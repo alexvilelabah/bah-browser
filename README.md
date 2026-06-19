@@ -13,6 +13,12 @@
 
 ![Stack: Electron + React + TypeScript + DeepSeek/Ollama](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20TS-blue)
 
+## 🎬 Demonstração
+
+![Bah em ação](assets/demo.gif)
+
+▶️ **[Ver a demo completa (vídeo)](assets/demo.mp4)** — o agente pesquisando e operando a web sozinho.
+
 ## 📥 Baixar
 
 **🧑 Só quero usar (Windows):** [**baixe o instalador aqui**](https://github.com/alexvilelabah/bah-browser/releases/latest) → arquivo `Bah Setup`, clique 2× e instale.
