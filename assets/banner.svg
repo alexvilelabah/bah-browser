@@ -1,0 +1,29 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1200" y2="360">
+      <stop offset="0" stop-color="#0B0D14"/>
+      <stop offset="1" stop-color="#141826"/>
+    </linearGradient>
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="90" y1="70" x2="330" y2="300">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="0.55" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="txt" gradientUnits="userSpaceOnUse" x1="430" y1="120" x2="760" y2="240">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="1" stop-color="#93C5FD"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <!-- mark "b" -->
+  <g transform="translate(96,84) scale(0.18)">
+    <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#g)"/>
+    <rect x="348" y="206" width="132" height="612" rx="66" fill="#ffffff"/>
+    <circle cx="566" cy="606" r="206" fill="#ffffff"/>
+    <circle cx="566" cy="606" r="104" fill="url(#g)"/>
+  </g>
+  <!-- wordmark + tagline -->
+  <text x="318" y="196" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="150" font-weight="800" fill="url(#txt)">Bah</text>
+  <text x="324" y="250" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="33" font-weight="500" fill="#A8B0C4">Navegador com IA — você fala, ele opera a web.</text>
+  <text x="324" y="296" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="25" font-weight="600" fill="#6B7390">by VilelaLab · Electron + React + DeepSeek/Ollama</text>
+</svg>

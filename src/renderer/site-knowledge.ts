@@ -166,7 +166,7 @@ export function getInitialShortcutAction(command: string): { action: { type: 'na
   // on a results page full of Shorts and the agent then picks a random clip. The
   // download_video { query } action finds + downloads the right result by itself
   // (with a duration filter), so let the agent go straight to it.
-  const isDownloadMedia = /\b(baix\w*|download|salv\w*|baixar|save|get|grab)\b/.test(normalizedCommand)
+  const isDownloadMedia = /\b(baix\w*|download|downloading|salv\w*|baixar|save|saving|get|grab)\b/.test(normalizedCommand)
     && /\b(musica|video|videos|audio|som|clipe|cancao|mp3|mp4|m[uú]sica|v[ií]deo|song|songs|track|movie|clip|sound)\b/.test(normalizedCommand);
   if (isDownloadMedia) return null;
 
@@ -313,7 +313,7 @@ export function detectQuickAction(command: string): QuickAction | null {
   {
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2'); // "baixe10 imagens" → "baixe 10 imagens"
     if (/\b(imagens|fotos|imagem|fotografias|figuras|wallpapers?|papeis?\s+de\s+parede|images?|photos?|pictures?|pics?)\b/.test(sp)
-        && /\b(baix\w*|quero|queria|salv\w*|pega\w*|arruma|me\s+da|junta|colhe|coleta|download|want|save|get|grab|fetch)\b/.test(sp)) {
+        && /\b(baix\w*|quero|queria|salv\w*|pega\w*|arruma|me\s+da|junta|colhe|coleta|download|downloading|want|save|saving|get|getting|grab|grabbing|fetch)\b/.test(sp)) {
       // quantidade: dígito ("3") OU por extenso ("tres") OU "varias/um monte". N>=2.
       const IMG_NUM: Record<string, number> = { uma: 1, duas: 2, dois: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, fifty: 50 };
       const noun = '(imagens|fotos|imagem|foto|figuras|wallpapers?|images?|photos?|pictures?|pics?)';
@@ -425,10 +425,10 @@ export function detectQuickAction(command: string): QuickAction | null {
   // bolo de cenoura", "me mostre como trocar um pneu". Resolve o 1º vídeo real (pula
   // Shorts via yt-dlp) e abre TOCANDO. ANTES do bloqueador de perguntas (pega "mostre COMO…").
   {
-    const isDownload = /\b(baix\w*|download|salv\w*|save)\b/.test(n);
+    const isDownload = /\b(baix\w*|download|downloading|salv\w*|save|saving)\b/.test(n);
     const phraseCue = /\b(onde\s+(?:falam|dizem|aparece)|frase|supercut|trecho|where\s+(?:they\s+)?(?:say|says)|phrase)\b/.test(n);  // → open_video_cuts, não isso
     // toc\w+ pega "tocar/toca" mas NÃO "toque" (t-o-q-u-e); idem coloc/coloque → cobre os dois.
-    const watchVerb = /\b(mostr\w+|veja|vejam|assist\w+|abr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|reproduz\w+|bota\b|botar\b|p[oõ]e\b|poem\b|quero\s+ver|ver\s+(?:um|uma)\b|watch|play|open|show|see|put\s+on)\b/.test(n);
+    const watchVerb = /\b(mostr\w+|veja|vejam|assist\w+|abr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|reproduz\w+|bota\b|botar\b|p[oõ]e\b|poem\b|quero\s+ver|ver\s+(?:um|uma)\b|watch|watching|play|playing|open|opening|show|showing|see|put\s+on)\b/.test(n);
     const mediaWord = /\b(video|videos|clipe|clipes|musica|musicas|cancao|filme|tutorial|aula|show|song|songs|track|movie|clip|clips)\b/.test(n);
     const someoneDoing = /\b(mostr\w+|veja|quero\s+ver|show\s+me|i\s+want\s+to\s+see|watch)\b/.test(n)
       && /\b(alguem|gente|como|someone|somebody|people|how\s+to)\b/.test(n)
@@ -453,11 +453,11 @@ export function detectQuickAction(command: string): QuickAction | null {
   // Não sequestrar perguntas / pesquisa / tutoriais ("como baixar", "qual o melhor app")
   if (/\b(como|o que|oque|qual|quais|porque|por que|melhor|recomend\w*|tutorial|ensina|explica|aprende|significa|diferenca|site|aplicativo|app|programa|how|what|which|why|best|recommend\w*|teaches?|explains?|software|program)\b/.test(n)) return null;
 
-  const hasGet = /\b(baix\w*|download|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|save|get|grab|fetch|want|need)\b/.test(n);
+  const hasGet = /\b(baix\w*|download|downloading|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|save|saving|get|getting|grab|grabbing|fetch|want|need)\b/.test(n);
   // "quero VER o vídeo" / "quero OUVIR a música" é consumo, não download — só
   // sequestra se houver verbo explícito de baixar junto.
-  const hasWatch = /\b(ver|assistir|veja|assista|olh\w*|ouvir|escut\w*|toc\w*|coloc\w*|abr\w*|watch|see|view|listen|play|open)\b/.test(n);
-  const hasDl = /\b(baix\w*|download|salv\w*|arquiv\w*|save|file)\b/.test(n);
+  const hasWatch = /\b(ver|assistir|veja|assista|olh\w*|ouvir|escut\w*|toc\w*|coloc\w*|abr\w*|watch|watching|see|seeing|view|viewing|listen|listening|play|playing|open|opening)\b/.test(n);
+  const hasDl = /\b(baix\w*|download|downloading|salv\w*|arquiv\w*|save|saving|file)\b/.test(n);
   const wantsDownload = hasDl || (hasGet && !hasWatch);
   const count = parseCount(n);
   // Drop helper words, the count digit (e.g. "3"), number-words and quality words so they

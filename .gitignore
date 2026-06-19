@@ -1,8 +1,8 @@
-# ── Dependências e build (regenerados com `npm install` / `npm run build`) ──
+# ── Dependências e saída de build (regenerados) ──
+# OBS: a pasta build/ (ícone do app) É versionada de propósito — só o OUTPUT é ignorado.
 node_modules/
 dist/
 out/
-build/
 release/
 
 # ── Configuração LOCAL do Claude Code — CONTÉM CHAVE DE API. NUNCA PUBLICAR ──

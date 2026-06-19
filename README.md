@@ -1,9 +1,25 @@
-# Bah
+<p align="center">
+  <img src="build/icon.png" width="116" alt="Bah" />
+</p>
 
-> **Bah** — navegador com IA, estilo **Perplexity Comet** / Tandem / Browser-Use. Código aberto (source-available). Feito por **VilelaLab**.
+<h1 align="center">Bah</h1>
+
+<p align="center">
+  <b>Navegador com IA</b> — você fala em português, ele opera a web pra você.<br/>
+  Estilo <b>Perplexity Comet</b> · código aberto (source-available) · por <b>VilelaLab</b>.
+</p>
+
 > Você dá comandos em linguagem natural ("abre o gmail e apaga os spams") e a IA opera o navegador no seu lugar — vendo a tela, clicando com mouse real, digitando e seguindo até concluir.
 
 ![Stack: Electron + React + TypeScript + DeepSeek/Ollama](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20TS-blue)
+
+## 📥 Baixar
+
+**🧑 Só quero usar (Windows):** [**baixe o instalador aqui**](https://github.com/alexvilelabah/bah-browser/releases/latest) → arquivo `Bah Setup`, clique 2× e instale.
+
+> ⚠️ O Windows mostra uma tela azul *"protegeu seu PC"* (o app ainda não tem assinatura digital paga). Clique em **Mais informações → Executar assim mesmo** — é normal em apps novos de código aberto.
+
+**👨‍💻 Quero mexer no código:** clone e rode — veja [Como rodar](#como-rodar) logo abaixo.
 
 ---
 

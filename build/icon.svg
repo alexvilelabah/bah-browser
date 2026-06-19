@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="120" y1="80" x2="900" y2="980">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="0.55" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+  <!-- fundo squircle com gradiente -->
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#g)"/>
+  <!-- letra "b" geométrica (haste + bojo). Bojo interno usa o MESMO gradiente
+       (userSpaceOnUse) → alinha com o fundo e parece um furo. Sem fonte. -->
+  <rect x="348" y="206" width="132" height="612" rx="66" fill="#ffffff"/>
+  <circle cx="566" cy="606" r="206" fill="#ffffff"/>
+  <circle cx="566" cy="606" r="104" fill="url(#g)"/>
+</svg>

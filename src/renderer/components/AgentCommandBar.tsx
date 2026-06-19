@@ -73,7 +73,7 @@ function isAffirmative(msg: string): boolean {
 // Verbo de AÇÃO na web (busca/abrir/baixar/comprar/preencher/comparar…). Backup do
 // roteador determinístico (detectQuickAction/atalhos). NÃO inclui "resuma/explique/o
 // que/qual" — essas são perguntas, respondidas pelo chat com o conteúdo da página.
-const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|find|look\s+up|open|go\s+to|navigate|access|save|get|grab|click|buy|add|fill|send|subscribe|like|publish)\b/i;
+const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching)\b/i;
 function isImperativeAction(msg: string): boolean {
   return ACTION_VERB_RE.test(msg);
 }

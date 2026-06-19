@@ -11,6 +11,9 @@ import path from 'path';
 import https from 'https';
 
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
+// Build estático do ffmpeg (Windows). Vem num .zip → descompactamos com o Expand-Archive
+// nativo do Windows (sem dependência nova). Usado pra mesclar 1080p+ e extrair mp3.
+const FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip';
 
 function binDir(): string {
   const d = path.join(app.getPath('userData'), 'bin');
@@ -110,10 +113,16 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
   return ensurePromise;
 }
 
-// Detect a usable ffmpeg so yt-dlp can merge 1080p+ (video+audio in separate streams).
+// ── ffmpeg: detecta (baixado por nós OU do sistema) e, se faltar, baixa+descompacta ──
+// Necessário pra mesclar 1080p+ (vídeo+áudio separados) e pra extrair mp3.
+const ffmpegExePath = () => path.join(binDir(), 'ffmpeg.exe');
 let ffmpegDirCache: string | null | undefined;
+
 export function findFfmpegDir(): Promise<string | null> {
   if (ffmpegDirCache !== undefined) return Promise.resolve(ffmpegDirCache);
+  // 1) já baixamos antes? (userData/bin/ffmpeg.exe)
+  try { if (fs.existsSync(ffmpegExePath())) { ffmpegDirCache = binDir(); return Promise.resolve(ffmpegDirCache); } } catch {}
+  // 2) ffmpeg do sistema (PATH)?
   return new Promise((resolve) => {
     execFile('where', ['ffmpeg'], { windowsHide: true }, (err, stdout) => {
       if (!err && stdout) {
@@ -124,6 +133,88 @@ export function findFfmpegDir(): Promise<string | null> {
       resolve(null);
     });
   });
+}
+
+// Acha um arquivo por nome na árvore extraída (o zip do BtbN põe em .../bin/ffmpeg.exe).
+function findFileRecursive(dir: string, name: string): string | null {
+  try {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { const r = findFileRecursive(p, name); if (r) return r; }
+      else if (e.name.toLowerCase() === name.toLowerCase()) return p;
+    }
+  } catch {}
+  return null;
+}
+
+function validateFfmpeg(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try { if (!fs.existsSync(bin) || fs.statSync(bin).size < 1_000_000) return resolve(false); }
+    catch { return resolve(false); }
+    let out = ''; let done = false;
+    const finish = (ok: boolean) => { if (!done) { done = true; resolve(ok); } };
+    try {
+      const child = spawn(bin, ['-version'], { windowsHide: true });
+      child.stdout.on('data', (d) => { out += d.toString(); });
+      child.on('error', () => finish(false));
+      child.on('close', (code) => finish(code === 0 && /ffmpeg version/i.test(out)));
+      setTimeout(() => { try { child.kill(); } catch {} finish(false); }, 10_000);
+    } catch { finish(false); }
+  });
+}
+
+// Descompacta o .zip com o Expand-Archive nativo do Windows (sem lib nova).
+function expandZipWindows(zip: string, outDir: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    const ps = `Expand-Archive -LiteralPath ${JSON.stringify(zip)} -DestinationPath ${JSON.stringify(outDir)} -Force`;
+    let done = false;
+    const finish = (ok: boolean) => { if (!done) { done = true; resolve(ok); } };
+    try {
+      const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true });
+      child.on('error', () => finish(false));
+      child.on('close', (code) => finish(code === 0));
+      setTimeout(() => { try { child.kill(); } catch {} finish(false); }, 120_000);
+    } catch { finish(false); }
+  });
+}
+
+// Garante o ffmpeg: usa o existente (baixado/sistema) ou baixa+descompacta (só Windows).
+// FAIL-SAFE: qualquer erro → retorna null e o download segue sem ffmpeg (qualidade menor),
+// exatamente como era antes. Nunca quebra o fluxo principal.
+let ffmpegEnsurePromise: Promise<string | null> | null = null;
+export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<string | null> {
+  const existing = await findFfmpegDir();
+  if (existing) return existing;
+  if (process.platform !== 'win32') return null; // outros SO: usa o do sistema (já tentado)
+  if (ffmpegEnsurePromise) return ffmpegEnsurePromise;
+  ffmpegEnsurePromise = (async () => {
+    const zip = path.join(binDir(), 'ffmpeg-dl.zip');
+    const extractDir = path.join(binDir(), 'ffmpeg-extract');
+    try {
+      onStatus?.('Preparando o conversor de vídeo/áudio (primeira vez, ~80MB)…');
+      await downloadToFile(FFMPEG_URL, zip);
+      onStatus?.('Descompactando o ffmpeg…');
+      if (!(await expandZipWindows(zip, extractDir))) throw new Error('falha ao descompactar');
+      const exe = findFileRecursive(extractDir, 'ffmpeg.exe');
+      if (!exe) throw new Error('ffmpeg.exe não encontrado no pacote');
+      fs.copyFileSync(exe, ffmpegExePath());
+      const probe = path.join(path.dirname(exe), 'ffprobe.exe');     // yt-dlp também usa ffprobe
+      if (fs.existsSync(probe)) { try { fs.copyFileSync(probe, path.join(binDir(), 'ffprobe.exe')); } catch {} }
+      try { fs.rmSync(zip, { force: true }); } catch {}
+      try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
+      if (!(await validateFfmpeg(ffmpegExePath()))) { try { fs.unlinkSync(ffmpegExePath()); } catch {} throw new Error('ffmpeg baixado inválido'); }
+      ffmpegDirCache = binDir();
+      onStatus?.('Conversor pronto.');
+      return binDir();
+    } catch {
+      try { fs.rmSync(zip, { force: true }); } catch {}
+      try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
+      ffmpegEnsurePromise = null;
+      return null; // segue sem ffmpeg — não quebra o download
+    }
+  })();
+  return ffmpegEnsurePromise;
 }
 
 /**
@@ -222,7 +313,12 @@ export async function downloadVideo(
     return { success: false, error: `Não consegui preparar o yt-dlp: ${e?.message ?? e}` };
   }
 
-  const ffmpegDir = await findFfmpegDir();
+  // mp3 (audioOnly) e "melhor qualidade" (merge 1080p+) PRECISAM de ffmpeg → auto-instala.
+  // "low" não precisa → só detecta. ensureFfmpeg é fail-safe (null = segue sem ffmpeg).
+  const needFfmpeg = opts.audioOnly || opts.quality !== 'low';
+  const ffmpegDir = needFfmpeg
+    ? await ensureFfmpeg((m) => onProgress({ state: 'preparing', title: m }))
+    : await findFfmpegDir();
   const outDir = app.getPath('downloads');
   const outTmpl = path.join(outDir, '%(title).120B [%(id)s].%(ext)s');
 
