@@ -1,0 +1,125 @@
+import { useState, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+
+export interface Tab {
+  id: string;
+  title: string;
+  url: string;
+  isLoading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  hidden?: boolean;   // aba de trabalho (Pesquisa Rápida): carrega mas não aparece na barra
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+export interface AISettings {
+  provider: 'anthropic' | 'openai' | 'deepseek' | 'pollinations' | 'ollama';
+  apiKey: string;
+  baseUrl: string;
+}
+
+export interface LocalSettings {
+  enabled: boolean;          // hybrid routing on/off
+  provider: 'ollama';        // only ollama for now
+  baseUrl: string;           // e.g. http://localhost:11434
+  model: string;             // e.g. qwen3-vl:8b
+}
+
+export function createTab(url = 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr'): Tab {
+  return {
+    id: uuidv4(),
+    title: 'New Tab',
+    url,
+    isLoading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
+}
+
+export function useTabStore() {
+  const [tabs, setTabs] = useState<Tab[]>([createTab()]);
+  const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [aiSettings, setAISettings] = useState<AISettings>(() => {
+    try {
+      const saved = localStorage.getItem('aiSettings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { provider: 'deepseek', apiKey: '', baseUrl: '' };
+  });
+
+  const [localSettings, setLocalSettingsState] = useState<LocalSettings>(() => {
+    try {
+      const saved = localStorage.getItem('localSettings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { enabled: false, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen2.5:7b' };
+  });
+
+  const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
+
+  const addTab = useCallback((url?: string): string => {
+    const tab = createTab(url);
+    setTabs(prev => [...prev, tab]);
+    setActiveTabId(tab.id);
+    return tab.id;
+  }, []);
+
+  // Aba OCULTA (Pesquisa Rápida): monta o webview e carrega a URL, mas NÃO vira a aba
+  // ativa nem aparece na barra de abas — a busca roda "por baixo dos panos". É removida
+  // com closeTab quando termina. A barra (TabBar) ignora abas com hidden=true.
+  const addHiddenTab = useCallback((url?: string): string => {
+    const tab = { ...createTab(url), hidden: true };
+    setTabs(prev => [...prev, tab]);
+    return tab.id;
+  }, []);
+
+  const closeTab = useCallback((id: string) => {
+    setTabs(prev => {
+      const next = prev.filter(t => t.id !== id);
+      if (next.length === 0) {
+        const newTab = createTab();
+        setActiveTabId(newTab.id);
+        return [newTab];
+      }
+      if (id === activeTabId) {
+        const idx = prev.findIndex(t => t.id === id);
+        const newActive = next[Math.min(idx, next.length - 1)];
+        setActiveTabId(newActive.id);
+      }
+      return next;
+    });
+  }, [activeTabId]);
+
+  const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+  }, []);
+
+  const addChatMessage = useCallback((role: 'user' | 'assistant', content: string) => {
+    setChatMessages(prev => [...prev, { id: uuidv4(), role, content, timestamp: Date.now() }]);
+  }, []);
+
+  const clearChat = useCallback(() => setChatMessages([]), []);
+
+  return {
+    tabs, activeTabId, activeTab, sidebarOpen,
+    chatMessages, aiSettings, localSettings,
+    setActiveTabId, addTab, addHiddenTab, closeTab, updateTab,
+    setSidebarOpen, addChatMessage, clearChat,
+    setAISettings: (s: AISettings) => {
+      setAISettings(s);
+      try { localStorage.setItem('aiSettings', JSON.stringify(s)); } catch {}
+    },
+    setLocalSettings: (s: LocalSettings) => {
+      setLocalSettingsState(s);
+      try { localStorage.setItem('localSettings', JSON.stringify(s)); } catch {}
+    },
+  };
+}

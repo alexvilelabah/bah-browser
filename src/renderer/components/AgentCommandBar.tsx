@@ -1,0 +1,921 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { BrowserAction, formatAction } from '../page-executor';
+import { AISettings, LocalSettings } from '../store';
+import { detectQuickAction, getInitialShortcutAction } from '../site-knowledge';
+
+export interface StepRecord {
+  step: number;
+  evaluation?: string;          // model's judgement of the PREVIOUS action
+  thought?: string;
+  actionLabel: string;
+  success: boolean;
+  resultSummary?: string;
+  urlAfter?: string;
+  recovery?: { decision: string; reason: string };
+  screenshot?: string;          // small thumbnail dataUrl (replay)
+  fromQueue?: boolean;          // executed from a batched action queue (no LLM call)
+  durationMs?: number;          // wall-clock time of the whole step (slowness made visible)
+}
+
+export type AgentProgressEvent =
+  | { kind: 'status'; message: string }
+  | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
+  | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void }
+  | { kind: 'thought'; message: string }
+  | { kind: 'action'; action: BrowserAction }
+  | { kind: 'result'; action: BrowserAction; result: any }
+  | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
+  | { kind: 'step'; step: StepRecord };
+
+interface ActionResult {
+  thought?: string;
+  results?: Array<{ action?: BrowserAction; description?: string; result: any }>;
+  done?: BrowserAction;
+  error?: string;
+}
+
+// Unified feed: agent activity + chat, interleaved chronologically (Comet-style).
+// Everything here is INTERCEPTED from real events — nothing is AI-generated filler.
+type FeedData =
+  | { kind: 'task'; text: string }
+  | { kind: 'chat-user'; text: string }
+  | { kind: 'chat-assistant'; text: string; suggestedCommand?: string; sources?: Array<{ title: string; url: string }> }
+  | { kind: 'event'; event: AgentProgressEvent }
+  | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
+  | { kind: 'step'; step: StepRecord }
+  | { kind: 'report'; text: string }
+  | { kind: 'error'; text: string }
+  | { kind: 'help'; message: string; instruction: string }
+  | { kind: 'confirm'; message: string };
+type FeedItem = FeedData & { id: number };
+
+const FEED_CAP = 400;
+
+// Sugestões de modelos por HARDWARE — do PC comum ao Mac de memória unificada e
+// servidores. Cada um é um nome real do Ollama (`ollama pull <nome>`). Quem tem
+// placa/memória maior pega modelos melhores; o usuário clica e baixa.
+const MODEL_SUGGESTIONS: Array<{ tier: string; models: string[] }> = [
+  { tier: '~16GB', models: ['qwen2.5:14b', 'llama3.1:8b', 'gpt-oss:20b'] },
+  { tier: '24–32GB', models: ['qwen2.5:32b', 'qwen3:32b', 'gemma2:27b'] },
+  { tier: '64GB+', models: ['llama3.3:70b', 'qwen2.5:72b', 'deepseek-r1:70b'] },
+  { tier: '128GB+ (Mac unificado)', models: ['gpt-oss:120b', 'qwen3:235b'] },
+  { tier: '~250GB (servidor/Mac topo)', models: ['llama3.1:405b'] },
+];
+
+// "sim/pode/faça/manda/bora…" — confirmação curta a uma proposta de ação do chat.
+// Só conta quando há proposta pendente E a mensagem é curta (evita falso positivo).
+function isAffirmative(msg: string): boolean {
+  const m = msg.trim();
+  if (m.length > 28) return false;
+  return /^(sim|isso( mesmo)?|isso a[ií]|pode( ser|\s+sim)?|claro|com certeza|fa[cç]a|faz|fazer|vai|vai l[aá]|manda( ver)?|bora|quero( sim)?|por favor|pfv?|ok|okay|beleza|blz|exato|perfeito|aham|uhum|sim por favor|sim pode|s)\s*[.!👍✅]*$/i.test(m);
+}
+
+// Verbo de AÇÃO na web (busca/abrir/baixar/comprar/preencher/comparar…). Backup do
+// roteador determinístico (detectQuickAction/atalhos). NÃO inclui "resuma/explique/o
+// que/qual" — essas são perguntas, respondidas pelo chat com o conteúdo da página.
+const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|find|look\s+up|open|go\s+to|navigate|access|save|get|grab|click|buy|add|fill|send|subscribe|like|publish)\b/i;
+function isImperativeAction(msg: string): boolean {
+  return ACTION_VERB_RE.test(msg);
+}
+
+// Pergunta pura ("o que é X", "qual…?", "como…") → deve ser RESPONDIDA, não executada.
+// Impede que um atalho de site (mencionar "google"/"youtube") sequestre a pergunta.
+// (O detectQuickAction de preço/etc. tem confiança alta e roda FORA deste filtro.)
+function isQuestion(msg: string): boolean {
+  const m = msg.trim().toLowerCase();
+  if (/\?\s*$/.test(m)) return true;
+  return /^(o que|oque|qual|quais|quem|quando|onde|por\s*que|porque|pra que|para que|como|existe|tem como|d[aá]\s+pra|vale a pena|quanto\s+(?:tempo|tem|s[aã]o)|me explica|explica|explique|diga|fala sobre|do que (?:fala|trata)|what|what'?s|which|who|when|where|why|how|is there|can i|could you|should i|tell me|explain|worth it)\b/.test(m);
+}
+
+// Pedido INFORMACIONAL / de pesquisa → resposta no painel (web-grounded, estilo Perplexity).
+const INFO_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|me\s+(diga|fala|fale|conta|explica|explique|mostra|mostre)|quero\s+saber|descub\w+|descobrir|o\s+que\b|oque\b|qual\b|quais\b|quanto\w*\b|quem\b|quando\b|onde\b|por\s*que\b|porque\b|melhor(es)?\b|vale\s+a\s+pena|compar\w+|signific\w+|diferen[cç]a|not[ií]cia\w*|ultimas?\b|search\b|find\b|look\s+up|tell\s+me|want\s+to\s+know|find\s+out|what\b|which\b|how\s+(?:much|many|long|to)|who\b|when\b|where\b|why\b|best\b|compare\b|means\b|difference|news\b|latest\b)\b/i;
+function isInfoRequest(msg: string): boolean { return INFO_RE.test(msg) || isQuestion(msg); }
+
+// Verbo que OPERA numa página (faz algo, não só lê/pergunta) → agente.
+const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule)\b/i;
+function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
+
+// Sobre a PÁGINA ATUAL (não a web aberta) → chat com o conteúdo da página.
+const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta)\s+aba|(?:este|esse)\s+(artigo|texto)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
+function isAboutCurrentPage(msg: string): boolean { return CUR_PAGE_RE.test(msg); }
+
+function hostOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url.slice(0, 24); }
+}
+
+interface Props {
+  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal) => Promise<ActionResult>;
+  onSendChat: (message: string) => Promise<{ reply: string; suggestedCommand?: string }>;
+  onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
+  onFetchHeadlines?: (query: string) => Promise<string[]>;
+  onOpenUrl: (url: string) => void;
+  onClose: () => void;
+  aiSettings: AISettings;
+  onSettingsChange: (settings: AISettings) => Promise<void>;
+  localSettings: LocalSettings;
+  onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
+}
+
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onFetchHeadlines, onOpenUrl, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
+  const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
+  // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
+  const pendingSuggestionRef = useRef<string | null>(null);
+  // ── VITRINE DE NOVIDADES no placeholder ────────────────────────────────────
+  // Em vez de só "ensinar" o navegador, o placeholder cicla MANCHETES recentes de
+  // IA/tech (contextuais: IA local ligada → notícias de IA local). Cache ~4h pra não
+  // raspar o Google a cada abertura. Não-clicável — info ambiente que some ao digitar.
+  const [headlines, setHeadlines] = useState<string[]>(() => {
+    try { const c = JSON.parse(localStorage.getItem('newsHeadlines.v1') || 'null'); return Array.isArray(c?.items) ? c.items : []; } catch { return []; }
+  });
+  // Ref pra função de busca: ela muda de identidade a cada render (o store se recria),
+  // e o typewriter re-renderiza ~20×/s → se ela estivesse nas deps, o timer abaixo
+  // resetaria pra sempre e nunca dispararia. Por isso: ref + deps só [localEnabled].
+  const fetchHeadlinesRef = useRef(onFetchHeadlines);
+  useEffect(() => { fetchHeadlinesRef.current = onFetchHeadlines; }, [onFetchHeadlines]);
+  useEffect(() => {
+    const fn = fetchHeadlinesRef.current;
+    if (!fn) return;
+    let cached: any = null;
+    try { cached = JSON.parse(localStorage.getItem('newsHeadlines.v1') || 'null'); } catch {}
+    const fresh = cached && Array.isArray(cached.items) && cached.items.length && Date.now() - (cached.ts || 0) < 4 * 3600 * 1000;
+    if (fresh) return;   // cache bom → não busca de novo
+    const topics = localSettings.enabled
+      ? ['IA local open source', 'modelos de IA open source', 'Ollama IA local privacidade']
+      : ['inteligência artificial', 'novidades de IA', 'tecnologia'];
+    const query = topics[Math.floor(Math.random() * topics.length)];
+    let cancelled = false;
+    const t = setTimeout(async () => {   // alguns segundos depois — não atrasa o boot
+      try {
+        const items = await fetchHeadlinesRef.current?.(query);
+        if (cancelled || !items?.length) return;
+        setHeadlines(items);
+        try { localStorage.setItem('newsHeadlines.v1', JSON.stringify({ ts: Date.now(), items })); } catch {}
+      } catch {}
+    }, 3500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [localSettings.enabled]);
+  // Placeholder "vivo" (estilo Comet): frases/manchetes vão sendo digitadas e apagadas.
+  // 1 dica instrucional + as manchetes (ou exemplos, se ainda não buscou).
+  const [ph, setPh] = useState('');
+  useEffect(() => {
+    const phrases = headlines.length
+      ? ['Pergunte, pesquise ou peça uma tarefa…', ...headlines]
+      : ['Pergunte, pesquise ou peça uma tarefa…', 'quem ganhou o jogo ontem?', 'qual a alexa mais barata?', 'resuma esta página em 3 tópicos'];
+    let i = 0, c = 0, deleting = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const full = phrases[i % phrases.length];
+      c += deleting ? -1 : 1;
+      setPh(full.slice(0, Math.max(0, c)));
+      if (!deleting && c >= full.length) { deleting = true; timer = setTimeout(tick, 1900); return; }   // pausa cheia
+      if (deleting && c <= 0) { deleting = false; i++; timer = setTimeout(tick, 380); return; }          // próxima frase
+      timer = setTimeout(tick, deleting ? 26 : 50 + Math.random() * 45);
+    };
+    timer = setTimeout(tick, 500);
+    return () => clearTimeout(timer);
+  }, [headlines]);
+  // Auto-crescer a caixa de texto conforme digita (até um teto), estilo Comet.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+  }, [input]);
+  const [loading, setLoading] = useState(false);       // agent task running
+  const [chatLoading, setChatLoading] = useState(false);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [manualHelp, setManualHelp] = useState<{ message: string; instruction: string } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ message: string } | null>(null);   // freio de segurança
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(aiSettings);
+  const [localCfg, setLocalCfg] = useState(localSettings);
+  // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
+  const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string }>>([]);
+  const [pullName, setPullName] = useState('');
+  const [pullMsg, setPullMsg] = useState('');
+  const [pulling, setPulling] = useState(false);
+  const [ggufPath, setGgufPath] = useState('');
+  const [ggufName, setGgufName] = useState('');
+  // null = ainda não checado; true = Ollama respondeu; false = não detectado (não instalado/desligado).
+  const [ollamaUp, setOllamaUp] = useState<boolean | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const manualContinueRef = useRef<(() => void) | null>(null);
+  const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void } | null>(null);
+  const feedRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const idRef = useRef(0);
+
+  const push = (item: FeedData) => {
+    setFeed(prev => {
+      let next = [...prev, { ...item, id: ++idRef.current }];
+      if (next.length > FEED_CAP) next = next.slice(-FEED_CAP);
+      // Cap image memory in long recording sessions: keep thumbnails only on the
+      // most recent ~40 step cards; older ones drop the heavy dataURL (text stays).
+      if (item.kind === 'step') {
+        let kept = 0;
+        for (let i = next.length - 1; i >= 0; i--) {
+          const it = next[i];
+          if (it.kind === 'step' && it.step.screenshot) {
+            if (kept >= 40) { next[i] = { ...it, step: { ...it.step, screenshot: undefined } }; }
+            else kept++;
+          }
+        }
+      }
+      return next;
+    });
+  };
+
+  // Stick-to-bottom: auto-scroll on new items only when the user is already near
+  // the bottom (so reading history upward isn't hijacked).
+  useEffect(() => {
+    const el = feedRef.current;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [feed, chatLoading]);
+  const onFeedScroll = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  const runAgent = async (cmd: string) => {
+    const abortController = new AbortController();
+    abortRef.current = abortController;
+    setLoading(true);
+    setManualHelp(null);
+    manualContinueRef.current = null;
+    stickToBottomRef.current = true;
+    push({ kind: 'task', text: cmd });
+    try {
+      const result = await onExecute(cmd, event => {
+        if (event.kind === 'step') {
+          push({ kind: 'step', step: event.step });
+        } else if (event.kind === 'manual_help') {
+          manualContinueRef.current = event.onContinue;
+          setManualHelp({ message: event.message, instruction: event.instruction });
+          push({ kind: 'help', message: event.message, instruction: event.instruction });
+        } else if (event.kind === 'confirm') {
+          confirmActionsRef.current = { onConfirm: event.onConfirm, onCancel: event.onCancel };
+          setPendingConfirm({ message: event.message });
+          push({ kind: 'confirm', message: event.message });
+        } else if (event.kind === 'result') {
+          // skip — step cards already carry action+result (avoids duplicate noise)
+        } else if (event.kind === 'media') {
+          push({ kind: 'media', mediaKind: event.mediaKind, paths: event.paths, dir: event.dir, total: event.total, label: event.label });
+        } else {
+          push({ kind: 'event', event });
+        }
+      }, abortController.signal);
+      if (result.error) {
+        push({ kind: 'error', text: result.error });
+      } else if ((result.done as any)?.reason) {
+        push({ kind: 'report', text: (result.done as any).reason });
+        notifyDone((result.done as any).reason);
+      } else if (result.thought) {
+        push({ kind: 'report', text: result.thought.split('\n').slice(-3).join('\n') });
+        notifyDone(result.thought);
+      }
+      if (!result.error) setInput('');
+    } finally {
+      abortRef.current = null;
+      setLoading(false);
+      setManualHelp(null);
+      manualContinueRef.current = null;
+      setPendingConfirm(null);
+      confirmActionsRef.current = null;
+    }
+  };
+
+  const runChat = async (msg: string) => {
+    setChatLoading(true);
+    stickToBottomRef.current = true;
+    push({ kind: 'chat-user', text: msg });
+    setInput('');
+    try {
+      const { reply, suggestedCommand } = await onSendChat(msg);
+      pendingSuggestionRef.current = suggestedCommand ?? null;
+      push({ kind: 'chat-assistant', text: reply, suggestedCommand });
+    } catch (e: any) {
+      push({ kind: 'error', text: String(e?.message ?? e) });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // ── Pesquisa Rápida: busca na web em segundo plano e responde NO PAINEL com fontes. ──
+  const runResearch = async (msg: string) => {
+    if (loading || chatLoading) return;
+    setChatLoading(true);
+    stickToBottomRef.current = true;
+    push({ kind: 'chat-user', text: msg });
+    push({ kind: 'event', event: { kind: 'status', message: '🔎 pesquisando na web…' } });
+    setInput('');
+    try {
+      const { answer, sources } = await onResearch(msg);
+      pendingSuggestionRef.current = null;
+      push({ kind: 'chat-assistant', text: answer, sources });
+    } catch (e: any) {
+      push({ kind: 'error', text: String(e?.message ?? e) });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // ── Caixa unificada: decide AGIR (agente) · PESQUISAR (web→painel) · RESPONDER (chat),
+  // sem o usuário escolher modo. Determinístico e 0 token na decisão. ──
+  const routeCommand = (msg: string) => {
+    // 1) Ação determinística (download/preço/notícia/imagens/ações/supercut/arquivo) → agente.
+    if (detectQuickAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // 1b) Criar playlist ("crie/monte uma playlist de…") → agente (o modelo nomeia as músicas).
+    if (/\bplaylist\b/i.test(msg) && /\b(cri\w+|mont\w+|fa[cz]\w+|gera\w+|junt\w+|adicion\w+|creat\w+|make|made|build|generat\w+|add)\b/i.test(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // 2) Sobre a PÁGINA ATUAL ("resuma esta página") → chat com o conteúdo da página.
+    if (isAboutCurrentPage(msg)) { runChat(msg); return; }
+    // 3) Verbo que OPERA numa página (abrir/clicar/comprar/login…) e não é pergunta → agente.
+    if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // 4) Pesquisa / pergunta informacional → RESPOSTA NO PAINEL (web-grounded).
+    if (isInfoRequest(msg)) { runResearch(msg); return; }
+    // 5) Atalho de site explícito ("abre o youtube") → agente.
+    if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // 6) Resto (saudação/conversa) → chat.
+    runChat(msg);
+  };
+
+  const runUnified = (msg: string) => {
+    // "sim/pode/faça…" logo após uma proposta → roda a proposta (reclassificada).
+    if (pendingSuggestionRef.current && isAffirmative(msg)) {
+      const cmd = pendingSuggestionRef.current;
+      pendingSuggestionRef.current = null;
+      push({ kind: 'chat-user', text: msg });   // mostra o "sim" do usuário no feed
+      setInput('');
+      routeCommand(cmd);
+      return;
+    }
+    setInput('');
+    routeCommand(msg);
+  };
+
+  const handleSubmit = () => {
+    const msg = input.trim();
+    if (!msg) return;
+    if (loading || chatLoading) return;
+    runUnified(msg);
+  };
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    setManualHelp(null);
+    manualContinueRef.current = null;
+    setPendingConfirm(null);
+    confirmActionsRef.current = null;
+    push({ kind: 'event', event: { kind: 'status', message: 'Cancelando tarefa...' } });
+  };
+
+  // Freio de segurança: usuário decidiu (Sim, pode / Cancelar) na ação de risco.
+  const handleConfirmRisky = (ok: boolean) => {
+    const actions = confirmActionsRef.current;
+    confirmActionsRef.current = null;
+    setPendingConfirm(null);
+    push({ kind: 'event', event: { kind: 'status', message: ok ? '✅ Você confirmou — seguindo.' : '✖️ Você cancelou a ação.' } });
+    if (actions) (ok ? actions.onConfirm : actions.onCancel)();
+  };
+
+  const handleContinueAfterManualHelp = () => {
+    const resume = manualContinueRef.current;
+    if (!resume) return;
+    manualContinueRef.current = null;
+    setManualHelp(null);
+    push({ kind: 'event', event: { kind: 'status', message: 'Continuando depois da intervencao manual...' } });
+    resume();
+  };
+
+  // ── Gerenciador de modelos Ollama ──
+  const ollamaApi = () => (window as any).electronAPI;
+  const refreshModels = async () => {
+    try {
+      const r = await ollamaApi()?.ollamaList?.(localCfg.baseUrl);
+      setOllamaUp(!!r?.ok);
+      if (r?.ok) setModels(r.models || []);
+    } catch { setOllamaUp(false); }
+  };
+  const installOllama = () => { try { ollamaApi()?.openExternal?.('https://ollama.com/download'); } catch {} };
+  const getDeepseekKey = () => { try { ollamaApi()?.openExternal?.('https://platform.deepseek.com/api_keys'); } catch {} };
+  useEffect(() => {
+    if (!showSettings || !localCfg.enabled) return;
+    refreshModels();
+    const off = ollamaApi()?.onOllamaPullProgress?.((p: any) => {
+      if (p?.error) { setPullMsg(`erro: ${p.error}`); setPulling(false); return; }
+      if (p?.done) { setPullMsg('✅ baixado!'); setPulling(false); refreshModels(); return; }
+      setPullMsg(`${p?.status || 'baixando'}${p?.percent != null ? ` ${p.percent}%` : ''}`);
+    });
+    return typeof off === 'function' ? off : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings, localCfg.enabled, localCfg.baseUrl]);
+  const handlePull = async () => {
+    const m = pullName.trim(); if (!m || pulling) return;
+    if (ollamaUp === false) { setPullMsg('Ollama não detectado — instale o Ollama primeiro (botão acima).'); return; }
+    setPulling(true); setPullMsg('iniciando…');
+    try { const r = await ollamaApi()?.ollamaPull?.(m, localCfg.baseUrl); if (r && !r.ok) { setPullMsg(`erro: ${r.error || 'falhou'}`); setPulling(false); refreshModels(); } }
+    catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); setPulling(false); }
+  };
+  const handleDeleteModel = async (name: string) => {
+    try { await ollamaApi()?.ollamaDelete?.(name, localCfg.baseUrl); refreshModels(); } catch {}
+  };
+  const handleImportGguf = async () => {
+    if (!ggufPath.trim() || pulling) return;
+    setPulling(true); setPullMsg('importando .gguf…');
+    try { const r = await ollamaApi()?.ollamaImportGguf?.(ggufName.trim(), ggufPath.trim()); setPullMsg(r?.ok ? '✅ importado!' : `erro: ${r?.error || 'falhou'}`); refreshModels(); }
+    catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); }
+    setPulling(false);
+  };
+
+  return (
+    <div className="agent-command-bar" data-testid="agent-command-bar">
+      <div className="sidebar-header">
+        <h3>Assistente</h3>
+        <div className="sidebar-actions">
+          <button onClick={() => setShowSettings(!showSettings)} title="Configurações">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+          </button>
+          <button onClick={() => setFeed([])} title="Limpar feed">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+          </button>
+          <button onClick={onClose} title="Fechar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      {showSettings && (
+        <div className="settings-panel">
+          <div className="mode-switch" role="tablist" aria-label="Onde a IA roda">
+            <button
+              type="button"
+              className={`mode-opt ${!localCfg.enabled ? 'on' : ''}`}
+              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: 'deepseek' })); }}
+            >☁️ DeepSeek<small>nuvem · API · recomendado</small></button>
+            <button
+              type="button"
+              className={`mode-opt ${localCfg.enabled ? 'on' : ''}`}
+              onClick={() => setLocalCfg(p => ({ ...p, enabled: true }))}
+            >🏠 IA Local<small>sua GPU · offline</small></button>
+          </div>
+          {!localCfg.enabled && (
+            <>
+              <label>
+                API Key (DeepSeek)
+                <input
+                  type="password"
+                  value={settings.apiKey}
+                  onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
+                  placeholder="Cole sua chave da API DeepSeek"
+                />
+              </label>
+              <div className="mm-hint">☁️ A <b>nuvem é o caminho recomendado</b>: rápido, esperto e estável. <button type="button" className="mm-link" onClick={getDeepseekKey}>Pegar uma chave da API →</button></div>
+              <details className="mm-imp">
+                <summary>Avançado</summary>
+                <label>
+                  Base URL (opcional)
+                  <input
+                    type="text"
+                    value={settings.baseUrl}
+                    onChange={e => setSettings({ ...settings, baseUrl: e.target.value })}
+                    placeholder="Deixe vazio pro padrão"
+                  />
+                </label>
+              </details>
+            </>
+          )}
+          {localCfg.enabled && (
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div className="mm-hint">💡 Quanto mais memória, maior e mais esperto o modelo. <b>16GB de VRAM</b> roda os pequenos; <b>32GB+</b> (ou Mac com memória unificada de <b>64–128GB</b>) roda os grandes (70B–235B); os gigantes (<b>~250GB</b>, como o llama3.1:405b) pedem servidor ou Mac topo de linha. Com pouca memória os modelos grandes ficam lentos e o agente erra mais — aí a <b>nuvem (API)</b> funciona melhor.</div>
+                <label>
+                  URL do Ollama
+                  <input type="text" value={localCfg.baseUrl}
+                    onChange={e => setLocalCfg(p => ({ ...p, baseUrl: e.target.value }))}
+                    placeholder="http://localhost:11434" />
+                </label>
+                <div className="model-mgr">
+                  {ollamaUp === false && (
+                    <div className="mm-noollama">
+                      <div className="mm-noollama-t"><b>Ollama não detectado.</b> Os modelos baixam <b>através do Ollama</b> — um programa gratuito que você instala <b>uma vez</b> (ele não vem junto com o navegador). Depois de instalar, ele roda sozinho em segundo plano e os botões de baixar passam a funcionar.</div>
+                      <div className="mm-noollama-b">
+                        <button className="mm-install" onClick={installOllama}>⬇ Instalar Ollama</button>
+                        <button className="mm-recheck" onClick={refreshModels}>Já instalei — verificar</button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="mm-head">
+                    <span>Modelos instalados</span>
+                    <button className="mm-refresh" onClick={refreshModels} title="Atualizar lista">↻</button>
+                  </div>
+                  {models.length === 0 ? (
+                    <div className="mm-empty">{ollamaUp === false ? 'Instale o Ollama acima pra começar.' : 'Nenhum modelo ainda. Baixe um abaixo pelo nome.'}</div>
+                  ) : (
+                    <div className="mm-list">
+                      {models.map(m => (
+                        <div key={m.name} className={`mm-item ${m.name === localCfg.model ? 'on' : ''}`}>
+                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name }))} title="Usar este modelo">
+                            <span className="mm-name">{m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
+                            <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : ''].filter(Boolean).join(' · ')}</span>
+                          </button>
+                          <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title="Apagar modelo">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mm-pull">
+                    <input value={pullName} onChange={e => setPullName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handlePull(); }}
+                      placeholder="baixar pelo nome — ex.: qwen3:14b, gpt-oss:20b" />
+                    <button onClick={handlePull} disabled={!pullName.trim() || pulling}>{pulling ? '…' : 'Baixar'}</button>
+                  </div>
+                  {pullMsg && <div className="mm-prog">{pullMsg}</div>}
+                  <div className="mm-sugg">
+                    <div className="mm-sugg-cap">Sugestões por hardware (clique pra preencher):</div>
+                    {MODEL_SUGGESTIONS.map(g => (
+                      <div key={g.tier} className="mm-sugg-row">
+                        <span className="mm-tier">{g.tier}</span>
+                        <span className="mm-chips">
+                          {g.models.map(s => (
+                            <button key={s} className="mm-chip" onClick={() => setPullName(s)}>{s}</button>
+                          ))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <details className="mm-imp">
+                    <summary>Importar .gguf por caminho (avançado)</summary>
+                    <input value={ggufPath} onChange={e => setGgufPath(e.target.value)} placeholder="ex.: D:\modelos\meu.gguf" />
+                    <input value={ggufName} onChange={e => setGgufName(e.target.value)} placeholder="nome do modelo (ex.: meu-modelo)" />
+                    <button onClick={handleImportGguf} disabled={!ggufPath.trim() || pulling}>Importar</button>
+                  </details>
+                </div>
+            </div>
+          )}
+          <button className="save-settings" onClick={async () => {
+            await onSettingsChange(settings);
+            await onLocalSettingsChange(localCfg);
+            setShowSettings(false);
+          }}>
+            Salvar
+          </button>
+        </div>
+      )}
+
+      {/* ── Unified activity feed (infinite scroll, persists across tasks) ── */}
+      <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll}>
+        {feed.length === 0 && (
+          <div className="feed-empty">
+            <div className="showcase-title">✨ Peça qualquer coisa</div>
+            <div className="showcase-sub">Escreva o que você quer em linguagem natural — o agente faz o resto.</div>
+          </div>
+        )}
+        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} />)}
+        {chatLoading && (
+          <div className="chat-msg assistant"><div className="msg-content typing"><span /><span /><span /></div></div>
+        )}
+        {loading && (
+          <div className="feed-working"><span className="agent-spinner" /> trabalhando…</div>
+        )}
+      </div>
+
+      {/* ── Composer: um bloco ÚNICO, limpo e generoso (estilo Comet) ── */}
+      <div className="composer">
+        <textarea
+          ref={inputRef}
+          data-testid="agent-command-input"
+          className="composer-input"
+          rows={1}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+          placeholder={ph}
+          disabled={loading || chatLoading}
+        />
+        <div className="composer-bar">
+          <div className="composer-hint">⚡ Pergunte ou peça uma tarefa — eu decido se respondo ou faço.</div>
+          {manualHelp ? (
+            <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
+              Continuar
+            </button>
+          ) : loading ? (
+            <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title="Parar tarefa">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            </button>
+          ) : (
+            <button data-testid="agent-run" onClick={handleSubmit} disabled={!input.trim() || chatLoading} className="composer-send" title="Enviar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Feed item renderers
+// ────────────────────────────────────────────────────────────────────────
+
+// "Pronto!" — toca um sininho suave (2 notas, via Web Audio, sem arquivo) e, se a
+// janela NÃO estiver em foco, dispara uma notificação do SO. Para tarefas longas
+// (supercut, baixar muita coisa) o usuário pode olhar pra fora e ser avisado.
+function chime() {
+  try {
+    const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ac = new AC();
+    const beep = (freq: number, at: number) => {
+      const o = ac.createOscillator(); const g = ac.createGain();
+      o.connect(g); g.connect(ac.destination); o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, ac.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.13, ac.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + at + 0.35);
+      o.start(ac.currentTime + at); o.stop(ac.currentTime + at + 0.37);
+    };
+    beep(880, 0); beep(1245, 0.13);   // dó→mi, alegrinho
+    setTimeout(() => { try { ac.close(); } catch {} }, 800);
+  } catch {}
+}
+function notifyDone(message: string) {
+  chime();
+  try {
+    if (!document.hasFocus() && 'Notification' in window) {
+      new Notification('✅ Navegador Inteligente', { body: (message || 'Tarefa concluída.').slice(0, 140) });
+    }
+  } catch {}
+}
+
+function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void }) {
+  switch (item.kind) {
+    case 'task':
+      return <div className="chat-msg user"><div className="msg-content">⚡ {item.text}</div></div>;
+    case 'chat-user':
+      return <div className="chat-msg user"><div className="msg-content">{item.text}</div></div>;
+    case 'chat-assistant':
+      return (
+        <div className="chat-msg assistant">
+          <div className="msg-content">{item.text}</div>
+          {item.sources && item.sources.length > 0 && (
+            <div className="chat-sources">
+              <span className="chat-sources-label">Fontes:</span>
+              {item.sources.slice(0, 6).map((s, i) => (
+                <button key={i} className="chat-source" onClick={() => onOpenUrl(s.url)} title={`${s.title}\n${s.url}`}>
+                  {i + 1}. {hostOf(s.url)}
+                </button>
+              ))}
+            </div>
+          )}
+          {item.suggestedCommand && (
+            <button className="chat-action-btn" onClick={() => onRunSuggestion(item.suggestedCommand!)} title="Executar esta tarefa no agente">
+              ⚡ Fazer isso{item.suggestedCommand.length <= 48 ? `: ${item.suggestedCommand}` : ''}
+            </button>
+          )}
+        </div>
+      );
+    case 'report':
+      return <div className="result-report">{item.text}</div>;
+    case 'error':
+      return <div className="result-error">{item.text}</div>;
+    case 'help':
+      return (
+        <div className="feed-help-card">
+          <div className="feed-help-title">✋ Preciso de você</div>
+          <div className="feed-help-msg">{item.message}</div>
+          <div className="feed-help-instr">{item.instruction}</div>
+          {helpActive && <button className="manual-continue-btn" onClick={onContinue}>Continuar</button>}
+        </div>
+      );
+    case 'step':
+      return <StepCard step={item.step} />;
+    case 'event':
+      return <ProgressLine event={item.event} />;
+    case 'media':
+      return <MediaStrip mediaKind={item.mediaKind} paths={item.paths} dir={item.dir} total={item.total} label={item.label} />;
+    case 'confirm':
+      return (
+        <div className="feed-confirm-card">
+          <div className="feed-confirm-title">🛑 Confirmação de segurança</div>
+          <div className="feed-confirm-msg">{item.message}</div>
+          {confirmActive && (
+            <div className="feed-confirm-actions">
+              <button className="confirm-yes" onClick={() => onConfirmRisky(true)}>✅ Sim, pode</button>
+              <button className="confirm-no" onClick={() => onConfirmRisky(false)}>✖️ Cancelar</button>
+            </div>
+          )}
+        </div>
+      );
+  }
+}
+
+// Tira de mídia no feed: até 5 miniaturas + "+N", clique abre a pasta. Zero IA.
+function MediaStrip({ mediaKind, paths, dir, total, label }: { mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }) {
+  const shown = paths.slice(0, 5);
+  const extra = Math.max(0, total - shown.length);
+  const icon = mediaKind === 'audio' ? '🎵' : mediaKind === 'video' ? '🎬' : '🖼️';
+  const fileUrl = (p: string) => 'file:///' + p.replace(/\\/g, '/').replace(/^\/+/, '');
+  const open = (target: string) => { try { (window as any).electronAPI?.revealInFolder?.(target); } catch {} };
+  return (
+    <div className="media-strip" title="Clique para abrir a pasta">
+      <div className="media-strip-head">{icon} {label} <span className="media-strip-open">— abrir pasta ↗</span></div>
+      <div className="media-tiles">
+        {shown.map((p, i) => (
+          <div key={i} className="media-tile" onClick={() => open(p)} title={p.split(/[\\/]/).pop()}>
+            {mediaKind === 'image'
+              ? <img src={fileUrl(p)} alt="" draggable={false} onError={e => { (e.currentTarget.style.display = 'none'); }} />
+              : <span className="media-tile-icon">{icon}</span>}
+          </div>
+        ))}
+        {extra > 0 && (
+          <div className="media-tile media-tile-more" onClick={() => open(dir)} title={`mais ${extra} em ${dir}`}>+{extra}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepCard({ step }: { step: StepRecord }) {
+  const [open, setOpen] = useState(false);
+  const evalKind = step.evaluation
+    ? (/^success/i.test(step.evaluation) ? 'ok' : /^fail/i.test(step.evaluation) ? 'fail' : 'unknown')
+    : null;
+  const statusColor = step.success ? '#22c55e' : '#ef4444';
+  const recoveryColor = '#f59e0b';
+  return (
+    <div style={{
+      border: '1px solid var(--border)', borderRadius: '8px', padding: '7px 9px',
+      background: 'rgba(255,255,255,0.02)', animation: 'msgIn 0.25s ease',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <span style={{
+          fontSize: '10px', fontWeight: 700, color: statusColor,
+          background: statusColor + '1f', border: `1px solid ${statusColor}55`,
+          borderRadius: '999px', padding: '1px 8px', flex: '0 0 auto',
+        }}>{step.success ? '✓' : '✕'} {step.fromQueue ? `⚡${step.step}` : step.step}</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {step.actionLabel}
+        </span>
+        {step.recovery && (
+          <span style={{ fontSize: '9px', fontWeight: 700, color: recoveryColor, background: recoveryColor + '1f', border: `1px solid ${recoveryColor}55`, borderRadius: '4px', padding: '1px 5px', flex: '0 0 auto' }}>
+            🛡️ {step.recovery.decision}
+          </span>
+        )}
+        {step.durationMs != null && (
+          <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', flex: '0 0 auto' }}>{(step.durationMs / 1000).toFixed(0)}s</span>
+        )}
+        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {step.evaluation && (
+        <div style={{ fontSize: '10.5px', marginTop: '4px', color: evalKind === 'ok' ? '#86efac' : evalKind === 'fail' ? '#fca5a5' : 'var(--text-muted)' }}>
+          {evalKind === 'ok' ? '✅' : evalKind === 'fail' ? '❌' : '❓'} {step.evaluation}
+        </div>
+      )}
+
+      {/* Screenshot always visible — the live "replay" the feed is about */}
+      {step.screenshot && (
+        <img src={step.screenshot} alt={`passo ${step.step}`}
+          style={{ width: '100%', borderRadius: '6px', border: '1px solid var(--border)', marginTop: '6px', cursor: 'pointer' }}
+          onClick={() => setOpen(o => !o)} />
+      )}
+
+      {open && (
+        <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+          {step.thought && (
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.4 }}>💭 {step.thought}</div>
+          )}
+          {step.recovery && (
+            <div style={{ fontSize: '10.5px', color: recoveryColor, lineHeight: 1.4 }}>🛡️ {step.recovery.reason}</div>
+          )}
+          {step.resultSummary && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{step.resultSummary}</div>
+          )}
+          {step.urlAfter && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🔗 {step.urlAfter}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressLine({ event }: { event: AgentProgressEvent }) {
+  if (event.kind === 'step') return null;
+  if (event.kind === 'manual_help') return null;
+  if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui
+  if (event.kind === 'action') {
+    return <div className="result-action"><span className="result-desc">▶ {formatAction(event.action)}</span></div>;
+  }
+  if (event.kind === 'result') {
+    return (
+      <div className="result-action">
+        <span className="result-desc">✓ {formatAction(event.action)}</span>
+        <span className="result-value">{formatResult(event.result)}</span>
+      </div>
+    );
+  }
+  if (event.kind === 'thought') {
+    return (
+      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', padding: '2px 0', lineHeight: 1.4 }}>
+        💭 {event.message}
+      </div>
+    );
+  }
+  // status — detect engine chip lines vs metric lines vs generic
+  const msg = event.message;
+
+  if (msg.startsWith('Atalho conhecido:')) {
+    return <StatusChip label="FAST PATH" message={msg.replace('Atalho conhecido:', '').trim()} color="#5b9e92" />;
+  }
+
+  if (msg.includes('OCR local:')) {
+    return <StatusChip label="OCR LOCAL" message={msg.replace(/^.*OCR local:/, '').trim()} color="#b59a4d" />;
+  }
+
+  if (/Passo \d+: observando/.test(msg)) {
+    return <StatusChip label="OBSERVE" message={msg} color="#6b93b8" subtle />;
+  }
+
+  if (/Passo \d+: pensando/.test(msg)) {
+    return <StatusChip label="THINK" message={msg} color="#8b80b5" subtle />;
+  }
+
+  if (msg.startsWith('🛡️')) {
+    return <StatusChip label="RECOVERY" message={msg.replace(/^🛡️\s*(Recovery:)?\s*/, '')} color="#c0883e" />;
+  }
+
+  // Engine routing line: "⚡ flash → engine: cloud-flash-fallback" / "🧠 pro → engine: pro"
+  if (msg.includes('engine:')) {
+    const isLocal = msg.includes('local') && !msg.includes('fallback');
+    const isFallback = msg.includes('fallback');
+    const isPro = msg.includes('pro');
+    const chipColor = isLocal ? '#5a9e6f' : isFallback ? '#c0793f' : isPro ? '#8b6fb0' : '#5e7fc0';
+    const chipLabel = isLocal ? '🏠 GPU LOCAL' : isFallback ? '⚠️ FALLBACK CLOUD' : isPro ? '🧠 PRO CLOUD' : '⚡ FLASH CLOUD';
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0' }}>
+        <span style={{
+          fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em',
+          background: chipColor + '22', color: chipColor,
+          border: `1px solid ${chipColor}55`,
+          borderRadius: '4px', padding: '1px 6px',
+        }}>{chipLabel}</span>
+      </div>
+    );
+  }
+
+  // Metrics line: "📊 deepseek-chat • 1200 in / 45 out / 0 cached • 2.1s"
+  if (msg.startsWith('📊')) {
+    return (
+      <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', padding: '1px 0', opacity: 0.8 }}>
+        {msg}
+      </div>
+    );
+  }
+
+  // Generic status (observing, thinking, etc.)
+  return (
+    <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '1px 0', opacity: 0.7 }}>
+      {msg}
+    </div>
+  );
+}
+
+function StatusChip({
+  label,
+  message,
+  color,
+  subtle = false,
+}: {
+  label: string;
+  message: string;
+  color: string;
+  subtle?: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0' }}>
+      <span style={{
+        fontSize: '10px',
+        fontWeight: 700,
+        letterSpacing: '0.05em',
+        background: color + (subtle ? '16' : '22'),
+        color,
+        border: `1px solid ${color}${subtle ? '33' : '55'}`,
+        borderRadius: '4px',
+        padding: '1px 6px',
+        flex: '0 0 auto',
+      }}>{label}</span>
+      <span style={{ fontSize: '11px', color: subtle ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
+        {message}
+      </span>
+    </div>
+  );
+}
+
+function formatResult(result: any): string {
+  if (result === undefined || result === null) return '';
+  if (typeof result !== 'object') return String(result);
+  return JSON.stringify(result);
+}

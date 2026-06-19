@@ -1,0 +1,39 @@
+# ── Dependências e build (regenerados com `npm install` / `npm run build`) ──
+node_modules/
+dist/
+out/
+build/
+release/
+
+# ── Configuração LOCAL do Claude Code — CONTÉM CHAVE DE API. NUNCA PUBLICAR ──
+.claude/
+
+# ── Segredos / variáveis de ambiente ──
+.env
+.env.*
+*.key
+*.pem
+secrets.*
+
+# ── Documentos internos/privados (estratégia, auditoria, memória do projeto) ──
+MEMORIA_DO_PROJETO.md
+ARQUITETURA_PARA_AUDITORIA.md
+MANUAL_ARQUITETURA.md
+
+# ── Saídas de teste / arquivos temporários do tools/ ──
+test-results/
+playwright-report/
+playwright/.cache/
+tools/_*
+
+# ── Mídia baixada pelo app (não faz parte do código) ──
+downloads/
+*.mp3
+*.mp4
+
+# ── Lixo de SO / editor ──
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

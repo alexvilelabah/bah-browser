@@ -1,0 +1,1467 @@
+import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog } from 'electron';
+import { ElectronBlocker } from '@ghostery/adblocker-electron';
+import fetch from 'cross-fetch';
+import fs from 'fs';
+import path from 'path';
+import { AIEngine, AIProvider } from './ai-engine';
+import { PageAgent } from './page-agent';
+import { downloadVideo, resolveTopVideo, resolveTopVideos } from './media-downloader';
+import { searchVideoCuts } from './video-cuts';
+import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
+import { makeSupercut } from './supercut';
+import { harvestDownload } from './image-harvester';
+import { cortarTrecho, removerSilencio, extrairAudio } from './video-editor';
+import { enqueueJob } from './job-queue';
+import { isHttpUrl, isHttpOrSearch, clampCount, isInsideAllowedRoot, isExistingFile } from './validate';
+import * as os from 'os';
+import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
+import { decidePopup } from './popup-shield';
+
+let mainWindow: BrowserWindow | null = null;
+let aiEngine: AIEngine;
+let pageAgent: PageAgent;
+let localEngine: AIEngine | null = null;
+let localPageAgent: PageAgent | null = null;
+// Escudo de popup: timestamps de novas abas por webContents (anti-bombardeio).
+const popupTimes = new Map<number, number[]>();
+
+// Shared ensureDebugger used by CDP handlers AND the hybrid pipeline
+// NOTE: only attaches + enables Accessibility — exactly as the original.
+// DOM.enable / Page.enable are enabled on-demand inside page-capture.ts.
+const debuggerAttachedSet = new Set<number>();
+async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Promise<void> {
+  if (!debuggerAttachedSet.has(wcId)) {
+    try { wc.debugger.attach('1.3'); } catch (err: any) {
+      if (!String(err.message).includes('already attached')) throw err;
+    }
+    debuggerAttachedSet.add(wcId);
+    wc.once('destroyed', () => debuggerAttachedSet.delete(wcId));
+    await wc.debugger.sendCommand('Accessibility.enable');
+  }
+}
+
+
+// Rede de segurança: um erro não tratado no processo PRINCIPAL não pode derrubar o app
+// inteiro (ex.: um módulo nativo/lib emitindo um erro assíncrono). Logamos e seguimos,
+// em vez de mostrar o diálogo fatal do Electron e fechar tudo.
+function logMainError(tag: string, err: unknown): void {
+  const msg = (err as any)?.stack || (err as any)?.message || String(err);
+  console.error(`[${tag}]`, msg);
+  try {
+    const logPath = path.join(app.getPath('userData'), 'agent.log');
+    fs.appendFileSync(logPath, `${new Date().toISOString()} [${tag}] ${msg}\n`);
+  } catch {}
+}
+process.on('uncaughtException', (err) => logMainError('uncaughtException', err));
+process.on('unhandledRejection', (reason) => logMainError('unhandledRejection', reason));
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 800,
+    minHeight: 600,
+    frame: false,
+    titleBarStyle: 'hidden',
+    autoHideMenuBar: true,
+    backgroundColor: '#0d0d12',
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+    },
+  });
+
+  const rendererPath = path.join(__dirname, '..', 'renderer', 'index.html');
+  const isDev = !app.isPackaged && !require('fs').existsSync(rendererPath);
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173/');
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    mainWindow.loadFile(rendererPath);
+  }
+
+  mainWindow.on('close', async () => {
+    // Força gravação dos cookies em disco antes de fechar
+    try {
+      const persistSession = session.fromPartition('persist:browser');
+      await persistSession.cookies.flushStore();
+      await session.defaultSession.cookies.flushStore();
+    } catch {}
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  // F12 toggles DevTools
+  mainWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainWindow?.webContents.toggleDevTools();
+    }
+  });
+
+  // Forward renderer console messages to main process logs (visible in terminal + file)
+  mainWindow.webContents.on('console-message', (_e, level, message) => {
+    if (message.startsWith('[Agent]') || message.startsWith('[DeepSeek]')) {
+      console.log(`[renderer] ${message}`);
+      try {
+        const logPath = path.join(app.getPath('userData'), 'agent.log');
+        fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+      } catch {}
+    }
+  });
+
+  // Right-click context menu on main window (renderer UI)
+  attachContextMenu(mainWindow.webContents);
+
+  // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
+  mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
+    wc.setUserAgent(CHROME_UA);
+    // Inject stealth script before each navigation to mask Electron/automation signals
+    wc.on('dom-ready', () => {
+      if (!/accounts\.google\.com|accounts-google\.com/i.test(wc.getURL())) {
+        wc.executeJavaScript(STEALTH_SCRIPT).catch(() => {});
+      }
+      // Segue "Você quis dizer X?" sozinho em qualquer busca (Google/YouTube/Bing/DuckDuckGo).
+      wc.executeJavaScript(AUTOCORRECT_SCRIPT).catch(() => {});
+    });
+    attachContextMenu(wc);
+    // Intercept popup window requests and forward to renderer to open as new tab
+    wc.setWindowOpenHandler((details) => {
+      const url = details.url;
+      if (!url || url === 'about:blank') return { action: 'deny' };
+      // Safe browsing na popup
+      try {
+        const u = new URL(url);
+        if (maliciousHosts.has(u.hostname)) {
+          mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
+          return { action: 'deny' };
+        }
+      } catch { return { action: 'deny' }; }   // URL inválida → bloqueia
+      // ESCUDO DE POPUP (genérico, todo site): aba real do usuário passa; popup de
+      // anúncio (window.open com features) e rajadas são descartados — não viram aba.
+      const now = Date.now();
+      const recent = (popupTimes.get(wc.id) || []).filter(t => now - t < 4000);
+      const decision = decidePopup(details.disposition || '', details.features || '', recent.length);
+      if (!decision.open) {
+        console.log(`[Popup] bloqueado (${decision.reason}): ${url.slice(0, 80)}`);
+        popupTimes.set(wc.id, recent);
+        return { action: 'deny' };
+      }
+      recent.push(now);
+      popupTimes.set(wc.id, recent);
+      mainWindow?.webContents.send('open-new-tab', url);
+      return { action: 'deny' };
+    });
+    wc.once('destroyed', () => popupTimes.delete(wc.id));
+    // Safe browsing on main-frame navigation
+    wc.on('will-navigate', (e, url) => {
+      try {
+        const u = new URL(url);
+        if (maliciousHosts.has(u.hostname)) {
+          e.preventDefault();
+          mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
+        }
+      } catch {}
+    });
+  });
+}
+
+function attachContextMenu(wc: Electron.WebContents): void {
+  wc.on('context-menu', (_event, params) => {
+    const hasSelection = !!params.selectionText;
+    const isEditable = params.isEditable;
+    const template: Electron.MenuItemConstructorOptions[] = [];
+
+    if (hasSelection) {
+      template.push({ label: 'Copiar', role: 'copy' });
+    }
+    if (isEditable) {
+      template.push({ label: 'Recortar', role: 'cut', enabled: hasSelection });
+      template.push({ label: 'Colar', role: 'paste' });
+      template.push({ label: 'Selecionar tudo', role: 'selectAll' });
+    } else if (hasSelection) {
+      template.push({ label: 'Selecionar tudo', role: 'selectAll' });
+    }
+
+    if (params.linkURL) {
+      if (template.length) template.push({ type: 'separator' });
+      template.push({
+        label: 'Copiar endereço do link',
+        click: () => clipboard.writeText(params.linkURL),
+      });
+    }
+
+    if (template.length) template.push({ type: 'separator' });
+    template.push({ label: 'Recarregar', click: () => wc.reload() });
+    template.push({ label: 'Inspecionar', click: () => wc.inspectElement(params.x, params.y) });
+
+    Menu.buildFromTemplate(template).popup({ window: mainWindow ?? undefined });
+  });
+}
+
+function setupIPC(): void {
+  // Helpers de "humanização" do input (jitter de tempo/trajeto) — DOR 3.
+  const rnd = (min: number, max: number) => min + Math.random() * (max - min);
+  const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+  // Window controls
+  ipcMain.handle('window:minimize', () => mainWindow?.minimize());
+  ipcMain.handle('window:maximize', () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow?.maximize();
+    }
+  });
+  ipcMain.handle('window:close', () => mainWindow?.close());
+
+  // AI configuration
+  ipcMain.handle('ai:set-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string) => {
+    aiEngine = new AIEngine(provider, apiKey, baseUrl);
+    pageAgent = new PageAgent(aiEngine);
+    return { success: true };
+  });
+
+  // Local (GPU) model configuration
+  ipcMain.handle('ai:set-local-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string, modelName?: string) => {
+    localEngine = new AIEngine(provider, apiKey || 'local', baseUrl, modelName);
+    localPageAgent = new PageAgent(localEngine);
+    console.log(`[HybridRouter] Local engine set: ${provider} model=${modelName || 'default'} @ ${baseUrl || 'default'}`);
+    // Pré-aquece o modelo na VRAM (fire-and-forget) pra a 1ª tarefa já vir quente.
+    localEngine.warmupOllama().catch(() => {});
+    return { success: true };
+  });
+
+  // AI chat — general conversation / page Q&A
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean) => {
+    if (!aiEngine) return { error: 'AI provider not configured. Open settings to configure.' };
+    try {
+      const response = await aiEngine.chat(message, pageContent, stateless);
+      return { response };
+    } catch (err: any) {
+      return { error: err.message ?? String(err) };
+    }
+  });
+
+  // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine
+  ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => {
+    if (process.env.E2E_MOCK_AI === '1') {
+      return {
+        thought: 'E2E mock: confirming the current browser state.',
+        evaluation: 'Success - e2e mock response',
+        action: { type: 'done', reason: 'E2E mock completed the task.', success: true },
+        _engine: 'e2e-mock',
+        metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+      };
+    }
+    const resolvedTier = tier ?? 'pro';
+    // Route to local engine if requested AND local is configured
+    if (resolvedTier === 'local' && localPageAgent) {
+      try {
+        const result = await localPageAgent.executeCommand(command, pageContent, screenshot, 'flash');
+        if (result.error) throw new Error(result.error);
+        return { ...result, _engine: 'local' };
+      } catch (err: any) {
+        // Local failed → fallback to main engine with flash
+        console.warn('[HybridRouter] Local engine failed, falling back to cloud flash:', err.message);
+        if (!pageAgent) return { error: err.message ?? String(err) };
+        const result = await pageAgent.executeCommand(command, pageContent, screenshot, 'flash');
+        return { ...result, _engine: 'cloud-flash-fallback' };
+      }
+    }
+    if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };
+    try {
+      const result = await pageAgent.executeCommand(command, pageContent, screenshot, resolvedTier === 'local' ? 'flash' : resolvedTier);
+      return { ...result, _engine: resolvedTier };
+    } catch (err: any) {
+      return { error: err.message ?? String(err) };
+    }
+  });
+
+  // ═══ Gerenciador de modelos Ollama (modo local) ═══════════════════════════
+  // Deixa o usuário listar / baixar (pelo NOME, ex.: "qwen3:14b") / apagar / importar
+  // um .gguf — tudo pela UI, sem terminal. Assim, IA nova = só digitar o nome (não
+  // precisa atualizar o app). NÃO toca o caminho da API/nuvem.
+  const ollamaUrl = (b?: string) => (b || 'http://localhost:11434').replace(/\/$/, '');
+  ipcMain.handle('ollama:list', async (_e, baseUrl?: string) => {
+    try {
+      const r = await fetch(`${ollamaUrl(baseUrl)}/api/tags`);
+      if (!r.ok) return { ok: false, error: `status ${r.status}`, models: [] };
+      const data = await r.json();
+      const models = (data.models || []).map((m: any) => ({
+        name: m.name,
+        sizeGB: m.size ? +(m.size / 1e9).toFixed(1) : 0,
+        params: m.details?.parameter_size || '',
+        quant: m.details?.quantization_level || '',
+      }));
+      return { ok: true, models };
+    } catch (e: any) { return { ok: false, error: String(e?.message ?? e), models: [] }; }
+  });
+  ipcMain.handle('ollama:delete', async (_e, model: string, baseUrl?: string) => {
+    try {
+      const r = await fetch(`${ollamaUrl(baseUrl)}/api/delete`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }),
+      });
+      return { ok: r.ok, error: r.ok ? undefined : `status ${r.status}` };
+    } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+  });
+  // Pull com PROGRESSO (stream de linhas JSON) — usa Node http direto (streaming confiável).
+  ipcMain.handle('ollama:pull', async (e, model: string, baseUrl?: string) => {
+    const u = new URL(`${ollamaUrl(baseUrl)}/api/pull`);
+    const send = (p: any) => { try { e.sender.send('ollama:pull-progress', { model, ...p }); } catch {} };
+    return await new Promise((resolve) => {
+      try {
+        const http = require('http');
+        const req = http.request(
+          { hostname: u.hostname, port: u.port || 11434, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+          (res: any) => {
+            let buf = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk: string) => {
+              buf += chunk;
+              let nl: number;
+              while ((nl = buf.indexOf('\n')) >= 0) {
+                const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+                if (!line) continue;
+                try {
+                  const o = JSON.parse(line);
+                  const pct = o.total ? Math.round((o.completed || 0) / o.total * 100) : undefined;
+                  send({ status: o.status, completed: o.completed, total: o.total, percent: pct });
+                  if (o.error) send({ done: true, error: o.error });
+                } catch {}
+              }
+            });
+            res.on('end', () => { send({ done: true }); resolve({ ok: true }); });
+          },
+        );
+        req.on('error', (err: any) => { send({ done: true, error: String(err?.message ?? err) }); resolve({ ok: false, error: String(err?.message ?? err) }); });
+        req.write(JSON.stringify({ model, stream: true }));
+        req.end();
+      } catch (e2: any) { send({ done: true, error: String(e2?.message ?? e2) }); resolve({ ok: false, error: String(e2?.message ?? e2) }); }
+    });
+  });
+  // Importar um .gguf por CAMINHO (modelo fora do catálogo / baixado na mão via IDM).
+  // Roda `ollama create <nome> -f <Modelfile>` com `FROM <caminho>`.
+  ipcMain.handle('ollama:import-gguf', async (_e, name: string, ggufPath: string) => {
+    try {
+      if (!ggufPath || !fs.existsSync(ggufPath)) return { ok: false, error: '.gguf não encontrado nesse caminho' };
+      const mf = path.join(app.getPath('temp'), `Modelfile_${Date.now()}`);
+      fs.writeFileSync(mf, `FROM ${ggufPath.replace(/\\/g, '/')}\n`);
+      return await new Promise((resolve) => {
+        const child = require('child_process').spawn('ollama', ['create', name || `local-${Date.now()}`, '-f', mf], { windowsHide: true, env: { ...process.env } });
+        let err = '';
+        child.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+        child.on('error', (e2: any) => resolve({ ok: false, error: String(e2?.message ?? e2) }));
+        child.on('close', (code: number) => { try { fs.unlinkSync(mf); } catch {} resolve(code === 0 ? { ok: true } : { ok: false, error: err.slice(-300) || `exit ${code}` }); });
+        setTimeout(() => { try { child.kill(); } catch {} resolve({ ok: false, error: 'timeout' }); }, 600000);
+      });
+    } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+  });
+
+  // Execute JS directly (from agent or user)
+  // ═══ Real OS-level mouse input (Comet-style) ═══
+  ipcMain.handle('input:click', async (_e, wcId: number, x: number, y: number, backendNodeId?: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      wc.focus();
+      // Re-resolve FRESCO da caixa do alvo pelo backendNodeId (estável a reflow). É chamado
+      // no ÚLTIMO instante antes do mouseDown: se a janela mudou de tamanho DURANTE o trajeto
+      // do clique, o alvo acompanha o novo layout e o clique não erra. Sem backendNodeId
+      // (click_at / click_text) retorna null e o comportamento é IDÊNTICO ao de antes.
+      const resolveCenter = async (): Promise<{ x: number; y: number } | null> => {
+        if (backendNodeId == null) return null;
+        try {
+          await sharedEnsureDebugger(wc, wcId);
+          const r = await wc.debugger.sendCommand('DOM.getBoxModel', { backendNodeId }) as any;
+          const q = r?.model?.border;
+          if (q && q.length === 8) {
+            const xs = [q[0], q[2], q[4], q[6]]; const ys = [q[1], q[3], q[5], q[7]];
+            return { x: Math.round((Math.min(...xs) + Math.max(...xs)) / 2), y: Math.round((Math.min(...ys) + Math.max(...ys)) / 2) };
+          }
+        } catch { /* alvo sumiu/erro → cai no x,y recebido */ }
+        return null;
+      };
+      // Humanizado: leve desvio do centro (±2px) + trajeto curto com easing + jitter.
+      const tx0 = Math.round(x + rnd(-2, 2));
+      const ty0 = Math.round(y + rnd(-2, 2));
+      const sx = Math.max(0, Math.round(tx0 - rnd(40, 90)));
+      const sy = Math.max(0, Math.round(ty0 - rnd(25, 60)));
+      const steps = 4 + Math.floor(rnd(0, 3));
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps; const e = t * t * (3 - 2 * t); // smoothstep
+        wc.sendInputEvent({ type: 'mouseMove', x: Math.round(sx + (tx0 - sx) * e), y: Math.round(sy + (ty0 - sy) * e) } as any);
+        await sleepMs(rnd(8, 22));
+      }
+      // ÚLTIMO instante: re-resolve a posição (pega resize/scroll ocorrido no trajeto).
+      const fresh = await resolveCenter();
+      const tx = fresh ? Math.round(fresh.x + rnd(-2, 2)) : tx0;
+      const ty = fresh ? Math.round(fresh.y + rnd(-2, 2)) : ty0;
+      wc.sendInputEvent({ type: 'mouseMove', x: tx, y: ty } as any);
+      await sleepMs(rnd(30, 70));
+      wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      await sleepMs(rnd(60, 130));
+      wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      return { success: true, info: { x: tx, y: ty, refreshed: !!fresh } };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  ipcMain.handle('input:type', async (_e, wcId: number, text: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      wc.focus();
+      // Humanizado: cadência variável por tecla + pausa ocasional após espaço/pontuação.
+      // Mesmo texto digitado; só o ritmo muda (menos "robô"). Textos longos = ritmo menor.
+      const s = String(text);
+      const longText = s.length > 60;
+      for (const ch of s) {
+        if (ch === '\n' || ch === '\r') {
+          wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' } as any);
+          wc.sendInputEvent({ type: 'char', keyCode: 'Enter' } as any);
+          wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' } as any);
+        } else {
+          wc.sendInputEvent({ type: 'char', keyCode: ch } as any);
+        }
+        let d = longText ? rnd(10, 28) : rnd(25, 70);
+        if (/[\s.,!?;:]/.test(ch) && Math.random() < 0.35) d += rnd(120, 300);
+        await sleepMs(d);
+      }
+      return { success: true, info: { typed: s.length } };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  ipcMain.handle('input:key', async (_e, wcId: number, key: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      wc.focus();
+      wc.sendInputEvent({ type: 'keyDown', keyCode: key } as any);
+      wc.sendInputEvent({ type: 'char', keyCode: key } as any);
+      wc.sendInputEvent({ type: 'keyUp', keyCode: key } as any);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Accessibility tree via CDP (Comet-style semantic tree) ═══
+  // Uses the shared ensureDebugger (also enables DOM + Page domains for the hybrid pipeline)
+  const ensureDebugger = sharedEnsureDebugger;
+
+  ipcMain.handle('cdp:axtree', async (_e, wcId: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      const result = await wc.debugger.sendCommand('Accessibility.getFullAXTree') as any;
+      return { ok: true, nodes: result.nodes };
+    } catch (e: any) {
+      return { error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Resolve backendNodeId → bounding box via CDP DOM.getBoxModel ═══
+  ipcMain.handle('cdp:node-coords', async (_e, wcId: number, backendNodeIds: number[]) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      const results: Record<number, { x: number; y: number; w: number; h: number } | null> = {};
+      // Resolve in parallel (up to 30 at a time to avoid overwhelming CDP)
+      const BATCH = 30;
+      for (let i = 0; i < backendNodeIds.length; i += BATCH) {
+        const batch = backendNodeIds.slice(i, i + BATCH);
+        await Promise.all(batch.map(async (id) => {
+          try {
+            const r = await wc.debugger.sendCommand('DOM.getBoxModel', { backendNodeId: id }) as any;
+            const quad = r?.model?.border; // [x1,y1, x2,y2, x3,y3, x4,y4]
+            if (quad && quad.length === 8) {
+              const xs = [quad[0], quad[2], quad[4], quad[6]];
+              const ys = [quad[1], quad[3], quad[5], quad[7]];
+              const minX = Math.min(...xs), maxX = Math.max(...xs);
+              const minY = Math.min(...ys), maxY = Math.max(...ys);
+              results[id] = {
+                x: Math.round((minX + maxX) / 2),
+                y: Math.round((minY + maxY) / 2),
+                w: Math.round(maxX - minX),
+                h: Math.round(maxY - minY),
+              };
+            } else {
+              results[id] = null;
+            }
+          } catch {
+            results[id] = null;
+          }
+        }));
+      }
+      return { ok: true, coords: results };
+    } catch (e: any) {
+      return { error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Pre-click verification via CDP ═══
+  // Re-resolve a target's fresh box from its backendNodeId (stable across re-renders),
+  // then hit-test the center point to detect overlays/modals covering the target.
+  // Returns: { ok, stale?, covered?, covering?, x, y }
+  //   stale=true   → element no longer exists (caller should re-observe)
+  //   covered=true → an unrelated element is on top at the click point
+  //   x, y         → fresh center coordinates to click (use instead of cached ones)
+  ipcMain.handle('cdp:verify-click', async (_e, wcId: number, backendNodeId: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      // 1. Fresh bounding box of the intended target
+      let box: any = null;
+      try {
+        box = await wc.debugger.sendCommand('DOM.getBoxModel', { backendNodeId }) as any;
+      } catch {
+        return { ok: true, stale: true };
+      }
+      const quad = box?.model?.border;
+      if (!quad || quad.length !== 8) return { ok: true, stale: true };
+      const xs = [quad[0], quad[2], quad[4], quad[6]];
+      const ys = [quad[1], quad[3], quad[5], quad[7]];
+      const cx = Math.round((Math.min(...xs) + Math.max(...xs)) / 2);
+      const cy = Math.round((Math.min(...ys) + Math.max(...ys)) / 2);
+
+      // 2. Hit-test: what element actually sits at the target's center?
+      let covered = false;
+      let covering: string | undefined;
+      try {
+        const hit = await wc.debugger.sendCommand('DOM.getNodeForLocation', {
+          x: cx, y: cy, includeUserAgentShadowDOM: false,
+        }) as any;
+        const hitBackend = hit?.backendNodeId;
+        if (hitBackend && hitBackend !== backendNodeId) {
+          // Different node on top — confirm it's truly unrelated (not a child icon/span or wrapping parent)
+          const tObj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+          const hObj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId: hitBackend }) as any;
+          const tId = tObj?.object?.objectId;
+          const hId = hObj?.object?.objectId;
+          if (tId && hId) {
+            const rel = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+              objectId: tId,
+              functionDeclaration: 'function(o){return this===o||this.contains(o)||o.contains(this);}',
+              arguments: [{ objectId: hId }],
+              returnByValue: true,
+            }) as any;
+            if (rel?.result?.value !== true) {
+              covered = true;
+              try {
+                const desc = await wc.debugger.sendCommand('DOM.describeNode', { backendNodeId: hitBackend }) as any;
+                const n = desc?.node;
+                covering = String(n?.nodeName || '?').toLowerCase();
+                const attrs = n?.attributes || [];
+                for (let i = 0; i < attrs.length; i += 2) {
+                  if (attrs[i] === 'id') covering += '#' + attrs[i + 1];
+                  else if (attrs[i] === 'aria-label') covering += ' [' + String(attrs[i + 1]).slice(0, 40) + ']';
+                }
+              } catch { /* describe is best-effort */ }
+            }
+          }
+          if (tId) wc.debugger.sendCommand('Runtime.releaseObject', { objectId: tId }).catch(() => {});
+          if (hId) wc.debugger.sendCommand('Runtime.releaseObject', { objectId: hId }).catch(() => {});
+        }
+      } catch { /* hit-test unavailable (e.g. off-screen) — don't block the click */ }
+
+      return { ok: true, stale: false, covered, covering, x: cx, y: cy };
+    } catch (e: any) {
+      return { error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Preenchimento à prova de overlay (CDP) ═══
+  // Foca o elemento pelo backendNodeId (estável) e seta o valor DIRETO no nó, sem clicar
+  // por coordenada. Imune a: modal/overlay cobrindo o campo, redimensionar a janela, e
+  // reflow. Generaliza o que descobrimos no salvar-playlist → vale pra preencher campo
+  // dentro de QUALQUER diálogo (login, checkout, comentário, "criar X") em qualquer site.
+  ipcMain.handle('cdp:fill-node', async (_e, wcId: number, backendNodeId: number, value: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      const resolved = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+      const objectId = resolved?.object?.objectId;
+      if (!objectId) return { ok: false, error: 'resolveNode failed' };
+      const fn = `function(v){
+        try{ this.scrollIntoView({block:'center',inline:'center'}); }catch(e){}
+        try{ this.focus(); }catch(e){}
+        var el=this;
+        if (el.isContentEditable || (el.getAttribute && el.getAttribute('role')==='textbox')){
+          try{ el.textContent=v; }catch(e){}
+          el.dispatchEvent(new InputEvent('input',{bubbles:true,data:v,inputType:'insertReplacementText'}));
+          el.dispatchEvent(new Event('change',{bubbles:true}));
+          return true;
+        }
+        var proto = el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
+        var d = Object.getOwnPropertyDescriptor(proto,'value');
+        if (d && d.set) d.set.call(el, v); else el.value=v;
+        var k=v.slice(-1)||'a';
+        el.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:k}));
+        el.dispatchEvent(new InputEvent('input',{bubbles:true,data:v,inputType:'insertText'}));
+        el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,cancelable:true,key:k}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+        return true;
+      }`;
+      const res = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+        objectId, functionDeclaration: fn, arguments: [{ value: String(value ?? '') }], returnByValue: true,
+      }) as any;
+      wc.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {});
+      return { ok: res?.result?.value === true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Agent-driven file download (images, pdfs...) into the user's Downloads ═══
+  // Executables are blocked by extension AND by content sniffing of the first bytes.
+  const BLOCKED_EXTENSIONS = /\.(exe|msi|bat|cmd|scr|com|pif|apk|dmg|pkg|deb|rpm|js|jse|vbs|vbe|wsf|ps1|jar|lnk|hta)(\?|#|$)/i;
+
+  // ═══ Supercut: o navegador edita vídeo (frase dita N vezes → MP4 costurado) ═══
+  ipcMain.handle('media:make-supercut', async (_e, phrase: string, count?: number) =>
+    // FILA (lane 'download', junto com o download de vídeo): uma tarefa pesada por vez.
+    enqueueJob('download', async () => {
+      try {
+        return await makeSupercut(String(phrase || ''), clampCount(count, 1, 15, 6), (p) => {
+          mainWindow?.webContents.send('agent:supercut-progress', p);
+        });
+      } catch (e: any) {
+        return { success: false, error: String(e?.message ?? e) };
+      }
+    }, (ahead) => mainWindow?.webContents.send('agent:supercut-progress', { stage: 'searching', message: `Na fila — ${ahead} tarefa(s) de vídeo na frente…` }))
+      .catch((e: any) => ({ success: false, error: String(e?.message ?? e) })));
+
+  // ═══ Editor de vídeo: o navegador EDITA um vídeo local (ffmpeg nativo, 0 IA) ═══
+  // Escolher arquivo (diálogo nativo — à prova de balas, sem depender de drag-drop).
+  ipcMain.handle('video:pick', async () => {
+    const r = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Escolha um vídeo pra editar',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Vídeos', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'flv', 'wmv', 'mpeg', 'mpg', 'ts'] },
+        { name: 'Todos os arquivos', extensions: ['*'] },
+      ],
+    });
+    if (r.canceled || !r.filePaths[0]) return { canceled: true };
+    return { canceled: false, path: r.filePaths[0] };
+  });
+
+  // Edições entram na FILA (lane 'edit') — uma por vez, em ordem, sem rejeitar a
+  // próxima. (Roda em paralelo com a lane 'download'.) Mesmas funções de sempre.
+  const editProgress = (p: any) => mainWindow?.webContents.send('agent:videoedit-progress', p);
+  const onEditQueued = (ahead: number) => editProgress({ stage: 'preparing', message: `Na fila — ${ahead} edição(ões) na frente…` });
+  const queueGuard = (e: any) => ({ success: false, error: String(e?.message ?? e) });
+  ipcMain.handle('videoedit:trim', async (_e, input: string, startSec: number, endSec: number) => {
+    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    return enqueueJob('edit', async () => {
+      try { return await cortarTrecho(String(input), Number(startSec), Number(endSec), editProgress); }
+      catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
+    }, onEditQueued).catch(queueGuard);
+  });
+  ipcMain.handle('videoedit:remove-silence', async (_e, input: string, opts?: any) => {
+    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    return enqueueJob('edit', async () => {
+      try { return await removerSilencio(String(input), opts || {}, editProgress); }
+      catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
+    }, onEditQueued).catch(queueGuard);
+  });
+  ipcMain.handle('videoedit:extract-audio', async (_e, input: string) => {
+    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    return enqueueJob('edit', async () => {
+      try { return await extrairAudio(String(input), editProgress); }
+      catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
+    }, onEditQueued).catch(queueGuard);
+  });
+
+  // ═══ Data views: dados → página bonita local (tabela + gráfico, zero CDN) ═══
+  // ═══ Abrir pasta / revelar arquivo no explorador (clique nas miniaturas do feed) ═══
+  ipcMain.handle('shell:reveal', async (_e, target: string) => {
+    try {
+      if (!target) return { success: false };
+      // GUARD: só revela dentro de pastas que o app de fato usa (Downloads/userData/temp).
+      // Bloqueia pedir pra abrir um caminho arbitrário do sistema. Nunca executa arquivo.
+      const roots = [app.getPath('downloads'), app.getPath('userData'), os.tmpdir()];
+      if (!isInsideAllowedRoot(target, roots)) {
+        console.warn('[shell:reveal] bloqueado (fora das pastas permitidas):', target);
+        return { success: false, error: 'Caminho fora das pastas permitidas.' };
+      }
+      const fsx = require('fs');
+      // Se for arquivo, revela ele na pasta; se for pasta, abre a pasta.
+      if (fsx.existsSync(target) && fsx.statSync(target).isDirectory()) {
+        await shell.openPath(target);
+      } else {
+        shell.showItemInFolder(target);
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Abrir link externo no navegador do SISTEMA (ex.: instalar Ollama) ═══
+  // Só http/https — nunca file:, exe ou esquema arbitrário.
+  ipcMain.handle('shell:open-external', async (_e, url: string) => {
+    try {
+      const u = new URL(String(url));
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        return { success: false, error: 'esquema não permitido' };
+      }
+      await shell.openExternal(u.toString());
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Porteiro de overlays: roda o dispensador de cookie/consent em TODOS os frames ═══
+  // Só o processo principal alcança iframes de OUTRA ORIGEM (ex.: Sourcepoint da CNN/Guardian).
+  // Tenta o frame principal primeiro (evita clicar dentro de iframe de anúncio). Retorna o
+  // rótulo do que fechou (ou ''). Conservador: o próprio script só clica em consent conhecido.
+  ipcMain.handle('overlays:dismiss', async (_e, wcId: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { dismissed: '' };
+    try {
+      const main = wc.mainFrame;
+      if (!main) return { dismissed: '' };
+      const subtree = (main.framesInSubtree || [main]);
+      const frames = [main, ...subtree.filter(f => f !== main)].slice(0, 25);
+      for (const frame of frames) {
+        try {
+          const r = await frame.executeJavaScript(OVERLAY_DISMISS_SCRIPT, false);
+          if (r) return { dismissed: String(r) };
+        } catch { /* frame detached/cross-process: ignora */ }
+      }
+    } catch { /* ignore */ }
+    return { dismissed: '' };
+  });
+
+  // ═══ Colheita de imagens em massa → Downloads/<tema>/ (download paralelo) ═══
+  ipcMain.handle('images:harvest', async (_e, urls: string[], theme: string) => {
+    try {
+      // só URLs http(s) válidas (o harvester ainda aplica seu próprio teto MAX_URLS)
+      const safe = (Array.isArray(urls) ? urls : []).filter(isHttpUrl);
+      return await harvestDownload(safe, String(theme || 'imagens'), (saved, total) => {
+        mainWindow?.webContents.send('agent:harvest-progress', { saved, total });
+      });
+    } catch (e: any) {
+      return { success: false, saved: 0, error: String(e?.message ?? e) };
+    }
+  });
+
+  ipcMain.handle('view:render', async (_e, spec: DataViewSpec) => {
+    try {
+      if (!spec || !Array.isArray(spec.columns) || !Array.isArray(spec.rows)) {
+        return { success: false, error: 'Spec inválida (columns/rows obrigatórios).' };
+      }
+      spec.rows = spec.rows.slice(0, 200);
+      return openDataView(spec);
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+  ipcMain.handle('stocks:movers', async (_e, direction: 'gainers' | 'losers', count?: number) => {
+    try {
+      const spec = await fetchStockMovers(direction === 'losers' ? 'losers' : 'gainers', Number(count) || 50);
+      return { success: true, spec };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Video cuts: onde uma frase é DITA em vídeos do YouTube (Filmot → legendas) ═══
+  ipcMain.handle('videocuts:search', async (_e, phrase: string, count?: number) => {
+    try {
+      return await searchVideoCuts(String(phrase || ''), Number(count) || 4);
+    } catch (e: any) {
+      return { success: false, cuts: [], error: String(e?.message ?? e) };
+    }
+  });
+
+  // ═══ Image search via public APIs (direct full-res, rights-clean URLs) ═══
+  // Beats Google Images: returns DIRECT downloadable URLs in high resolution from
+  // Creative-Commons/public-domain sources — no DOM scraping, no wandering to
+  // third-party watermark sites. Openverse (CC) primary; Wikimedia for famous subjects.
+  ipcMain.handle('images:search', async (_e, query: string, minWidth?: number, count?: number) => {
+    const q = String(query || '').trim();
+    if (!q) return { success: false, error: 'empty query', images: [] };
+    const want = Math.min(Math.max(count || 12, 1), 30);
+    const minW = minWidth && minWidth > 0 ? minWidth : 0;
+    const UA = { 'User-Agent': 'navegador-inteligente/1.0 (educational browser agent)' };
+    const withTO = <T>(p: Promise<T>, ms: number, fb: T) => Promise.race([p, new Promise<T>(r => setTimeout(() => r(fb), ms))]);
+    type Img = { url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string };
+    const out: Img[] = [];
+
+    // Openverse (Creative Commons)
+    try {
+      const r = await withTO(fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=30`, { headers: UA }), 9000, null as any);
+      if (r && r.ok) {
+        const d: any = await r.json();
+        for (const it of (d.results || [])) {
+          if (!it.url) continue;
+          out.push({ url: it.url, thumbnail: it.thumbnail, width: it.width || 0, height: it.height || 0,
+            title: (it.title || '').slice(0, 100), source: it.source || 'openverse', license: (it.license || '').toUpperCase() });
+        }
+      }
+    } catch { /* one source down doesn't sink the other */ }
+
+    // Wikimedia Commons (public domain / CC originals, capped to ~2000px for speed)
+    try {
+      const u = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(q)}&gsrlimit=12&prop=imageinfo&iiprop=url|size|extmetadata&iiurlwidth=2000&format=json&origin=*`;
+      const r = await withTO(fetch(u, { headers: UA }), 9000, null as any);
+      if (r && r.ok) {
+        const d: any = await r.json();
+        for (const p of Object.values<any>(d.query?.pages || {})) {
+          const info = (p.imageinfo || [])[0];
+          if (!info) continue;
+          const url = info.thumburl || info.url;
+          if (!url || /\.(svg|gif)$/i.test(url)) continue;
+          const lic = info.extmetadata?.LicenseShortName?.value || 'Wikimedia';
+          out.push({ url, thumbnail: info.thumburl, width: info.thumbwidth || info.width || 0, height: info.thumbheight || info.height || 0,
+            title: String(p.title || '').replace(/^File:/, '').slice(0, 100), source: 'wikimedia', license: String(lic).slice(0, 30) });
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Normalize: dedupe by url, filter min width, sort by area (largest first)
+    const seen = new Set<string>();
+    const images = out
+      .filter(i => i.url && !seen.has(i.url) && (seen.add(i.url), true))
+      .filter(i => !i.width || i.width >= minW)
+      .sort((a, b) => (b.width * b.height) - (a.width * a.height))
+      .slice(0, want);
+    return { success: images.length > 0, count: images.length, images };
+  });
+
+  // ═══ Video download (yt-dlp) with streamed progress ═══
+  ipcMain.handle('media:download-video', async (_e, url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => {
+    if (!isHttpOrSearch(url)) return { success: false, error: 'URL ou busca inválida.' };
+    const n = clampCount(count, 1, 50, 1);
+    // FILA (lane 'download', compartilhada com o supercut): um download pesado por vez.
+    return enqueueJob('download', async () => {
+      try {
+        return await downloadVideo(url, { audioOnly: !!audioOnly, count: n, quality }, (p) => {
+          mainWindow?.webContents.send('agent:video-progress', p);
+        });
+      } catch (e: any) {
+        return { success: false, error: String(e?.message ?? e) };
+      }
+    }, (ahead) => mainWindow?.webContents.send('agent:video-progress', { state: 'preparing', title: `Na fila — ${ahead} download(s) na frente…` }))
+      .catch((e: any) => ({ success: false, error: String(e?.message ?? e) }));
+  });
+
+  // Resolve uma busca → URL do 1º vídeo real (sem Shorts), SEM baixar. Pro "open_video".
+  ipcMain.handle('media:resolve-video', async (_e, query: string) => {
+    try {
+      return await resolveTopVideo(query);
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // Resolve VÁRIAS músicas → ids (pro "create_playlist" montar a playlist por URL).
+  ipcMain.handle('media:resolve-videos', async (_e, queries: string[]) => {
+    try {
+      return await resolveTopVideos(Array.isArray(queries) ? queries.slice(0, 25) : []);
+    } catch (e: any) {
+      return [];
+    }
+  });
+
+  // ═══ Site-initiated downloads: NEVER show the native Windows "Save As" dialog ═══
+  // When the agent (or user) clicks a download button, Electron would pop a native
+  // dialog that no agent can click. Instead we auto-save into Downloads (like a
+  // browser with "ask where to save" off) and notify the renderer so the agent
+  // KNOWS the click worked (otherwise it sees "no page change" and assumes failure).
+  function uniqueDownloadPath(base: string): string {
+    const dir = app.getPath('downloads');
+    const safe = base.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'download.bin';
+    let target = path.join(dir, safe);
+    for (let i = 1; fs.existsSync(target) && i < 100; i++) {
+      const dot = safe.lastIndexOf('.') > 0 ? safe.lastIndexOf('.') : safe.length;
+      target = path.join(dir, `${safe.slice(0, dot)} (${i})${safe.slice(dot)}`);
+    }
+    return target;
+  }
+  function attachDownloadHandler(sess: Electron.Session) {
+    sess.on('will-download', (event, item) => {
+      const filename = item.getFilename() || 'download.bin';
+      if (BLOCKED_EXTENSIONS.test(filename) || BLOCKED_EXTENSIONS.test(item.getURL())) {
+        event.preventDefault();
+        console.warn(`[Download] BLOCKED executable: ${filename}`);
+        mainWindow?.webContents.send('agent:download-event', { state: 'blocked', filename, reason: 'executable/script blocked' });
+        return;
+      }
+      const target = uniqueDownloadPath(filename);
+      item.setSavePath(target); // <- this is what suppresses the native Save As dialog
+      mainWindow?.webContents.send('agent:download-event', { state: 'started', filename: path.basename(target), path: target, totalBytes: item.getTotalBytes() });
+      item.once('done', (_e, state) => {
+        console.log(`[Download] ${state}: ${target}`);
+        mainWindow?.webContents.send('agent:download-event', {
+          state: state === 'completed' ? 'completed' : 'failed',
+          filename: path.basename(target),
+          path: target,
+          bytes: item.getReceivedBytes(),
+        });
+      });
+    });
+  }
+  attachDownloadHandler(session.fromPartition('persist:browser'));
+  attachDownloadHandler(session.defaultSession);
+  ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
+    try {
+      if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
+      if (BLOCKED_EXTENSIONS.test(url) || (filename && BLOCKED_EXTENSIONS.test(filename))) {
+        return { success: false, error: 'Blocked: executable/script files cannot be downloaded by the agent.' };
+      }
+      // Full browser-like headers: Wikimedia (and many CDNs) reject generic/partial
+      // User-Agents with 429/403. Referer helps with hotlink protection.
+      const dlHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Referer': new URL(url).origin + '/',
+      };
+      // Many .gov.br / older sites have an incomplete TLS cert chain ("unable to verify
+      // the first certificate"). Try strict first; on a cert error retry tolerantly
+      // (the file's MZ/executable checks below still protect the user).
+      const doFetch = (lenient: boolean) => {
+        const opts: any = { headers: dlHeaders };
+        if (lenient && url.startsWith('https:')) opts.agent = new (require('https').Agent)({ rejectUnauthorized: false });
+        return fetch(url, opts);
+      };
+      let res: any;
+      try {
+        res = await doFetch(false);
+      } catch (e: any) {
+        if (/certificate|unable to verify|self.signed|CERT_|altname|ERR_TLS/i.test(String(e?.message))) {
+          console.warn('[Download] TLS cert issue → retrying tolerantly:', url);
+          res = await doFetch(true);
+        } else throw e;
+      }
+      if (res.status === 429 || res.status === 403) {
+        await new Promise(r => setTimeout(r, 2500));
+        res = await doFetch(false).catch(() => doFetch(true));
+      }
+      if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length === 0) return { success: false, error: 'Empty file.' };
+      if (buf.length > 100 * 1024 * 1024) return { success: false, error: 'File larger than 100MB — refused.' };
+      // Content sniff: block Windows executables regardless of extension (MZ header)
+      if (buf.length > 2 && buf[0] === 0x4d && buf[1] === 0x5a) {
+        return { success: false, error: 'Blocked: file content is a Windows executable.' };
+      }
+      // Derive a safe filename: explicit > URL basename > content-type guess
+      const ctype = res.headers.get('content-type') || '';
+      const extFromType = ctype.includes('jpeg') ? '.jpg' : ctype.includes('png') ? '.png'
+        : ctype.includes('webp') ? '.webp' : ctype.includes('gif') ? '.gif'
+        : ctype.includes('svg') ? '.svg' : ctype.includes('pdf') ? '.pdf' : '';
+      let base = (filename || decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'download')
+        .replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+      if (!/\.[a-z0-9]{2,5}$/i.test(base) && extFromType) base += extFromType;
+      if (!/\.[a-z0-9]{2,5}$/i.test(base)) base += '.bin';
+      const dir = app.getPath('downloads');
+      let target = path.join(dir, base);
+      // Never overwrite: suffix (1), (2)...
+      for (let i = 1; fs.existsSync(target) && i < 100; i++) {
+        const dot = base.lastIndexOf('.');
+        target = path.join(dir, `${base.slice(0, dot)} (${i})${base.slice(dot)}`);
+      }
+      fs.writeFileSync(target, buf);
+      console.log(`[Download] saved ${buf.length} bytes → ${target}`);
+      return { success: true, info: { path: target, bytes: buf.length, contentType: ctype } };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // (Importação de cookies do Chrome REMOVIDA: dependia do módulo nativo win-dpapi, que não
+  // é confiável de instalar/buildar e só funcionava com o Chrome fechado. O login direto em
+  // accounts.google.com já funciona por causa do disfarce de UA/headers — sem dep nativa.)
+
+  // ═══ Adblock controls (with per-site auto-bypass) ═══
+  // Sites known to break with adblock (anti-adblock walls, broken players, etc.)
+  const ADBLOCK_BYPASS_HOSTS = new Set([
+    'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be',
+    'twitch.tv', 'www.twitch.tv',
+  ]);
+  let userAdblockPref = true;        // user toggle (baseline)
+  let actuallyEnabled = true;         // current actual state
+  const persistSession = session.fromPartition('persist:browser');
+
+  function applyAdblockState(targetEnabled: boolean) {
+    if (!blocker) return;
+    if (targetEnabled === actuallyEnabled) return;
+    if (targetEnabled) blocker.enableBlockingInSession(persistSession);
+    else blocker.disableBlockingInSession(persistSession);
+    actuallyEnabled = targetEnabled;
+  }
+
+  function evalAdblockForHost(host: string) {
+    if (!userAdblockPref) { applyAdblockState(false); return; }
+    const matches = ADBLOCK_BYPASS_HOSTS.has(host) ||
+      [...ADBLOCK_BYPASS_HOSTS].some(h => host.endsWith('.' + h));
+    applyAdblockState(!matches);
+  }
+
+  ipcMain.handle('adblock:get-state', () => ({ enabled: userAdblockPref, active: actuallyEnabled, bypassedHosts: Array.from(ADBLOCK_BYPASS_HOSTS) }));
+  ipcMain.handle('adblock:set-enabled', (_e, on: boolean) => {
+    userAdblockPref = !!on;
+    applyAdblockState(userAdblockPref);
+    return { enabled: userAdblockPref };
+  });
+  ipcMain.handle('adblock:active-host-changed', (_e, host: string) => {
+    if (host) evalAdblockForHost(host);
+    return { active: actuallyEnabled };
+  });
+
+  ipcMain.handle('page:execute-js', async (_event, code: string) => {
+    // Forwarded to renderer which injects into webview
+    if (!mainWindow) return { error: 'No window' };
+    return { code };
+  });
+
+  // ═══ OCR-only handler — used by the agent loop to enrich DOM with local OCR ═══
+  // Takes a screenshot only when DOM text is sparse, runs Tesseract locally,
+  // returns plain text. No image is ever sent to DeepSeek.
+  ipcMain.handle('pipeline:take-ocr', async (
+    _e,
+    wcId: number,
+    domText: string,       // existing DOM text — used to decide if OCR is needed
+    force = false          // force screenshot + OCR even if DOM has text
+  ) => {
+    const MIN_CHARS = 200;
+    const domClean = (domText ?? '').replace(/\s+/g, ' ').trim();
+    const needsOcr = force || domClean.length < MIN_CHARS;
+
+    if (!needsOcr) {
+      return { ocrText: '', ocrUsed: false, skipped: true };
+    }
+
+    try {
+      const { captureViewport } = await import('./page-capture');
+      const { runOCR } = await import('./ocr-engine');
+
+      const taskId = `ocr_${Date.now()}`;
+      const capture = await captureViewport(wcId, sharedEnsureDebugger, taskId);
+      let ocr;
+      try {
+        ocr = await runOCR(capture.imagePath);
+      } finally {
+        // No image to cloud, no image left on disk — delete the temp PNG right away.
+        try { fs.unlinkSync(capture.imagePath); } catch {}
+      }
+
+      return {
+        ocrText: ocr.text.slice(0, 2000),
+        ocrUsed: true,
+        skipped: false,
+        confidence: Math.round(ocr.confidence),
+        durationMs: ocr.durationMs,
+      };
+    } catch (err: any) {
+      // Non-fatal — agent continues without OCR
+      return { ocrText: '', ocrUsed: false, skipped: false, error: String(err?.message ?? err) };
+    }
+  });
+}
+
+// ═══ Whitelist (per-site disable adblock) ═══
+const WHITELIST_PATH = path.join(app.getPath('userData'), 'adblock-whitelist.json');
+let adblockWhitelist: Set<string> = new Set();
+try {
+  if (fs.existsSync(WHITELIST_PATH)) {
+    adblockWhitelist = new Set(JSON.parse(fs.readFileSync(WHITELIST_PATH, 'utf-8')));
+  }
+} catch { /* ignore */ }
+function saveWhitelist() {
+  try { fs.writeFileSync(WHITELIST_PATH, JSON.stringify([...adblockWhitelist])); } catch {}
+}
+
+// ═══ Safe browsing — phishing/malware host blocklist ═══
+const SAFE_BROWSING_PATH = path.join(app.getPath('userData'), 'safe-browsing-hosts.txt');
+const SAFE_BROWSING_URL = 'https://urlhaus.abuse.ch/downloads/hostfile/';
+let maliciousHosts = new Set<string>();
+
+async function refreshSafeBrowsing(): Promise<void> {
+  try {
+    let raw = '';
+    if (fs.existsSync(SAFE_BROWSING_PATH)) {
+      raw = fs.readFileSync(SAFE_BROWSING_PATH, 'utf-8');
+      const stat = fs.statSync(SAFE_BROWSING_PATH);
+      const ageDays = (Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24);
+      if (ageDays > 1) raw = ''; // refresh daily
+    }
+    if (!raw) {
+      const res = await fetch(SAFE_BROWSING_URL);
+      if (res.ok) {
+        raw = await res.text();
+        try { fs.writeFileSync(SAFE_BROWSING_PATH, raw); } catch {}
+      }
+    }
+    const set = new Set<string>();
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const parts = trimmed.split(/\s+/);
+      const host = parts[parts.length - 1];
+      if (host && host !== '0.0.0.0' && host !== '127.0.0.1') set.add(host);
+    }
+    maliciousHosts = set;
+    console.log(`[SafeBrowsing] Loaded ${maliciousHosts.size} malicious hosts`);
+  } catch (e) {
+    console.error('[SafeBrowsing] Failed to load:', e);
+  }
+}
+
+// ═══ Initialize adblock engine (EasyList, EasyPrivacy, cosmetic filters) ═══
+let blocker: ElectronBlocker | null = null;
+async function setupAdblock(): Promise<void> {
+  try {
+    blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch as any);
+    const persistSession = session.fromPartition('persist:browser');
+    blocker.enableBlockingInSession(persistSession);
+
+    console.log('[Adblock] Engine ready (EasyList + EasyPrivacy + cosmetic filters)');
+  } catch (e) {
+    console.error('[Adblock] Failed to initialize:', e);
+  }
+}
+
+
+
+// Fixed modern Chrome User-Agent (avoid Google's "insecure browser" warning)
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36';
+
+// Auto-correção SEM IA: em qualquer busca (Google/YouTube/Bing/DuckDuckGo), quando aparece
+// "Você quis dizer X?" / "Did you mean X?", o navegador segue a correção sozinho. NUNCA segue
+// "Em vez disso, pesquisar por…" (esse desfaz a correção). Escrito sem regex/backslash pra não
+// quebrar dentro do template; usa observer+poll curto (cobre páginas SPA tipo YouTube).
+const AUTOCORRECT_SCRIPT = `
+(function(){
+  try {
+    if (window.__autoCorrectOn) return;
+    var h = location.hostname || '';
+    var ok = h.indexOf('google.') >= 0 || h.indexOf('youtube.com') >= 0 || h.indexOf('bing.com') >= 0 || h.indexOf('duckduckgo.com') >= 0;
+    if (!ok) return;
+    window.__autoCorrectOn = true;
+    var DYM = ['você quis dizer','voce quis dizer','did you mean'];
+    var SKIP = ['em vez disso','search instead','pesquisar mesmo','buscar mesmo','search anyway'];
+    var actedFor = '';
+    function low(s){ return (s || '').toLowerCase(); }
+    function isSearchHref(u){ return !!u && (u.indexOf('search') >= 0 || u.indexOf('q=') >= 0 || u.indexOf('search_query') >= 0); }
+    function tryFix(){
+      try {
+        var key = location.href;
+        if (actedFor === key) return;
+        var yt = document.querySelector('ytd-did-you-mean-renderer a[href]');
+        if (yt && yt.href) { actedFor = key; location.href = yt.href; return; }
+        var links = document.querySelectorAll('a[href]');
+        for (var i = 0; i < links.length; i++) {
+          var a = links[i];
+          if (!(a.textContent || '').trim()) continue;
+          if (!isSearchHref(a.href)) continue;
+          var ctx = '';
+          try { var p = a.closest('div,span,p,yt-formatted-string'); ctx = low((p && p.textContent) || ''); } catch (e) {}
+          if (!ctx) continue;
+          var skip = false;
+          for (var s = 0; s < SKIP.length; s++) { if (ctx.indexOf(SKIP[s]) >= 0) { skip = true; break; } }
+          if (skip) continue;
+          var hit = false;
+          for (var d = 0; d < DYM.length; d++) { if (ctx.indexOf(DYM[d]) >= 0) { hit = true; break; } }
+          if (hit) {
+            actedFor = key;
+            if (a.href.indexOf('javascript:') !== 0) location.href = a.href; else a.click();
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+    var last = 0;
+    function deb(){ var t = Date.now(); if (t - last < 500) return; last = t; tryFix(); }
+    try { new MutationObserver(deb).observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
+    var n = 0;
+    var iv = setInterval(function(){ n++; tryFix(); if (n > 30) clearInterval(iv); }, 500);
+    tryFix();
+  } catch (e) {}
+})();
+`;
+
+// Stealth script — masks automation signals so Google/etc don't flag us
+const STEALTH_SCRIPT = `
+(function(){
+  try {
+    // 1. navigator.webdriver — must be undefined (not false)
+    Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => undefined, configurable: true });
+
+    // 2. navigator.plugins — populate with realistic Chrome plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const arr = [
+          { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        ];
+        Object.defineProperty(arr, 'item', { value: (i) => arr[i], enumerable: false });
+        Object.defineProperty(arr, 'namedItem', { value: (n) => arr.find(p => p.name === n), enumerable: false });
+        return arr;
+      },
+      configurable: true,
+    });
+
+    // 2.5. navigator.userAgentData (Crucial para login do Google)
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: () => ({
+        brands: [
+          { brand: 'Google Chrome', version: '132' },
+          { brand: 'Not;A=Brand', version: '8' },
+          { brand: 'Chromium', version: '132' }
+        ],
+        mobile: false,
+        platform: 'Windows'
+      }),
+      configurable: true
+    });
+
+    // 3. languages
+    Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'], configurable: true });
+
+    // 4. window.chrome — populate with realistic structure
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.runtime) window.chrome.runtime = {
+      OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
+      OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+      PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+      PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
+      RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
+    };
+    if (!window.chrome.csi) window.chrome.csi = function() { return { onloadT: Date.now(), pageT: 1, startE: Date.now() - 1000, tran: 15 }; };
+    if (!window.chrome.loadTimes) window.chrome.loadTimes = function() { return { commitLoadTime: Date.now()/1000, finishDocumentLoadTime: Date.now()/1000, finishLoadTime: Date.now()/1000, firstPaintTime: Date.now()/1000, navigationType: 'Other', requestTime: Date.now()/1000-1, startLoadTime: Date.now()/1000, wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; };
+    if (!window.chrome.app) window.chrome.app = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } };
+
+    // 5. Permissions API
+    const origQuery = navigator.permissions && navigator.permissions.query;
+    if (origQuery) {
+      navigator.permissions.query = (params) => params && params.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission, onchange: null })
+        : origQuery.call(navigator.permissions, params);
+    }
+
+    // 6. WebGL vendor — pretend to be a real GPU
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+      if (p === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
+      if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100'; // UNMASKED_RENDERER_WEBGL
+      return getParameter.call(this, p);
+    };
+    if (window.WebGL2RenderingContext) {
+      const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
+      WebGL2RenderingContext.prototype.getParameter = function(p) {
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100';
+        return getParameter2.call(this, p);
+      };
+    }
+
+    // 7. Hardware concurrency / device memory
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+
+    // 8. Chromium-detected automation flag
+    delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+    // 9. Iframe contentWindow trick — Chrome iframes have specific behavior
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.srcdoc = 'blank';
+      iframe.style.display = 'none';
+      // Make sure HTMLIFrameElement.prototype.contentWindow is OK (real)
+    } catch {}
+
+    // 10. Notification.permission — bot pages return 'denied' inconsistently
+    if (window.Notification) {
+      try {
+        Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+      } catch {}
+    }
+
+    // 11. window.outerWidth/outerHeight not 0 (headless leak)
+    try {
+      if (window.outerWidth === 0) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth, configurable: true });
+      if (window.outerHeight === 0) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + 80, configurable: true });
+    } catch {}
+
+    // 12. screen properties — headless reports 0
+    try {
+      if (screen.width === 0) Object.defineProperty(screen, 'width', { get: () => 1920, configurable: true });
+      if (screen.height === 0) Object.defineProperty(screen, 'height', { get: () => 1080, configurable: true });
+      if (screen.availWidth === 0) Object.defineProperty(screen, 'availWidth', { get: () => 1920, configurable: true });
+      if (screen.availHeight === 0) Object.defineProperty(screen, 'availHeight', { get: () => 1040, configurable: true });
+    } catch {}
+
+    // 13. MediaCodec / mediaDevices — bots often have 0 devices
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      const orig = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+      navigator.mediaDevices.enumerateDevices = async () => {
+        const list = await orig();
+        if (list.length === 0) {
+          return [
+            { kind: 'audioinput', deviceId: 'default', groupId: '1', label: '' },
+            { kind: 'videoinput', deviceId: 'default', groupId: '2', label: '' },
+            { kind: 'audiooutput', deviceId: 'default', groupId: '1', label: '' },
+          ];
+        }
+        return list;
+      };
+    }
+
+    // 14. Battery API — Chrome has it, bots often don't
+    if (!navigator.getBattery) {
+      navigator.getBattery = () => Promise.resolve({
+        charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1,
+        addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+      });
+    }
+  } catch(e) {}
+})();
+`;
+
+// Chromium flags to defeat automation/headless detection (must be set BEFORE app.whenReady)
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process,AutomationControlled');
+app.commandLine.appendSwitch('enable-features', 'NetworkService,NetworkServiceInProcess');
+app.commandLine.appendSwitch('lang', 'pt-BR');
+// Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
+// soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+// Flush periódico dos cookies (a cada 30s) — garante persistência mesmo se o app travar
+function startCookieFlushInterval() {
+  setInterval(async () => {
+    try {
+      const persistSession = session.fromPartition('persist:browser');
+      await persistSession.cookies.flushStore();
+    } catch {}
+  }, 30_000);
+}
+
+// Sweep any leftover OCR screenshots (older than 1h) so the temp folder never grows.
+function sweepOldScreenshots(): void {
+  try {
+    const dir = path.join(app.getPath('userData'), 'screenshots');
+    if (!fs.existsSync(dir)) return;
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const f of fs.readdirSync(dir)) {
+      const p = path.join(dir, f);
+      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch {}
+    }
+  } catch {}
+}
+
+app.whenReady().then(() => {
+  const electronOriginalUA = session.defaultSession.getUserAgent();
+  sweepOldScreenshots();
+  setupAdblock();
+  refreshSafeBrowsing();
+  // Set fixed Chrome UA on every session
+  session.defaultSession.setUserAgent(CHROME_UA);
+  const persistSession = session.fromPartition('persist:browser');
+  persistSession.setUserAgent(CHROME_UA);
+  // Write stealth script to disk and register as preload for the persist partition
+  // (preloads run BEFORE page JS — much more effective than dom-ready injection)
+  try {
+    const stealthPath = path.join(app.getPath('userData'), 'stealth-preload.js');
+    fs.writeFileSync(stealthPath, STEALTH_SCRIPT);
+    persistSession.setPreloads([stealthPath]);
+    session.defaultSession.setPreloads([stealthPath]);
+  } catch (e) {
+    console.warn('[Stealth] Failed to register preload:', e);
+  }
+
+  // Força headers stealth em todas as requisições (Bypass do Google Login)
+  const filter = { urls: ['<all_urls>'] };
+  const originalUserAgent = electronOriginalUA;
+  const applyHeaders = (details: any, callback: any) => {
+    const headers = { ...details.requestHeaders };
+    const isGoogleAuth = /accounts\.google\.com|accounts-google\.com/i.test(details.url);
+    
+    if (isGoogleAuth) {
+      // Tática do Tandem: O Google bloqueia UA fake de Chrome se o fingerprint não bater 100%. 
+      // Mas curiosamente, ele aceita o UA original do Electron sem reclamar!
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0';
+      for (const k of Object.keys(headers)) {
+        if (k.toLowerCase().startsWith('sec-ch-ua')) delete headers[k];
+      }
+    } else {
+      headers['User-Agent'] = CHROME_UA;
+      headers['Accept-Language'] = 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7';
+      if (headers['sec-ch-ua']) {
+        headers['sec-ch-ua'] = '"Google Chrome";v="132", "Not;A=Brand";v="8", "Chromium";v="132"';
+      }
+    }
+    callback({ requestHeaders: headers });
+  };
+  session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
+  persistSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
+
+  // Remove restrictive CSP headers so webview can load any site
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...details.responseHeaders };
+    delete headers['content-security-policy'];
+    delete headers['Content-Security-Policy'];
+    delete headers['x-frame-options'];
+    delete headers['X-Frame-Options'];
+    callback({ responseHeaders: headers });
+  });
+
+  // Hidden menu with edit role enables Ctrl+C/V/X/A even on frameless window
+  const menu = Menu.buildFromTemplate([
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+  ]);
+  Menu.setApplicationMenu(menu);
+
+  createWindow();
+  setupIPC();
+  startCookieFlushInterval();
+
+  // Default cloud engine (no key yet — user sets in settings)
+  aiEngine = new AIEngine('deepseek', '');
+  pageAgent = new PageAgent(aiEngine);
+
+
+  // Default local engine (Ollama on localhost — user configures model in settings)
+  try {
+    localEngine = new AIEngine('ollama', 'local', 'http://localhost:11434', 'qwen3-vl:8b');
+    localPageAgent = new PageAgent(localEngine);
+    console.log('[HybridRouter] Local engine (Ollama) initialized at http://localhost:11434');
+  } catch (e) {
+    console.warn('[HybridRouter] Local engine init failed (Ollama not running?):', e);
+  }
+});
+
+app.on('before-quit', () => {
+  // Free the persistent OCR workers (≈40–80MB) cleanly on exit.
+  import('./ocr-engine').then(m => m.terminateOcrWorkers()).catch(() => {});
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
