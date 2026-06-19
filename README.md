@@ -28,7 +28,7 @@
 - **Navegador completo** com abas, navegação, URL, tema dark
 - **Painel AGENT** lateral: digita um comando → IA decide passo a passo até concluir
 - **Vê a página** (screenshot + accessibility tree) e age usando ferramentas estruturadas
-- **Multi-provider AI**: DeepSeek V4, Claude (Anthropic), GPT-4o (OpenAI), Pollinations (grátis), Ollama (100% local)
+- **IA**: o caminho **testado e recomendado é o DeepSeek (nuvem)** — rápido e estável. O código também tem suporte a **Ollama (local/offline)** e, de forma experimental, a Claude / GPT-4o / Pollinations (esses três **não foram validados a fundo**)
 - **Adblock** completo (EasyList + EasyPrivacy) com bypass automático para sites que quebram (YouTube, Twitch)
 - **Safe Browsing** (URLhaus malicious hosts list, atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic events — passa por React, Vue, Angular sem ser ignorado)
@@ -43,8 +43,8 @@
 |---|---|
 | Shell do navegador | **Electron 33** + Chromium |
 | UI | **React 19** + **TypeScript** + Vite |
-| IA (cloud) | DeepSeek V4 Pro (visão), Claude, GPT-4o, Pollinations |
-| IA (local) | **Ollama** + Qwen3-VL 8B (ou outros) |
+| IA (nuvem) | **DeepSeek** — testado e recomendado. *(Claude / GPT-4o / Pollinations existem no código, mas não validados.)* |
+| IA (local) | **Ollama** (qualquer modelo) — roda offline, mas modelos locais são **menos confiáveis** que a nuvem pro agente |
 | Adblock | `@ghostery/adblocker-electron` |
 | Webview | Tag `<webview>` com partition persistente |
 
@@ -205,13 +205,15 @@ ollama pull qwen3-vl:8b
 |  | **Bah** | Comet | Tandem | Browser-Use |
 |---|---|---|---|---|
 | Código aberto | ✅ | ❌ | ✅ | ✅ |
-| Local-first | ✅ (Ollama) | ❌ | ✅ | ✅ |
+| Opção 100% local (Ollama) | ✅ | ❌ | ✅ | ✅ |
 | Roda em casa | ✅ | ❌ | ✅ | ❌ (só lib) |
-| Multi-provider AI | ✅ | ❌ (Sonar) | ✅ | ✅ |
+| Vários providers no código | ✅ | ❌ (Sonar) | ✅ | ✅ |
 | Cliques reais (não synthetic) | ✅ | ✅ | ✅ | ✅ |
 | Accessibility tree (CDP) | ✅ | ✅ | ✅ | ⚠️ |
 | UI completa | ✅ | ✅ | ✅ | ❌ |
 | Adblock + Safe browsing | ✅ | ✅ | ⚠️ | ❌ |
+
+> ℹ️ Os ✅ indicam recursos **presentes no código**. O caminho de IA **testado e recomendado é o DeepSeek (nuvem)**; o modo local (Ollama) e os outros providers existem, mas são **menos validados**.
 
 ---
 
@@ -247,7 +249,7 @@ Status atual:
 - [x] **Cliques reais** via `sendInputEvent` (não synthetic)
 - [x] **Adblock + Safe Browsing** com bypass automático por site
 - [x] **Stealth básico** (UA + `navigator.webdriver`)
-- [x] **Multi-provider AI** (DeepSeek, Claude, OpenAI, Pollinations, Ollama)
+- [x] **Arquitetura multi-provider** (DeepSeek **testado**; Claude/GPT-4o/Pollinations/Ollama presentes no código, não todos validados)
 - [x] **Visual overlay** estilo Comet
 - [x] **Accessibility tree via CDP** — IPC handler já existe (`cdp:axtree`), falta usar no loop
 - [ ] **Migrar `<webview>` → `WebContentsView`** — *prioridade alta*. A tag `<webview>` está [oficialmente deprecated](https://www.electronjs.org/docs/latest/api/webview-tag) e tem várias quirks (skeleton bug do YouTube, problemas com IntersectionObserver). `WebContentsView` (Electron 30+) é o caminho moderno e dá acesso direto ao `webContents` sem o sandbox aninhado. **Refator grande**: muda o jeito que tabs são gerenciadas. Vale o esforço quando for estabilizar pra produção.
