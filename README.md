@@ -268,5 +268,15 @@ Em resumo (este resumo não tem valor legal — vale o texto da licença):
 
 - ✅ **Livre** para uso pessoal, estudo, projetos próprios e **empresas pequenas** (menos de 100 pessoas **e** menos de US$ 1 milhão de faturamento no último ano).
 - ✅ Pode **modificar, melhorar e redistribuir**, mantendo este aviso de licença.
-- 💼 **Empresa grande / uso comercial acima desse porte** precisa de uma **licença comercial** do autor — abra uma issue ou entre em contato.
+- 💼 **Empresa grande / uso comercial acima desse porte** precisa de uma **licença comercial** do autor — fale comigo em **alexmachadovilela@gmail.com**.
 - ❌ Sem garantia. O software vem "como está".
+
+---
+
+## Contato
+
+- 📧 **Email** (dúvidas e licença comercial): **alexmachadovilela@gmail.com**
+- 🐦 **X / Twitter**: [@alexvilelaba](https://x.com/alexvilelaba)
+- 🐛 **Bugs / ideias**: [abra uma issue](https://github.com/alexvilelabah/bah-browser/issues)
+
+Feito com 🧉 por **Alex Vilela** — **VilelaLab**.
