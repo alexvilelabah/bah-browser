@@ -1398,6 +1398,18 @@ function startCookieFlushInterval() {
   }, 30_000);
 }
 
+// Flush SÍNCRONO ao fechar o app. Sem isto, se você fecha LOGO depois de logar (antes do
+// flush de 30s acima), os cookies do login não chegam ao disco e você reabre DESLOGADO.
+// Segura o quit até os cookies serem gravados. (Causa do "fechei e abri deslogado".)
+let cookiesFlushedOnQuit = false;
+app.on('before-quit', (e) => {
+  if (cookiesFlushedOnQuit) return;
+  e.preventDefault();
+  session.fromPartition('persist:browser').cookies.flushStore()
+    .catch(() => {})
+    .finally(() => { cookiesFlushedOnQuit = true; app.quit(); });
+});
+
 // Sweep any leftover OCR screenshots (older than 1h) so the temp folder never grows.
 function sweepOldScreenshots(): void {
   try {
