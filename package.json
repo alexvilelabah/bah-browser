@@ -1,6 +1,6 @@
 {
   "name": "bah-browser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "AI-powered browser agent — navigate and manipulate the web with natural language",
   "author": {
     "name": "Alex Vilela",
@@ -39,7 +39,7 @@
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.1.0",
-    "electron": "^33.3.0",
+    "electron": "^42.4.1",
     "electron-builder": "^25.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -70,6 +70,7 @@ declare global {
       renderView?: (spec: object) => Promise<{ success: boolean; url?: string; error?: string }>;
       harvestImages?: (urls: string[], theme: string) => Promise<{ success: boolean; saved: number; dir?: string; paths?: string[]; error?: string }>;
       revealInFolder?: (target: string) => Promise<{ success: boolean; error?: string }>;
+      googleLogin?: () => Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }>;
       dismissOverlays?: (wcId: number) => Promise<{ dismissed: string }>;
       makeSupercut?: (phrase: string, count?: number) => Promise<{ success: boolean; dir?: string; paths?: string[]; clipCount?: number; clips?: Array<{ title?: string; videoId: string; seconds: number }>; error?: string }>;
       onSupercutProgress?: (cb: (p: { stage: string; message: string; current?: number; total?: number }) => void) => () => void;
@@ -417,14 +418,18 @@ export default function App() {
                 </button>
                 <button className="menu-item" onClick={async () => {
                   setMenuOpen(false);
-                  setLastFooterMsg('🔑 Abrindo a janela de login do Google…');
+                  setLastFooterMsg('Abrindo Chrome/Edge real para login do Google...');
                   try {
-                    await (window.electronAPI as any)?.googleLogin?.();
-                    setLastFooterMsg('✅ Login feito. Recarregando a página…');
+                    const result = await window.electronAPI?.googleLogin?.();
+                    if (!result?.ok) {
+                      setLastFooterMsg(result?.error || 'Nao consegui importar o login do Google.');
+                      return;
+                    }
+                    setLastFooterMsg(`Login importado de ${result.browser || 'Chrome/Edge'} (${result.copied || 0} cookies). Recarregando...`);
                     const wv = webviewRefs.current.get(store.activeTab?.id) as any;
                     try { wv?.reload?.(); } catch {}
-                  } catch { setLastFooterMsg('Não consegui abrir o login do Google.'); }
-                }} title="Faz o login do Google numa janela normal — o navegador fica logado (contorna o bloqueio do webview)">
+                  } catch { setLastFooterMsg('Nao consegui abrir o login do Google.'); }
+                }} title="Faz login no Google pelo Chrome/Edge real e importa a sessao para o Bah">
                   <span className="menu-ic">🔑</span>
                   <span className="menu-label">Entrar no Google</span>
                 </button>

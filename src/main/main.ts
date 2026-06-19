@@ -25,6 +25,14 @@ let localPageAgent: PageAgent | null = null;
 // Escudo de popup: timestamps de novas abas por webContents (anti-bombardeio).
 const popupTimes = new Map<number, number[]>();
 
+const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
+const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
+// Keep HTTP UA and JS Client Hints aligned with the Chromium embedded in Electron.
+const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
+const CHROME_SEC_CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR}"`;
+const BROWSER_PARTITION = 'persist:browser';
+const GOOGLE_LOGIN_PARTITION = 'persist:google-login';
+
 // Shared ensureDebugger used by CDP handlers AND the hybrid pipeline
 // NOTE: only attaches + enables Accessibility — exactly as the original.
 // DOM.enable / Page.enable are enabled on-demand inside page-capture.ts.
@@ -55,6 +63,358 @@ function logMainError(tag: string, err: unknown): void {
 process.on('uncaughtException', (err) => logMainError('uncaughtException', err));
 process.on('unhandledRejection', (reason) => logMainError('unhandledRejection', reason));
 
+async function flushBrowserState(): Promise<void> {
+  const sessions = [session.fromPartition(BROWSER_PARTITION), session.fromPartition(GOOGLE_LOGIN_PARTITION), session.defaultSession];
+  await Promise.all(sessions.map(async (ses) => {
+    try { await ses.cookies.flushStore(); } catch {}
+    try { await (ses as any).flushStorageData?.(); } catch {}
+  }));
+}
+
+function isGoogleCookie(cookie: Electron.Cookie): boolean {
+  const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
+  return domain.endsWith('google.com') ||
+    domain.endsWith('google.com.br') ||
+    domain.endsWith('youtube.com') ||
+    domain.endsWith('googleusercontent.com') ||
+    domain.endsWith('gstatic.com');
+}
+
+function cookieUrl(cookie: Electron.Cookie): string | null {
+  const domain = String(cookie.domain || '').replace(/^\./, '');
+  if (!domain) return null;
+  const pathPart = cookie.path && cookie.path.startsWith('/') ? cookie.path : '/';
+  return `${cookie.secure ? 'https' : 'http'}://${domain}${pathPart}`;
+}
+
+async function clearGoogleCookies(target: Electron.Session): Promise<void> {
+  const existing = (await target.cookies.get({})).filter(isGoogleCookie);
+  await Promise.all(existing.map(async (cookie) => {
+    const url = cookieUrl(cookie);
+    if (!url) return;
+    try { await target.cookies.remove(url, cookie.name); } catch {}
+  }));
+}
+
+async function copyGoogleCookies(source: Electron.Session, target: Electron.Session): Promise<number> {
+  try { await source.cookies.flushStore(); } catch {}
+  const cookies = (await source.cookies.get({})).filter(isGoogleCookie);
+  if (!cookies.length) return 0;
+
+  await clearGoogleCookies(target);
+
+  let copied = 0;
+  for (const cookie of cookies) {
+    const url = cookieUrl(cookie);
+    if (!url) continue;
+    const details: Electron.CookiesSetDetails = {
+      url,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+    };
+    if (!cookie.hostOnly && cookie.domain) details.domain = cookie.domain;
+    if (cookie.expirationDate) details.expirationDate = cookie.expirationDate;
+    if (cookie.sameSite && cookie.sameSite !== 'unspecified') details.sameSite = cookie.sameSite;
+    try {
+      await target.cookies.set(details);
+      copied++;
+    } catch (err) {
+      console.warn(`[GoogleLogin] cookie copy failed for ${cookie.name}:`, err);
+    }
+  }
+
+  try { await target.cookies.flushStore(); } catch {}
+  try { await (target as any).flushStorageData?.(); } catch {}
+  return copied;
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function findSystemBrowser(): { name: string; exe: string } | null {
+  const env = process.env;
+  const candidates = [
+    { name: 'Google Chrome', exe: path.join(env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe') },
+    { name: 'Google Chrome', exe: path.join(env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe') },
+    { name: 'Google Chrome', exe: path.join(env['ProgramFiles(x86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe') },
+    { name: 'Microsoft Edge', exe: path.join(env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe') },
+    { name: 'Microsoft Edge', exe: path.join(env['ProgramFiles(x86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe') },
+    { name: 'Brave', exe: path.join(env.LOCALAPPDATA || '', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe') },
+    { name: 'Brave', exe: path.join(env.ProgramFiles || '', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe') },
+  ];
+  return candidates.find(c => c.exe && fs.existsSync(c.exe)) || null;
+}
+
+function getFreeLocalPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const net = require('net');
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      server.close(() => port ? resolve(port) : reject(new Error('no free port')));
+    });
+  });
+}
+
+async function fetchJson(url: string, timeoutMs = 3000): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal as any });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cdpCommand(wsUrl: string, method: string, params: any = {}, timeoutMs = 5000): Promise<any> {
+  const WebSocketCtor = (globalThis as any).WebSocket;
+  if (!WebSocketCtor) throw new Error('WebSocket indisponivel no Node/Electron');
+
+  return await new Promise((resolve, reject) => {
+    const id = Math.floor(Math.random() * 1_000_000_000);
+    const ws = new WebSocketCtor(wsUrl);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error(`CDP timeout: ${method}`));
+    }, timeoutMs);
+
+    const cleanup = () => clearTimeout(timer);
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+    ws.addEventListener('message', (event: any) => {
+      try {
+        const raw = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
+        const msg = JSON.parse(raw);
+        if (msg.id !== id) return;
+        cleanup();
+        try { ws.close(); } catch {}
+        if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        else resolve(msg.result);
+      } catch (err) {
+        cleanup();
+        try { ws.close(); } catch {}
+        reject(err);
+      }
+    });
+    ws.addEventListener('error', (err: any) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err?.message || err)));
+    });
+  });
+}
+
+async function getChromeDebugCookies(port: number): Promise<any[]> {
+  const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
+  const page = (Array.isArray(targets) ? targets : [])
+    .find((t: any) => t.type === 'page' && t.webSocketDebuggerUrl) || targets?.[0];
+  if (!page?.webSocketDebuggerUrl) return [];
+
+  try {
+    const result = await cdpCommand(page.webSocketDebuggerUrl, 'Network.getAllCookies');
+    return Array.isArray(result?.cookies) ? result.cookies : [];
+  } catch {
+    const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
+    if (!version?.webSocketDebuggerUrl) return [];
+    const result = await cdpCommand(version.webSocketDebuggerUrl, 'Storage.getCookies');
+    return Array.isArray(result?.cookies) ? result.cookies : [];
+  }
+}
+
+function isGoogleAuthCdpCookie(cookie: any): boolean {
+  const domain = String(cookie?.domain || '').replace(/^\./, '').toLowerCase();
+  if (!domain.endsWith('google.com') && !domain.endsWith('google.com.br') && !domain.endsWith('youtube.com')) return false;
+  const name = String(cookie?.name || '');
+  return /^(SID|HSID|SSID|APISID|SAPISID|LSID|OSID|__Secure-[13]P?SID|__Secure-[13]P?APISID)$/i.test(name);
+}
+
+function mapCdpSameSite(value: unknown): Electron.Cookie['sameSite'] | undefined {
+  const v = String(value || '').toLowerCase();
+  if (v === 'strict') return 'strict';
+  if (v === 'lax') return 'lax';
+  if (v === 'none' || v === 'no_restriction') return 'no_restriction';
+  return undefined;
+}
+
+async function copyCdpGoogleCookies(cdpCookies: any[], target: Electron.Session): Promise<number> {
+  const googleCookies = cdpCookies.filter((cookie) => isGoogleCookie({
+    domain: cookie.domain,
+    name: cookie.name,
+    value: cookie.value,
+    path: cookie.path || '/',
+    secure: !!cookie.secure,
+    httpOnly: !!cookie.httpOnly,
+  } as Electron.Cookie));
+  if (!googleCookies.length) return 0;
+
+  await clearGoogleCookies(target);
+
+  let copied = 0;
+  for (const cookie of googleCookies) {
+    const domain = String(cookie.domain || '').replace(/^\./, '');
+    if (!domain || !cookie.name) continue;
+    const details: Electron.CookiesSetDetails = {
+      url: `${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path || '/'}`,
+      name: String(cookie.name),
+      value: String(cookie.value || ''),
+      domain: cookie.domain,
+      path: cookie.path || '/',
+      secure: !!cookie.secure,
+      httpOnly: !!cookie.httpOnly,
+    };
+    if (!cookie.session && Number.isFinite(cookie.expires) && cookie.expires > 0) details.expirationDate = cookie.expires;
+    const sameSite = mapCdpSameSite(cookie.sameSite);
+    if (sameSite) details.sameSite = sameSite;
+    try {
+      await target.cookies.set(details);
+      copied++;
+    } catch (err) {
+      console.warn(`[GoogleLogin] CDP cookie copy failed for ${cookie.name}:`, err);
+    }
+  }
+  try { await target.cookies.flushStore(); } catch {}
+  try { await (target as any).flushStorageData?.(); } catch {}
+  return copied;
+}
+
+async function importGoogleCookiesFromBrowserProfile(
+  browser: { name: string; exe: string },
+  profileDir: string,
+): Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }> {
+  const port = await getFreeLocalPort();
+  const args = [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profileDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    'about:blank',
+  ];
+
+  const child = require('child_process').spawn(browser.exe, args, {
+    detached: false,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+  child.once('error', (err: Error) => {
+    console.warn('[GoogleLogin] import browser launch failed:', err);
+  });
+
+  try {
+    const readyBy = Date.now() + 18_000;
+    let ready = false;
+    while (Date.now() < readyBy) {
+      if (exited) return { ok: false, browser: browser.name, error: `${browser.name} fechou antes da importacao.` };
+      try {
+        await fetchJson(`http://127.0.0.1:${port}/json/version`, 1200);
+        ready = true;
+        break;
+      } catch {
+        await sleepMs(350);
+      }
+    }
+
+    if (!ready) {
+      return {
+        ok: false,
+        browser: browser.name,
+        error: `Nao consegui abrir o perfil em modo importacao. Feche a janela do ${browser.name} usada no login e tente novamente.`,
+      };
+    }
+
+    const cookies = await getChromeDebugCookies(port);
+    if (!cookies.some(isGoogleAuthCdpCookie)) {
+      return {
+        ok: false,
+        browser: browser.name,
+        error: `Ainda nao encontrei cookies de login do Google nesse perfil do ${browser.name}.`,
+      };
+    }
+
+    const copied = await copyCdpGoogleCookies(cookies, session.fromPartition(BROWSER_PARTITION));
+    await flushBrowserState();
+    return { ok: copied > 0, copied, browser: browser.name };
+  } finally {
+    try {
+      const version = await fetchJson(`http://127.0.0.1:${port}/json/version`, 1000);
+      if (version?.webSocketDebuggerUrl) await cdpCommand(version.webSocketDebuggerUrl, 'Browser.close', {}, 1200);
+    } catch {
+      try { child.kill(); } catch {}
+    }
+  }
+}
+
+async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }> {
+  const browser = findSystemBrowser();
+  if (!browser) {
+    return { ok: false, error: 'Nao encontrei Chrome, Edge ou Brave instalado.' };
+  }
+
+  const profileDir = path.join(app.getPath('userData'), 'google-system-login-profile');
+  fs.mkdirSync(profileDir, { recursive: true });
+
+  const existing = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
+  if (existing.ok) return existing;
+
+  const loginUrl = 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F';
+  const child = require('child_process').spawn(browser.exe, [
+    `--user-data-dir=${profileDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    loginUrl,
+  ], {
+    detached: false,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+
+  let loginWindowClosed = false;
+  child.once('exit', () => { loginWindowClosed = true; });
+  child.once('error', (err: Error) => {
+    console.warn('[GoogleLogin] system browser launch failed:', err);
+  });
+
+  const loginDialogOptions: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: 'Login do Google',
+    message: `${browser.name} foi aberto para o login do Google.`,
+    detail: 'Faca o login no navegador que abriu. Quando terminar e a pagina da sua Conta Google carregar, feche essa janela do Chrome/Edge. Depois clique em "Ja fechei, importar".',
+    buttons: ['Ja fechei, importar', 'Cancelar'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const choice = mainWindow
+    ? await dialog.showMessageBox(mainWindow, loginDialogOptions)
+    : await dialog.showMessageBox(loginDialogOptions);
+  if (choice.response !== 0) {
+    return { ok: false, browser: browser.name, error: 'Login cancelado.' };
+  }
+
+  if (!loginWindowClosed) {
+    await sleepMs(1200);
+  }
+  if (!loginWindowClosed) {
+    return {
+      ok: false,
+      browser: browser.name,
+      error: `Feche a janela do ${browser.name} que abriu para o login e clique em Entrar no Google de novo para importar.`,
+    };
+  }
+
+  return await importGoogleCookiesFromBrowserProfile(browser, profileDir);
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -82,13 +442,20 @@ function createWindow(): void {
     mainWindow.loadFile(rendererPath);
   }
 
-  mainWindow.on('close', async () => {
-    // Força gravação dos cookies em disco antes de fechar
-    try {
-      const persistSession = session.fromPartition('persist:browser');
-      await persistSession.cookies.flushStore();
-      await session.defaultSession.cookies.flushStore();
-    } catch {}
+  // Segura o fechamento ATÉ gravar os cookies (login do Google etc.) em disco.
+  // Sem o preventDefault, a janela fechava na hora e o flush não terminava → reabria
+  // DESLOGADO (pior quando aberto pelo .bat, que desliga abrupto). Agora é confiável.
+  let cookiesFlushedOnClose = false;
+  mainWindow.on('close', (e) => {
+    if (cookiesFlushedOnClose) return;   // 2ª passada: deixa fechar de verdade
+    e.preventDefault();
+    (async () => {
+      try {
+        await flushBrowserState();
+      } catch {}
+      cookiesFlushedOnClose = true;
+      try { mainWindow?.close(); } catch {}
+    })();
   });
 
   mainWindow.on('closed', () => {
@@ -723,45 +1090,9 @@ function setupIPC(): void {
     }
   });
 
-  // ═══ Login do Google numa JANELA NORMAL (não-webview) ═══
-  // O Google bloqueia login em <webview>, mas aceita numa BrowserWindow comum. Esta janela
-  // usa a MESMA sessão (persist:browser) do navegador → ao logar, os cookies ficam salvos e
-  // o webview passa a estar LOGADO (o bloqueio é só na TELA de login, não na sessão já válida).
-  ipcMain.handle('google:login', async () => {
-    return await new Promise((resolve) => {
-      try {
-        const fsx = require('fs');
-        const pathx = require('path');
-        const stealthPath = pathx.join(app.getPath('userData'), 'stealth-preload.js');
-        const hasStealth = fsx.existsSync(stealthPath);
-        const win = new BrowserWindow({
-          width: 1080, height: 800,
-          title: 'Entrar no Google',
-          autoHideMenuBar: true,
-          webPreferences: {
-            partition: 'persist:browser',     // MESMA sessão do navegador → webview fica logado
-            contextIsolation: false,          // stealth roda no main world
-            sandbox: false,
-            nodeIntegration: false,
-            ...(hasStealth ? { preload: stealthPath } : {}),
-          },
-        });
-        win.setMenuBarVisibility(false);
-        win.loadURL('https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F');
-        let done = false;
-        const finish = (ok: boolean) => { if (!done) { done = true; resolve({ ok }); } };
-        // chegou numa página claramente logada → fecha sozinha (com folga p/ salvar cookies)
-        win.webContents.on('did-navigate', (_e: any, url: string) => {
-          if (/myaccount\.google\.com/i.test(url)) {
-            setTimeout(() => { try { if (!win.isDestroyed()) win.close(); } catch {} }, 2500);
-          }
-        });
-        win.on('closed', () => finish(true));
-      } catch (e: any) {
-        resolve({ ok: false, error: String(e?.message ?? e) });
-      }
-    });
-  });
+  // Google blocks sign-in inside Electron/embedded browsers. Use a real installed
+  // Chrome/Edge profile for the login, then import the Google cookies into Bah.
+  ipcMain.handle('google:login', async () => loginWithSystemBrowser());
 
   // ═══ Porteiro de overlays: roda o dispensador de cookie/consent em TODOS os frames ═══
   // Só o processo principal alcança iframes de OUTRA ORIGEM (ex.: Sourcepoint da CNN/Guardian).
@@ -1179,9 +1510,6 @@ async function setupAdblock(): Promise<void> {
 
 
 
-// Fixed modern Chrome User-Agent (avoid Google's "insecure browser" warning)
-const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36';
-
 // Auto-correção SEM IA: em qualquer busca (Google/YouTube/Bing/DuckDuckGo), quando aparece
 // "Você quis dizer X?" / "Did you mean X?", o navegador segue a correção sozinho. NUNCA segue
 // "Em vez disso, pesquisar por…" (esse desfaz a correção). Escrito sem regex/backslash pra não
@@ -1264,9 +1592,9 @@ const STEALTH_SCRIPT = `
     Object.defineProperty(navigator, 'userAgentData', {
       get: () => ({
         brands: [
-          { brand: 'Google Chrome', version: '132' },
+          { brand: 'Google Chrome', version: '${CHROME_MAJOR}' },
           { brand: 'Not;A=Brand', version: '8' },
-          { brand: 'Chromium', version: '132' }
+          { brand: 'Chromium', version: '${CHROME_MAJOR}' }
         ],
         mobile: false,
         platform: 'Windows'
@@ -1379,9 +1707,9 @@ const STEALTH_SCRIPT = `
 })();
 `;
 
-// Chromium flags to defeat automation/headless detection (must be set BEFORE app.whenReady)
-app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
-app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process,AutomationControlled');
+// Keep the Chromium process close to stock for sensitive sites like Google login.
+// Site isolation stays disabled because the app's capture/injection pipeline spans frames.
+app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 app.commandLine.appendSwitch('enable-features', 'NetworkService,NetworkServiceInProcess');
 app.commandLine.appendSwitch('lang', 'pt-BR');
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
@@ -1394,6 +1722,7 @@ function startCookieFlushInterval() {
     try {
       const persistSession = session.fromPartition('persist:browser');
       await persistSession.cookies.flushStore();
+      await (persistSession as any).flushStorageData?.();
     } catch {}
   }, 30_000);
 }
@@ -1405,7 +1734,7 @@ let cookiesFlushedOnQuit = false;
 app.on('before-quit', (e) => {
   if (cookiesFlushedOnQuit) return;
   e.preventDefault();
-  session.fromPartition('persist:browser').cookies.flushStore()
+  flushBrowserState()
     .catch(() => {})
     .finally(() => { cookiesFlushedOnQuit = true; app.quit(); });
 });
@@ -1431,13 +1760,13 @@ app.whenReady().then(() => {
   session.defaultSession.setUserAgent(CHROME_UA);
   const persistSession = session.fromPartition('persist:browser');
   persistSession.setUserAgent(CHROME_UA);
-  // Write stealth script to disk and register as preload for the persist partition
-  // (preloads run BEFORE page JS — much more effective than dom-ready injection)
+  // Write stealth script to disk for diagnostics, but keep Google login free of
+  // session preloads. Regular webviews inject this script later on dom-ready.
   try {
     const stealthPath = path.join(app.getPath('userData'), 'stealth-preload.js');
     fs.writeFileSync(stealthPath, STEALTH_SCRIPT);
-    persistSession.setPreloads([stealthPath]);
-    session.defaultSession.setPreloads([stealthPath]);
+    // Do not register this as a session preload. Google login must stay clean;
+    // regular webviews still get the script later via dom-ready injection.
   } catch (e) {
     console.warn('[Stealth] Failed to register preload:', e);
   }
@@ -1450,9 +1779,9 @@ app.whenReady().then(() => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = CHROME_UA;
     headers['Accept-Language'] = 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7';
-    if (headers['sec-ch-ua']) {
-      headers['sec-ch-ua'] = '"Google Chrome";v="132", "Not;A=Brand";v="8", "Chromium";v="132"';
-    }
+    headers['sec-ch-ua'] = CHROME_SEC_CH_UA;
+    headers['sec-ch-ua-mobile'] = '?0';
+    headers['sec-ch-ua-platform'] = '"Windows"';
     callback({ requestHeaders: headers });
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
