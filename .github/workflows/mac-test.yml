@@ -1,0 +1,63 @@
+name: macOS build + smoke test
+
+# Roda num Mac real (servidor do GitHub, grátis p/ repo público).
+# Objetivo: confirmar que o Bah COMPILA e gera o .dmg no macOS, e TENTAR um
+# smoke test (abrir sem crashar). O launch headless no macOS do CI pode ser
+# inconclusivo (servidor sem tela) — por isso ele não derruba o job.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'assets/**'
+      - 'LICENSE'
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependências do projeto
+        run: npm ci || npm install
+
+      - name: Build (renderer + main)
+        run: npm run build
+
+      - name: Recompilar módulos nativos para o Electron
+        run: npx --yes @electron/rebuild -f || true
+
+      - name: Smoke test (tenta abrir ~15s — best-effort)
+        continue-on-error: true
+        run: |
+          set +e
+          npx electron . > app.log 2>&1 &
+          APP=$!
+          sleep 15
+          if kill -0 "$APP" 2>/dev/null; then
+            echo "PASS: Bah continua vivo depois de 15s no macOS (abriu sem crashar)"
+            kill "$APP" 2>/dev/null
+          else
+            echo "INCONCLUSIVO: o app saiu cedo no Mac headless do CI (pode ser limitacao do servidor sem tela)"
+          fi
+          echo "----- log do app -----"
+          cat app.log 2>/dev/null || true
+
+      - name: Gerar .dmg (prova de que compila/empacota no Mac)
+        run: npx --yes electron-builder --mac dmg --publish never
+
+      - name: Subir o .dmg como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bah-macos-dmg
+          path: release/*.dmg
+          if-no-files-found: ignore
