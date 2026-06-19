@@ -30,6 +30,8 @@ tools/_*
 downloads/
 *.mp3
 *.mp4
+# ...exceto o vídeo de demonstração do projeto:
+!assets/demo.mp4
 
 # ── Lixo de SO / editor ──
 .DS_Store
