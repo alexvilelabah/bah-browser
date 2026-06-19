@@ -363,56 +363,64 @@ async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number;
   const profileDir = path.join(app.getPath('userData'), 'google-system-login-profile');
   fs.mkdirSync(profileDir, { recursive: true });
 
-  const existing = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
-  if (existing.ok) return existing;
-
+  // Abre o navegador real JÁ com a porta de debug ligada, direto na tela de login.
+  // O app fica VIGIANDO os cookies; quando o login termina, importa e fecha o Chrome
+  // SOZINHO — sem o usuário precisar fechar a janela nem clicar em "importar".
+  const port = await getFreeLocalPort();
   const loginUrl = 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F';
   const child = require('child_process').spawn(browser.exe, [
+    `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
     loginUrl,
-  ], {
-    detached: false,
-    stdio: 'ignore',
-    windowsHide: false,
-  });
+  ], { detached: false, stdio: 'ignore', windowsHide: false });
 
-  let loginWindowClosed = false;
-  child.once('exit', () => { loginWindowClosed = true; });
-  child.once('error', (err: Error) => {
-    console.warn('[GoogleLogin] system browser launch failed:', err);
-  });
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+  child.once('error', (err: Error) => { console.warn('[GoogleLogin] system browser launch failed:', err); });
 
-  const loginDialogOptions: Electron.MessageBoxOptions = {
-    type: 'info',
-    title: 'Login do Google',
-    message: `${browser.name} foi aberto para o login do Google.`,
-    detail: 'Faca o login no navegador que abriu. Quando terminar e a pagina da sua Conta Google carregar, feche essa janela do Chrome/Edge. Depois clique em "Ja fechei, importar".',
-    buttons: ['Ja fechei, importar', 'Cancelar'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
+  const closeLoginBrowser = async () => {
+    try {
+      const v = await fetchJson(`http://127.0.0.1:${port}/json/version`, 1000);
+      if (v?.webSocketDebuggerUrl) { await cdpCommand(v.webSocketDebuggerUrl, 'Browser.close', {}, 1500); return; }
+    } catch {}
+    try { child.kill(); } catch {}
   };
-  const choice = mainWindow
-    ? await dialog.showMessageBox(mainWindow, loginDialogOptions)
-    : await dialog.showMessageBox(loginDialogOptions);
-  if (choice.response !== 0) {
-    return { ok: false, browser: browser.name, error: 'Login cancelado.' };
+
+  // 1) Espera a porta de debug subir.
+  const readyBy = Date.now() + 20_000;
+  let ready = false;
+  while (Date.now() < readyBy && !exited) {
+    try { await fetchJson(`http://127.0.0.1:${port}/json/version`, 1200); ready = true; break; }
+    catch { await sleepMs(400); }
+  }
+  if (!ready) {
+    await closeLoginBrowser();
+    return { ok: false, browser: browser.name, error: `Nao consegui abrir o ${browser.name} para o login.` };
   }
 
-  if (!loginWindowClosed) {
-    await sleepMs(1200);
+  // 2) Detecta SOZINHO o fim do login: polla os cookies até aparecer a sessão do Google
+  //    (ou até o usuário fechar a janela / dar timeout de 5 min).
+  const deadline = Date.now() + 5 * 60_000;
+  while (Date.now() < deadline) {
+    if (exited) {
+      // usuário fechou a janela na mão → tenta importar do perfil por garantia
+      const after = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
+      return after.ok ? after : { ok: false, browser: browser.name, error: 'Janela fechada antes de concluir o login.' };
+    }
+    let cookies: any[] = [];
+    try { cookies = await getChromeDebugCookies(port); } catch {}
+    if (cookies.some(isGoogleAuthCdpCookie)) {
+      const copied = await copyCdpGoogleCookies(cookies, session.fromPartition(BROWSER_PARTITION));
+      await flushBrowserState();
+      await closeLoginBrowser();   // fecha o Chrome de login automaticamente
+      return { ok: copied > 0, copied, browser: browser.name };
+    }
+    await sleepMs(2500);
   }
-  if (!loginWindowClosed) {
-    return {
-      ok: false,
-      browser: browser.name,
-      error: `Feche a janela do ${browser.name} que abriu para o login e clique em Entrar no Google de novo para importar.`,
-    };
-  }
-
-  return await importGoogleCookiesFromBrowserProfile(browser, profileDir);
+  await closeLoginBrowser();
+  return { ok: false, browser: browser.name, error: 'Tempo esgotado esperando o login.' };
 }
 
 function createWindow(): void {
