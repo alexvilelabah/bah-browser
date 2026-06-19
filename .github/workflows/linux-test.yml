@@ -1,0 +1,74 @@
+name: Linux build + smoke test
+
+# Roda nos servidores Linux (Ubuntu) gratuitos do GitHub.
+# Objetivo: confirmar que o Bah ABRE e não crasha no Linux (smoke test headless),
+# e gerar um AppImage como artefato. NÃO testa download de mídia (código Windows).
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'assets/**'
+      - 'LICENSE'
+  workflow_dispatch: {}
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependências do projeto
+        run: npm ci || npm install
+
+      - name: Libs de sistema do Linux (GUI + xvfb + keytar)
+        run: |
+          sudo apt-get update
+          sudo npx --yes playwright install-deps || true
+          sudo apt-get install -y xvfb libsecret-1-0 || true
+
+      - name: Build (renderer + main)
+        run: npm run build
+
+      - name: Recompilar módulos nativos para o Electron
+        run: npx --yes @electron/rebuild -f || true
+
+      - name: Smoke test (abre headless e confirma que não crasha)
+        run: |
+          set -e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" bash -c '
+            npx electron . --no-sandbox --disable-gpu --disable-dev-shm-usage > app.log 2>&1 &
+            APP=$!
+            sleep 15
+            if kill -0 "$APP" 2>/dev/null; then
+              echo "PASS: Bah continua rodando depois de 15s (abriu sem crashar no Linux)"
+              kill "$APP" 2>/dev/null || true
+              exit 0
+            else
+              echo "FAIL: o app saiu cedo demais (possivel crash no Linux)"
+              exit 1
+            fi
+          '
+
+      - name: Log do app (sempre)
+        if: always()
+        run: cat app.log 2>/dev/null || echo "(sem log)"
+
+      - name: Gerar AppImage (bônus, não bloqueia)
+        continue-on-error: true
+        run: npx --yes electron-builder --linux AppImage --publish never
+
+      - name: Subir o AppImage como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bah-linux-appimage
+          path: release/*.AppImage
+          if-no-files-found: ignore
