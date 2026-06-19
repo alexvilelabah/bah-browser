@@ -234,7 +234,9 @@ O agente opera com privilégios elevados de navegador, então é importante deix
 
 - **Detecção de ação sem efeito.** Se duas ações seguidas não mudarem nada na página, o sistema avisa a IA pra mudar de estratégia (em vez de repetir infinitamente).
 
-- **Stealth não é evasão.** Mascaramos `navigator.webdriver` e usamos UA Chrome só para sites como Google não rejeitarem o login. Não burlamos CAPTCHA, não evitamos rate-limit, não automatizamos coisas que sites proíbem nos termos de uso.
+- **Stealth não é evasão.** Mascaramos `navigator.webdriver` e usamos UA Chrome só para reduzir rejeições. Não burlamos CAPTCHA, não evitamos rate-limit, não automatizamos coisas que sites proíbem nos termos de uso.
+
+- **⚠️ Login do Google pode não funcionar.** O Google **bloqueia login em navegadores embutidos** (Electron/webview) — pode aparecer *"este navegador ou app pode não ser seguro"*. É uma proteção deliberada do Google contra esse tipo de app, **não um bug do Bah**, e atinge todos os navegadores-agente (inclusive os grandes). A maioria dos sites funciona normal; **tarefas que exigem login no Google** (Gmail, criar playlist no YouTube) podem **falhar na etapa de login**. Não há contorno confiável — o jeito "correto" (login pelo navegador do sistema via OAuth) ainda não está implementado.
 
 - **Adblock pausa em sites conhecidos.** YouTube e Twitch entram em modo bypass automático para o player não ser bloqueado pelo anti-adblock deles. Outros sites: o adblock fica ativo.
 
