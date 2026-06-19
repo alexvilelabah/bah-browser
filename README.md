@@ -17,7 +17,7 @@
 
 ![Bah em ação](assets/demo.gif)
 
-▶️ **[Ver a demo completa (vídeo)](assets/demo.mp4)** — o agente pesquisando e operando a web sozinho.
+▶️ **[Baixar o vídeo completo (2 min)](https://github.com/alexvilelabah/bah-browser/releases/download/v1.0.0/demo.mp4)** — o agente pesquisando e operando a web sozinho. *(o GIF acima é a prévia; o GitHub não toca vídeo embutido no README.)*
 
 ## 📥 Baixar
 
