@@ -284,6 +284,10 @@ body {
   border-bottom:1px solid var(--border);
   display:flex;flex-direction:column;gap:10px;
   background:var(--bg-primary);
+  /* No modo IA Local o conteúdo fica alto (lista + sugestões + import). Sem isto,
+     o painel estoura e empurra o botão Salvar pra fora da tela. */
+  max-height:calc(100vh - 110px);
+  overflow-y:auto;
 }
 .settings-panel label {
   display:flex;flex-direction:column;gap:5px;
@@ -310,6 +314,11 @@ body {
   font-size:12px;font-weight:700;cursor:pointer;
   transition:opacity 0.2s;letter-spacing:0.3px;
   font-family:inherit;
+  /* Fica colado no rodapé do painel rolável → sempre visível e clicável,
+     mesmo no modo IA Local (conteúdo longo). */
+  position:sticky;bottom:0;flex:none;
+  margin-top:4px;
+  box-shadow:0 -10px 14px -2px var(--bg-primary);
 }
 .save-settings:hover{opacity:0.88;}
 

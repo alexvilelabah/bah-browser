@@ -414,10 +414,34 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
   }, [showSettings, localCfg.enabled, localCfg.baseUrl]);
   const handlePull = async () => {
     const m = pullName.trim(); if (!m || pulling) return;
-    if (ollamaUp === false) { setPullMsg('Ollama não detectado — instale o Ollama primeiro (botão acima).'); return; }
-    setPulling(true); setPullMsg('iniciando…');
-    try { const r = await ollamaApi()?.ollamaPull?.(m, localCfg.baseUrl); if (r && !r.ok) { setPullMsg(`erro: ${r.error || 'falhou'}`); setPulling(false); refreshModels(); } }
-    catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); setPulling(false); }
+    const url = localCfg.baseUrl || 'http://localhost:11434';
+    setPulling(true); setPullMsg('verificando o Ollama…');
+    // Re-check JUST-IN-TIME: a detecção pode estar defasada (Ollama subiu depois do
+    // painel abrir). Não travamos em estado velho — checamos agora. Se subir, isso
+    // também atualiza ollamaUp e some a caixa "Ollama não detectado".
+    let up = false;
+    try {
+      const chk = await ollamaApi()?.ollamaList?.(localCfg.baseUrl);
+      up = !!chk?.ok; setOllamaUp(up);
+      if (chk?.ok) setModels(chk.models || []);
+    } catch { up = false; setOllamaUp(false); }
+    if (!up) {
+      setPullMsg(`Não encontrei o Ollama rodando em ${url}. Abra o app Ollama (ícone na bandeja, perto do relógio) e clique em Baixar de novo.`);
+      setPulling(false); return;
+    }
+    setPullMsg('iniciando…');
+    try {
+      const r = await ollamaApi()?.ollamaPull?.(m, localCfg.baseUrl);
+      // Sucesso é tratado pelo onOllamaPullProgress (✅ baixado!). Aqui só erro síncrono.
+      if (r && !r.ok) {
+        const err = String(r.error || 'falhou');
+        const conn = /ECONNREFUSED|ENOTFOUND|fetch failed|ECONNRESET|connect\b/i.test(err);
+        setPullMsg(conn
+          ? `Não consegui falar com o Ollama em ${url}. Abra o app Ollama e tente de novo.`
+          : `erro: ${err}`);
+        setPulling(false); refreshModels();
+      }
+    } catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); setPulling(false); }
   };
   const handleDeleteModel = async (name: string) => {
     try { await ollamaApi()?.ollamaDelete?.(name, localCfg.baseUrl); refreshModels(); } catch {}

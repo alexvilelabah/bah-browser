@@ -199,7 +199,7 @@ Atalho Windows: clique duplo em `Abrir-Bah.bat`.
 4. Colar API key (ou deixar vazio se for Ollama local)
 5. Save
 
-**Modo local (Ollama):** instale o [Ollama](https://ollama.com) e baixe um modelo — pelo gerenciador dentro do Bah, ou no terminal (ex.: `ollama pull qwen2.5:14b`). Roda offline, mas a nuvem (DeepSeek) é mais confiável.
+**Modo local (Ollama):** instale o [Ollama](https://ollama.com) e **deixe o app aberto** (ele fica na bandeja, perto do relógio — é ele que serve os modelos em `127.0.0.1:11434`). Com o Ollama rodando, baixe um modelo pelo gerenciador dentro do Bah (☁️/🏠 → 🏠 IA Local → digite o nome e clique em **Baixar**) ou no terminal (ex.: `ollama pull qwen2.5:14b`). Roda offline, mas a nuvem (DeepSeek) é mais confiável.
 
 ---
 
