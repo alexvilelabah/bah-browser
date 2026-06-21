@@ -1728,7 +1728,9 @@ export default function App() {
                     const rmv = await window.electronAPI?.resolveManyVideos?.(vq, want);
                     const vids = (rmv?.videos || []) as Array<{ url: string; title: string }>;
                     if (vids.length > 0) {
-                      for (const v of vids) { try { store.addTab(`${v.url}&autoplay=1`); } catch {} }
+                      // SEM autoplay: cada aba carrega PAUSADA e só toca quando o usuário
+                      // abre/foca a aba (igual ao Chrome) — senão tocariam todas de uma vez.
+                      for (const v of vids) { try { store.addTab(v.url); } catch {} }
                       const doneMsg = `Abri ${vids.length} aba(s) com vídeos de "${vq}": ${vids.map(v => v.title).slice(0, 5).join(' · ')}`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { count: vids.length } } });
