@@ -1958,24 +1958,33 @@ export default function App() {
                     } else {
                       onProgress({ kind: 'status', message: `🪄 Colhendo ${want} imagens de "${q}" (alta qualidade)…` });
                       let urls: string[] = [];
+                      // Raspa numa ABA OCULTA (same-origin evita 403, mas NÃO abre o buscador
+                      // na cara do usuário — igual à Pesquisa Rápida). A aba some no fim.
+                      const imgBgId = store.addHiddenTab(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images`);
                       try {
-                        const before = wv.getURL();
-                        await executeBrowserAction(wv, { type: 'navigate', url: `https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images` } as BrowserAction);
-                        await waitForWebviewSettled(wv, before);
-                        await waitForSettle(wv, { maxMs: 3000, minMs: 250 });
-                        const ddg: any = await withTimeout(wv.executeJavaScript(ddgHarvestScript(q, want, minW)), 20000, { urls: [] });
-                        urls = Array.isArray(ddg?.urls) ? ddg.urls : [];
-                      } catch { /* tenta Bing */ }
-                      if (urls.length < want) {
-                        try {
-                          onProgress({ kind: 'status', message: `🪄 Completando no Bing Images…` });
-                          const before2 = wv.getURL();
-                          await executeBrowserAction(wv, { type: 'navigate', url: `https://www.bing.com/images/search?q=${encodeURIComponent(q)}` } as BrowserAction);
-                          await waitForWebviewSettled(wv, before2);
-                          await waitForSettle(wv, { maxMs: 3000, minMs: 250 });
-                          const bing: any = await withTimeout(wv.executeJavaScript(bingHarvestScript(want, minW)), 25000, { urls: [] });
-                          for (const u of (bing?.urls || [])) if (!urls.includes(u)) urls.push(u);
-                        } catch { /* usa o que tiver */ }
+                        let iw = 0;
+                        let bgWv = webviewRefs.current.get(imgBgId) as Electron.WebviewTag | undefined;
+                        while (iw < 6000 && !bgWv) { await new Promise(r => setTimeout(r, 150)); iw += 150; bgWv = webviewRefs.current.get(imgBgId) as any; }
+                        if (bgWv) {
+                          try {
+                            await waitForWebviewSettled(bgWv, '');
+                            await waitForSettle(bgWv, { maxMs: 3000, minMs: 250 });
+                            const ddg: any = await withTimeout(bgWv.executeJavaScript(ddgHarvestScript(q, want, minW)), 20000, { urls: [] });
+                            urls = Array.isArray(ddg?.urls) ? ddg.urls : [];
+                          } catch { /* tenta Bing */ }
+                          if (urls.length < want) {
+                            try {
+                              onProgress({ kind: 'status', message: `🪄 Completando no Bing Images…` });
+                              await bgWv.loadURL(`https://www.bing.com/images/search?q=${encodeURIComponent(q)}`);
+                              await waitForWebviewSettled(bgWv, '');
+                              await waitForSettle(bgWv, { maxMs: 3000, minMs: 250 });
+                              const bing: any = await withTimeout(bgWv.executeJavaScript(bingHarvestScript(want, minW)), 25000, { urls: [] });
+                              for (const u of (bing?.urls || [])) if (!urls.includes(u)) urls.push(u);
+                            } catch { /* usa o que tiver */ }
+                          }
+                        }
+                      } finally {
+                        try { store.closeTab(imgBgId); } catch {}   // remove a aba oculta (nunca foi vista)
                       }
                       urls = urls.slice(0, want);
                       if (urls.length === 0) {
