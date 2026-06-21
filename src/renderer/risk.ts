@@ -24,9 +24,9 @@ export function classifyRisk(
 
   // cliques (click_ref / click_text)
   const PAY = /\b(pagar|pague|pagar agora|pagamento|finalizar (compra|pedido|a compra)|confirmar (pedido|compra|pagamento)|comprar agora|fazer pedido|place order|buy now|complete (purchase|order|payment)|checkout|finalizar e pagar|assinar agora|assinar plano|transferir|enviar pix)\b/;
-  const DEL = /\b(excluir|apagar|deletar|delete|esvaziar (a )?lixeira|excluir conta|apagar tudo|excluir permanentemente|remover conta|excluir email|excluir mensagem|excluir tudo)\b/;
-  // "apagar busca", "limpar filtro", "esvaziar carrinho" = inofensivo → não confirma.
-  const BENIGN_CLEAR = /\b(busca|pesquisa|filtro|filtros|campo|texto|rascunho|carrinho|formulario)\b/;
+  const DEL = /\b(excluir|apagar|deletar|delete|remover|remove|descartar|discard|esvaziar (a )?lixeira|empty trash|excluir conta|delete account|remover conta|remove account|apagar tudo|delete all|excluir permanentemente|delete permanently|excluir email|excluir mensagem|excluir tudo)\b/;
+  // "apagar busca", "remover filtro", "esvaziar carrinho" = inofensivo → não confirma.
+  const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form)\b/;
   if (PAY.test(hay)) return { kind: 'pagamento', label: shown || 'pagamento' };
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'exclusão', label: shown || 'exclusão' };
   return null;
