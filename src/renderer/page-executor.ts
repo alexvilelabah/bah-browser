@@ -418,6 +418,12 @@ export async function executeBrowserAction(wv: Electron.WebviewTag, action: Brow
   if (action.type === 'navigate') {
     if (!action.url) return { success: false, error: 'Missing url' };
     const target = normalizeUrl(action.url);
+    // O agente só navega para http(s). Bloqueia file://, javascript:, data:, about:
+    // etc. (rota pra ler arquivo local e mandar pra IA). Páginas internas do app
+    // (data-view/supercut) abrem por outro caminho — store.addTab(rv.url) —, não aqui.
+    if (!/^https?:\/\//i.test(target)) {
+      return { success: false, error: `Bloqueado: o agente só navega para páginas http(s), não "${action.url}".` };
+    }
     try { await wv.loadURL(target); } catch (e: any) { /* ignore mid-load aborts */ }
     // Wait until page settles or timeout
     await new Promise<void>((resolve) => {

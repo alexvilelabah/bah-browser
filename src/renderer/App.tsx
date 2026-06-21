@@ -2103,6 +2103,9 @@ export default function App() {
                     else toolResult = { success: false, error: `Tab ${action.tab} not found` };
                     await new Promise(r => setTimeout(r, 1500));
                   } else if (action.type === 'new_tab') {
+                    if (!/^https?:\/\//i.test(action.url || '')) {
+                      toolResult = { success: false, error: `Bloqueado: o agente só abre páginas http(s), não "${action.url}".` };
+                    } else {
                     const newId = store.addTab(action.url);
                     activeTabIdRef.current = newId;
                     toolResult = { success: true, info: { openedUrl: action.url, tabId: newId } };
@@ -2114,6 +2117,7 @@ export default function App() {
                     }
                     // Then wait for it to load
                     await new Promise(r => setTimeout(r, 4000));
+                    }
                   } else if (action.type === 'close_tab') {
                     const target = store.tabs[action.tab];
                     if (target) { store.closeTab(target.id); toolResult = { success: true, info: { closed: action.tab } }; }
