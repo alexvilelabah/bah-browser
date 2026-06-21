@@ -100,7 +100,9 @@ body {
 .tab{
   display:flex;align-items:center;gap:9px;
   padding:0 10px 0 12px;height:34px;
-  min-width:120px;max-width:240px;
+  /* flex-shrink ligado + min-width baixo = abas ENCOLHEM (estilo Chrome) em vez de
+     fazer scroll e esconder o "+". O título trunca com reticências ao apertar. */
+  flex:0 1 auto;min-width:56px;max-width:240px;
   background:transparent;
   border-radius:9px 9px 0 0;
   cursor:pointer;position:relative;
@@ -1191,7 +1193,7 @@ body {
   }
 
   .tab {
-    min-width:92px;
+    min-width:52px;
   }
 
   .ai-toggle span,
