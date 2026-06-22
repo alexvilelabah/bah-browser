@@ -320,21 +320,32 @@ export default function App() {
     setHistoryView([]);
   }, []);
   // Sugestões pro autocomplete: favoritos + histórico, casando a busca em url/título.
-  const getSuggestions = useCallback((q: string): Array<{ url: string; title: string }> => {
+  const getSuggestions = useCallback((q: string): Array<{ url: string; title: string; display: string; prefix: boolean }> => {
     const query = q.trim().toLowerCase();
     if (!query || /^https?:\/\//i.test(q)) return [];   // já é uma URL completa → não sugere
-    const seen = new Set<string>();
-    const out: Array<{ url: string; title: string }> = [];
-    const push = (url: string, title: string) => { if (!seen.has(url)) { seen.add(url); out.push({ url, title }); } };
-    for (const f of favorites) {
-      if (out.length >= 8) break;
-      if (f.url.toLowerCase().includes(query) || (f.title || '').toLowerCase().includes(query)) push(f.url, f.title || f.url);
+    const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+    const normOf = (u: string) => u.replace(/^https?:\/\//i, '').replace(/^www\./, '');
+    // Só completa typo de DOMÍNIO (sem espaço/barra) → "youtube.co" vira "youtube.com".
+    const canPrefix = !query.includes(' ') && !query.includes('/');
+    const seenHost = new Set<string>();
+    const seenUrl = new Set<string>();
+    const prefixHits: Array<{ url: string; title: string; display: string; prefix: boolean }> = [];
+    const other: Array<{ url: string; title: string; display: string; prefix: boolean }> = [];
+    const all = [...favorites, ...historyRef.current.map(h => ({ url: h.url, title: h.title }))];
+    for (const c of all) {
+      if (prefixHits.length + other.length >= 12) break;
+      const host = hostOf(c.url);
+      const norm = normOf(c.url);
+      const title = c.title || c.url;
+      if (canPrefix && host && host.startsWith(query) && host !== query && !seenHost.has(host)) {
+        // match de prefixo de host → completa pro host LIMPO (raiz), estilo Chrome
+        seenHost.add(host);
+        prefixHits.push({ url: 'https://' + host, title: host, display: host, prefix: true });
+      } else if (norm.toLowerCase().includes(query) || title.toLowerCase().includes(query)) {
+        if (!seenUrl.has(c.url)) { seenUrl.add(c.url); other.push({ url: c.url, title, display: norm, prefix: false }); }
+      }
     }
-    for (const h of historyRef.current) {
-      if (out.length >= 8) break;
-      if (h.url.toLowerCase().includes(query) || (h.title || '').toLowerCase().includes(query)) push(h.url, h.title || h.url);
-    }
-    return out;
+    return [...prefixHits, ...other].slice(0, 8);
   }, [favorites]);
 
   // Troca de idioma re-renderiza a UI SEM recarregar a página (o menu não fecha).

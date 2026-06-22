@@ -1,4 +1,4 @@
-import React, { useState, useEffect, KeyboardEvent } from 'react';
+import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
 import { t } from '../i18n';
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   onReload: () => void;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
-  getSuggestions?: (q: string) => Array<{ url: string; title: string }>;
+  getSuggestions?: (q: string) => Array<{ url: string; title: string; display: string; prefix: boolean }>;
 }
 
 export default function AddressBar({
@@ -21,23 +21,48 @@ export default function AddressBar({
   isBookmarked, onToggleBookmark, getSuggestions,
 }: Props) {
   const [input, setInput] = useState(url);
-  const [sugg, setSugg] = useState<Array<{ url: string; title: string }>>([]);
+  const [sugg, setSugg] = useState<Array<{ url: string; title: string; display: string; prefix: boolean }>>([]);
   const [showSugg, setShowSugg] = useState(false);
   const [hi, setHi] = useState(-1);   // item destacado (-1 = usa o texto digitado)
+  const inputRef = useRef<HTMLInputElement>(null);
+  const lastKeyRef = useRef('');      // pra NÃO autocompletar quando o usuário está apagando
+  const selRef = useRef<{ s: number; e: number } | null>(null);
 
   useEffect(() => { setInput(url); setShowSugg(false); }, [url]);
 
-  const refreshSugg = (v: string) => {
-    const list = (v.trim() && getSuggestions) ? getSuggestions(v) : [];
-    setSugg(list); setShowSugg(list.length > 0); setHi(-1);
+  // Depois que o input re-renderiza com o texto completado, seleciona o sufixo (estilo Chrome).
+  useEffect(() => {
+    if (selRef.current && inputRef.current) {
+      const { s, e } = selRef.current; selRef.current = null;
+      try { inputRef.current.setSelectionRange(s, e); } catch {}
+    }
+  }, [input]);
+
+  const onType = (val: string) => {
+    const deleting = lastKeyRef.current === 'Backspace' || lastKeyRef.current === 'Delete' || val.length < input.length;
+    const list = (val.trim() && getSuggestions) ? getSuggestions(val) : [];
+    const top = list[0];
+    // Autocomplete inline: topo é match de prefixo e seu display começa com o que foi digitado
+    // → completa o resto (ex.: "youtube.co" → "youtube.com") com o sufixo selecionado. Só ao
+    // DIGITAR (nunca apagando), e o Enter passa a ir pro site completo, não pro typo.
+    if (!deleting && top && top.prefix && top.display.toLowerCase().startsWith(val.toLowerCase()) && top.display.length > val.length) {
+      const completed = val + top.display.slice(val.length);
+      setInput(completed);
+      selRef.current = { s: val.length, e: completed.length };
+      setSugg(list); setShowSugg(list.length > 0); setHi(0);
+    } else {
+      setInput(val);
+      setSugg(list); setShowSugg(list.length > 0); setHi(!deleting && top && top.prefix ? 0 : -1);
+    }
   };
   const go = (target: string) => { setShowSugg(false); onNavigate(target); };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    lastKeyRef.current = e.key;
     if (showSugg && e.key === 'ArrowDown') { e.preventDefault(); setHi(i => Math.min(i + 1, sugg.length - 1)); return; }
     if (showSugg && e.key === 'ArrowUp') { e.preventDefault(); setHi(i => Math.max(i - 1, -1)); return; }
     if (e.key === 'Escape') { setShowSugg(false); return; }
-    if (e.key === 'Enter') { go(showSugg && hi >= 0 ? sugg[hi].url : input); }
+    if (e.key === 'Enter') { go(hi >= 0 && sugg[hi] ? sugg[hi].url : input); }
   };
 
   // Indicador de segurança (cadeado) — só pra páginas reais http/https; vazio na nova aba.
@@ -70,10 +95,11 @@ export default function AddressBar({
           </span>
         )}
         <input
+          ref={inputRef}
           type="text"
           className="url-input"
           value={input}
-          onChange={e => { setInput(e.target.value); refreshSugg(e.target.value); }}
+          onChange={e => onType(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={e => e.target.select()}
           onBlur={() => setTimeout(() => setShowSugg(false), 150)}
@@ -100,7 +126,7 @@ export default function AddressBar({
                 onMouseEnter={() => setHi(i)}
               >
                 <span className="omni-title">{s.title}</span>
-                <span className="omni-url">{s.url.replace(/^https?:\/\//, '')}</span>
+                {s.display && s.display !== s.title && <span className="omni-url">{s.display}</span>}
               </li>
             ))}
           </ul>
