@@ -6,6 +6,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import { classifyRisk } from './risk';
 import WebViewContainer from './components/WebViewContainer';
+import StartPage from './components/StartPage';
 import {
   BrowserAction,
   executeBrowserAction,
@@ -246,6 +247,27 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // ── Atalhos da nova aba (speed-dial) — lista própria, separada dos favoritos ──
+  const [speeddial, setSpeedDial] = useState<Array<{ url: string; title: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem('speeddial.v1') || '[]'); } catch { return []; }
+  });
+  const addSpeedDial = useCallback((url: string, title: string) => {
+    setSpeedDial(prev => {
+      if (prev.some(s => s.url === url)) return prev;
+      const next = [...prev, { url, title }].slice(0, 30);
+      try { localStorage.setItem('speeddial.v1', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+  const removeSpeedDial = useCallback((url: string) => {
+    setSpeedDial(prev => {
+      const next = prev.filter(s => s.url !== url);
+      try { localStorage.setItem('speeddial.v1', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+  const isStartPage = (u?: string) => !u || u === 'about:blank';
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
   const handleGoogleLogin = useCallback(async () => {
@@ -474,7 +496,7 @@ export default function App() {
 
       <div className="address-bar-row">
         <AddressBar
-          url={store.activeTab.url}
+          url={isStartPage(store.activeTab.url) ? '' : store.activeTab.url}
           isLoading={store.activeTab.isLoading}
           canGoBack={store.activeTab.canGoBack}
           canGoForward={store.activeTab.canGoForward}
@@ -575,6 +597,9 @@ export default function App() {
               <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: true })} title="Próximo (Enter)">↓</button>
               <button className="find-btn" onClick={closeFind} title="Fechar (Esc)">✕</button>
             </div>
+          )}
+          {isStartPage(store.activeTab.url) && (
+            <StartPage items={speeddial} onNavigate={navigate} onAdd={addSpeedDial} onRemove={removeSpeedDial} />
           )}
         </div>
 

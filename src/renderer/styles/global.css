@@ -246,6 +246,66 @@ body {
 }
 .find-btn:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
 
+/* 🏠 Start page (nova aba): logo + busca + grade de atalhos com "+" */
+.start-page{
+  position:absolute; inset:0; z-index:40;
+  display:flex; flex-direction:column; align-items:center;
+  padding-top:13vh; gap:26px; overflow-y:auto;
+  background:var(--bg-primary);
+}
+.start-logo{ font-size:64px; font-weight:800; letter-spacing:-1px;
+  background:var(--gradient); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.start-search{
+  display:flex; align-items:center; gap:10px;
+  width:min(560px,86%); height:50px; padding:0 18px;
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  border-radius:9999px; color:var(--text-muted);
+  box-shadow:0 6px 24px rgba(0,0,0,0.25);
+}
+.start-search:focus-within{ border-color:var(--accent); box-shadow:0 0 0 4px var(--accent-glow); }
+.start-search input{ flex:1; border:none; outline:none; background:transparent; color:var(--text-primary); font-size:15px; font-family:inherit; }
+.start-search input::placeholder{ color:var(--text-muted); }
+.sd-grid{ display:flex; flex-wrap:wrap; justify-content:center; gap:10px 6px; width:min(720px,92%); }
+.sd-tile{
+  position:relative; width:90px; padding:12px 4px 8px;
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  border-radius:12px; cursor:pointer; transition:background 0.12s var(--ease);
+}
+.sd-tile:hover{ background:rgba(255,255,255,0.06); }
+.sd-icon{
+  position:relative; width:48px; height:48px; border-radius:50%;
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center; overflow:hidden;
+}
+.sd-icon img{ width:26px; height:26px; object-fit:contain; position:relative; z-index:1; }
+.sd-letter{ position:absolute; font-size:20px; font-weight:700; color:var(--text-secondary); }
+.sd-label{ font-size:12px; color:var(--text-secondary); max-width:84px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; }
+.sd-del{
+  position:absolute; top:6px; right:12px; width:18px; height:18px;
+  border:none; border-radius:50%; background:rgba(0,0,0,0.5); color:#fff;
+  font-size:10px; cursor:pointer; display:none; align-items:center; justify-content:center; z-index:2;
+}
+.sd-tile:hover .sd-del{ display:flex; }
+.sd-add .sd-icon{ border-style:dashed; }
+.sd-plus{ font-size:26px; color:var(--text-muted); line-height:1; }
+.sd-modal{ position:absolute; inset:0; z-index:50; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; }
+.sd-modal-box{
+  width:min(360px,88%); background:var(--bg-secondary); border:1px solid var(--border);
+  border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:10px;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5);
+}
+.sd-modal-title{ font-size:15px; font-weight:700; color:var(--text-primary); }
+.sd-modal-input{
+  height:38px; padding:0 12px; border-radius:9px;
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  color:var(--text-primary); font-size:13px; outline:none; font-family:inherit;
+}
+.sd-modal-input:focus{ border-color:var(--accent); }
+.sd-modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+.sd-cancel,.sd-ok{ height:34px; padding:0 16px; border-radius:9px; cursor:pointer; font-size:13px; font-weight:600; border:1px solid var(--border); }
+.sd-cancel{ background:transparent; color:var(--text-secondary); }
+.sd-ok{ background:var(--accent); color:#fff; border-color:transparent; }
+
 /* ── Botões da barra: AI + Adblock — retângulo de cantos arredondados (estilo
    "Baixar música"), UM padrão só, consistente ─────────────────────────────── */
 .ai-toggle, .adblock-btn {
