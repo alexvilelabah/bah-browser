@@ -12,21 +12,32 @@ interface Props {
   onReload: () => void;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
+  getSuggestions?: (q: string) => Array<{ url: string; title: string }>;
 }
 
 export default function AddressBar({
   url, isLoading, canGoBack, canGoForward,
   onNavigate, onBack, onForward, onReload,
-  isBookmarked, onToggleBookmark,
+  isBookmarked, onToggleBookmark, getSuggestions,
 }: Props) {
   const [input, setInput] = useState(url);
+  const [sugg, setSugg] = useState<Array<{ url: string; title: string }>>([]);
+  const [showSugg, setShowSugg] = useState(false);
+  const [hi, setHi] = useState(-1);   // item destacado (-1 = usa o texto digitado)
 
-  useEffect(() => { setInput(url); }, [url]);
+  useEffect(() => { setInput(url); setShowSugg(false); }, [url]);
+
+  const refreshSugg = (v: string) => {
+    const list = (v.trim() && getSuggestions) ? getSuggestions(v) : [];
+    setSugg(list); setShowSugg(list.length > 0); setHi(-1);
+  };
+  const go = (target: string) => { setShowSugg(false); onNavigate(target); };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      onNavigate(input);
-    }
+    if (showSugg && e.key === 'ArrowDown') { e.preventDefault(); setHi(i => Math.min(i + 1, sugg.length - 1)); return; }
+    if (showSugg && e.key === 'ArrowUp') { e.preventDefault(); setHi(i => Math.max(i - 1, -1)); return; }
+    if (e.key === 'Escape') { setShowSugg(false); return; }
+    if (e.key === 'Enter') { go(showSugg && hi >= 0 ? sugg[hi].url : input); }
   };
 
   // Indicador de segurança (cadeado) — só pra páginas reais http/https; vazio na nova aba.
@@ -62,11 +73,13 @@ export default function AddressBar({
           type="text"
           className="url-input"
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={e => { setInput(e.target.value); refreshSugg(e.target.value); }}
           onKeyDown={handleKeyDown}
           onFocus={e => e.target.select()}
+          onBlur={() => setTimeout(() => setShowSugg(false), 150)}
           placeholder={t('addr.placeholder')}
           spellCheck={false}
+          autoComplete="off"
         />
         <button
           className={`bookmark-star ${isBookmarked ? 'on' : ''}`}
@@ -77,6 +90,21 @@ export default function AddressBar({
             <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
           </svg>
         </button>
+        {showSugg && (
+          <ul className="omni-suggest">
+            {sugg.map((s, i) => (
+              <li
+                key={s.url}
+                className={`omni-item${i === hi ? ' on' : ''}`}
+                onMouseDown={e => { e.preventDefault(); go(s.url); }}
+                onMouseEnter={() => setHi(i)}
+              >
+                <span className="omni-title">{s.title}</span>
+                <span className="omni-url">{s.url.replace(/^https?:\/\//, '')}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

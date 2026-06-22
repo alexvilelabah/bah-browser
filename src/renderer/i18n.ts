@@ -117,6 +117,9 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.clear': 'Clear',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Close tab',
+    'history.title': 'History',
+    'history.clear': 'Clear history',
+    'history.empty': 'No history yet.',
   },
   pt: {
     'addr.placeholder': 'Pergunte ao Google ou digite um URL',
@@ -218,6 +221,9 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.clear': 'Limpar',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Fechar aba',
+    'history.title': 'Histórico',
+    'history.clear': 'Limpar histórico',
+    'history.empty': 'Sem histórico ainda.',
   },
   es: {
     'addr.placeholder': 'Busca en Google o escribe una URL',
@@ -319,6 +325,9 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.clear': 'Limpiar',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Cerrar pestaña',
+    'history.title': 'Historial',
+    'history.clear': 'Borrar historial',
+    'history.empty': 'Aún no hay historial.',
   },
 };
 

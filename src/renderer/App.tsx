@@ -260,6 +260,44 @@ export default function App() {
     });
   }, []);
 
+  // ── Histórico de navegação (alimenta o autocomplete da barra + tela Ctrl+H) ──
+  const historyRef = useRef<Array<{ url: string; title: string; ts: number }>>([]);
+  useEffect(() => {
+    try { const h = JSON.parse(localStorage.getItem('history.v1') || '[]'); if (Array.isArray(h)) historyRef.current = h; } catch {}
+  }, []);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
+  const recordHistory = useCallback((url: string, title?: string) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    const list = historyRef.current;
+    const prev = list.find(h => h.url === url);
+    const entry = { url, title: (title || prev?.title || url).slice(0, 120), ts: Date.now() };
+    historyRef.current = [entry, ...list.filter(h => h.url !== url)].slice(0, 1000);
+    try { localStorage.setItem('history.v1', JSON.stringify(historyRef.current)); } catch {}
+  }, []);
+  const clearHistory = useCallback(() => {
+    historyRef.current = [];
+    try { localStorage.removeItem('history.v1'); } catch {}
+    setHistoryView([]);
+  }, []);
+  // Sugestões pro autocomplete: favoritos + histórico, casando a busca em url/título.
+  const getSuggestions = useCallback((q: string): Array<{ url: string; title: string }> => {
+    const query = q.trim().toLowerCase();
+    if (!query || /^https?:\/\//i.test(q)) return [];   // já é uma URL completa → não sugere
+    const seen = new Set<string>();
+    const out: Array<{ url: string; title: string }> = [];
+    const push = (url: string, title: string) => { if (!seen.has(url)) { seen.add(url); out.push({ url, title }); } };
+    for (const f of favorites) {
+      if (out.length >= 8) break;
+      if (f.url.toLowerCase().includes(query) || (f.title || '').toLowerCase().includes(query)) push(f.url, f.title || f.url);
+    }
+    for (const h of historyRef.current) {
+      if (out.length >= 8) break;
+      if (h.url.toLowerCase().includes(query) || (h.title || '').toLowerCase().includes(query)) push(h.url, h.title || h.url);
+    }
+    return out;
+  }, [favorites]);
+
   // Troca de idioma re-renderiza a UI SEM recarregar a página (o menu não fecha).
   const [, forceI18n] = useState(0);
   useEffect(() => onLangChange(() => forceI18n(n => n + 1)), []);
@@ -372,6 +410,7 @@ export default function App() {
         setLastFooterMsg(t('zoom.level', { pct: String(Math.round(z * 100)) }));
         break;
       }
+      case 'history': setHistoryView(historyRef.current.slice(0, 300)); setHistoryOpen(true); break;
       default:
         if (action.startsWith('tab-')) {
           const n = parseInt(action.slice(4), 10);
@@ -532,6 +571,7 @@ export default function App() {
           onReload={reload}
           isBookmarked={favorites.some(f => f.url === store.activeTab.url)}
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
+          getSuggestions={getSuggestions}
         />
         <div className="menu-wrap">
           <button className="menu-btn" onClick={() => setMenuOpen(o => !o)} title={t('menu.title')}>
@@ -600,7 +640,15 @@ export default function App() {
             tabs={store.tabs}
             activeTabId={store.activeTabId}
             webviewRefs={webviewRefs}
-            onUpdateTab={store.updateTab}
+            onUpdateTab={(id, patch) => {
+              store.updateTab(id, patch);
+              // Registra no histórico só páginas reais de abas VISÍVEIS (ignora abas de
+              // busca em segundo plano da Pesquisa Rápida).
+              if (patch.url) {
+                const tab = tabsRef.current.find(t => t.id === id);
+                if (!tab?.hidden) recordHistory(patch.url, patch.title);
+              }
+            }}
             onNewTab={store.addTab}
           />
           <AgentVisualOverlay state={agentVisual} ripples={ripples} />
@@ -2656,6 +2704,31 @@ export default function App() {
           <span className="agent-footer-label">{t('footer.lastStatus')}</span>
           <span className="agent-footer-text" title={t('footer.selectCopy')}>{lastFooterMsg}</span>
           <button className="agent-footer-clear" onClick={() => setLastFooterMsg('')} title={t('footer.clear')}>×</button>
+        </div>
+      )}
+      {historyOpen && (
+        <div className="history-overlay" onClick={() => setHistoryOpen(false)}>
+          <div className="history-panel" onClick={e => e.stopPropagation()}>
+            <div className="history-head">
+              <span>🕘 {t('history.title')}</span>
+              <div className="history-head-actions">
+                <button className="history-clear" onClick={clearHistory}>{t('history.clear')}</button>
+                <button className="history-close" onClick={() => setHistoryOpen(false)} title={t('assist.close')}>✕</button>
+              </div>
+            </div>
+            {historyView.length === 0 ? (
+              <div className="history-empty">{t('history.empty')}</div>
+            ) : (
+              <ul className="history-list">
+                {historyView.map((h, i) => (
+                  <li key={h.url + i} className="history-item" onClick={() => { setHistoryOpen(false); navigate(h.url); }} title={h.url}>
+                    <span className="history-title">{h.title}</span>
+                    <span className="history-url">{h.url.replace(/^https?:\/\//, '')}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
       {/* dead second AgentCommandBar removed */}
