@@ -60,7 +60,7 @@ export function useTabStore() {
       const saved = localStorage.getItem('localSettings');
       if (saved) return JSON.parse(saved);
     } catch {}
-    return { enabled: false, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen2.5:7b' };
+    return { enabled: false, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen3:8b' };
   });
 
   const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];

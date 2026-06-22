@@ -56,9 +56,9 @@ const FEED_CAP = 400;
 // servidores. Cada um é um nome real do Ollama (`ollama pull <nome>`). Quem tem
 // placa/memória maior pega modelos melhores; o usuário clica e baixa.
 const MODEL_SUGGESTIONS: Array<{ tier: string; models: string[] }> = [
-  { tier: '~16GB', models: ['qwen2.5:14b', 'llama3.1:8b', 'gpt-oss:20b'] },
-  { tier: '24–32GB', models: ['qwen2.5:32b', 'qwen3:32b', 'gemma2:27b'] },
-  { tier: '64GB+', models: ['llama3.3:70b', 'qwen2.5:72b', 'deepseek-r1:70b'] },
+  { tier: '~16GB', models: ['qwen3:14b', 'gpt-oss:20b', 'gemma3:12b'] },
+  { tier: '24–32GB', models: ['qwen3:32b', 'gemma3:27b', 'deepseek-r1:32b'] },
+  { tier: '64GB+', models: ['llama3.3:70b', 'deepseek-r1:70b'] },
   { tier: '128GB+ (Mac unificado)', models: ['gpt-oss:120b', 'qwen3:235b'] },
   { tier: '~250GB (servidor/Mac topo)', models: ['llama3.1:405b'] },
 ];
