@@ -478,7 +478,7 @@ export default function App() {
         <button
           className={`ai-toggle top-bar-ai ${store.sidebarOpen ? 'active' : ''}`}
           onClick={() => store.setSidebarOpen(!store.sidebarOpen)}
-          title="Abrir/fechar o painel do agente (AI)"
+          title={t('ai.toggle')}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2H10a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
@@ -520,12 +520,12 @@ export default function App() {
             <>
               <div className="menu-overlay" onClick={() => setMenuOpen(false)} />
               <div className="menu-panel">
-                <button className="menu-item" onClick={() => toggleAdblock()} title="Bloqueador de anúncios nativo (liga/desliga)">
+                <button className="menu-item" onClick={() => toggleAdblock()} title={t('menu.adblockTitle')}>
                   <span className="menu-ic">🛡️</span>
                   <span className="menu-label">{t('menu.adblock')}</span>
                   <span className={`menu-switch ${adblockOn ? 'on' : ''}`}>{!adblockOn ? 'OFF' : (adblockActive ? 'ON' : 'BYPASS')}</span>
                 </button>
-                <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title="Faz login no Google pelo Chrome/Edge real e importa a sessao para o Bah">
+                <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">🔑</span>
                   <span className="menu-label">{t('menu.googleLogin')}</span>
                 </button>
@@ -544,7 +544,7 @@ export default function App() {
                           <span className="fav-title">{f.title}</span>
                           <span className="fav-url">{(() => { try { return new URL(f.url).hostname.replace(/^www\./, ''); } catch { return f.url; } })()}</span>
                         </button>
-                        <button className="fav-del" onClick={() => removeFavorite(f.url)} title="Remover dos favoritos">✕</button>
+                        <button className="fav-del" onClick={() => removeFavorite(f.url)} title={t('fav.remove')}>✕</button>
                       </div>
                     ))}
                   </div>
@@ -2573,9 +2573,9 @@ export default function App() {
 
       {lastFooterMsg && (
         <div className="agent-footer-strip">
-          <span className="agent-footer-label">Último status:</span>
-          <span className="agent-footer-text" title="Selecione e copie">{lastFooterMsg}</span>
-          <button className="agent-footer-clear" onClick={() => setLastFooterMsg('')} title="Limpar">×</button>
+          <span className="agent-footer-label">{t('footer.lastStatus')}</span>
+          <span className="agent-footer-text" title={t('footer.selectCopy')}>{lastFooterMsg}</span>
+          <button className="agent-footer-clear" onClick={() => setLastFooterMsg('')} title={t('footer.clear')}>×</button>
         </div>
       )}
       {/* dead second AgentCommandBar removed */}

@@ -163,8 +163,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
   const [ph, setPh] = useState('');
   useEffect(() => {
     const phrases = headlines.length
-      ? ['Pergunte, pesquise ou peça uma tarefa…', ...headlines]
-      : ['Pergunte, pesquise ou peça uma tarefa…', 'quem ganhou o jogo ontem?', 'qual a alexa mais barata?', 'resuma esta página em 3 tópicos'];
+      ? [t('composer.phLead'), ...headlines]
+      : [t('composer.phLead'), t('composer.phEx1'), t('composer.phEx2'), t('composer.phEx3')];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
@@ -177,7 +177,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
     };
     timer = setTimeout(tick, 500);
     return () => clearTimeout(timer);
-  }, [headlines]);
+  }, [headlines, getLang()]);
   // Auto-crescer a caixa de texto conforme digita (até um teto), estilo Comet.
   useEffect(() => {
     const el = inputRef.current;
@@ -507,34 +507,34 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
               type="button"
               className={`mode-opt ${!localCfg.enabled ? 'on' : ''}`}
               onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: 'deepseek' })); }}
-            >☁️ DeepSeek<small>nuvem · API · recomendado</small></button>
+            >☁️ DeepSeek<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
               className={`mode-opt ${localCfg.enabled ? 'on' : ''}`}
               onClick={() => setLocalCfg(p => ({ ...p, enabled: true }))}
-            >🏠 IA Local<small>sua GPU · offline</small></button>
+            >🏠 {t('set.localMode')}<small>{t('set.localSmall')}</small></button>
           </div>
           {!localCfg.enabled && (
             <>
               <label>
-                API Key (DeepSeek)
+                {t('set.apiKey')}
                 <input
                   type="password"
                   value={settings.apiKey}
                   onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder="Cole sua chave da API DeepSeek"
+                  placeholder={t('set.apiKeyPlaceholder')}
                 />
               </label>
-              <div className="mm-hint">☁️ A <b>nuvem é o caminho recomendado</b>: rápido, esperto e estável. <button type="button" className="mm-link" onClick={getDeepseekKey}>Pegar uma chave da API →</button></div>
+              <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getDeepseekKey}>{t('set.getKey')}</button></div>
               <details className="mm-imp">
-                <summary>Avançado</summary>
+                <summary>{t('set.advanced')}</summary>
                 <label>
-                  Base URL (opcional)
+                  {t('set.baseUrl')}
                   <input
                     type="text"
                     value={settings.baseUrl}
                     onChange={e => setSettings({ ...settings, baseUrl: e.target.value })}
-                    placeholder="Deixe vazio pro padrão"
+                    placeholder={t('set.baseUrlPlaceholder')}
                   />
                 </label>
               </details>
@@ -542,9 +542,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
           )}
           {localCfg.enabled && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div className="mm-hint">💡 Quanto mais memória, maior e mais esperto o modelo. <b>16GB de VRAM</b> roda os pequenos; <b>32GB+</b> (ou Mac com memória unificada de <b>64–128GB</b>) roda os grandes (70B–235B); os gigantes (<b>~250GB</b>, como o llama3.1:405b) pedem servidor ou Mac topo de linha. Com pouca memória os modelos grandes ficam lentos e o agente erra mais — aí a <b>nuvem (API)</b> funciona melhor.</div>
+              <div className="mm-hint">💡 {t('set.localHint')}</div>
                 <label>
-                  URL do Ollama
+                  {t('set.ollamaUrl')}
                   <input type="text" value={localCfg.baseUrl}
                     onChange={e => setLocalCfg(p => ({ ...p, baseUrl: e.target.value }))}
                     placeholder="http://localhost:11434" />
@@ -552,28 +552,28 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
                 <div className="model-mgr">
                   {ollamaUp === false && (
                     <div className="mm-noollama">
-                      <div className="mm-noollama-t"><b>Ollama não detectado.</b> Os modelos baixam <b>através do Ollama</b> — um programa gratuito que você instala <b>uma vez</b> (ele não vem junto com o navegador). Depois de instalar, ele roda sozinho em segundo plano e os botões de baixar passam a funcionar.</div>
+                      <div className="mm-noollama-t">{t('mm.noOllama')}</div>
                       <div className="mm-noollama-b">
-                        <button className="mm-install" onClick={installOllama}>⬇ Instalar Ollama</button>
-                        <button className="mm-recheck" onClick={refreshModels}>Já instalei — verificar</button>
+                        <button className="mm-install" onClick={installOllama}>{t('mm.install')}</button>
+                        <button className="mm-recheck" onClick={refreshModels}>{t('mm.recheck')}</button>
                       </div>
                     </div>
                   )}
                   <div className="mm-head">
-                    <span>Modelos instalados</span>
-                    <button className="mm-refresh" onClick={refreshModels} title="Atualizar lista">↻</button>
+                    <span>{t('mm.installed')}</span>
+                    <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>
                   </div>
                   {models.length === 0 ? (
-                    <div className="mm-empty">{ollamaUp === false ? 'Instale o Ollama acima pra começar.' : 'Nenhum modelo ainda. Baixe um abaixo pelo nome.'}</div>
+                    <div className="mm-empty">{ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
                   ) : (
                     <div className="mm-list">
                       {models.map(m => (
                         <div key={m.name} className={`mm-item ${m.name === localCfg.model ? 'on' : ''}`}>
-                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name }))} title="Usar este modelo">
+                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name }))} title={t('mm.use')}>
                             <span className="mm-name">{m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
                             <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : ''].filter(Boolean).join(' · ')}</span>
                           </button>
-                          <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title="Apagar modelo">✕</button>
+                          <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title={t('mm.delete')}>✕</button>
                         </div>
                       ))}
                     </div>
@@ -582,14 +582,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
                     <input value={pullName} onChange={e => setPullName(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handlePull(); }}
                       disabled={pulling}
-                      placeholder="baixar pelo nome — ex.: qwen3:14b, gpt-oss:20b" />
+                      placeholder={t('mm.pullPlaceholder')} />
                     {pulling
-                      ? <button className="mm-cancel" onClick={handleCancelPull} title="Parar o download">■ Parar</button>
-                      : <button onClick={handlePull} disabled={!pullName.trim()}>Baixar</button>}
+                      ? <button className="mm-cancel" onClick={handleCancelPull} title={t('mm.stopTitle')}>{t('mm.stop')}</button>
+                      : <button onClick={handlePull} disabled={!pullName.trim()}>{t('mm.download')}</button>}
                   </div>
                   {pullMsg && <div className="mm-prog">{pullMsg}</div>}
                   <div className="mm-sugg">
-                    <div className="mm-sugg-cap">Sugestões por hardware (clique pra preencher):</div>
+                    <div className="mm-sugg-cap">{t('mm.suggestions')}</div>
                     {MODEL_SUGGESTIONS.map(g => (
                       <div key={g.tier} className="mm-sugg-row">
                         <span className="mm-tier">{g.tier}</span>
@@ -602,10 +602,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
                     ))}
                   </div>
                   <details className="mm-imp mm-imp-open" open>
-                    <summary>📂 Importar um .gguf por caminho (avançado)</summary>
-                    <input value={ggufPath} onChange={e => setGgufPath(e.target.value)} placeholder="ex.: D:\modelos\meu.gguf" />
-                    <input value={ggufName} onChange={e => setGgufName(e.target.value)} placeholder="nome do modelo (ex.: meu-modelo)" />
-                    <button onClick={handleImportGguf} disabled={!ggufPath.trim() || pulling}>Importar</button>
+                    <summary>{t('mm.importGguf')}</summary>
+                    <input value={ggufPath} onChange={e => setGgufPath(e.target.value)} placeholder={t('mm.ggufPath')} />
+                    <input value={ggufName} onChange={e => setGgufName(e.target.value)} placeholder={t('mm.ggufName')} />
+                    <button onClick={handleImportGguf} disabled={!ggufPath.trim() || pulling}>{t('mm.import')}</button>
                   </details>
                 </div>
             </div>
@@ -615,7 +615,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
             await onLocalSettingsChange(localCfg);
             setShowSettings(false);
           }}>
-            Salvar
+            {t('settings.save')}
           </button>
         </div>
       )}
@@ -638,7 +638,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
           <div className="chat-msg assistant"><div className="msg-content typing"><span /><span /><span /></div></div>
         )}
         {loading && (
-          <div className="feed-working"><span className="agent-spinner" /> trabalhando…</div>
+          <div className="feed-working"><span className="agent-spinner" /> {t('feed.working')}</div>
         )}
       </div>
 
@@ -656,17 +656,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
           disabled={loading || chatLoading}
         />
         <div className="composer-bar">
-          <div className="composer-hint">⚡ Pergunte ou peça uma tarefa — eu decido se respondo ou faço.</div>
+          <div className="composer-hint">{t('composer.hint')}</div>
           {manualHelp ? (
             <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
-              Continuar
+              {t('feed.continue')}
             </button>
           ) : loading ? (
-            <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title="Parar tarefa">
+            <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title={t('composer.stopTask')}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
             </button>
           ) : (
-            <button data-testid="agent-run" onClick={handleSubmit} disabled={!input.trim() || chatLoading} className="composer-send" title="Enviar">
+            <button data-testid="agent-run" onClick={handleSubmit} disabled={!input.trim() || chatLoading} className="composer-send" title={t('composer.send')}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
             </button>
           )}
@@ -721,7 +721,7 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
           <div className="msg-content">{item.text}</div>
           {item.sources && item.sources.length > 0 && (
             <div className="chat-sources">
-              <span className="chat-sources-label">Fontes:</span>
+              <span className="chat-sources-label">{t('feed.sources')}</span>
               {item.sources.slice(0, 6).map((s, i) => (
                 <button key={i} className="chat-source" onClick={() => onOpenUrl(s.url)} title={`${s.title}\n${s.url}`}>
                   {i + 1}. {hostOf(s.url)}
@@ -730,8 +730,8 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
             </div>
           )}
           {item.suggestedCommand && (
-            <button className="chat-action-btn" onClick={() => onRunSuggestion(item.suggestedCommand!)} title="Executar esta tarefa no agente">
-              ⚡ Fazer isso{item.suggestedCommand.length <= 48 ? `: ${item.suggestedCommand}` : ''}
+            <button className="chat-action-btn" onClick={() => onRunSuggestion(item.suggestedCommand!)} title={t('feed.runTaskTitle')}>
+              ⚡ {t('feed.doThis')}{item.suggestedCommand.length <= 48 ? `: ${item.suggestedCommand}` : ''}
             </button>
           )}
         </div>
@@ -743,10 +743,10 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
     case 'help':
       return (
         <div className="feed-help-card">
-          <div className="feed-help-title">✋ Preciso de você</div>
+          <div className="feed-help-title">{t('feed.helpTitle')}</div>
           <div className="feed-help-msg">{item.message}</div>
           <div className="feed-help-instr">{item.instruction}</div>
-          {helpActive && <button className="manual-continue-btn" onClick={onContinue}>Continuar</button>}
+          {helpActive && <button className="manual-continue-btn" onClick={onContinue}>{t('feed.continue')}</button>}
         </div>
       );
     case 'step':
@@ -758,12 +758,12 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
     case 'confirm':
       return (
         <div className="feed-confirm-card">
-          <div className="feed-confirm-title">🛑 Confirmação de segurança</div>
+          <div className="feed-confirm-title">{t('feed.confirmTitle')}</div>
           <div className="feed-confirm-msg">{item.message}</div>
           {confirmActive && (
             <div className="feed-confirm-actions">
-              <button className="confirm-yes" onClick={() => onConfirmRisky(true)}>✅ Sim, pode</button>
-              <button className="confirm-no" onClick={() => onConfirmRisky(false)}>✖️ Cancelar</button>
+              <button className="confirm-yes" onClick={() => onConfirmRisky(true)}>{t('feed.confirmYes')}</button>
+              <button className="confirm-no" onClick={() => onConfirmRisky(false)}>{t('feed.confirmNo')}</button>
             </div>
           )}
         </div>
@@ -779,8 +779,8 @@ function MediaStrip({ mediaKind, paths, dir, total, label }: { mediaKind: 'image
   const fileUrl = (p: string) => 'file:///' + p.replace(/\\/g, '/').replace(/^\/+/, '');
   const open = (target: string) => { try { (window as any).electronAPI?.revealInFolder?.(target); } catch {} };
   return (
-    <div className="media-strip" title="Clique para abrir a pasta">
-      <div className="media-strip-head">{icon} {label} <span className="media-strip-open">— abrir pasta ↗</span></div>
+    <div className="media-strip" title={t('media.openFolderTitle')}>
+      <div className="media-strip-head">{icon} {label} <span className="media-strip-open">{t('media.openFolder')}</span></div>
       <div className="media-tiles">
         {shown.map((p, i) => (
           <div key={i} className="media-tile" onClick={() => open(p)} title={p.split(/[\\/]/).pop()}>

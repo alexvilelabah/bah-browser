@@ -1,5 +1,6 @@
 import React from 'react';
 import { Tab } from '../store';
+import { t } from '../i18n';
 
 interface Props {
   tabs: Tab[];
@@ -20,17 +21,18 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: 
             onClick={() => onSelect(tab.id)}
           >
             {tab.isLoading ? <span className="tab-spinner" /> : <TabFavicon url={tab.url} />}
-            <span className="tab-title">{tab.title || 'New Tab'}</span>
+            <span className="tab-title">{tab.title || t('tab.new')}</span>
             <button
               className="tab-close"
               onClick={e => { e.stopPropagation(); onClose(tab.id); }}
+              title={t('tab.close')}
             >
               &times;
             </button>
           </div>
         ))}
         {/* "+" logo depois da última aba (não no canto direito) */}
-        <button className="tab-new" onClick={() => onNew()} title="Nova aba">+</button>
+        <button className="tab-new" onClick={() => onNew()} title={t('tab.new')}>+</button>
       </div>
     </div>
   );
