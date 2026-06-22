@@ -113,6 +113,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.lastStatus': 'Last status:',
     'footer.selectCopy': 'Select and copy',
     'footer.clear': 'Clear',
+    'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Close tab',
   },
   pt: {
@@ -211,6 +212,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.lastStatus': 'Último status:',
     'footer.selectCopy': 'Selecione e copie',
     'footer.clear': 'Limpar',
+    'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Fechar aba',
   },
   es: {
@@ -309,6 +311,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'footer.lastStatus': 'Último estado:',
     'footer.selectCopy': 'Selecciona y copia',
     'footer.clear': 'Limpiar',
+    'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Cerrar pestaña',
   },
 };
