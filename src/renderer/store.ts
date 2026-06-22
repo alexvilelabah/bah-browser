@@ -31,7 +31,7 @@ export interface LocalSettings {
   model: string;             // e.g. qwen3-vl:8b
 }
 
-export function createTab(url = 'about:blank'): Tab {
+export function createTab(url = 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr'): Tab {
   return {
     id: uuidv4(),
     title: 'New Tab',
