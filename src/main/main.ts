@@ -18,6 +18,60 @@ import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
 import { decidePopup } from './popup-shield';
 
+// ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
+// seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
+function mainLang(): 'en' | 'pt' | 'es' {
+  let l = 'en';
+  try { l = (app.getLocale() || 'en').toLowerCase(); } catch {}
+  if (l.startsWith('pt')) return 'pt';
+  if (l.startsWith('es')) return 'es';
+  return 'en';
+}
+const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
+  en: {
+    'ctx.copy': 'Copy', 'ctx.cut': 'Cut', 'ctx.paste': 'Paste', 'ctx.selectAll': 'Select all',
+    'ctx.copyLink': 'Copy link address', 'ctx.reload': 'Reload', 'ctx.inspect': 'Inspect',
+    'mnu.navigate': 'Navigate', 'mnu.newTab': 'New tab', 'mnu.closeTab': 'Close tab', 'mnu.reopenTab': 'Reopen tab',
+    'mnu.focusUrl': 'Focus address bar', 'mnu.reload': 'Reload', 'mnu.reloadF5': 'Reload (F5)',
+    'mnu.back': 'Back', 'mnu.forward': 'Forward', 'mnu.bookmark': 'Add bookmark', 'mnu.find': 'Find in page',
+    'mnu.nextTab': 'Next tab', 'mnu.prevTab': 'Previous tab', 'mnu.tab': 'Tab',
+    'upd.title': 'Update available', 'upd.restart': 'Restart now', 'upd.later': 'Later',
+    'upd.message': 'A new version ({v}) has been downloaded.',
+    'upd.detail': 'Restart to finish updating. Your settings and login are kept.',
+    'dlg.pickVideo': 'Choose a video to edit',
+  },
+  pt: {
+    'ctx.copy': 'Copiar', 'ctx.cut': 'Recortar', 'ctx.paste': 'Colar', 'ctx.selectAll': 'Selecionar tudo',
+    'ctx.copyLink': 'Copiar endereço do link', 'ctx.reload': 'Recarregar', 'ctx.inspect': 'Inspecionar',
+    'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nova aba', 'mnu.closeTab': 'Fechar aba', 'mnu.reopenTab': 'Reabrir aba',
+    'mnu.focusUrl': 'Focar endereço', 'mnu.reload': 'Recarregar', 'mnu.reloadF5': 'Recarregar (F5)',
+    'mnu.back': 'Voltar', 'mnu.forward': 'Avançar', 'mnu.bookmark': 'Favoritar', 'mnu.find': 'Buscar na página',
+    'mnu.nextTab': 'Próxima aba', 'mnu.prevTab': 'Aba anterior', 'mnu.tab': 'Aba',
+    'upd.title': 'Atualização disponível', 'upd.restart': 'Reiniciar agora', 'upd.later': 'Depois',
+    'upd.message': 'Uma nova versão ({v}) foi baixada.',
+    'upd.detail': 'Reinicie para concluir a atualização. Suas configurações e login são mantidos.',
+    'dlg.pickVideo': 'Escolha um vídeo pra editar',
+  },
+  es: {
+    'ctx.copy': 'Copiar', 'ctx.cut': 'Cortar', 'ctx.paste': 'Pegar', 'ctx.selectAll': 'Seleccionar todo',
+    'ctx.copyLink': 'Copiar dirección del enlace', 'ctx.reload': 'Recargar', 'ctx.inspect': 'Inspeccionar',
+    'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nueva pestaña', 'mnu.closeTab': 'Cerrar pestaña', 'mnu.reopenTab': 'Reabrir pestaña',
+    'mnu.focusUrl': 'Enfocar la dirección', 'mnu.reload': 'Recargar', 'mnu.reloadF5': 'Recargar (F5)',
+    'mnu.back': 'Atrás', 'mnu.forward': 'Adelante', 'mnu.bookmark': 'Añadir a favoritos', 'mnu.find': 'Buscar en la página',
+    'mnu.nextTab': 'Pestaña siguiente', 'mnu.prevTab': 'Pestaña anterior', 'mnu.tab': 'Pestaña',
+    'upd.title': 'Actualización disponible', 'upd.restart': 'Reiniciar ahora', 'upd.later': 'Después',
+    'upd.message': 'Se ha descargado una nueva versión ({v}).',
+    'upd.detail': 'Reinicia para completar la actualización. Tus ajustes y sesión se mantienen.',
+    'dlg.pickVideo': 'Elige un vídeo para editar',
+  },
+};
+function mt(key: string, vars?: Record<string, string>): string {
+  const L = mainLang();
+  let s = MAIN_STRINGS[L][key] || MAIN_STRINGS.en[key] || key;
+  if (vars) for (const k of Object.keys(vars)) s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), vars[k]);
+  return s;
+}
+
 let mainWindow: BrowserWindow | null = null;
 let aiEngine: AIEngine;
 let pageAgent: PageAgent;
@@ -552,27 +606,27 @@ function attachContextMenu(wc: Electron.WebContents): void {
     const template: Electron.MenuItemConstructorOptions[] = [];
 
     if (hasSelection) {
-      template.push({ label: 'Copiar', role: 'copy' });
+      template.push({ label: mt('ctx.copy'), role: 'copy' });
     }
     if (isEditable) {
-      template.push({ label: 'Recortar', role: 'cut', enabled: hasSelection });
-      template.push({ label: 'Colar', role: 'paste' });
-      template.push({ label: 'Selecionar tudo', role: 'selectAll' });
+      template.push({ label: mt('ctx.cut'), role: 'cut', enabled: hasSelection });
+      template.push({ label: mt('ctx.paste'), role: 'paste' });
+      template.push({ label: mt('ctx.selectAll'), role: 'selectAll' });
     } else if (hasSelection) {
-      template.push({ label: 'Selecionar tudo', role: 'selectAll' });
+      template.push({ label: mt('ctx.selectAll'), role: 'selectAll' });
     }
 
     if (params.linkURL) {
       if (template.length) template.push({ type: 'separator' });
       template.push({
-        label: 'Copiar endereço do link',
+        label: mt('ctx.copyLink'),
         click: () => clipboard.writeText(params.linkURL),
       });
     }
 
     if (template.length) template.push({ type: 'separator' });
-    template.push({ label: 'Recarregar', click: () => wc.reload() });
-    template.push({ label: 'Inspecionar', click: () => wc.inspectElement(params.x, params.y) });
+    template.push({ label: mt('ctx.reload'), click: () => wc.reload() });
+    template.push({ label: mt('ctx.inspect'), click: () => wc.inspectElement(params.x, params.y) });
 
     Menu.buildFromTemplate(template).popup({ window: mainWindow ?? undefined });
   });
@@ -1079,7 +1133,7 @@ function setupIPC(): void {
   // Escolher arquivo (diálogo nativo — à prova de balas, sem depender de drag-drop).
   ipcMain.handle('video:pick', async () => {
     const r = await dialog.showOpenDialog(mainWindow!, {
-      title: 'Escolha um vídeo pra editar',
+      title: mt('dlg.pickVideo'),
       properties: ['openFile'],
       filters: [
         { name: 'Vídeos', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'flv', 'wmv', 'mpeg', 'mpg', 'ts'] },
@@ -1851,12 +1905,12 @@ function setupAutoUpdater(): void {
       try {
         const r = await dialog.showMessageBox({
           type: 'info',
-          buttons: ['Reiniciar agora', 'Depois'],
+          buttons: [mt('upd.restart'), mt('upd.later')],
           defaultId: 0,
           cancelId: 1,
-          title: 'Atualização disponível',
-          message: `Uma nova versão (${info?.version ?? ''}) foi baixada.`,
-          detail: 'Reinicie para concluir a atualização. Suas configurações e login são mantidos.',
+          title: mt('upd.title'),
+          message: mt('upd.message', { v: String(info?.version ?? '') }),
+          detail: mt('upd.detail'),
         });
         if (r.response === 0) setImmediate(() => autoUpdater.quitAndInstall());
       } catch { /* silencioso */ }
@@ -1918,27 +1972,27 @@ app.whenReady().then(() => {
   // dispara um IPC pro renderer, que executa a ação nas abas. editMenu mantém Ctrl+C/V/X/A.
   const sendSc = (action: string) => { try { mainWindow?.webContents.send('app:shortcut', action); } catch {} };
   const tabNumberItems: Electron.MenuItemConstructorOptions[] = Array.from({ length: 9 }, (_, i) => ({
-    label: `Aba ${i + 1}`, accelerator: `CmdOrCtrl+${i + 1}`, click: () => sendSc(`tab-${i + 1}`),
+    label: `${mt('mnu.tab')} ${i + 1}`, accelerator: `CmdOrCtrl+${i + 1}`, click: () => sendSc(`tab-${i + 1}`),
   }));
   const menu = Menu.buildFromTemplate([
     { role: 'editMenu' },
     {
-      label: 'Navegar',
+      label: mt('mnu.navigate'),
       submenu: [
-        { label: 'Nova aba', accelerator: 'CmdOrCtrl+T', click: () => sendSc('new-tab') },
-        { label: 'Fechar aba', accelerator: 'CmdOrCtrl+W', click: () => sendSc('close-tab') },
-        { label: 'Reabrir aba', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendSc('reopen-tab') },
+        { label: mt('mnu.newTab'), accelerator: 'CmdOrCtrl+T', click: () => sendSc('new-tab') },
+        { label: mt('mnu.closeTab'), accelerator: 'CmdOrCtrl+W', click: () => sendSc('close-tab') },
+        { label: mt('mnu.reopenTab'), accelerator: 'CmdOrCtrl+Shift+T', click: () => sendSc('reopen-tab') },
         { type: 'separator' },
-        { label: 'Focar endereço', accelerator: 'CmdOrCtrl+L', click: () => sendSc('focus-url') },
-        { label: 'Recarregar', accelerator: 'CmdOrCtrl+R', click: () => sendSc('reload') },
-        { label: 'Recarregar (F5)', accelerator: 'F5', click: () => sendSc('reload') },
-        { label: 'Voltar', accelerator: 'Alt+Left', click: () => sendSc('back') },
-        { label: 'Avançar', accelerator: 'Alt+Right', click: () => sendSc('forward') },
-        { label: 'Favoritar', accelerator: 'CmdOrCtrl+D', click: () => sendSc('bookmark') },
-        { label: 'Buscar na página', accelerator: 'CmdOrCtrl+F', click: () => sendSc('find') },
+        { label: mt('mnu.focusUrl'), accelerator: 'CmdOrCtrl+L', click: () => sendSc('focus-url') },
+        { label: mt('mnu.reload'), accelerator: 'CmdOrCtrl+R', click: () => sendSc('reload') },
+        { label: mt('mnu.reloadF5'), accelerator: 'F5', click: () => sendSc('reload') },
+        { label: mt('mnu.back'), accelerator: 'Alt+Left', click: () => sendSc('back') },
+        { label: mt('mnu.forward'), accelerator: 'Alt+Right', click: () => sendSc('forward') },
+        { label: mt('mnu.bookmark'), accelerator: 'CmdOrCtrl+D', click: () => sendSc('bookmark') },
+        { label: mt('mnu.find'), accelerator: 'CmdOrCtrl+F', click: () => sendSc('find') },
         { type: 'separator' },
-        { label: 'Próxima aba', accelerator: 'Control+Tab', click: () => sendSc('next-tab') },
-        { label: 'Aba anterior', accelerator: 'Control+Shift+Tab', click: () => sendSc('prev-tab') },
+        { label: mt('mnu.nextTab'), accelerator: 'Control+Tab', click: () => sendSc('next-tab') },
+        { label: mt('mnu.prevTab'), accelerator: 'Control+Shift+Tab', click: () => sendSc('prev-tab') },
         ...tabNumberItems,
         { type: 'separator' },
         { role: 'toggleDevTools' },
