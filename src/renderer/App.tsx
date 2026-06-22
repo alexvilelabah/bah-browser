@@ -52,6 +52,7 @@ declare global {
       close: () => void;
       setAIProvider: (provider: string, apiKey: string, baseUrl?: string) => Promise<any>;
       setUILanguage?: (lang: string) => Promise<any>;
+      onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean) => Promise<{ response?: string; error?: string }>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
@@ -207,6 +208,7 @@ export default function App() {
   useEffect(() => {
     window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiKey, store.aiSettings.baseUrl);
     window.electronAPI?.setUILanguage?.(getLang());   // i18n Fase 2: agente responde no idioma da UI
+    window.electronAPI?.onZoom?.((pct) => showZoom(pct));   // Ctrl+roda → badge de zoom na tela
     // Initialize local (GPU) engine if hybrid is enabled
     if (store.localSettings.enabled) {
       window.electronAPI?.setLocalProvider?.(store.localSettings.provider, 'local', store.localSettings.baseUrl, store.localSettings.model);
@@ -276,6 +278,14 @@ export default function App() {
   // ── Downloads (painel Ctrl+J) ──
   const [downloads, setDownloads] = useState<Array<{ filename: string; path?: string; state: string; bytes?: number; totalBytes?: number }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
+  // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
+  const [zoomBadge, setZoomBadge] = useState<number | null>(null);
+  const zoomBadgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showZoom = useCallback((pct: number) => {
+    setZoomBadge(pct);
+    if (zoomBadgeTimer.current) clearTimeout(zoomBadgeTimer.current);
+    zoomBadgeTimer.current = setTimeout(() => setZoomBadge(null), 1400);
+  }, []);
   const recordHistory = useCallback((url: string, title?: string) => {
     if (!/^https?:\/\//i.test(url)) return;
     const list = historyRef.current;
@@ -417,7 +427,7 @@ export default function App() {
         let z = action === 'zoom-reset' ? 1 : cur + (action === 'zoom-in' ? 0.1 : -0.1);
         z = Math.max(0.3, Math.min(3, Math.round(z * 100) / 100));
         try { wv.setZoomFactor(z); } catch {}
-        setLastFooterMsg(t('zoom.level', { pct: String(Math.round(z * 100)) }));
+        showZoom(Math.round(z * 100));
         break;
       }
       case 'history': setHistoryView(historyRef.current.slice(0, 300)); setHistoryOpen(true); break;
@@ -704,6 +714,12 @@ export default function App() {
             onNewTab={store.addTab}
           />
           <AgentVisualOverlay state={agentVisual} ripples={ripples} />
+          {zoomBadge != null && (
+            <div className="zoom-badge">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              {zoomBadge}%
+            </div>
+          )}
           {findOpen && (
             <div className="find-bar">
               <input

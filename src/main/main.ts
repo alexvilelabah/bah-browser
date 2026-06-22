@@ -568,6 +568,7 @@ function createWindow(): void {
       const cur = wc.getZoomFactor();
       const next = Math.max(0.3, Math.min(3, Math.round((cur + (dir === 'in' ? 0.1 : -0.1)) * 100) / 100));
       wc.setZoomFactor(next);
+      mainWindow?.webContents.send('app:zoom', Math.round(next * 100));   // badge na tela
     });
     // Intercept popup window requests and forward to renderer to open as new tab
     wc.setWindowOpenHandler((details) => {

@@ -263,6 +263,18 @@ body {
 .dl-bar{ height:5px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden; }
 .dl-bar-fill{ height:100%; background:var(--accent); border-radius:3px; transition:width 0.2s var(--ease); }
 
+/* 🔍 Badge de zoom flutuante (aparece e some, estilo Chrome) */
+.zoom-badge{
+  position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:120;
+  display:flex; align-items:center; gap:6px; padding:7px 14px;
+  background:var(--bg-secondary); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:var(--radius-pill);
+  font-size:13px; font-weight:600; box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  pointer-events:none; animation:zoomBadgeIn 0.15s var(--ease);
+}
+.zoom-badge svg{ color:var(--text-muted); }
+@keyframes zoomBadgeIn{ from{ opacity:0; transform:translate(-50%,-6px); } to{ opacity:1; transform:translate(-50%,0); } }
+
 /* ⭐ Estrela de favorito dentro da caixa de URL (estilo Chrome) */
 .url-input-wrapper .url-input{ padding-right:40px; }
 .bookmark-star{
