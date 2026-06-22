@@ -604,12 +604,24 @@ window.__browserTools = window.__browserTools || {
     this.fireClick(el);
     return { success: true, info: { ref, tag: el.tagName, text: this.label(el).slice(0, 120) } };
   },
+  // #10 (falso-sucesso): lê o valor REAL do campo depois de escrever, pra não relatar
+  // sucesso quando o preenchimento foi engolido (campo continua vazio). Lenient de
+  // propósito: só falha se o campo ficou VAZIO tendo a gente tentado escrever algo —
+  // campos com máscara/formatação (telefone, data) mudam o texto e continuam passando.
+  fieldValue(el) {
+    if (el && typeof el.value === 'string') return el.value;
+    if (el && (el.isContentEditable || el.getAttribute('role') === 'textbox')) return el.innerText || el.textContent || '';
+    return '';
+  },
   fillRef(ref, value) {
     const el = this.byRef(ref);
     if (!el) return { success: false, error: 'No element with ref @' + ref };
     el.focus();
-    this.insertText(el, String(value || ''), true);
-    return { success: true, info: { ref, tag: el.tagName, valueLength: String(value || '').length } };
+    const want = String(value || '');
+    this.insertText(el, want, true);
+    const got = this.fieldValue(el);
+    if (want && !got) return { success: false, error: 'O campo @' + ref + ' continuou vazio — não aceitou o texto (campo desabilitado/custom?). Tente outro elemento ou abordagem.' };
+    return { success: true, info: { ref, tag: el.tagName, valueLength: got.length, verified: got === want } };
   },
   clickText(text, nth = 1) {
     const needle = String(text || '').toLowerCase().trim();
@@ -663,15 +675,21 @@ window.__browserTools = window.__browserTools || {
   typeText(text) {
     const el = this.editableTarget(document.activeElement);
     if (!el) return { success: false, error: 'No focused element' };
-    this.insertText(el, String(text || ''), false);
-    return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, textLength: String(text || '').length } };
+    const want = String(text || '');
+    this.insertText(el, want, false);
+    const got = this.fieldValue(el);
+    if (want && !got) return { success: false, error: 'O campo focado não aceitou o texto (continuou vazio). Clique no campo certo antes de digitar.' };
+    return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, textLength: got.length } };
   },
   fill(action) {
     const el = this.findField(action) || this.editableTarget(document.activeElement);
     if (!el) return { success: false, error: 'No matching input found' };
     el.focus();
-    this.insertText(el, String(action.value || ''), true);
-    return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, valueLength: String(action.value || '').length } };
+    const want = String(action.value || '');
+    this.insertText(el, want, true);
+    const got = this.fieldValue(el);
+    if (want && !got) return { success: false, error: 'O campo continuou vazio — não aceitou o texto (campo desabilitado/custom?). Tente outro elemento.' };
+    return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, valueLength: got.length, verified: got === want } };
   },
   insertText(el, value, replace) {
     if (el.isContentEditable || el.getAttribute('role') === 'textbox') {
