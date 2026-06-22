@@ -54,7 +54,7 @@ export default function AddressBar({
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={e => e.target.select()}
-          placeholder="Search or enter URL..."
+          placeholder="Pergunte ao Google ou digite um URL"
           spellCheck={false}
         />
         <button
