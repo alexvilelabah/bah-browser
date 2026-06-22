@@ -66,6 +66,7 @@ declare global {
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
       onDownloadEvent?: (cb: (info: { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; reason?: string }) => void) => void;
+      revealInFolder?: (target: string) => Promise<any>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
       resolveVideos?: (queries: string[]) => Promise<Array<{ query: string; id?: string; title?: string }>>;
@@ -219,6 +220,11 @@ export default function App() {
     });
     window.electronAPI?.onDownloadEvent?.((info) => {
       downloadEventsRef.current.push(info);
+      setDownloads(prev => {
+        const key = info.path || info.filename;
+        const rest = prev.filter(d => (d.path || d.filename) !== key);
+        return [{ filename: info.filename, path: info.path, state: info.state, bytes: info.bytes, totalBytes: info.totalBytes }, ...rest].slice(0, 50);
+      });
       if (info.state === 'completed') setLastFooterMsg(`💾 Baixado: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
       else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download bloqueado: ${info.filename} (${info.reason || 'executável'})`);
     });
@@ -269,6 +275,9 @@ export default function App() {
   }, []);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
+  // ── Downloads (painel Ctrl+J) ──
+  const [downloads, setDownloads] = useState<Array<{ filename: string; path?: string; state: string; bytes?: number; totalBytes?: number }>>([]);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
   const recordHistory = useCallback((url: string, title?: string) => {
     if (!/^https?:\/\//i.test(url)) return;
     const list = historyRef.current;
@@ -413,6 +422,7 @@ export default function App() {
         break;
       }
       case 'history': setHistoryView(historyRef.current.slice(0, 300)); setHistoryOpen(true); break;
+      case 'downloads': setDownloadsOpen(o => !o); break;
       default:
         if (action.startsWith('tab-')) {
           const n = parseInt(action.slice(4), 10);
@@ -575,6 +585,47 @@ export default function App() {
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
           getSuggestions={getSuggestions}
         />
+        <div className="menu-wrap">
+          <button
+            className={`menu-btn${downloads.some(d => d.state === 'started' || d.state === 'progress') ? ' dl-active' : ''}`}
+            onClick={() => setDownloadsOpen(o => !o)}
+            title={t('downloads.open')}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          </button>
+          {downloadsOpen && (
+            <>
+              <div className="menu-overlay" onClick={() => setDownloadsOpen(false)} />
+              <div className="menu-panel downloads-panel">
+                <div className="dl-head">
+                  <span>⬇️ {t('downloads.title')}</span>
+                  {downloads.length > 0 && <button className="history-clear" onClick={() => setDownloads([])}>{t('downloads.clear')}</button>}
+                </div>
+                {downloads.length === 0 ? (
+                  <div className="history-empty">{t('downloads.empty')}</div>
+                ) : (
+                  <ul className="dl-list">
+                    {downloads.map((d, i) => {
+                      const pct = d.totalBytes ? Math.min(100, Math.round(((d.bytes || 0) / d.totalBytes) * 100)) : 0;
+                      const active = d.state === 'started' || d.state === 'progress';
+                      const label = active ? t('dl.downloading') : d.state === 'completed' ? t('dl.done') : d.state === 'blocked' ? t('dl.blocked') : t('dl.failed');
+                      return (
+                        <li key={(d.path || d.filename) + i} className="dl-item" onClick={() => { if (d.path) window.electronAPI?.revealInFolder?.(d.path); }} title={d.path || d.filename}>
+                          <div className="dl-row1"><span className="dl-name">{d.filename}</span><span className={`dl-state ${d.state}`}>{label}</span></div>
+                          {active && d.totalBytes ? (
+                            <div className="dl-bar"><div className="dl-bar-fill" style={{ width: pct + '%' }} /></div>
+                          ) : (
+                            <span className="dl-meta">{d.bytes ? Math.round(d.bytes / 1024) + ' KB' : ''}{d.state === 'completed' ? ' · ' + t('media.openFolder') : ''}</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+        </div>
         <div className="menu-wrap">
           <button className="menu-btn" onClick={() => setMenuOpen(o => !o)} title={t('menu.title')}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>
