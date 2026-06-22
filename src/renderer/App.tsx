@@ -165,6 +165,9 @@ export default function App() {
       for (let i = 0; i < 40; i++) {
         const wv = webviewRefs.current.get(tabId) as any;
         if (wv) {
+          // Muta no nível do Electron NA HORA (sem esperar o JS injetar) → mata o
+          // "pisco de som" antes do guard conseguir pausar o vídeo.
+          try { wv.setAudioMuted(true); } catch {}
           try {
             const r = await wv.executeJavaScript(VCUT_GUARD_JS, false);
             if (r === 'ok' || r === 'armed') return;
@@ -181,6 +184,7 @@ export default function App() {
     if (!pausedCutTabsRef.current.has(id)) return;
     pausedCutTabsRef.current.delete(id);
     const wv = webviewRefs.current.get(id) as any;
+    try { wv?.setAudioMuted(false); } catch {}   // usuário abriu a aba → libera o som
     setTimeout(() => { try { wv?.executeJavaScript(VCUT_RELEASE_JS, false); } catch {} }, 250);
   }, [store.activeTabId]);
 
