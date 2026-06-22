@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveManyVideos: (query: string, count: number) => ipcRenderer.invoke('media:resolve-many', query, count),
   searchVideoCuts: (phrase: string, count?: number) =>
     ipcRenderer.invoke('videocuts:search', phrase, count),
+  getTranscript: (url: string) => ipcRenderer.invoke('media:transcript', url),
   renderView: (spec: object) => ipcRenderer.invoke('view:render', spec),
   harvestImages: (urls: string[], theme: string) => ipcRenderer.invoke('images:harvest', urls, theme),
   revealInFolder: (target: string) => ipcRenderer.invoke('shell:reveal', target),

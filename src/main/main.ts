@@ -8,6 +8,7 @@ import { AIEngine, AIProvider, setEngineLang } from './ai-engine';
 import { PageAgent } from './page-agent';
 import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
+import { fetchTranscript } from './transcript';
 import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
 import { makeSupercut } from './supercut';
 import { harvestDownload } from './image-harvester';
@@ -1296,6 +1297,14 @@ function setupIPC(): void {
       return await searchVideoCuts(String(phrase || ''), Number(count) || 4);
     } catch (e: any) {
       return { success: false, cuts: [], error: String(e?.message ?? e) };
+    }
+  });
+  // Transcrição (legenda) de um vídeo do YouTube → texto, pra IA conversar sobre o conteúdo.
+  ipcMain.handle('media:transcript', async (_e, url: string) => {
+    try {
+      return await fetchTranscript(String(url || ''));
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
     }
   });
 

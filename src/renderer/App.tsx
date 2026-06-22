@@ -73,6 +73,7 @@ declare global {
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
       revealInFolder?: (target: string) => Promise<any>;
+      getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
       resolveVideos?: (queries: string[]) => Promise<Array<{ query: string; id?: string; title?: string }>>;
@@ -290,6 +291,8 @@ export default function App() {
 
   // ── Histórico de navegação (alimenta o autocomplete da barra + tela Ctrl+H) ──
   const historyRef = useRef<Array<{ url: string; title: string; ts: number }>>([]);
+  // Transcrição (legenda) de vídeo do YouTube em cache por id — alimenta o chat ('' = sem legenda).
+  const transcriptCacheRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     try { const h = JSON.parse(localStorage.getItem('history.v1') || '[]'); if (Array.isArray(h)) historyRef.current = h; } catch {}
   }, []);
@@ -2791,7 +2794,21 @@ export default function App() {
             }}
             onSendChat={async (msg) => {
               store.addChatMessage('user', msg);
-              const pageContent = await getPageContent();
+              let pageContent = await getPageContent();
+              // Se a aba é um vídeo do YouTube, anexa a TRANSCRIÇÃO (legenda) ao contexto pra
+              // a IA conversar sobre o que é DITO, não só título/descrição. Cache por vídeo.
+              const vid = youtubeWatchId(store.activeTab.url);
+              if (vid && window.electronAPI?.getTranscript) {
+                let tr = transcriptCacheRef.current.get(vid);
+                if (tr === undefined) {
+                  setLastFooterMsg('📝 Lendo a legenda do vídeo…');
+                  const r = await window.electronAPI.getTranscript(store.activeTab.url).catch(() => null);
+                  tr = (r && r.ok && r.text) ? r.text : '';
+                  transcriptCacheRef.current.set(vid, tr);
+                  setLastFooterMsg(tr ? '✅ Legenda do vídeo carregada.' : 'ℹ️ Esse vídeo não tem legenda — respondo pelo título/descrição.');
+                }
+                if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
+              }
               const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled);
               const raw = result?.response ?? (result?.error ? `Erro: ${result.error}` : 'Sem resposta.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
@@ -2865,6 +2882,22 @@ export default function App() {
 // overlay — clicar por coordenada "não surte efeito" e o agente entra em loop (bug #1).
 // Só os resultados (Google com q=, Bing /search, DDG, YouTube /results); páginas de
 // destino e watch do YouTube ficam de fora (clique normal).
+// ID do vídeo do YouTube na URL (watch?v=, youtu.be/, /shorts/, /embed/) — pra puxar a legenda.
+function youtubeWatchId(u: string): string | null {
+  try {
+    const url = new URL(u);
+    const h = url.hostname.replace(/^www\./, '');
+    if (h === 'youtu.be') return (url.pathname.slice(1).match(/^[A-Za-z0-9_-]{11}/) || [null])[0];
+    if (/youtube\.com$/.test(h)) {
+      const v = url.searchParams.get('v');
+      if (v && /^[A-Za-z0-9_-]{11}/.test(v)) return v.slice(0, 11);
+      const m = url.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{11})/);
+      if (m) return m[1];
+    }
+  } catch {}
+  return null;
+}
+
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
 function fmtSize(b?: number): string {
   if (!b) return '';
