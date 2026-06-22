@@ -17,6 +17,7 @@ import { isHttpUrl, isHttpOrSearch, clampCount, isInsideAllowedRoot, isExistingF
 import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
 import { decidePopup } from './popup-shield';
+import { setupDownloadManager } from './download-manager';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -1412,39 +1413,15 @@ function setupIPC(): void {
     }
     return target;
   }
-  function attachDownloadHandler(sess: Electron.Session) {
-    sess.on('will-download', (event, item) => {
-      const filename = item.getFilename() || 'download.bin';
-      if (BLOCKED_EXTENSIONS.test(filename) || BLOCKED_EXTENSIONS.test(item.getURL())) {
-        event.preventDefault();
-        console.warn(`[Download] BLOCKED executable: ${filename}`);
-        mainWindow?.webContents.send('agent:download-event', { state: 'blocked', filename, reason: 'executable/script blocked' });
-        return;
-      }
-      const target = uniqueDownloadPath(filename);
-      item.setSavePath(target); // <- this is what suppresses the native Save As dialog
-      mainWindow?.webContents.send('agent:download-event', { state: 'started', filename: path.basename(target), path: target, totalBytes: item.getTotalBytes() });
-      item.on('updated', (_e, st) => {
-        if (st === 'progressing') {
-          mainWindow?.webContents.send('agent:download-event', {
-            state: 'progress', filename: path.basename(target), path: target,
-            bytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(),
-          });
-        }
-      });
-      item.once('done', (_e, state) => {
-        console.log(`[Download] ${state}: ${target}`);
-        mainWindow?.webContents.send('agent:download-event', {
-          state: state === 'completed' ? 'completed' : 'failed',
-          filename: path.basename(target),
-          path: target,
-          bytes: item.getReceivedBytes(),
-        });
-      });
-    });
-  }
-  attachDownloadHandler(session.fromPartition('persist:browser'));
-  attachDownloadHandler(session.defaultSession);
+  // Gerenciador de download nativo (Fase A): pausar/continuar/cancelar/retomar,
+  // velocidade+ETA, fila com limite. Registry por id vive no módulo dedicado.
+  const downloadManager = setupDownloadManager({
+    getMainWindow: () => mainWindow,
+    uniqueDownloadPath,
+    blockedExtensions: BLOCKED_EXTENSIONS,
+  });
+  downloadManager.attach(session.fromPartition('persist:browser'));
+  downloadManager.attach(session.defaultSession);
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
     try {
       if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };

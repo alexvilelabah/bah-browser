@@ -66,7 +66,12 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; reason?: string }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string }) => void) => void;
+      pauseDownload?: (id: string) => Promise<any>;
+      resumeDownload?: (id: string) => Promise<any>;
+      cancelDownload?: (id: string) => Promise<any>;
+      retryDownload?: (id: string, url?: string) => Promise<any>;
+      openFile?: (target: string) => Promise<any>;
       revealInFolder?: (target: string) => Promise<any>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
@@ -221,9 +226,24 @@ export default function App() {
     window.electronAPI?.onDownloadEvent?.((info) => {
       downloadEventsRef.current.push(info);
       setDownloads(prev => {
-        const key = info.path || info.filename;
-        const rest = prev.filter(d => (d.path || d.filename) !== key);
-        return [{ filename: info.filename, path: info.path, state: info.state, bytes: info.bytes, totalBytes: info.totalBytes }, ...rest].slice(0, 50);
+        const key = info.id || info.path || info.filename;
+        const existing = prev.find(d => (d.id || d.path || d.filename) === key);
+        const rest = prev.filter(d => (d.id || d.path || d.filename) !== key);
+        const done = info.state === 'completed' || info.state === 'failed' || info.state === 'cancelled';
+        const merged = {
+          ...existing,
+          id: info.id ?? existing?.id,
+          filename: info.filename ?? existing?.filename ?? 'download',
+          path: info.path ?? existing?.path,
+          url: info.url ?? existing?.url,
+          bytes: info.bytes ?? existing?.bytes,
+          totalBytes: info.totalBytes ?? existing?.totalBytes,
+          state: info.state,
+          paused: done ? false : (info.paused ?? existing?.paused),
+          speedBps: done ? 0 : (info.speedBps ?? existing?.speedBps),
+          etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec),
+        };
+        return [merged, ...rest].slice(0, 50);
       });
       if (info.state === 'completed') setLastFooterMsg(`💾 Baixado: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
       else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download bloqueado: ${info.filename} (${info.reason || 'executável'})`);
@@ -276,7 +296,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ filename: string; path?: string; state: string; bytes?: number; totalBytes?: number }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ id?: string; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
@@ -616,16 +636,42 @@ export default function App() {
                   <ul className="dl-list">
                     {downloads.map((d, i) => {
                       const pct = d.totalBytes ? Math.min(100, Math.round(((d.bytes || 0) / d.totalBytes) * 100)) : 0;
-                      const active = d.state === 'started' || d.state === 'progress';
-                      const label = active ? t('dl.downloading') : d.state === 'completed' ? t('dl.done') : d.state === 'blocked' ? t('dl.blocked') : t('dl.failed');
+                      const active = d.state === 'started' || d.state === 'progress' || d.state === 'queued';
+                      const label = d.state === 'queued' ? t('dl.queued')
+                        : d.paused ? t('dl.paused')
+                        : (d.state === 'started' || d.state === 'progress') ? t('dl.downloading')
+                        : d.state === 'completed' ? t('dl.done')
+                        : d.state === 'blocked' ? t('dl.blocked')
+                        : d.state === 'cancelled' ? t('dl.cancelled')
+                        : t('dl.failed');
                       return (
-                        <li key={(d.path || d.filename) + i} className="dl-item" onClick={() => { if (d.path) window.electronAPI?.revealInFolder?.(d.path); }} title={d.path || d.filename}>
-                          <div className="dl-row1"><span className="dl-name">{d.filename}</span><span className={`dl-state ${d.state}`}>{label}</span></div>
+                        <li key={d.id || d.path || d.filename || String(i)} className="dl-item" title={d.path || d.filename}>
+                          <div className="dl-row1">
+                            <span className="dl-name">{d.filename}</span>
+                            <span className={`dl-state ${d.state}`}>{label}</span>
+                          </div>
                           {active && d.totalBytes ? (
                             <div className="dl-bar"><div className="dl-bar-fill" style={{ width: pct + '%' }} /></div>
-                          ) : (
-                            <span className="dl-meta">{d.bytes ? Math.round(d.bytes / 1024) + ' KB' : ''}{d.state === 'completed' ? ' · ' + t('media.openFolder') : ''}</span>
-                          )}
+                          ) : null}
+                          <div className="dl-row2">
+                            <span className="dl-meta">
+                              {fmtSize(d.bytes)}{d.totalBytes ? ' / ' + fmtSize(d.totalBytes) : ''}
+                              {active && !d.paused && d.speedBps ? ' · ' + fmtSpeed(d.speedBps) : ''}
+                              {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
+                            </span>
+                            <span className="dl-actions">
+                              {d.id && active && (
+                                (d.paused || d.state === 'queued')
+                                  ? <button title={t('dl.resume')} onClick={() => window.electronAPI?.resumeDownload?.(d.id!)}>▶</button>
+                                  : <button title={t('dl.pause')} onClick={() => window.electronAPI?.pauseDownload?.(d.id!)}>⏸</button>
+                              )}
+                              {d.id && active && <button title={t('dl.cancel')} onClick={() => window.electronAPI?.cancelDownload?.(d.id!)}>✕</button>}
+                              {(d.state === 'failed' || d.state === 'cancelled') && <button title={t('dl.retry')} onClick={() => window.electronAPI?.retryDownload?.(d.id || '', d.url)}>↻</button>}
+                              {d.state === 'completed' && d.path && <button title={t('dl.openFile')} onClick={() => window.electronAPI?.openFile?.(d.path!)}>📂</button>}
+                              {d.path && <button title={t('media.openFolderTitle')} onClick={() => window.electronAPI?.revealInFolder?.(d.path!)}>🗂</button>}
+                              {d.url && <button title={t('dl.copyUrl')} onClick={() => { try { navigator.clipboard.writeText(d.url!); } catch {} }}>🔗</button>}
+                            </span>
+                          </div>
                         </li>
                       );
                     })}
@@ -2808,6 +2854,20 @@ export default function App() {
 // overlay — clicar por coordenada "não surte efeito" e o agente entra em loop (bug #1).
 // Só os resultados (Google com q=, Bing /search, DDG, YouTube /results); páginas de
 // destino e watch do YouTube ficam de fora (clique normal).
+// Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
+function fmtSize(b?: number): string {
+  if (!b) return '';
+  return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
+}
+function fmtSpeed(bps?: number): string {
+  if (!bps) return '';
+  return bps >= 1048576 ? (bps / 1048576).toFixed(1) + ' MB/s' : Math.round(bps / 1024) + ' KB/s';
+}
+function fmtEta(s?: number): string {
+  if (s == null) return '';
+  return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60}s` : `${s}s`;
+}
+
 function isSearchResultHost(url: string): boolean {
   try {
     const h = new URL(url).hostname.replace(/^www\./, '');

@@ -252,7 +252,7 @@ body {
 .downloads-panel{ min-width:320px; max-width:380px; }
 .dl-head{ display:flex; align-items:center; justify-content:space-between; padding:4px 8px 8px; font-size:13px; font-weight:600; color:var(--text-primary); }
 .dl-list{ list-style:none; margin:0; padding:0; max-height:340px; overflow-y:auto; }
-.dl-item{ display:flex; flex-direction:column; gap:4px; padding:8px 10px; border-radius:8px; cursor:pointer; }
+.dl-item{ display:flex; flex-direction:column; gap:4px; padding:8px 10px; border-radius:8px; }
 .dl-item:hover{ background:rgba(255,255,255,0.06); }
 .dl-row1{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .dl-name{ color:var(--text-primary); font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
@@ -262,6 +262,14 @@ body {
 .dl-meta{ color:var(--text-muted); font-size:11px; }
 .dl-bar{ height:5px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden; }
 .dl-bar-fill{ height:100%; background:var(--accent); border-radius:3px; transition:width 0.2s var(--ease); }
+.dl-row2{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; }
+.dl-actions{ display:flex; align-items:center; gap:1px; flex:0 0 auto; }
+.dl-actions button{
+  background:transparent; border:none; color:var(--text-muted); cursor:pointer;
+  width:24px; height:24px; border-radius:6px; font-size:12px; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+}
+.dl-actions button:hover{ background:rgba(255,255,255,0.10); color:var(--text-secondary); }
 
 /* 🔍 Badge de zoom flutuante (aparece e some, estilo Chrome) */
 .zoom-badge{

@@ -52,8 +52,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
     ipcRenderer.invoke('images:search', query, minWidth, count),
-  onDownloadEvent: (cb: (info: { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; reason?: string }) => void) =>
+  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string }) => void) =>
     ipcRenderer.on('agent:download-event', (_e, info) => cb(info)),
+  pauseDownload: (id: string) => ipcRenderer.invoke('download:pause', id),
+  resumeDownload: (id: string) => ipcRenderer.invoke('download:resume', id),
+  cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),
+  retryDownload: (id: string, url?: string) => ipcRenderer.invoke('download:retry', id, url),
+  openFile: (target: string) => ipcRenderer.invoke('download:open-file', target),
   downloadVideo: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') =>
     ipcRenderer.invoke('media:download-video', url, audioOnly, count, quality),
   resolveVideo: (query: string) => ipcRenderer.invoke('media:resolve-video', query),
