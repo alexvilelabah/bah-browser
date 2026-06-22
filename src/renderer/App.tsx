@@ -108,6 +108,11 @@ export default function App() {
   const rippleId = useRef(0);
   const activeTabIdRef = useRef(store.activeTabId);
   useEffect(() => { activeTabIdRef.current = store.activeTabId; }, [store.activeTabId]);
+  // #12: o loop do agente é uma closure longa — `store.tabs` capturado no render fica
+  // DEFASADO se o agente abre/fecha abas durante a execução. Espelhamos a lista viva
+  // num ref pra switch_tab/close_tab/contexto do modelo lerem o estado atual, não o velho.
+  const tabsRef = useRef(store.tabs);
+  useEffect(() => { tabsRef.current = store.tabs; }, [store.tabs]);
   // Site-initiated downloads (will-download no main) — drenados pelo loop do agente
   // para a IA saber que o clique em "baixar" realmente produziu um arquivo.
   const downloadEventsRef = useRef<Array<{ state: string; filename: string; path?: string; bytes?: number; reason?: string }>>([]);
@@ -739,6 +744,20 @@ export default function App() {
               const throwIfCancelled = () => {
                 if (signal?.aborted) throw new Error('TASK_CANCELLED_BY_USER');
               };
+              // #11: faz QUALQUER await longo (chamada ao modelo, sleeps) abortar NA HORA
+              // quando o usuário aperta Parar — sem esperar a operação terminar. Um único
+              // promise de abort por execução (não vaza listeners). Também garante que uma
+              // resposta ATRASADA do modelo não "ressuscite" a tarefa: o loop já rejeitou e
+              // não age no resultado tardio. (Matar ffmpeg/yt-dlp no main é o passo seguinte.)
+              const abortP = new Promise<never>((_, reject) => {
+                const fire = () => reject(new Error('TASK_CANCELLED_BY_USER'));
+                if (signal?.aborted) fire(); else signal?.addEventListener('abort', fire, { once: true });
+              });
+              abortP.catch(() => {});   // evita "unhandled rejection" se ninguém correr contra ele
+              const raceCancel = <T,>(p: T): Promise<Awaited<T>> =>
+                (signal ? (Promise.race([Promise.resolve(p), abortP]) as Promise<Awaited<T>>)
+                        : (Promise.resolve(p) as Promise<Awaited<T>>));
+              const sleep = (ms: number): Promise<void> => raceCancel(new Promise<void>(r => setTimeout(r, ms)));
               const waitForManualHelp = async (request: ManualHelpRequest, currentUrl: string) => {
                 setAgentVisual('idle');
                 setLastFooterMsg(`Ajuda manual: ${request.reason}`);
@@ -892,7 +911,7 @@ export default function App() {
                   const beforeUrl = wv.getURL();
                   const shortcutResult = await executeBrowserAction(wv, initialShortcut.action as BrowserAction);
                   await waitForWebviewSettled(wv, beforeUrl);
-                  await new Promise(r => setTimeout(r, 2500));
+                  await sleep(2500);
                   allResults.push({ action: initialShortcut.action as BrowserAction, result: shortcutResult });
                   if (shortcutResult?.success !== false) {
                     const durable = toDurableAction(initialShortcut.action as BrowserAction, { url: '', title: '', text_sample: '', interactive_elements: [] });
@@ -1090,8 +1109,8 @@ export default function App() {
                       return `${isNew ? '*' : ' '}[${e.id}] <${e.tag}${attrStr}>${text}</${e.tag}>${repeat}`;
                     }).join('\n');
                   prevElementKeys = curElementKeys;
-                  const tabsList = store.tabs
-                    .map((t, i) => `[${i}]${t.id === store.activeTabId ? ' (active)' : ''} "${(t.title || 'Untitled').slice(0, 60)}" — ${t.url}`)
+                  const tabsList = tabsRef.current
+                    .map((t, i) => `[${i}]${t.id === activeTabIdRef.current ? ' (active)' : ''} "${(t.title || 'Untitled').slice(0, 60)}" — ${t.url}`)
                     .join('\n');
                   const planBlock = plan.length
                     ? `PLAN (${plan.length} steps):\n${plan.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`
@@ -1191,7 +1210,7 @@ export default function App() {
                   const tierIcon = tier === 'local' ? '🏠 local' : tier === 'pro' ? '🧠 pensando mais fundo' : '⚡ flash';
                   // Never send raw screenshot — OCR text is already in the payload
                   console.log(`[Agent] step ${step + 1} → aiAction (tier=${tier}, ocrUsed=${!!ocrText})`);
-                  const result = await window.electronAPI?.aiAction(prompt, observedPayload, undefined, tier);
+                  const result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, undefined, tier));
                   throwIfCancelled();
                   console.log(`[Agent] step ${step + 1} ← result:`, result?.error || `action=${result?.action?.type} engine=${result?._engine}`);
                   if (result?._engine) {
@@ -1861,7 +1880,7 @@ export default function App() {
                       // (igual ao Chrome). Mesmo mecanismo do open_video_cuts (armCutTab):
                       // o guard muta+pausa e re-pausa se o player tentar tocar; o release
                       // (no clique da aba) dá play. Sem isso, as N abas tocavam todas juntas.
-                      const originTabId = store.activeTabId;
+                      const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
                       for (const v of vids) { try { opened.push(store.addTab(v.url)); } catch {} }
                       store.setActiveTabId(originTabId);
@@ -1897,7 +1916,7 @@ export default function App() {
                     if (vc?.success && vc.cuts?.length) {
                       // Abre TODAS em segundo plano (pausadas/mudas) e volta pra aba
                       // original — o usuário clica em cada aba quando quiser o play.
-                      const originTabId = store.activeTabId;
+                      const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
                       for (const c of vc.cuts) {
                         opened.push(store.addTab(`https://www.youtube.com/watch?v=${c.videoId}&t=${c.seconds}s`));
@@ -2272,14 +2291,14 @@ export default function App() {
                       done: { type: 'done', reason: action.summary, success: true } as any,
                     };
                   } else if (action.type === 'switch_tab') {
-                    const target = store.tabs[action.tab];
+                    const target = tabsRef.current[action.tab];
                     if (target) {
                       store.setActiveTabId(target.id);
                       activeTabIdRef.current = target.id;
                       toolResult = { success: true, info: { switchedTo: action.tab } };
                     }
                     else toolResult = { success: false, error: `Tab ${action.tab} not found` };
-                    await new Promise(r => setTimeout(r, 1500));
+                    await sleep(1500);
                   } else if (action.type === 'new_tab') {
                     if (!/^https?:\/\//i.test(action.url || '')) {
                       toolResult = { success: false, error: `Bloqueado: o agente só abre páginas http(s), não "${action.url}".` };
@@ -2294,10 +2313,10 @@ export default function App() {
                       waited += 200;
                     }
                     // Then wait for it to load
-                    await new Promise(r => setTimeout(r, 4000));
+                    await sleep(4000);
                     }
                   } else if (action.type === 'close_tab') {
-                    const target = store.tabs[action.tab];
+                    const target = tabsRef.current[action.tab];
                     if (target) { store.closeTab(target.id); toolResult = { success: true, info: { closed: action.tab } }; }
                     else toolResult = { success: false, error: `Tab ${action.tab} not found` };
                   } else {
