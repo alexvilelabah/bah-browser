@@ -154,7 +154,6 @@ src/
     ├── components/
     │   ├── TabBar.tsx             # Barra de abas estilo Chrome
     │   ├── AddressBar.tsx         # URL + nav buttons
-    │   ├── AISidebar.tsx          # Chat lateral (provider settings)
     │   ├── AgentCommandBar.tsx    # Painel direito do agente (input + log)
     │   ├── WebViewContainer.tsx   # Container das <webview> com refs
     │   └── AgentVisualOverlay.tsx # Overlay visual (borda, scan, ripples)
