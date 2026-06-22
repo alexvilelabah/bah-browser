@@ -247,6 +247,19 @@ Emit at most ONE [[ACTION:]] line, only when acting would genuinely help, and ne
 const SANITIZED_AGENT_PROMPT = sanitizeForJson(BROWSER_AGENT_SYSTEM_PROMPT);
 const SANITIZED_CHAT_PROMPT = sanitizeForJson(CHAT_ASSISTANT_SYSTEM_PROMPT);
 
+// ── Idioma da "voz" do agente (i18n Fase 2) ────────────────────────────────
+// O agente fala com o usuário (thought/evaluation/report/resposta) no idioma da
+// UI, não no idioma da página. Setado pelo renderer via IPC (ai:set-lang). Default
+// pt (comportamento anterior). JSON keys, nomes de ação e URLs ficam em inglês.
+const LANG_NAMES: Record<string, string> = { en: 'English', pt: 'Brazilian Portuguese', es: 'Spanish' };
+let engineLang: 'en' | 'pt' | 'es' = 'pt';
+export function setEngineLang(l: string): void {
+  if (l === 'en' || l === 'pt' || l === 'es') engineLang = l;
+}
+function langSuffix(): string {
+  return `\n\nLANGUAGE: Write your "thought", "evaluation", "reason"/report text and ANY message shown to the user in ${LANG_NAMES[engineLang]}, regardless of the page's language. Keep JSON keys, action/tool names and URLs in English.`;
+}
+
 export class AIEngine {
   private provider: AIProvider;
   private apiKey: string;
@@ -336,7 +349,7 @@ export class AIEngine {
     const body = {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
-      system: isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT,
+      system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix(),
       messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     };
 
@@ -362,7 +375,7 @@ export class AIEngine {
     const body: any = {
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT },
+        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
         ...messages,
       ],
       max_tokens: 4096,
@@ -387,7 +400,7 @@ export class AIEngine {
   }
 
   private async callPollinations(messages: Message[], isAgentMode: boolean): Promise<string> {
-    const systemMsg = isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT;
+    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix();
     const formatted = messages.map(m => {
       if (m.image) {
         return {
@@ -475,7 +488,7 @@ export class AIEngine {
     const dateLine = `CURRENT DATE/TIME: ${now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} (${now.toISOString()}). TRUST THIS DATE — your training data may believe an earlier year. Use it whenever the user asks about "hoje", "atual", current events or dates.`;
     // Prompt constante já vem pré-sanitizado (SANITIZED_*); só a dateLine (volátil,
     // poucas dezenas de chars) é sanitizada por chamada.
-    const systemMsg = (isAgentMode ? SANITIZED_AGENT_PROMPT : SANITIZED_CHAT_PROMPT) + '\n\n' + sanitizeForJson(dateLine);
+    const systemMsg = (isAgentMode ? SANITIZED_AGENT_PROMPT : SANITIZED_CHAT_PROMPT) + '\n\n' + sanitizeForJson(dateLine) + sanitizeForJson(langSuffix());
     // Images are already stripped upstream — DeepSeek has no vision API
     let model = await this.pickDeepSeekModel();
     const useFlash = model.includes('flash');
@@ -672,7 +685,7 @@ export class AIEngine {
   private ollamaWarmed = false;
 
   private async callOllama(messages: Message[], isAgentMode: boolean): Promise<string> {
-    const systemMsg = isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT;
+    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix();
     // Never send images to local model — it consumes too much VRAM and causes hangs
     const resolvedModel = await this.resolveOllama();
     const isGptOss = /gpt-?oss|gptoss/.test(resolvedModel.toLowerCase());

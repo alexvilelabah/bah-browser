@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // AI
   setAIProvider: (provider: string, apiKey: string, baseUrl?: string) =>
     ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl),
+  setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
   aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean) =>
     ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local),
   aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') =>

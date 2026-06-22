@@ -5,7 +5,7 @@ import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import { classifyRisk, riskForAction, RiskInfo } from './risk';
-import { t, onLangChange } from './i18n';
+import { t, onLangChange, getLang } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import SpeedDialOverlay from './components/SpeedDialOverlay';
 import {
@@ -51,6 +51,7 @@ declare global {
       maximize: () => void;
       close: () => void;
       setAIProvider: (provider: string, apiKey: string, baseUrl?: string) => Promise<any>;
+      setUILanguage?: (lang: string) => Promise<any>;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean) => Promise<{ response?: string; error?: string }>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
@@ -206,6 +207,7 @@ export default function App() {
 
   useEffect(() => {
     window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiKey, store.aiSettings.baseUrl);
+    window.electronAPI?.setUILanguage?.(getLang());   // i18n Fase 2: agente responde no idioma da UI
     // Initialize local (GPU) engine if hybrid is enabled
     if (store.localSettings.enabled) {
       window.electronAPI?.setLocalProvider?.(store.localSettings.provider, 'local', store.localSettings.baseUrl, store.localSettings.model);
@@ -300,7 +302,7 @@ export default function App() {
 
   // Troca de idioma re-renderiza a UI SEM recarregar a página (o menu não fecha).
   const [, forceI18n] = useState(0);
-  useEffect(() => onLangChange(() => forceI18n(n => n + 1)), []);
+  useEffect(() => onLangChange(() => { forceI18n(n => n + 1); window.electronAPI?.setUILanguage?.(getLang()); }), []);
 
   // ── Atalhos da nova aba (speed-dial) — flutuam SOBRE o Google real; lista própria ──
   const isGoogleHome = (u?: string) => !!u && /^https?:\/\/(www\.)?google\.[a-z.]+\/(webhp|\?|$)/i.test(u);

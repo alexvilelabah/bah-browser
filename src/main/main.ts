@@ -4,7 +4,7 @@ import { ElectronBlocker } from '@ghostery/adblocker-electron';
 import fetch from 'cross-fetch';
 import fs from 'fs';
 import path from 'path';
-import { AIEngine, AIProvider } from './ai-engine';
+import { AIEngine, AIProvider, setEngineLang } from './ai-engine';
 import { PageAgent } from './page-agent';
 import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
@@ -655,6 +655,13 @@ function setupIPC(): void {
   ipcMain.handle('ai:set-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string) => {
     aiEngine = new AIEngine(provider, apiKey, baseUrl);
     pageAgent = new PageAgent(aiEngine);
+    return { success: true };
+  });
+
+  // i18n Fase 2: idioma em que o agente fala com o usuário (segue a UI). Vale pra
+  // nuvem E local (engineLang é do módulo ai-engine, compartilhado).
+  ipcMain.handle('ai:set-lang', async (_event, lang: string) => {
+    setEngineLang(lang);
     return { success: true };
   });
 
