@@ -149,11 +149,20 @@ export function detectLang(): Lang {
 
 let currentLang: Lang = detectLang();
 
+// Quem quiser re-renderizar quando o idioma mudar se inscreve aqui (a UI não recarrega
+// — assim o menu/Configurações NÃO fecham ao trocar o idioma).
+const langListeners = new Set<() => void>();
+export function onLangChange(fn: () => void): () => void {
+  langListeners.add(fn);
+  return () => { langListeners.delete(fn); };
+}
+
 export function getLang(): Lang { return currentLang; }
 
 export function setLang(l: Lang): void {
+  currentLang = l;
   try { localStorage.setItem('uiLang', l); } catch {}
-  try { location.reload(); } catch {}
+  langListeners.forEach(fn => { try { fn(); } catch {} });
 }
 
 // Tradução. Cai pro inglês se faltar a chave no idioma; senão devolve a própria chave.

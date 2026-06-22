@@ -5,7 +5,7 @@ import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import { classifyRisk } from './risk';
-import { t } from './i18n';
+import { t, onLangChange } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import SpeedDialOverlay from './components/SpeedDialOverlay';
 import {
@@ -248,6 +248,10 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Troca de idioma re-renderiza a UI SEM recarregar a página (o menu não fecha).
+  const [, forceI18n] = useState(0);
+  useEffect(() => onLangChange(() => forceI18n(n => n + 1)), []);
 
   // ── Atalhos da nova aba (speed-dial) — flutuam SOBRE o Google real; lista própria ──
   const isGoogleHome = (u?: string) => !!u && /^https?:\/\/(www\.)?google\.[a-z.]+\/(webhp|\?|$)/i.test(u);
