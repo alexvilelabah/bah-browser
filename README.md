@@ -5,291 +5,189 @@
 <h1 align="center">Bah</h1>
 
 <p align="center">
-  <b>Navegador com IA</b> — você fala em português, ele opera a web pra você.<br/>
-  Estilo <b>Perplexity Comet</b> · código aberto (source-available) · por <b>VilelaLab</b>.
+  <b>AI browser</b> — you type in plain language, it operates the web for you.<br/>
+  <b>Perplexity Comet</b> style · open / source-available · by <b>VilelaLab</b>.
+</p>
+
+<p align="center">
+  🌐 <b>English</b> · <a href="README.pt-BR.md">Português</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/alexvilelabah/bah-browser/releases"><img src="https://img.shields.io/github/downloads/alexvilelabah/bah-browser/total?label=downloads&color=success" alt="Downloads" /></a>
-  <a href="https://github.com/alexvilelabah/bah-browser/releases/latest"><img src="https://img.shields.io/github/v/release/alexvilelabah/bah-browser?label=vers%C3%A3o&color=blue" alt="Versão" /></a>
+  <a href="https://github.com/alexvilelabah/bah-browser/releases/latest"><img src="https://img.shields.io/github/v/release/alexvilelabah/bah-browser?label=version&color=blue" alt="Version" /></a>
 </p>
 
-> Você dá comandos em linguagem natural ("abre o gmail e apaga os spams") e a IA opera o navegador no seu lugar — vendo a tela, clicando com mouse real, digitando e seguindo até concluir.
+> You give natural-language commands ("open gmail and delete the spam") and the AI operates the browser in your place — reading the screen, clicking with a real mouse, typing, and going until it's done.
+
+> 💸 **No GPU, no pricey setup needed.** Works on any PC: by default it runs on **DeepSeek's cloud API, which is extremely cheap** — pay-per-use, literally cents for tons of tasks. Want 100% free + offline instead? Run a local model with **Ollama** (optional, needs a decent GPU). Either way, **you don't need a powerful local AI to try it.**
 
 ![Stack: Electron + React + TypeScript + DeepSeek/Ollama](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20TS-blue)
 
-## 🎬 Demonstração
+## 🎬 Demo
 
-![Bah em ação](assets/demo.gif)
+![Bah in action](assets/demo.gif)
 
-▶️ **[Baixar o vídeo completo (2 min)](https://github.com/alexvilelabah/bah-browser/releases/download/v1.0.0/demo.mp4)** — o agente pesquisando e operando a web sozinho. *(o GIF acima é a prévia; o GitHub não toca vídeo embutido no README.)*
+▶️ **[Download the full video (2 min)](https://github.com/alexvilelabah/bah-browser/releases/download/v1.0.0/demo.mp4)** — the agent searching and operating the web on its own. *(the GIF above is a preview; GitHub doesn't play embedded video in the README.)*
 
-## 📥 Baixar
+## 📥 Download
 
-**🧑 Só quero usar (Windows):** [**baixe o instalador aqui**](https://github.com/alexvilelabah/bah-browser/releases/latest) → arquivo `Bah-Setup-*.exe`, clique 2× e instale.
+**🧑 I just want to use it (Windows):** [**grab the installer here**](https://github.com/alexvilelabah/bah-browser/releases/latest) → the `Bah-Setup-*.exe` file, double-click and install.
 
-> 🔄 **Atualiza sozinho:** depois de instalar, o Bah verifica novas versões, baixa em segundo plano e oferece *"Reiniciar agora"* pra aplicar — sem reinstalar nada.
+> 🔄 **Auto-updates:** after installing, Bah checks for new versions, downloads them in the background and offers *"Restart now"* to apply — no reinstalling.
 
-> ⚠️ O Windows mostra uma tela azul *"protegeu seu PC"* (o app ainda não tem assinatura digital paga). Clique em **Mais informações → Executar assim mesmo** — é normal em apps novos de código aberto. (As atualizações seguintes entram sem esse aviso.)
+> ⚠️ Windows shows a blue *"protected your PC"* screen (the app isn't code-signed with a paid certificate yet). Click **More info → Run anyway** — normal for new open-source apps. (Later updates install without that warning.)
 
-**👨‍💻 Quero mexer no código:** clone e rode — veja [Como rodar](#como-rodar) logo abaixo.
+**👨‍💻 I want to hack on the code:** clone and run it — see [Running it](#running-it) below.
 
 ---
 
-## O que ele faz
+## What it does
 
-- **Navegador completo** com abas, navegação, URL, tema dark
-- **Painel AGENT** lateral: digita um comando → IA decide passo a passo até concluir
-- **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela
-- **IA**: **DeepSeek** (nuvem) — testado e recomendado, rápido e estável — ou **Ollama** (local/offline) pra rodar a IA na própria máquina
-- **Adblock** completo (EasyList + EasyPrivacy) com bypass automático para sites que quebram (YouTube, Twitch)
-- **Safe Browsing** (URLhaus malicious hosts list, atualiza diariamente)
-- **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic events — passa por React, Vue, Angular sem ser ignorado)
-- **Stealth** anti-detecção (UA Chrome, mascara `navigator.webdriver` etc.)
-- **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
+- **Full browser** with tabs, navigation, URL bar, dark theme
+- **AGENT panel** on the side: type a command → the AI decides step by step until it's done
+- **Reads the page** (DOM, numbered interactive elements, and OCR) and acts through structured tools — it doesn't rely on "seeing" the screen
+- **AI**: **DeepSeek** (cloud) — tested and recommended, fast and stable — or **Ollama** (local/offline) to run the AI on your own machine
+- **One-shot skills**: open N videos at once, build a "supercut" of a spoken phrase, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
+- **UI in your language** (English / Português / Español) — auto-detects your system language; the AI also replies in your language
+- **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
+- **Safe Browsing** (URLhaus malicious-hosts list, updated daily)
+- **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
+- **Stealth** anti-detection (Chrome UA, masks `navigator.webdriver`, etc.)
+- **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
 
 ## Stack
 
-| Camada | Tecnologia |
+| Layer | Tech |
 |---|---|
-| Shell do navegador | **Electron 42** + Chromium |
+| Browser shell | **Electron 42** + Chromium |
 | UI | **React 19** + **TypeScript** + Vite |
-| IA (nuvem) | **DeepSeek** — testado e recomendado |
-| IA (local) | **Ollama** |
+| AI (cloud) | **DeepSeek** — tested and recommended |
+| AI (local) | **Ollama** |
 | Adblock | `@ghostery/adblocker-electron` |
-| Webview | Tag `<webview>` com partition persistente |
+| Webview | `<webview>` tag with persistent partition |
 
 ---
 
-## Arquitetura
+## The agent's ReAct loop (core)
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                         APP CONTAINER                          │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │ TopBar: tabs + window controls                           │  │
-│  ├──────────────────────────────────────────────────────────┤  │
-│  │ AddressBar: URL + Adblock toggle + AI sidebar toggle     │  │
-│  ├──────────────────────────────────┬───────────────────────┤  │
-│  │                                  │                       │  │
-│  │       <webview>                  │   AGENT PANEL         │  │
-│  │       (page renders here)        │   - input             │  │
-│  │       + AgentVisualOverlay       │   - thoughts/actions  │  │
-│  │       (border, scan, ripples)    │   - results           │  │
-│  │                                  │                       │  │
-│  ├──────────────────────────────────┴───────────────────────┤  │
-│  │ Footer (only on errors): selectable error text           │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
-```
-
-### Loop ReAct do agente (núcleo)
-
-```
-USER → "abre o gmail e apaga os spams"
+USER → "open gmail and delete the spam"
         │
         ▼
 ┌───────────────────────────────────────────────┐
-│  for step in 1..15:                           │
+│  for step in 1..25:                           │
 │    1. observePage(webview)                    │
 │       → { url, title, interactive_elements }  │
 │    2. captureScreenshot()                     │
 │    3. AI decides ONE action:                  │
 │       { action: { type, ...params } }         │
 │    4. execute action via REAL OS input        │
-│    5. wait, re-observe                        │
+│    5. wait, re-observe, self-evaluate         │
 │    6. if action == 'done' → return            │
 └───────────────────────────────────────────────┘
 ```
 
-### Ferramentas que a IA pode chamar
+### Tools the AI can call
 
-| Ação | O que faz |
+| Action | What it does |
 |---|---|
-| `click_ref(N)` | Clica no elemento de id N da lista observada |
-| `fill_ref(N, value)` | Preenche input de id N com `value` |
-| `click_text(text)` | Acha por texto visível e clica |
-| `click_at(x, y)` | Clique em coordenada exata (fallback visual) |
-| `type(text)` | Digita no campo focado |
-| `press(key)` | Tecla (Enter, Tab, Escape...) |
-| `navigate(url)` | Vai pra URL |
-| `scroll(direction)` | up / down / top / bottom |
-| `new_tab(url)` / `switch_tab(N)` / `close_tab(N)` | Gerência de abas |
-| `wait(ms)` | Pausa explícita |
-| `done(reason, success)` | Encerra o loop |
+| `click_ref(N)` | Clicks the element with id N from the observed list |
+| `fill_ref(N, value)` | Fills input id N with `value` (and verifies it took) |
+| `click_text(text)` | Finds by visible text and clicks |
+| `click_at(x, y)` | Click at exact coordinates (visual fallback) |
+| `type(text)` / `press(key)` | Type into the focused field / send a key |
+| `navigate(url)` / `scroll(dir)` | Go to a URL / scroll |
+| `new_tab` / `switch_tab` / `close_tab` | Tab management |
+| `done(reason, success)` | End the loop |
 
-#### Estratégia "DOM-first com fallback visual"
-
-A IA tem três jeitos de clicar, e foi instruída a tentar nessa ordem:
-
-1. **`click_ref(N)` — DOM semântico (preferencial)**
-   Cada passo o navegador injeta JS na página, varre os elementos interativos visíveis (`<a>`, `<button>`, `<input>`, `[role=button]`, etc.), filtra os que estão na viewport e numera de 0 a N. Essa lista vai pra IA junto com `aria-label`, `pressed`, `checked`, `href`. A IA escolhe o id e o navegador resolve as coordenadas. **É o caminho mais confiável** — funciona mesmo quando o texto muda ou está duplicado.
-
-2. **`click_text("X")` — busca por texto visível (fallback 1)**
-   Quando o elemento que a IA quer não está nos top 200 da lista numerada (página gigante tipo YouTube), ela pode chamar por texto. O executor busca todos os elementos com aquele texto, prioriza match exato e penaliza prefixos negativos (não, no, cancelar) pra não clicar no botão errado.
-
-3. **`click_at(x, y)` — coordenada visual (fallback 2)**
-   Último recurso, só quando o elemento é ícone-only sem `aria-label` ou está dentro de canvas. ⚠️ Só funciona com **provedor de visão** (ex.: Pollinations); com **DeepSeek o screenshot não é enviado ao modelo**, então o agente prioriza os elementos do DOM. Quando há visão, a IA estima a coordenada e o navegador usa `document.elementFromPoint()`.
-
-**Em todos os três casos**, o clique final acontece via `webContents.sendInputEvent` no main process — ou seja, é um evento de mouse **real** do Chromium, não synthetic event. Sites com React/Vue/proteção anti-bot respondem normalmente.
+Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
 
 ---
 
-## Estrutura do código
-
-```
-src/
-├── main/                          # Electron main process (Node.js)
-│   ├── main.ts                    # Bootstrap, IPC handlers, adblock, safe-browsing,
-│   │                              # stealth UA, real mouse input via sendInputEvent
-│   ├── ai-engine.ts               # Cliente de IA (DeepSeek nuvem / Ollama local).
-│   │                              # System prompt do agente.
-│   └── page-agent.ts              # Parser/normalizador da resposta JSON da IA
-│
-├── preload/
-│   └── preload.ts                 # contextBridge — expõe APIs main p/ renderer
-│
-└── renderer/                      # UI React
-    ├── App.tsx                    # Loop principal do agente, state, render layout
-    ├── store.ts                   # Hook de estado (tabs, chat, AI settings)
-    ├── page-executor.ts           # observePage(), executeBrowserAction(), helpers
-    │                              # de DOM injection para coletar interactive_elements
-    ├── components/
-    │   ├── TabBar.tsx             # Barra de abas estilo Chrome
-    │   ├── AddressBar.tsx         # URL + nav buttons
-    │   ├── AgentCommandBar.tsx    # Painel direito do agente (input + log)
-    │   ├── WebViewContainer.tsx   # Container das <webview> com refs
-    │   └── AgentVisualOverlay.tsx # Overlay visual (borda, scan, ripples)
-    └── styles/
-        └── global.css             # Tema dark + animações
-```
-
-### Arquivos-chave para revisão
-
-Se quiser entender o projeto rápido, leia nessa ordem:
-
-1. **`src/renderer/App.tsx`** — onde o loop ReAct mora. Ler o `onExecute` do `<AgentCommandBar>`.
-2. **`src/main/ai-engine.ts`** — system prompt + chamadas pra cada provider.
-3. **`src/renderer/page-executor.ts`** — como observamos a página (`OBSERVE_SCRIPT`) e executamos ações.
-4. **`src/main/main.ts`** — IPC handlers de `realClick`, `realType`, accessibility tree CDP, adblock, safe browsing.
-
----
-
-## Como rodar
+## Running it
 
 ```bash
-# 0. Clonar o repositório
 git clone https://github.com/alexvilelabah/bah-browser.git
 cd bah-browser
-
-# 1. Instalar deps
 npm install
-
-# 2. Build (compila TS main + bundle Vite)
 npm run build
-
-# 3. Rodar
-npm start
-# ou: npx electron .
+npm start        # or: npx electron .
 ```
 
-Atalho Windows: clique duplo em `Abrir-Bah.bat`.
+Windows shortcut: double-click `Abrir-Bah.bat`.
 
-### Configurar IA
+### Setting up the AI
 
-1. Abra o navegador
-2. Clique no ícone **AI** na barra de endereço (canto direito)
-3. Engrenagem → escolher Provider
-4. Colar API key (ou deixar vazio se for Ollama local)
-5. Save
-
-**Modo local (Ollama):** instale o [Ollama](https://ollama.com) e **deixe o app aberto** (ele fica na bandeja, perto do relógio — é ele que serve os modelos em `127.0.0.1:11434`). Com o Ollama rodando, baixe um modelo pelo gerenciador dentro do Bah (☁️/🏠 → 🏠 IA Local → digite o nome e clique em **Baixar**) ou no terminal (ex.: `ollama pull qwen2.5:14b`). Roda offline, mas a nuvem (DeepSeek) é mais confiável.
+1. Open the browser, click the **AI** button in the address bar.
+2. Gear icon → pick a provider.
+3. **Cloud (recommended):** paste a **DeepSeek** API key (their API is very cheap, pay-per-use). → Save.
+4. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
 
 ---
 
-## Comparação com outros agentes
+## Safety & limits
 
-|  | **Bah** | Comet | Tandem | Browser-Use |
-|---|---|---|---|---|
-| Código-fonte aberto | ✅ | ❌ | ✅ | ✅ |
-| Opção 100% local (Ollama) | ✅ | ❌ | ✅ | ✅ |
-| Roda em casa | ✅ | ❌ | ✅ | ❌ (só lib) |
-| IA na nuvem ou local | ✅ | ❌ (só nuvem) | ✅ | ✅ |
-| Cliques reais (não synthetic) | ✅ | ✅ | ✅ | ✅ |
-| Accessibility tree (CDP) | ✅ | ✅ | ✅ | ⚠️ |
-| UI completa | ✅ | ✅ | ✅ | ❌ |
-| Adblock + Safe browsing | ✅ | ✅ | ⚠️ | ❌ |
+The agent runs with full browser privileges, so it's worth being clear about what it does and doesn't do:
 
-> ℹ️ Os ✅ indicam recursos **presentes no código**. O caminho de IA **testado e recomendado é o DeepSeek (nuvem)**; o modo local (Ollama) também funciona, mas é **menos validado**.
+- **It's your real session.** The browser uses a persistent partition (`persist:browser`), so cookies and logins are saved. If you're logged into Gmail in Bah, so is the agent. **The AI can access anything you could access manually.** Don't log into accounts you wouldn't trust an assistant with.
 
----
+- **Safety brake on sensitive actions.** Before **paying, buying, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
 
-## Segurança e limites
+- **Stop means stop.** The ■ Stop button cancels immediately, even mid model-call or mid-loop; a late response won't "resurrect" a cancelled task.
 
-O agente opera com privilégios elevados de navegador, então é importante deixar claro o que ele faz e não faz:
+- **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
-- **Sessão é a sua sessão real.** O navegador usa partition persistente (`persist:browser`), então cookies e logins ficam salvos. Se você está logado no Gmail no Bah, o agente também está. **A IA tem acesso a tudo que você teria acesso manualmente.** Não logue em contas que você não confiaria a um assistente.
+- **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
-- **Sem confirmação humana entre passos (atualmente).** Quando o agente decide clicar em "Excluir", ele clica direto. Não há pop-up "tem certeza?" entre ações. Para tarefas destrutivas (apagar emails, deletar arquivos, comprar, transferir dinheiro), recomendo dar comandos pequenos e observar.
+- **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- **Listas com toggle são detectadas.** O agente lê `aria-pressed` e `aria-checked` antes de agir, então não fica num loop liga/desliga (ex: dando like infinito).
+- **Stealth is not evasion.** We mask `navigator.webdriver` and use a Chrome UA only to reduce rejections. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
 
-- **Limite de 15 passos por comando.** Se a tarefa não concluir em 15 ações, o agente para sozinho.
+- **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
-- **Detecção de ação sem efeito.** Se duas ações seguidas não mudarem nada na página, o sistema avisa a IA pra mudar de estratégia (em vez de repetir infinitamente).
+- **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 
-- **Stealth não é evasão.** Mascaramos `navigator.webdriver` e usamos UA Chrome só para reduzir rejeições. Não burlamos CAPTCHA, não evitamos rate-limit, não automatizamos coisas que sites proíbem nos termos de uso.
-
-- **🔑 Login do Google — use o menu "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview) — *"este navegador pode não ser seguro"*. O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** (no painel do agente, ou no menu ⋮) → ele abre o login no seu **Chrome/Edge real** (onde o Google confia). Você loga lá e **pronto** — o Bah **detecta sozinho**, importa a sessão (cookies via CDP, sem decifrar nada no disco) e fecha o navegador de login. Faça **uma vez** e fica logado (Gmail, YouTube, etc.), inclusive depois de reabrir.
-
-- **Adblock pausa em sites conhecidos.** YouTube e Twitch entram em modo bypass automático para o player não ser bloqueado pelo anti-adblock deles. Outros sites: o adblock fica ativo.
-
-- **Safe Browsing.** Navegação para hosts em listas de phishing/malware (URLhaus) é bloqueada com aviso.
-
-**O que NÃO está implementado ainda** (mas seria bom): aprovação humana antes de ações destrutivas (delete/buy/send), sandbox separado por aba, rate-limit de cliques pra evitar comportamento de bot agressivo.
+**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running, a per-tab sandbox, and click rate-limiting to avoid aggressive bot-like behavior.
 
 ---
 
-## Roadmap
+## Comparison with other agents
 
-Status atual:
+|  | **Bah** | Comet | Browser-Use |
+|---|---|---|---|
+| Open source | ✅ | ❌ | ✅ |
+| 100% local option (Ollama) | ✅ | ❌ | ✅ |
+| Runs at home | ✅ | ❌ | ❌ (lib only) |
+| Cloud **or** local AI | ✅ | ❌ (cloud only) | ✅ |
+| Real clicks (not synthetic) | ✅ | ✅ | ✅ |
+| Full UI | ✅ | ✅ | ❌ |
+| Adblock + Safe Browsing | ✅ | ✅ | ❌ |
+| Confirmation before sensitive actions | ✅ | ⚠️ | ❌ |
 
-- [x] **Loop ReAct multi-passo** com observação estruturada
-- [x] **Cliques reais** via `sendInputEvent` (não synthetic)
-- [x] **Adblock + Safe Browsing** com bypass automático por site
-- [x] **Stealth básico** (UA + `navigator.webdriver`)
-- [x] **IA na nuvem (DeepSeek, testado) ou local (Ollama)**
-- [x] **Visual overlay** estilo Comet
-- [x] **Accessibility tree via CDP** — IPC handler já existe (`cdp:axtree`), falta usar no loop
-- [ ] **Migrar `<webview>` → `WebContentsView`** — *prioridade alta*. A tag `<webview>` está [oficialmente deprecated](https://www.electronjs.org/docs/latest/api/webview-tag) e tem várias quirks (skeleton bug do YouTube, problemas com IntersectionObserver). `WebContentsView` (Electron 30+) é o caminho moderno e dá acesso direto ao `webContents` sem o sandbox aninhado. **Refator grande**: muda o jeito que tabs são gerenciadas. Vale o esforço quando for estabilizar pra produção.
-- [ ] **RAG entre abas** — indexar conteúdo das abas em vetores pra IA responder "compare X em duas abas". Provavelmente com `@xenova/transformers` rodando local.
-- [ ] **Whitelist de adblock por site** editável pelo usuário (botão "permitir nesse site")
-- [ ] **Confirmação humana** antes de ações destrutivas (`require_confirmation: true` em ações marcadas)
-- [ ] **Persistir abas/histórico** entre sessões
-- [ ] **Voice command** (input de áudio)
-- [ ] **Eval suite** — rodar tarefas-padrão (login, search, fill form) automaticamente pra detectar regressões
+> ℹ️ The **tested and recommended** AI path is **DeepSeek (cloud)**; local (Ollama) also works but is **less validated**.
 
 ---
 
-## Licença
+## License
 
-**PolyForm Small Business 1.0.0** — veja o arquivo [LICENSE](LICENSE).
+**PolyForm Small Business 1.0.0** — see [LICENSE](LICENSE).
 
-Em resumo (este resumo não tem valor legal — vale o texto da licença):
+In short (not legal advice — the license text rules):
 
-- ✅ **Livre** para uso pessoal, estudo, projetos próprios e **empresas pequenas** (menos de 100 pessoas **e** menos de US$ 1 milhão de faturamento no último ano).
-- ✅ Pode **modificar, melhorar e redistribuir**, mantendo este aviso de licença.
-- 💼 **Empresa grande / uso comercial acima desse porte** precisa de uma **licença comercial** do autor — fale comigo em **alexmachadovilela@gmail.com**.
-- ❌ Sem garantia. O software vem "como está".
+- ✅ **Free** for personal use, study, your own projects, and **small businesses** (under 100 people **and** under US$1M revenue last year).
+- ✅ You may **modify, improve and redistribute**, keeping this license notice.
+- 💼 **Large company / commercial use above that size** needs a **commercial license** — reach me at **alexmachadovilela@gmail.com**.
+- ❌ No warranty. Provided "as is".
 
 ---
 
-## Contato
+## Contact
 
-- 📧 **Email** (dúvidas e licença comercial): **alexmachadovilela@gmail.com**
+- 📧 **Email** (questions & commercial license): **alexmachadovilela@gmail.com**
 - 🐦 **X / Twitter**: [@alexvilelaba](https://x.com/alexvilelaba)
-- 🐛 **Bugs / ideias**: [abra uma issue](https://github.com/alexvilelabah/bah-browser/issues)
+- 🐛 **Bugs / ideas**: [open an issue](https://github.com/alexvilelabah/bah-browser/issues)
 
-Feito com 🧉 por **Alex Vilela** — **VilelaLab**.
+Made with 🧉 by **Alex Vilela** — **VilelaLab**.
