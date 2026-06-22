@@ -4,7 +4,7 @@ import { useTabStore } from './store';
 import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
-import { classifyRisk } from './risk';
+import { classifyRisk, riskForAction, RiskInfo } from './risk';
 import { t, onLangChange } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import SpeedDialOverlay from './components/SpeedDialOverlay';
@@ -823,6 +823,16 @@ export default function App() {
                   });
                 });
               };
+              // Freio unificado: pede confirmação pra ação de risco em QUALQUER caminho.
+              // Retorna um toolResult de cancelamento (aborta a ação) ou null (pode seguir).
+              const gateRisk = async (risk: RiskInfo | null): Promise<any | null> => {
+                if (!risk) return null;
+                const ok = await confirmRisky(risk);
+                throwIfCancelled();
+                if (ok) return null;
+                onProgress({ kind: 'status', message: `✖️ Cancelado por você: não fiz "${risk.label}".` });
+                return { success: false, reason: 'user_cancelled', error: `Você cancelou — não fiz "${risk.label}".` };
+              };
               try {
                 throwIfCancelled();
                 // ── REPLAY DE MACRO: "repete", "repete 1000 vezes", "a cada 5 min" ──
@@ -839,6 +849,19 @@ export default function App() {
                   const times = repeatIntent.times;
                   const pause = repeatIntent.intervalMs ?? 1200;
                   onProgress({ kind: 'status', message: `🔁 Automação: "${macro.command.slice(0, 70)}" — ${macro.steps.length} passo(s) × ${times >= 100000 ? '∞ (até você parar)' : times}${repeatIntent.intervalMs ? `, a cada ${Math.round(repeatIntent.intervalMs / 1000)}s` : ''}. Zero IA.` });
+                  // FREIO: se a automação inclui uma ação de risco (pagar/excluir/cartão),
+                  // confirma UMA vez antes de repetir (não a cada repetição — seria absurdo).
+                  const riskyStep = macro.steps.map(s => riskForAction(s as any)).find((r): r is RiskInfo => !!r);
+                  if (riskyStep) {
+                    const ok = await confirmRisky(riskyStep);
+                    throwIfCancelled();
+                    if (!ok) {
+                      const msg = `Cancelado — a automação inclui uma ação de risco ("${riskyStep.label}") e você não confirmou.`;
+                      setLastFooterMsg(msg);
+                      finishRun('cancelled', msg);
+                      return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
+                    }
+                  }
                   const sleepCancelable = async (ms: number) => {
                     const until = Date.now() + ms;
                     while (Date.now() < until) { throwIfCancelled(); await new Promise(r => setTimeout(r, Math.min(400, until - Date.now()))); }
@@ -909,6 +932,13 @@ export default function App() {
                   onProgress({ kind: 'status', message: `Atalho conhecido: ${initialShortcut.reason}` });
                   console.log(`[Agent] fast path -> ${initialShortcut.reason}`);
                   const beforeUrl = wv.getURL();
+                  // FREIO: atalho aprendido também passa pela confirmação se for de risco.
+                  const scCancel = await gateRisk(riskForAction(initialShortcut.action as any, undefined, beforeUrl));
+                  if (scCancel) {
+                    allResults.push({ action: initialShortcut.action as BrowserAction, result: scCancel });
+                    finishRun('cancelled', scCancel.error);
+                    return { thought: scCancel.error, results: allResults, done: { type: 'done', reason: scCancel.error, success: false } as BrowserAction };
+                  }
                   const shortcutResult = await executeBrowserAction(wv, initialShortcut.action as BrowserAction);
                   await waitForWebviewSettled(wv, beforeUrl);
                   await sleep(2500);
@@ -1478,7 +1508,10 @@ export default function App() {
                       } // fim do if(!cancelled) — freio de segurança
                     }
                   } else if (action.type === 'click_at' && wcId != null) {
-                    toolResult = await window.electronAPI?.realClick?.(wcId, action.x, action.y);
+                    // FREIO: resolve o rótulo do elemento SOB a coordenada e confirma se for de risco.
+                    const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${Math.round(action.x)},${Math.round(action.y)})`), 3000, '');
+                    const cancelAt = await gateRisk(riskForAction(action as any, { text: String(lblAt || '') }));
+                    toolResult = cancelAt ?? await window.electronAPI?.realClick?.(wcId, action.x, action.y);
                   } else if (action.type === 'click_text' && wcId != null) {
                     // FREIO DE SEGURANÇA: confirma antes de clicar em pagamento/exclusão.
                     const riskT = classifyRisk('click_text', action.text);
@@ -2320,9 +2353,13 @@ export default function App() {
                     if (target) { store.closeTab(target.id); toolResult = { success: true, info: { closed: action.tab } }; }
                     else toolResult = { success: false, error: `Tab ${action.tab} not found` };
                   } else {
+                    // FREIO: Enter (press) numa página de checkout pode submeter pagamento.
+                    const pressCancel = action.type === 'press'
+                      ? await gateRisk(riskForAction(action as any, undefined, wv.getURL?.() || ''))
+                      : null;
                     // Bounded: on hung pages any executeJavaScript-based action (scroll,
                     // click_text fallback, fill...) would otherwise never resolve.
-                    toolResult = await withTimeout(executeBrowserAction(wv, action),
+                    toolResult = pressCancel ?? await withTimeout(executeBrowserAction(wv, action),
                       12000,
                       { success: false, error: `${action.type} timed out — page scripts are unresponsive. Use OCR TEXT or navigate to a DIFFERENT site.` });
                   }

@@ -31,3 +31,33 @@ export function classifyRisk(
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'exclusão', label: shown || 'exclusão' };
   return null;
 }
+
+// Freio UNIFICADO: classifica o risco de QUALQUER ação, não importa o caminho
+// (clique por ref/texto/coordenada, preenchimento, Enter, macro, atalho). Assim
+// pagamento/exclusão/cartão pedem confirmação em todos os caminhos, não só nos
+// cliques que o modelo propõe. (Codex #5: a regra precisa ser a mesma pra todos.)
+export function riskForAction(
+  action: { type: string; ref?: number; text?: string; value?: string; label?: string; selector?: string; key?: string },
+  el?: { text?: string; placeholder?: string; aria?: string },
+  currentUrl?: string,
+): RiskInfo | null {
+  switch (action.type) {
+    case 'click_ref':
+    case 'fill_ref':
+      return classifyRisk(action.type, el?.text, el?.placeholder, el?.aria);
+    case 'click_text':
+    case 'click_at':
+      // click_at: quem chama resolve o rótulo do elemento sob a coordenada e passa em el.text.
+      return classifyRisk('click_text', el?.text ?? action.text);
+    case 'fill':
+      return classifyRisk('fill', el?.text ?? action.label ?? action.selector ?? action.text);
+    case 'press': {
+      // Enter pode submeter um pagamento. Como não há rótulo, só freia em página de checkout.
+      const k = (action.key || '').toLowerCase();
+      const checkout = !!currentUrl && /checkout|payment|pagamento|\/cart\b|carrinho|comprar|order\/?confirm|pedido\/?confirm|finalizar/i.test(currentUrl);
+      return (k === 'enter' || k === 'return') && checkout ? { kind: 'pagamento', label: 'Enter na página de pagamento' } : null;
+    }
+    default:
+      return null;
+  }
+}
