@@ -1856,9 +1856,17 @@ export default function App() {
                     const rmv = await window.electronAPI?.resolveManyVideos?.(vq, want);
                     const vids = (rmv?.videos || []) as Array<{ url: string; title: string }>;
                     if (vids.length > 0) {
-                      // SEM autoplay: cada aba carrega PAUSADA e só toca quando o usuário
-                      // abre/foca a aba (igual ao Chrome) — senão tocariam todas de uma vez.
-                      for (const v of vids) { try { store.addTab(v.url); } catch {} }
+                      // SEM autoplay: abre TODAS em segundo plano (mudas/pausadas) e VOLTA
+                      // pra aba de origem — cada vídeo só toca quando o usuário ABRE a aba
+                      // (igual ao Chrome). Mesmo mecanismo do open_video_cuts (armCutTab):
+                      // o guard muta+pausa e re-pausa se o player tentar tocar; o release
+                      // (no clique da aba) dá play. Sem isso, as N abas tocavam todas juntas.
+                      const originTabId = store.activeTabId;
+                      const opened: string[] = [];
+                      for (const v of vids) { try { opened.push(store.addTab(v.url)); } catch {} }
+                      store.setActiveTabId(originTabId);
+                      activeTabIdRef.current = originTabId;
+                      opened.forEach(id => { pausedCutTabsRef.current.set(id, 0); armCutTab(id); });
                       const doneMsg = `Abri ${vids.length} aba(s) com vídeos de "${vq}": ${vids.map(v => v.title).slice(0, 5).join(' · ')}`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { count: vids.length } } });
