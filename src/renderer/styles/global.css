@@ -224,6 +224,28 @@ body {
 .bm-fav{ width:15px; height:15px; flex:none; border-radius:3px; object-fit:contain; }
 .bm-title{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
+/* 🔎 Barra de busca na página (Ctrl+F) — overlay no canto superior direito */
+.webview-area{ position:relative; }
+.find-bar{
+  position:absolute; top:10px; right:18px; z-index:60;
+  display:flex; align-items:center; gap:4px;
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  border-radius:10px; padding:5px 6px;
+  box-shadow:0 10px 28px rgba(0,0,0,0.40);
+}
+.find-input{
+  height:28px; width:210px; border:none; outline:none; background:transparent;
+  color:var(--text-primary); font-size:13px; padding:0 6px; font-family:inherit;
+}
+.find-input::placeholder{ color:var(--text-muted); }
+.find-count{ font-size:11px; color:var(--text-muted); min-width:42px; text-align:center; font-variant-numeric:tabular-nums; }
+.find-btn{
+  width:26px; height:26px; border:none; background:transparent; color:var(--text-secondary);
+  cursor:pointer; border-radius:6px; font-size:13px; display:flex; align-items:center; justify-content:center;
+  transition:background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.find-btn:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
+
 /* ── Botões da barra: AI + Adblock — retângulo de cantos arredondados (estilo
    "Baixar música"), UM padrão só, consistente ─────────────────────────────── */
 .ai-toggle, .adblock-btn {

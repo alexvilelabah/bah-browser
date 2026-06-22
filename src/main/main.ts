@@ -1935,6 +1935,7 @@ app.whenReady().then(() => {
         { label: 'Voltar', accelerator: 'Alt+Left', click: () => sendSc('back') },
         { label: 'Avançar', accelerator: 'Alt+Right', click: () => sendSc('forward') },
         { label: 'Favoritar', accelerator: 'CmdOrCtrl+D', click: () => sendSc('bookmark') },
+        { label: 'Buscar na página', accelerator: 'CmdOrCtrl+F', click: () => sendSc('find') },
         { type: 'separator' },
         { label: 'Próxima aba', accelerator: 'Control+Tab', click: () => sendSc('next-tab') },
         { label: 'Aba anterior', accelerator: 'Control+Shift+Tab', click: () => sendSc('prev-tab') },

@@ -279,6 +279,32 @@ export default function App() {
   const goForward = useCallback(() => { getActiveWebview()?.goForward(); }, [getActiveWebview]);
   const reload = useCallback(() => { getActiveWebview()?.reload(); }, [getActiveWebview]);
 
+  // ── Buscar na página (Ctrl+F) — usa o findInPage nativo do webview ──
+  const [findOpen, setFindOpen] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [findCount, setFindCount] = useState<{ active: number; total: number }>({ active: 0, total: 0 });
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const runFind = useCallback((text: string, opts?: { findNext?: boolean; forward?: boolean }) => {
+    const wv = getActiveWebview() as any;
+    if (!wv) return;
+    if (text) { try { wv.findInPage(text, opts); } catch {} }
+    else { try { wv.stopFindInPage('clearSelection'); } catch {} setFindCount({ active: 0, total: 0 }); }
+  }, [getActiveWebview]);
+  const closeFind = useCallback(() => {
+    setFindOpen(false); setFindText('');
+    try { (getActiveWebview() as any)?.stopFindInPage('clearSelection'); } catch {}
+    setFindCount({ active: 0, total: 0 });
+  }, [getActiveWebview]);
+  useEffect(() => {
+    if (!findOpen) return;
+    const wv = getActiveWebview() as any;
+    if (!wv) return;
+    const onFound = (e: any) => { if (e?.result) setFindCount({ active: e.result.activeMatchOrdinal || 0, total: e.result.matches || 0 }); };
+    wv.addEventListener('found-in-page', onFound);
+    const t = setTimeout(() => findInputRef.current?.focus(), 60);
+    return () => { clearTimeout(t); try { wv.removeEventListener('found-in-page', onFound); } catch {} };
+  }, [findOpen, getActiveWebview]);
+
   // ── Atalhos de teclado estilo Chrome (vêm do menu/aceleradores no main → funcionam
   // mesmo com a página focada). Handler num ref atualizado a cada render → registra 1x. ──
   const shortcutRef = useRef<(action: string) => void>(() => {});
@@ -292,6 +318,7 @@ export default function App() {
       case 'reopen-tab': store.reopenClosedTab(); break;
       case 'focus-url': { const el = document.querySelector('.url-input') as HTMLInputElement | null; if (el) { el.focus(); el.select(); } break; }
       case 'reload': reload(); break;
+      case 'find': setFindOpen(true); setTimeout(() => { findInputRef.current?.focus(); findInputRef.current?.select(); }, 0); break;
       case 'back': goBack(); break;
       case 'forward': goForward(); break;
       case 'next-tab': if (visible.length) go(visible[(curIdx + 1) % visible.length]); break;
@@ -529,6 +556,26 @@ export default function App() {
             onNewTab={store.addTab}
           />
           <AgentVisualOverlay state={agentVisual} ripples={ripples} />
+          {findOpen && (
+            <div className="find-bar">
+              <input
+                ref={findInputRef}
+                className="find-input"
+                value={findText}
+                onChange={e => { setFindText(e.target.value); runFind(e.target.value); }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); runFind(findText, { findNext: true, forward: !e.shiftKey }); }
+                  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+                }}
+                placeholder="Buscar na página…"
+                spellCheck={false}
+              />
+              <span className="find-count">{findText ? `${findCount.active}/${findCount.total}` : ''}</span>
+              <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: false })} title="Anterior (Shift+Enter)">↑</button>
+              <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: true })} title="Próximo (Enter)">↓</button>
+              <button className="find-btn" onClick={closeFind} title="Fechar (Esc)">✕</button>
+            </div>
+          )}
         </div>
 
         {/* Kept mounted even when closed so a running task survives toggling the sidebar */}
