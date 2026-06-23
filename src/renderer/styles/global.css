@@ -283,6 +283,19 @@ body {
 .zoom-badge svg{ color:var(--text-muted); }
 @keyframes zoomBadgeIn{ from{ opacity:0; transform:translate(-50%,-6px); } to{ opacity:1; transform:translate(-50%,0); } }
 
+/* 👋 Onboarding da IA no primeiro uso (estado vazio do painel do agente) */
+.ai-onboard{
+  background:var(--accent-glow); border:1px solid var(--accent);
+  border-radius:12px; padding:14px 16px; margin-bottom:16px; text-align:left;
+}
+.ai-onboard-title{ font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:4px; }
+.ai-onboard-text{ font-size:12.5px; color:var(--text-secondary); line-height:1.5; margin-bottom:10px; }
+.ai-onboard-btn{
+  background:var(--accent); color:#fff; border:none; border-radius:8px;
+  padding:7px 14px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
+}
+.ai-onboard-btn:hover{ filter:brightness(1.08); }
+
 /* ⭐ Estrela de favorito dentro da caixa de URL (estilo Chrome) */
 .url-input-wrapper .url-input{ padding-right:40px; }
 .bookmark-star{
