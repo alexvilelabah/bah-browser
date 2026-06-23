@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
+import { detectLang } from './i18n';
 
 export interface Tab {
   id: string;
@@ -31,7 +32,16 @@ export interface LocalSettings {
   model: string;             // e.g. qwen3-vl:8b
 }
 
-export function createTab(url = 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr'): Tab {
+// Página inicial = Google no idioma da pessoa (não força o Brasil pra todo mundo).
+// Quem tem o PC em inglês abre o Google em inglês; pt-BR continua no Google do Brasil.
+function googleHome(): string {
+  const lang = detectLang();
+  if (lang === 'pt') return 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr';
+  if (lang === 'es') return 'https://www.google.com/webhp?hl=es&pws=0';
+  return 'https://www.google.com/webhp?hl=en&pws=0';
+}
+
+export function createTab(url = googleHome()): Tab {
   return {
     id: uuidv4(),
     title: 'New Tab',
