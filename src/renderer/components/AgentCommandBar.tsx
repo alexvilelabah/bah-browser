@@ -118,53 +118,21 @@ interface Props {
   onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
 }
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onFetchHeadlines, onOpenUrl, onGoogleLogin, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onOpenUrl, onGoogleLogin, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
   // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
   const pendingSuggestionRef = useRef<string | null>(null);
-  // ── VITRINE DE NOVIDADES no placeholder ────────────────────────────────────
-  // Em vez de só "ensinar" o navegador, o placeholder cicla MANCHETES recentes de
-  // IA/tech (contextuais: IA local ligada → notícias de IA local). Cache ~4h pra não
-  // raspar o Google a cada abertura. Não-clicável — info ambiente que some ao digitar.
-  const [headlines, setHeadlines] = useState<string[]>(() => {
-    try { const c = JSON.parse(localStorage.getItem('newsHeadlines.v1') || 'null'); return Array.isArray(c?.items) ? c.items : []; } catch { return []; }
-  });
-  // Ref pra função de busca: ela muda de identidade a cada render (o store se recria),
-  // e o typewriter re-renderiza ~20×/s → se ela estivesse nas deps, o timer abaixo
-  // resetaria pra sempre e nunca dispararia. Por isso: ref + deps só [localEnabled].
-  const fetchHeadlinesRef = useRef(onFetchHeadlines);
-  useEffect(() => { fetchHeadlinesRef.current = onFetchHeadlines; }, [onFetchHeadlines]);
-  useEffect(() => {
-    const fn = fetchHeadlinesRef.current;
-    if (!fn) return;
-    let cached: any = null;
-    try { cached = JSON.parse(localStorage.getItem('newsHeadlines.v1') || 'null'); } catch {}
-    const fresh = cached && Array.isArray(cached.items) && cached.items.length && Date.now() - (cached.ts || 0) < 4 * 3600 * 1000;
-    if (fresh) return;   // cache bom → não busca de novo
-    const topics = localSettings.enabled
-      ? ['IA local open source', 'modelos de IA open source', 'Ollama IA local privacidade']
-      : ['inteligência artificial', 'novidades de IA', 'tecnologia'];
-    const query = topics[Math.floor(Math.random() * topics.length)];
-    let cancelled = false;
-    const t = setTimeout(async () => {   // alguns segundos depois — não atrasa o boot
-      try {
-        const items = await fetchHeadlinesRef.current?.(query);
-        if (cancelled || !items?.length) return;
-        setHeadlines(items);
-        try { localStorage.setItem('newsHeadlines.v1', JSON.stringify({ ts: Date.now(), items })); } catch {}
-      } catch {}
-    }, 3500);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [localSettings.enabled]);
-  // Placeholder "vivo" (estilo Comet): frases/manchetes vão sendo digitadas e apagadas.
-  // 1 dica instrucional + as manchetes (ou exemplos, se ainda não buscou).
+  // Placeholder "vivo" (estilo Comet): frases de EXEMPLO vão sendo digitadas e apagadas,
+  // ensinando o que dá pra pedir. (Uma dica instrucional + 3 exemplos curtos.)
   const [ph, setPh] = useState('');
   useEffect(() => {
-    const phrases = headlines.length
-      ? [t('composer.phLead'), ...headlines]
-      : [t('composer.phLead'), t('composer.phEx1'), t('composer.phEx2'), t('composer.phEx3')];
+    const phrases = [
+      t('composer.phLead'),
+      t('composer.phEx1'), t('composer.phEx2'), t('composer.phEx3'), t('composer.phEx4'),
+      t('composer.phEx5'), t('composer.phEx6'), t('composer.phEx7'),
+    ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
@@ -177,7 +145,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onF
     };
     timer = setTimeout(tick, 500);
     return () => clearTimeout(timer);
-  }, [headlines, getLang()]);
+  }, [getLang()]);
   // Auto-crescer a caixa de texto conforme digita (até um teto), estilo Comet.
   useEffect(() => {
     const el = inputRef.current;
