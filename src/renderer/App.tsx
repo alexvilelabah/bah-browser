@@ -7,7 +7,6 @@ import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBa
 import { classifyRisk, riskForAction, RiskInfo } from './risk';
 import { t, onLangChange, getLang } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
-import SpeedDialOverlay from './components/SpeedDialOverlay';
 import {
   BrowserAction,
   executeBrowserAction,
@@ -355,26 +354,8 @@ export default function App() {
   const [, forceI18n] = useState(0);
   useEffect(() => onLangChange(() => { forceI18n(n => n + 1); window.electronAPI?.setUILanguage?.(getLang()); }), []);
 
-  // ── Atalhos da nova aba (speed-dial) — flutuam SOBRE o Google real; lista própria ──
+  // Detecta a home do Google (nova aba) → barra de endereço mostra o placeholder em vez da URL.
   const isGoogleHome = (u?: string) => !!u && /^https?:\/\/(www\.)?google\.[a-z.]+\/(webhp|\?|$)/i.test(u);
-  const [speeddial, setSpeedDial] = useState<Array<{ url: string; title: string }>>(() => {
-    try { return JSON.parse(localStorage.getItem('speeddial.v1') || '[]'); } catch { return []; }
-  });
-  const addSpeedDial = useCallback((url: string, title: string) => {
-    setSpeedDial(prev => {
-      if (prev.some(s => s.url === url)) return prev;
-      const next = [...prev, { url, title }].slice(0, 30);
-      try { localStorage.setItem('speeddial.v1', JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, []);
-  const removeSpeedDial = useCallback((url: string) => {
-    setSpeedDial(prev => {
-      const next = prev.filter(s => s.url !== url);
-      try { localStorage.setItem('speeddial.v1', JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, []);
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
   const handleGoogleLogin = useCallback(async () => {
@@ -799,9 +780,6 @@ export default function App() {
               <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: true })} title={t('find.next')}>↓</button>
               <button className="find-btn" onClick={closeFind} title={t('find.close')}>✕</button>
             </div>
-          )}
-          {isGoogleHome(store.activeTab.url) && (
-            <SpeedDialOverlay items={speeddial} onNavigate={navigate} onAdd={addSpeedDial} onRemove={removeSpeedDial} />
           )}
         </div>
 

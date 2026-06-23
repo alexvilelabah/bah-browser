@@ -349,45 +349,6 @@ body {
 }
 .find-btn:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
 
-/* 🟣 Atalhos (speed-dial) flutuando SOBRE o Google real, na área vazia abaixo da busca.
-   O container NÃO captura cliques (Google fica 100% clicável); só os tiles capturam. */
-.sd-overlay{ position:absolute; left:0; right:0; top:56%; display:flex; justify-content:center; pointer-events:none; z-index:30; }
-.sd-grid{ display:flex; flex-wrap:wrap; justify-content:center; gap:8px 4px; max-width:min(560px,92%); pointer-events:auto; }
-.sd-tile{
-  position:relative; width:84px; padding:10px 4px 6px;
-  display:flex; flex-direction:column; align-items:center; gap:7px;
-  border-radius:12px; cursor:pointer; transition:background 0.12s var(--ease);
-}
-.sd-tile:hover{ background:rgba(255,255,255,0.07); }
-.sd-icon{
-  position:relative; width:46px; height:46px; border-radius:50%;
-  background:var(--bg-tertiary); border:1px solid var(--border);
-  display:flex; align-items:center; justify-content:center; overflow:hidden;
-}
-.sd-icon img{ width:24px; height:24px; object-fit:contain; position:relative; z-index:1; }
-.sd-letter{ position:absolute; font-size:19px; font-weight:700; color:var(--text-secondary); }
-.sd-label{ font-size:12px; color:var(--text-secondary); max-width:80px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; }
-.sd-del{
-  position:absolute; top:4px; right:10px; width:18px; height:18px;
-  border:none; border-radius:50%; background:rgba(0,0,0,0.55); color:#fff;
-  font-size:10px; cursor:pointer; display:none; align-items:center; justify-content:center; z-index:2;
-}
-.sd-tile:hover .sd-del{ display:flex; }
-.sd-add .sd-icon{ border-style:dashed; }
-.sd-plus{ font-size:24px; color:var(--text-muted); line-height:1; }
-.sd-modal{ position:absolute; inset:0; z-index:50; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; pointer-events:auto; }
-.sd-modal-box{
-  width:min(360px,88%); background:var(--bg-secondary); border:1px solid var(--border);
-  border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:10px; box-shadow:0 20px 60px rgba(0,0,0,0.5);
-}
-.sd-modal-title{ font-size:15px; font-weight:700; color:var(--text-primary); }
-.sd-modal-input{ height:38px; padding:0 12px; border-radius:9px; background:var(--bg-tertiary); border:1px solid var(--border); color:var(--text-primary); font-size:13px; outline:none; font-family:inherit; }
-.sd-modal-input:focus{ border-color:var(--accent); }
-.sd-modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
-.sd-cancel,.sd-ok{ height:34px; padding:0 16px; border-radius:9px; cursor:pointer; font-size:13px; font-weight:600; border:1px solid var(--border); }
-.sd-cancel{ background:transparent; color:var(--text-secondary); }
-.sd-ok{ background:var(--accent); color:#fff; border-color:transparent; }
-
 /* ── Botões da barra: AI + Adblock — retângulo de cantos arredondados (estilo
    "Baixar música"), UM padrão só, consistente ─────────────────────────────── */
 .ai-toggle, .adblock-btn {
