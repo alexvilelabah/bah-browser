@@ -498,12 +498,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
                 </select>
               </label>
               <label>
-                {t('set.apiKey')}
+                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : 'DeepSeek'})
                 <input
                   type="password"
                   value={settings.apiKey}
                   onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder={t('set.apiKeyPlaceholder')}
+                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : 'DeepSeek' })}
                 />
               </label>
               <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
