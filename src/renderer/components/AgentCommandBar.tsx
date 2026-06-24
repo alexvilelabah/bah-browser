@@ -491,7 +491,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
                 {t('set.provider')}
                 <select
                   value={settings.provider === 'mistral' ? 'mistral' : 'deepseek'}
-                  onChange={e => setSettings({ ...settings, provider: e.target.value as AISettings['provider'] })}
+                  onChange={e => setSettings({ ...settings, provider: e.target.value as AISettings['provider'], baseUrl: '' })}
                 >
                   <option value="deepseek">DeepSeek</option>
                   <option value="mistral">Mistral</option>
