@@ -56,6 +56,8 @@ const dict: Record<Lang, Record<string, string>> = {
     'onboard.text': 'Add a DeepSeek key (very cheap, pay-per-use) or run a local model — then just type a command.',
     'onboard.btn': 'Set up the AI',
     // Configurações / IA Local
+    'set.cloudMode': 'Cloud',
+    'set.provider': 'Provider',
     'set.cloudSmall': 'cloud · API · recommended',
     'set.localSmall': 'your GPU · offline',
     'set.localMode': 'Local AI',
@@ -179,6 +181,8 @@ const dict: Record<Lang, Record<string, string>> = {
     'onboard.text': 'Cole uma chave da DeepSeek (baratíssima, paga por uso) ou use um modelo local — depois é só digitar um comando.',
     'onboard.btn': 'Configurar a IA',
     // Configurações / IA Local
+    'set.cloudMode': 'Nuvem',
+    'set.provider': 'Provedor',
     'set.cloudSmall': 'nuvem · API · recomendado',
     'set.localSmall': 'sua GPU · offline',
     'set.localMode': 'IA Local',
@@ -302,6 +306,8 @@ const dict: Record<Lang, Record<string, string>> = {
     'onboard.text': 'Pega una clave de DeepSeek (muy barata, pago por uso) o usa un modelo local — luego solo escribe un comando.',
     'onboard.btn': 'Configurar la IA',
     // Configuración / IA Local
+    'set.cloudMode': 'Nube',
+    'set.provider': 'Proveedor',
     'set.cloudSmall': 'nube · API · recomendado',
     'set.localSmall': 'tu GPU · sin conexión',
     'set.localMode': 'IA Local',

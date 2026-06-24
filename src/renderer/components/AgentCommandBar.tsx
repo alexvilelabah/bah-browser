@@ -369,7 +369,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
     } catch { setOllamaUp(false); }
   };
   const installOllama = () => { try { ollamaApi()?.openExternal?.('https://ollama.com/download'); } catch {} };
-  const getDeepseekKey = () => { try { ollamaApi()?.openExternal?.('https://platform.deepseek.com/api_keys'); } catch {} };
+  const getProviderKey = () => {
+    const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys' : 'https://platform.deepseek.com/api_keys';
+    try { ollamaApi()?.openExternal?.(url); } catch {}
+  };
   useEffect(() => {
     if (!showSettings || !localCfg.enabled) return;
     refreshModels();
@@ -474,8 +477,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
             <button
               type="button"
               className={`mode-opt ${!localCfg.enabled ? 'on' : ''}`}
-              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: 'deepseek' })); }}
-            >☁️ DeepSeek<small>{t('set.cloudSmall')}</small></button>
+              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: s.provider === 'mistral' ? 'mistral' : 'deepseek' })); }}
+            >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
               className={`mode-opt ${localCfg.enabled ? 'on' : ''}`}
@@ -485,6 +488,16 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
           {!localCfg.enabled && (
             <>
               <label>
+                {t('set.provider')}
+                <select
+                  value={settings.provider === 'mistral' ? 'mistral' : 'deepseek'}
+                  onChange={e => setSettings({ ...settings, provider: e.target.value as AISettings['provider'] })}
+                >
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="mistral">Mistral</option>
+                </select>
+              </label>
+              <label>
                 {t('set.apiKey')}
                 <input
                   type="password"
@@ -493,7 +506,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
                   placeholder={t('set.apiKeyPlaceholder')}
                 />
               </label>
-              <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getDeepseekKey}>{t('set.getKey')}</button></div>
+              <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
               <details className="mm-imp">
                 <summary>{t('set.advanced')}</summary>
                 <label>
