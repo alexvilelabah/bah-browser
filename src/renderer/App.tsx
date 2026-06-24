@@ -71,7 +71,6 @@ declare global {
       cancelDownload?: (id: string) => Promise<any>;
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
-      revealInFolder?: (target: string) => Promise<any>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
@@ -3052,7 +3051,12 @@ async function summarizeForTrashDestroyer(
       '',
       article.text.slice(0, 9000),
     ].join('\n');
-    const res = await raceTimeout(window.electronAPI?.aiChat(prompt, '', undefined, store.localSettings.enabled) ?? Promise.resolve(undefined), 14000, undefined);
+    // Função de módulo (sem o hook `store`): lê a preferência de IA local direto do
+    // localStorage, que é onde o store a persiste. Antes usava `store` fora de escopo →
+    // lançava ReferenceError, caía no catch e devolvia sempre o fallback (resumo sem IA).
+    let localEnabled = false;
+    try { localEnabled = !!JSON.parse(localStorage.getItem('localSettings') || '{}').enabled; } catch {}
+    const res = await raceTimeout(window.electronAPI?.aiChat(prompt, '', undefined, localEnabled) ?? Promise.resolve(undefined), 14000, undefined);
     const raw = res?.response?.trim();
     if (!raw || res?.error) return fallback;
     const bullets = raw
