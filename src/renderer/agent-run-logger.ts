@@ -77,9 +77,15 @@ export function finishAgentRun(
   run.finalReason = finalReason;
   run.endedAt = Date.now();
   saveRun(run);
-  // Dataset em disco: a corrida COMPLETA (com observações, sem trim) é anexada a um
-  // JSONL em userData via IPC — é o material de treino futuro. Nunca quebra o loop.
-  try { (window as any).electronAPI?.appendDatasetRun?.(run); } catch {}
+  // Dataset em disco — OPT-IN, DESLIGADO por padrão. Só grava se o coletor estiver
+  // ligado nesta máquina (localStorage 'datasetCollect' === 'on'). Pros usuários comuns
+  // nada é gravado (privacidade + é inútil pra eles); quem quer coletar (o dono) liga na
+  // própria máquina: localStorage.setItem('datasetCollect','on'). Nunca quebra o loop.
+  try {
+    if (localStorage.getItem('datasetCollect') === 'on') {
+      (window as any).electronAPI?.appendDatasetRun?.(run);
+    }
+  } catch {}
 }
 
 export function summarizeAction(action: BrowserAction): { action: string; actionType: string } {
