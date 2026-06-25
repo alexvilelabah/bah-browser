@@ -370,7 +370,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
   };
   const installOllama = () => { try { ollamaApi()?.openExternal?.('https://ollama.com/download'); } catch {} };
   const getProviderKey = () => {
-    const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys' : 'https://platform.deepseek.com/api_keys';
+    const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys'
+      : settings.provider === 'nvidia' ? 'https://build.nvidia.com/'
+      : 'https://platform.deepseek.com/api_keys';
     try { ollamaApi()?.openExternal?.(url); } catch {}
   };
   useEffect(() => {
@@ -477,7 +479,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
             <button
               type="button"
               className={`mode-opt ${!localCfg.enabled ? 'on' : ''}`}
-              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: s.provider === 'mistral' ? 'mistral' : 'deepseek' })); }}
+              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: s.provider === 'mistral' || s.provider === 'nvidia' ? s.provider : 'deepseek' })); }}
             >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
@@ -490,20 +492,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
               <label>
                 {t('set.provider')}
                 <select
-                  value={settings.provider === 'mistral' ? 'mistral' : 'deepseek'}
+                  value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : 'deepseek'}
                   onChange={e => setSettings({ ...settings, provider: e.target.value as AISettings['provider'], baseUrl: '' })}
                 >
                   <option value="deepseek">DeepSeek</option>
                   <option value="mistral">Mistral</option>
+                  <option value="nvidia">NVIDIA NIM</option>
                 </select>
               </label>
               <label>
-                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : 'DeepSeek'})
+                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek'})
                 <input
                   type="password"
                   value={settings.apiKey}
                   onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : 'DeepSeek' })}
+                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
                 />
               </label>
               <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>

@@ -1,4 +1,4 @@
-export type AIProvider = 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'pollinations' | 'ollama';
+export type AIProvider = 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -283,6 +283,7 @@ export class AIEngine {
       case 'openai': return 'https://api.openai.com';
       case 'deepseek': return 'https://api.deepseek.com';
       case 'mistral': return 'https://api.mistral.ai';
+      case 'nvidia': return 'https://integrate.api.nvidia.com';
       case 'pollinations': return 'https://gen.pollinations.ai';
       case 'ollama': return 'http://localhost:11434';
     }
@@ -342,6 +343,8 @@ export class AIEngine {
       case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier);
       // Mistral is OpenAI-compatible; strip screenshots (text-first, avoids 400s)
       case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
+      // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
+      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
       case 'pollinations': return this.callPollinations(messages, isAgentMode);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
       case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
@@ -427,6 +430,37 @@ export class AIEngine {
 
     if (!res.ok) {
       throw new Error(`Mistral API error ${res.status}: ${await res.text()}`);
+    }
+
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
+  // NVIDIA NIM: OpenAI-compatible hosted endpoint (free tier). Default model is a
+  // capable free one; override via custom baseUrl later if needed. Separate from the
+  // other providers so nada se afeta.
+  private async callNim(messages: Message[], isAgentMode: boolean): Promise<string> {
+    const body: any = {
+      model: 'meta/llama-3.3-70b-instruct',
+      messages: [
+        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
+        ...messages,
+      ],
+      max_tokens: 4096,
+    };
+    if (isAgentMode) body.response_format = { type: 'json_object' };
+
+    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw new Error(`NVIDIA NIM API error ${res.status}: ${await res.text()}`);
     }
 
     const data = await res.json();

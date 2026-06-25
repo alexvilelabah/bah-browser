@@ -20,7 +20,7 @@ export interface ChatMessage {
 }
 
 export interface AISettings {
-  provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'pollinations' | 'ollama';
+  provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
   apiKey: string;
   baseUrl: string;
 }
