@@ -8,9 +8,9 @@
   --bg-hover: #2c2c33;
   --bg-elevated: #1e1e23;
   /* Glassmorphism tokens (used by AI panel + command palette) */
-  --bg-glass: rgba(26,26,31,0.62);
+  --bg-glass: #1a1a1e;
   --glass-border: rgba(255,255,255,0.10);
-  --glass-blur: blur(14px) saturate(140%);
+  --glass-blur: none;
   --hairline: rgba(255,255,255,0.06);
   --border: rgba(255,255,255,0.08);
   --border-bright: rgba(138,99,255,0.45);
@@ -88,7 +88,7 @@ body {
   height:28px;padding:0 11px;margin:0 8px 0 4px;flex:none;
 }
 .top-bar .top-bar-ai svg{width:14px;height:14px;}
-.win-btn:hover{background:rgba(255,255,255,0.09);color:var(--text-primary);}
+.win-btn:hover{background:var(--bg-hover);color:var(--text-primary);}
 .win-btn.close:hover{background:#e81123;color:#fff;}
 
 /* FAIXA DE ABAS */
@@ -758,7 +758,7 @@ body {
 }
 .vpo-card{
   display:flex;align-items:center;gap:13px;
-  background:rgba(10,10,18,0.92);backdrop-filter:blur(14px);
+  background:#0a0a12;
   border:1px solid rgba(167,139,250,0.45);
   border-radius:14px;padding:13px 18px;min-width:340px;max-width:560px;
   box-shadow:0 12px 48px rgba(0,0,0,0.5),0 0 28px rgba(124,58,237,0.25);
@@ -818,11 +818,10 @@ body {
 .agent-status-pill{
   position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
   display:flex;align-items:center;gap:8px;
-  background:rgba(12,12,20,0.72);
+  background:#0c0c14;
   border:1px solid color-mix(in srgb,var(--aura-2) 40%,transparent);
   padding:6px 14px 6px 11px;border-radius:999px;
   color:#e6e6f0;font-size:12px;font-weight:500;letter-spacing:0.2px;
-  backdrop-filter:blur(12px);
   box-shadow:0 4px 24px rgba(0,0,0,0.35),0 0 22px color-mix(in srgb,var(--aura-1) 28%,transparent);
   animation:pillIn 0.35s ease-out;
 }
@@ -954,14 +953,13 @@ body {
 .url-input {
   height:40px;
   border-radius:9999px;
-  background:rgba(255,255,255,0.055);
+  background:var(--bg-tertiary);
   border:1px solid rgba(255,255,255,0.10);
   color:#f7f9fc;
   padding:0 46px 0 18px;
   font-size:13px;
   font-weight:500;
-  box-shadow:0 1px 0 rgba(255,255,255,0.04) inset,0 10px 24px rgba(0,0,0,0.18);
-  backdrop-filter:blur(14px);
+  box-shadow:0 10px 24px rgba(0,0,0,0.18);
 }
 
 .url-input:hover {
@@ -1003,10 +1001,9 @@ body {
 .ai-sidebar {
   width:420px;
   min-width:360px;
-  background:linear-gradient(180deg,rgba(31,36,47,0.82),rgba(18,21,29,0.88));
+  background:var(--bg-secondary);
   border-left:1px solid rgba(255,255,255,0.10);
-  box-shadow:-20px 0 60px rgba(0,0,0,0.32),1px 0 0 rgba(255,255,255,0.05) inset;
-  backdrop-filter:blur(18px);
+  box-shadow:-20px 0 60px rgba(0,0,0,0.32);
 }
 
 .agent-side-panel-host .agent-command-bar,
@@ -1017,9 +1014,8 @@ body {
 .sidebar-header {
   height:56px;
   padding:0 16px;
-  background:rgba(255,255,255,0.035);
+  background:var(--bg-elevated);
   border-bottom:1px solid rgba(255,255,255,0.08);
-  backdrop-filter:blur(12px);
 }
 
 .sidebar-header h3 {
@@ -1080,10 +1076,9 @@ body {
 .feed-help-card,
 .agent-result,
 .settings-panel {
-  background:rgba(255,255,255,0.055);
+  background:var(--bg-tertiary);
   border:1px solid rgba(255,255,255,0.10);
-  box-shadow:0 10px 30px rgba(0,0,0,0.18),0 1px 0 rgba(255,255,255,0.05) inset;
-  backdrop-filter:blur(12px);
+  box-shadow:0 10px 30px rgba(0,0,0,0.18);
 }
 
 .chat-msg.assistant .msg-content {
@@ -1331,9 +1326,8 @@ body {
 
 .agent-footer-strip,
 .video-progress-overlay .vpo-card {
-  background:rgba(24,28,36,0.82);
+  background:#181c24;
   border-color:rgba(255,255,255,0.12);
-  backdrop-filter:blur(14px);
 }
 
 .vpo-card {
@@ -1585,9 +1579,7 @@ body {
   display:inline-flex; align-items:center; gap:9px;
   margin:0 auto 14px; padding:13px 22px;
   border:1px solid rgba(255,255,255,0.55); border-radius:14px;
-  background:rgba(255,255,255,0.72);
-  backdrop-filter:blur(14px) saturate(160%);
-  -webkit-backdrop-filter:blur(14px) saturate(160%);
+  background:#eef0f4;
   color:#15151a; font-size:15px; font-weight:300; letter-spacing:0.01em;
   cursor:pointer; white-space:nowrap;
   box-shadow:0 8px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.6);
