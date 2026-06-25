@@ -5,7 +5,7 @@
 <h1 align="center">Bah</h1>
 
 <p align="center">
-  <b>AI browser</b> — you type in plain language, it operates the web for you.<br/>
+  <b>AI browser</b> — type in plain language, and the AI <b>autonomously</b> operates the web for you.<br/>
   <b>Perplexity Comet</b> style · open / source-available · by <b>VilelaLab</b>.
 </p>
 
@@ -20,7 +20,7 @@
 
 > You give natural-language commands ("open gmail and delete the spam") and the AI operates the browser in your place — reading the screen, clicking with a real mouse, typing, and going until it's done.
 
-> 💸 **No GPU, no pricey setup needed.** Works on any PC: by default it runs on **DeepSeek's cloud API, which is extremely cheap** — pay-per-use, literally cents for tons of tasks. Want 100% free + offline instead? Run a local model with **Ollama** (optional, needs a decent GPU). Either way, **you don't need a powerful local AI to try it.**
+> 💸 **No expensive GPU required.** Works on any PC: by default it runs on **DeepSeek's API — top-tier reasoning for a fraction of a cent per task**. Want 100% free + offline instead? Run a local model with **Ollama** (optional, needs a decent GPU). Either way, **you don't need a powerful local AI to try it.**
 
 ![Stack: Electron + React + TypeScript + DeepSeek/Ollama](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20TS-blue)
 
@@ -30,9 +30,11 @@
 
 ▶️ **[Download the full video](https://github.com/alexvilelabah/bah-browser/raw/main/assets/demo.mp4)** — the agent searching and operating the web on its own. *(the GIF above is a preview; GitHub doesn't play embedded video in the README.)*
 
-## 📥 Download
+## 🚀 Quick Start (Plug & Play)
 
 **🧑 I just want to use it (Windows):** [**grab the installer here**](https://github.com/alexvilelabah/bah-browser/releases/latest) → the `Bah-Setup-*.exe` file, double-click and install.
+
+> 🏠 **Want it 100% local & free? No terminal needed.** Set up the AI right inside the browser: open the AI panel → 🏠 **Local AI** → type a model name → **Download**, and Bah pulls the Ollama model for you. (Prefer the cloud? A cheap DeepSeek key works too — and needs no GPU.)
 
 > 🔄 **Auto-updates:** after installing, Bah checks for new versions, downloads them in the background and offers *"Restart now"* to apply — no reinstalling.
 
@@ -132,23 +134,23 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 
 The agent runs with full browser privileges, so it's worth being clear about what it does and doesn't do:
 
-- **It's your real session.** The browser uses a persistent partition (`persist:browser`), so cookies and logins are saved. If you're logged into Gmail in Bah, so is the agent. **The AI can access anything you could access manually.** Don't log into accounts you wouldn't trust an assistant with.
+- 🔓 **It's your real session.** The browser uses a persistent partition (`persist:browser`), so cookies and logins are saved. If you're logged into Gmail in Bah, so is the agent. **The AI can access anything you could access manually.** Don't log into accounts you wouldn't trust an assistant with.
 
-- **Safety brake on sensitive actions.** Before **paying, buying, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
+- 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
 
-- **Stop means stop.** The ■ Stop button cancels immediately, even mid model-call or mid-loop; a late response won't "resurrect" a cancelled task.
+- 🛑 **Stop means stop.** The ■ Stop button cancels immediately, even mid model-call or mid-loop; a late response won't "resurrect" a cancelled task.
 
-- **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
+- 🎯 **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
-- **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
+- 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
-- **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
+- 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- **Stealth is not evasion.** We mask `navigator.webdriver` and use a Chrome UA only to reduce rejections. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
+- 🥷 **Stealth is not evasion.** We mask `navigator.webdriver` and use a Chrome UA only to reduce rejections. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
 
 - **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
-- **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
+- 🚫 **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 
 **Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running, a per-tab sandbox, and click rate-limiting to avoid aggressive bot-like behavior.
 
