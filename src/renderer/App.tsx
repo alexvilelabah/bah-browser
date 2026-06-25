@@ -486,6 +486,42 @@ export default function App() {
     }
   }, [getActiveWebview]);
 
+  // Classificador de intenção por IA: lê o contexto da aba atual (url+título) e decide o caminho
+  // da caixa (agir / página atual / web / chat). Chamada barata (resposta de UMA palavra, stateless).
+  // Retorna null em qualquer falha/timeout → o AgentCommandBar usa o roteador determinístico.
+  const classifyIntent = useCallback(async (msg: string): Promise<'action' | 'page' | 'web' | 'chat' | null> => {
+    try {
+      const url = store.activeTab?.url || '';
+      const title = (store.activeTab as any)?.title || '';
+      const prompt =
+`Classify the user's message for a browser assistant into ONE label. Reply with ONLY the word.
+
+ACTION = wants the browser to DO something (open/go to a site, click, buy, download, play a video, make a supercut, create a playlist, log in, fill/submit a form, subscribe).
+PAGE = asking about the CURRENTLY OPEN tab/page/video (summarize this, what is this page/video about, info about this tab, what does it say, translate this page).
+WEB = wants info that needs a web search (facts, news, prices/comparisons of things not currently open, "what is X", "who is Y").
+CHAT = greeting or small talk.
+
+Current tab URL: ${url || '(blank)'}
+Current tab title: ${title || '(blank)'}
+User message: """${msg}"""
+
+Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
+      const r = await raceTimeout(
+        window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled) ?? Promise.resolve(undefined),
+        6000,
+        undefined,
+      );
+      const out = (r?.response || '').toUpperCase();
+      if (out.includes('ACTION')) return 'action';
+      if (out.includes('PAGE')) return 'page';
+      if (out.includes('WEB')) return 'web';
+      if (out.includes('CHAT')) return 'chat';
+      return null;
+    } catch {
+      return null;
+    }
+  }, [store.activeTab, store.localSettings.enabled]);
+
   const captureScreenshot = useCallback(async (): Promise<string | undefined> => {
     const wv = getActiveWebview();
     if (!wv) return undefined;
@@ -2817,6 +2853,7 @@ export default function App() {
               return { reply, suggestedCommand };
             }}
             onResearch={runWebResearch}
+            onClassify={classifyIntent}
             onFetchHeadlines={fetchNewsHeadlines}
             onGoogleLogin={handleGoogleLogin}
             onOpenUrl={(url: string) => { const id = store.addTab(url); activeTabIdRef.current = id; }}

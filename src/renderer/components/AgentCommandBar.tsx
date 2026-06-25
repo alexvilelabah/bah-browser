@@ -97,7 +97,7 @@ const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|
 function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
 
 // Sobre a PÁGINA ATUAL (não a web aberta) → chat com o conteúdo da página.
-const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta)\s+aba|(?:este|esse)\s+(artigo|texto)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
+const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta|a|nessa|nesta|minha)\s+aba|(?:este|esse)\s+(artigo|texto|v[ií]deo|site)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text|video|site)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
 function isAboutCurrentPage(msg: string): boolean { return CUR_PAGE_RE.test(msg); }
 
 function hostOf(url: string): string {
@@ -108,6 +108,8 @@ interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal) => Promise<ActionResult>;
   onSendChat: (message: string) => Promise<{ reply: string; suggestedCommand?: string }>;
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
+  /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
+  onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
   onOpenUrl: (url: string) => void;
   onGoogleLogin?: () => void;
@@ -118,7 +120,7 @@ interface Props {
   onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
 }
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onOpenUrl, onGoogleLogin, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
@@ -294,20 +296,34 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onO
 
   // ── Caixa unificada: decide AGIR (agente) · PESQUISAR (web→painel) · RESPONDER (chat),
   // sem o usuário escolher modo. Determinístico e 0 token na decisão. ──
-  const routeCommand = (msg: string) => {
-    // 1) Ação determinística (download/preço/notícia/imagens/ações/supercut/arquivo) → agente.
+  const classifyingRef = useRef(false);
+  const routeCommand = async (msg: string) => {
+    // 1) Ações determinísticas de ALTA confiança (0 token, instantâneas) passam NA FRENTE da IA —
+    //    um erro do classificador nunca pode quebrar supercut/preço/notícia/download/playlist.
     if (detectQuickAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    // 1b) Criar playlist ("crie/monte uma playlist de…") → agente (o modelo nomeia as músicas).
     if (/\bplaylist\b/i.test(msg) && /\b(cri\w+|mont\w+|fa[cz]\w+|gera\w+|junt\w+|adicion\w+|creat\w+|make|made|build|generat\w+|add)\b/i.test(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    // 2) Sobre a PÁGINA ATUAL ("resuma esta página") → chat com o conteúdo da página.
+    // 2) A IA classifica o pedido (agir / página atual / web / chat) com o contexto da aba.
+    //    Se a chamada falhar/demorar/estiver indisponível, cai no roteador determinístico abaixo.
+    if (onClassify && !classifyingRef.current) {
+      classifyingRef.current = true;
+      let cls: 'action' | 'page' | 'web' | 'chat' | null = null;
+      try { cls = await onClassify(msg); } catch { cls = null; }
+      classifyingRef.current = false;
+      if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg); return; }
+      if (cls === 'page' || cls === 'chat') { runChat(msg); return; }
+      if (cls === 'web') { runResearch(msg); return; }
+      // cls === null → segue pro fallback determinístico.
+    }
+    routeDeterministic(msg);
+  };
+
+  // Fallback determinístico (o roteamento de antes da IA): usado quando a classificação por IA
+  // falha/demora/está indisponível (API caiu, modo local travado). 0 token, nunca deixa a caixa morta.
+  const routeDeterministic = (msg: string) => {
     if (isAboutCurrentPage(msg)) { runChat(msg); return; }
-    // 3) Verbo que OPERA numa página (abrir/clicar/comprar/login…) e não é pergunta → agente.
     if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    // 4) Pesquisa / pergunta informacional → RESPOSTA NO PAINEL (web-grounded).
     if (isInfoRequest(msg)) { runResearch(msg); return; }
-    // 5) Atalho de site explícito ("abre o youtube") → agente.
     if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    // 6) Resto (saudação/conversa) → chat.
     runChat(msg);
   };
 
