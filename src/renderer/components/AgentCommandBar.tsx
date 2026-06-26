@@ -172,6 +172,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [ggufName, setGgufName] = useState('');
   // null = ainda não checado; true = Ollama respondeu; false = não detectado (não instalado/desligado).
   const [ollamaUp, setOllamaUp] = useState<boolean | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [notInstalled, setNotInstalled] = useState(false);
+  const [startMsg, setStartMsg] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const manualContinueRef = useRef<(() => void) | null>(null);
   const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void } | null>(null);
@@ -384,6 +387,30 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       if (r?.ok) setModels(r.models || []);
     } catch { setOllamaUp(false); }
   };
+  // Botão único "Ligar o Ollama": tenta SUBIR o Ollama (ensure-running sobe o `ollama serve`
+  // se estiver instalado mas desligado), depois lista os modelos. Dá retorno na tela. Se nem
+  // estiver instalado (notInstalled), a mensagem manda instalar e o botão Instalar aparece.
+  const startOllama = async () => {
+    if (starting) return;
+    setStarting(true); setNotInstalled(false); setStartMsg(t('mm.starting'));
+    try {
+      const ens = await ollamaApi()?.ollamaEnsureRunning?.(localCfg.baseUrl);
+      if (ens?.ok) {
+        const r = await ollamaApi()?.ollamaList?.(localCfg.baseUrl);
+        setOllamaUp(!!r?.ok);
+        if (r?.ok) setModels(r.models || []);
+        setStartMsg(r?.ok ? t('mm.started', { n: (r.models || []).length }) : '');
+      } else {
+        setOllamaUp(false);
+        setNotInstalled(!!ens?.notInstalled);
+        setStartMsg(ens?.notInstalled ? t('mm.notInstalled') : t('mm.startFailed'));
+      }
+    } catch {
+      setOllamaUp(false); setStartMsg(t('mm.startFailed'));
+    } finally {
+      setStarting(false);
+    }
+  };
   const installOllama = () => { try { ollamaApi()?.openExternal?.('https://ollama.com/download'); } catch {} };
   const getProviderKey = () => {
     const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys'
@@ -554,8 +581,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     <div className="mm-noollama">
                       <div className="mm-noollama-t">{t('mm.noOllama')}</div>
                       <div className="mm-noollama-b">
-                        <button className="mm-install" onClick={installOllama}>{t('mm.install')}</button>
-                        <button className="mm-recheck" onClick={refreshModels}>{t('mm.recheck')}</button>
+                        <button className="mm-recheck" onClick={startOllama} disabled={starting}>{starting ? t('mm.starting') : t('mm.startOllama')}</button>
+                        {notInstalled && <button className="mm-install" onClick={installOllama}>{t('mm.install')}</button>}
                       </div>
                     </div>
                   )}
@@ -587,7 +614,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       ? <button className="mm-cancel" onClick={handleCancelPull} title={t('mm.stopTitle')}>{t('mm.stop')}</button>
                       : <button onClick={handlePull} disabled={!pullName.trim()}>{t('mm.download')}</button>}
                   </div>
-                  {pullMsg && <div className="mm-prog">{pullMsg}</div>}
+                  {(pullMsg || startMsg) && <div className="mm-prog">{pullMsg || startMsg}</div>}
                   <div className="mm-sugg">
                     <div className="mm-sugg-cap">{t('mm.suggestions')}</div>
                     {MODEL_SUGGESTIONS.map(g => (
