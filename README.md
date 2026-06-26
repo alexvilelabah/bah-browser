@@ -20,7 +20,7 @@
 
 > You give natural-language commands ("open gmail and delete the spam") and the AI operates the browser in your place — reading the screen, clicking with a real mouse, typing, and going until it's done.
 
-> 💸 **No expensive GPU required.** Works on any PC: by default it runs on **DeepSeek's API — top-tier reasoning for a fraction of a cent per task**. Want 100% free + offline instead? Run a local model with **Ollama** (optional, needs a decent GPU). Either way, **you don't need a powerful local AI to try it.**
+> 💸 **No expensive GPU required.** Works on any PC: by default it runs on **DeepSeek's API — top-tier reasoning for a fraction of a cent per task** (also works with **Mistral** and **NVIDIA NIM**). Want 100% free + offline instead? Run a local model with **Ollama** (optional, needs a decent GPU). Either way, **you don't need a powerful local AI to try it.**
 
 ![Stack: Electron + React + TypeScript + DeepSeek/Ollama](https://img.shields.io/badge/stack-Electron%20%2B%20React%20%2B%20TS-blue)
 
@@ -49,7 +49,8 @@
 - **Full browser** with tabs, navigation, URL bar, dark theme
 - **AGENT panel** on the side: type a command → the AI decides step by step until it's done
 - **Reads the page** (DOM, numbered interactive elements, and OCR) and acts through structured tools — it doesn't rely on "seeing" the screen
-- **AI**: **DeepSeek** (cloud) — tested and recommended, fast and stable — or **Ollama** (local/offline) to run the AI on your own machine
+- **AI**: **DeepSeek** (cloud) — tested and recommended, fast and stable — also works with **Mistral** and **NVIDIA NIM** — or **Ollama** (local/offline) to run the AI on your own machine
+- **Chat per tab** — each browser tab keeps its own conversation; the AI remembers each tab separately
 - **One-shot skills**: open N videos at once, build a "supercut" of a spoken phrase, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
 - **UI in English by default**, with **Português** and **Español** available in Settings — the AI replies in your chosen language
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
@@ -66,7 +67,7 @@
 |---|---|
 | Browser shell | **Electron 42** + Chromium |
 | UI | **React 19** + **TypeScript** + Vite |
-| AI (cloud) | **DeepSeek** — tested and recommended |
+| AI (cloud) | **DeepSeek** (recommended) · **Mistral** · **NVIDIA NIM** |
 | AI (local) | **Ollama** |
 | Adblock | `@ghostery/adblocker-electron` |
 | Webview | `<webview>` tag with persistent partition |
@@ -125,7 +126,7 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 
 1. Open the browser, click the **AI** button in the address bar.
 2. Gear icon → pick a provider.
-3. **Cloud (recommended):** paste a **DeepSeek** API key (their API is very cheap, pay-per-use). → Save.
+3. **Cloud (recommended):** pick a provider — **DeepSeek**, **Mistral** or **NVIDIA NIM** — and paste that provider's API key (DeepSeek's is very cheap, pay-per-use). → Save.
 4. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
 
 ---
