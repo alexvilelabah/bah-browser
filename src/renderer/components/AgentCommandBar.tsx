@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalSettings } from '../store';
@@ -114,13 +114,15 @@ interface Props {
   onOpenUrl: (url: string) => void;
   onGoogleLogin?: () => void;
   onClose: () => void;
+  activeTabId: string;
+  tabIds: string;   // ids das abas existentes (csv) — descarta conversas de abas fechadas
   aiSettings: AISettings;
   onSettingsChange: (settings: AISettings) => Promise<void>;
   localSettings: LocalSettings;
   onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
 }
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, onClose, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
@@ -157,7 +159,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   }, [input]);
   const [loading, setLoading] = useState(false);       // agent task running
   const [chatLoading, setChatLoading] = useState(false);
-  const [feed, setFeed] = useState<FeedItem[]>([]);
+  // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
+  // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
+  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
+  const convoTabRef = useRef<string>(activeTabId);
+  const feed = useMemo<FeedItem[]>(() => feedsByTab[activeTabId] ?? [], [feedsByTab, activeTabId]);
+  // Descarta as conversas de abas que foram fechadas (libera memória; não persiste).
+  useEffect(() => {
+    const ids = new Set(tabIds.split(',').filter(Boolean));
+    setFeedsByTab(prev => {
+      let changed = false;
+      const next: Record<string, FeedItem[]> = {};
+      for (const k of Object.keys(prev)) { if (ids.has(k)) next[k] = prev[k]; else changed = true; }
+      return changed ? next : prev;
+    });
+  }, [tabIds]);
   const [manualHelp, setManualHelp] = useState<{ message: string; instruction: string } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ message: string } | null>(null);   // freio de segurança
   const [showSettings, setShowSettings] = useState(false);
@@ -183,7 +199,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const idRef = useRef(0);
 
   const push = (item: FeedData) => {
-    setFeed(prev => {
+    const tabId = convoTabRef.current;
+    setFeedsByTab(prevMap => {
+      const prev = prevMap[tabId] ?? [];
       let next = [...prev, { ...item, id: ++idRef.current }];
       if (next.length > FEED_CAP) next = next.slice(-FEED_CAP);
       // Cap image memory in long recording sessions: keep thumbnails only on the
@@ -198,7 +216,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           }
         }
       }
-      return next;
+      return { ...prevMap, [tabId]: next };
     });
   };
 
@@ -215,6 +233,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const runAgent = async (cmd: string) => {
+    convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
     setLoading(true);
@@ -263,6 +282,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const runChat = async (msg: string) => {
+    convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
     push({ kind: 'chat-user', text: msg });
@@ -281,6 +301,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // ── Pesquisa Rápida: busca na web em segundo plano e responde NO PAINEL com fontes. ──
   const runResearch = async (msg: string) => {
     if (loading || chatLoading) return;
+    convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
     push({ kind: 'chat-user', text: msg });
@@ -505,7 +526,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
             </svg>
           </button>
-          <button onClick={() => setFeed([])} title={t('assist.clear')}>
+          <button onClick={() => setFeedsByTab(m => ({ ...m, [activeTabId]: [] }))} title={t('assist.clear')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
           <button onClick={onClose} title={t('assist.close')}>
@@ -672,10 +693,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           </div>
         )}
         {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} />)}
-        {chatLoading && (
+        {chatLoading && convoTabRef.current === activeTabId && (
           <div className="chat-msg assistant"><div className="msg-content typing"><span /><span /><span /></div></div>
         )}
-        {loading && (
+        {loading && convoTabRef.current === activeTabId && (
           <div className="feed-working"><span className="agent-spinner" /> {t('feed.working')}</div>
         )}
       </div>

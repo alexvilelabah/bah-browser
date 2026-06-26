@@ -853,6 +853,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
         {/* Kept mounted even when closed so a running task survives toggling the sidebar */}
         <div className={`agent-side-panel-host ${store.sidebarOpen ? '' : 'collapsed'}`}>
           <AgentCommandBar
+            activeTabId={store.activeTabId}
+            tabIds={store.tabs.map(t => t.id).join(',')}
             onExecute={async (command, onProgress, signal) => {
               const runLog = startAgentRun(command);
               if (isTrashDestroyerCommand(command)) {
