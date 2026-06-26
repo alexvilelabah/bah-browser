@@ -422,27 +422,27 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (!showSettings || !localCfg.enabled) return;
     refreshModels();
     const off = ollamaApi()?.onOllamaPullProgress?.((p: any) => {
-      if (p?.canceled) { setPullMsg('cancelado'); setPulling(false); refreshModels(); return; }
-      if (p?.error) { setPullMsg(`erro: ${p.error}`); setPulling(false); return; }
-      if (p?.done) { setPullMsg('✅ baixado!'); setPulling(false); refreshModels(); return; }
-      setPullMsg(`${p?.status || 'baixando'}${p?.percent != null ? ` ${p.percent}%` : ''}`);
+      if (p?.canceled) { setPullMsg('canceled'); setPulling(false); refreshModels(); return; }
+      if (p?.error) { setPullMsg(`error: ${p.error}`); setPulling(false); return; }
+      if (p?.done) { setPullMsg('✅ Downloaded!'); setPulling(false); refreshModels(); return; }
+      setPullMsg(`${p?.status || 'downloading'}${p?.percent != null ? ` ${p.percent}%` : ''}`);
     });
     return typeof off === 'function' ? off : undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings, localCfg.enabled, localCfg.baseUrl]);
   const handlePull = async () => {
     const m = pullName.trim(); if (!m || pulling) return;
-    setPulling(true); setPullMsg('preparando o Ollama…');
+    setPulling(true); setPullMsg('Preparing Ollama…');
     // Garante o Ollama rodando — sobe ele sozinho se estiver instalado mas fechado
     // (sem o usuário precisar abrir o app na mão).
     let up = false;
     try {
       const ens = await ollamaApi()?.ollamaEnsureRunning?.(localCfg.baseUrl);
       up = !!ens?.ok;
-      if (ens?.started) setPullMsg('Ollama iniciado ✓');
+      if (ens?.started) setPullMsg('Ollama started ✓');
       if (!ens?.ok && ens?.notInstalled) {
         setOllamaUp(false);
-        setPullMsg('O Ollama não está instalado. Clique em "⬇ Instalar Ollama" acima, instale, abra ele e tente de novo.');
+        setPullMsg('Ollama is not installed. Click "Install Ollama" above, install it, open it, and try again.');
         setPulling(false); return;
       }
     } catch { up = false; }
@@ -456,11 +456,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     }
     if (!up) {
       setOllamaUp(false);
-      setPullMsg('Não consegui iniciar o Ollama. Abra o app Ollama (ícone na bandeja, perto do relógio) e clique em Baixar de novo.');
+      setPullMsg('Could not start Ollama. Open the Ollama app (tray icon, near the clock) and click Download again.');
       setPulling(false); return;
     }
     const url = localCfg.baseUrl || 'http://127.0.0.1:11434';
-    setPullMsg('iniciando o download…');
+    setPullMsg('Starting the download…');
     try {
       const r = await ollamaApi()?.ollamaPull?.(m, localCfg.baseUrl);
       // Sucesso e cancelamento são tratados pelo onOllamaPullProgress. Aqui só erro real.
@@ -472,10 +472,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           : `erro: ${err}`);
         setPulling(false); refreshModels();
       }
-    } catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); setPulling(false); }
+    } catch (e: any) { setPullMsg(`error: ${e?.message || e}`); setPulling(false); }
   };
   const handleCancelPull = async () => {
-    setPullMsg('cancelando…');
+    setPullMsg('Canceling…');
     try { await ollamaApi()?.ollamaPullCancel?.(); } catch {}
     // O resultado final ('cancelado') chega pelo onOllamaPullProgress; garante o desbloqueio.
     setPulling(false);
@@ -485,9 +485,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
   const handleImportGguf = async () => {
     if (!ggufPath.trim() || pulling) return;
-    setPulling(true); setPullMsg('importando .gguf…');
+    setPulling(true); setPullMsg('Importing .gguf…');
     try { const r = await ollamaApi()?.ollamaImportGguf?.(ggufName.trim(), ggufPath.trim()); setPullMsg(r?.ok ? '✅ importado!' : `erro: ${r?.error || 'falhou'}`); refreshModels(); }
-    catch (e: any) { setPullMsg(`erro: ${e?.message || e}`); }
+    catch (e: any) { setPullMsg(`error: ${e?.message || e}`); }
     setPulling(false);
   };
 
@@ -588,7 +588,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   )}
                   <div className="mm-head">
                     <span>{t('mm.installed')}</span>
-                    <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>
+                    {ollamaUp === true && <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>}
                   </div>
                   {models.length === 0 ? (
                     <div className="mm-empty">{ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
