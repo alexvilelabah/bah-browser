@@ -80,19 +80,19 @@ export function formatAction(action: BrowserAction): string {
     case 'search_images': return `search_images("${shorten(action.query, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'harvest_images': return `harvest_images("${shorten(action.query, 50)}", ${action.count || 10}${action.min_width ? `, min ${action.min_width}px` : ''})`;
     case 'download': return `download("${shorten(action.url, 80)}")`;
-    case 'download_video': return `download_video(${action.count && action.count > 1 ? `${action.count}x, ` : ''}${action.audio_only ? 'audio, ' : ''}${action.quality === 'best' ? 'máx qualidade, ' : ''}${action.query ? `busca: "${shorten(action.query, 50)}"` : action.url ? shorten(action.url, 70) : 'aba atual'})`;
+    case 'download_video': return `download_video(${action.count && action.count > 1 ? `${action.count}x, ` : ''}${action.audio_only ? 'audio, ' : ''}${action.quality === 'best' ? 'best quality, ' : ''}${action.query ? `search: "${shorten(action.query, 50)}"` : action.url ? shorten(action.url, 70) : 'current tab'})`;
     case 'open_video_cuts': return `open_video_cuts("${shorten(action.phrase, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'open_video': return `open_video("${shorten(action.query, 50)}")`;
-    case 'open_videos': return `open_videos("${shorten(action.query, 50)}"${action.count ? `, ${action.count} abas` : ''})`;
-    case 'create_playlist': return `create_playlist(${action.songs?.length ?? 0} músicas)`;
-    case 'make_supercut': return `make_supercut("${shorten(action.phrase, 50)}"${action.count ? `, ${action.count} trechos` : ''})`;
-    case 'render_view': return `render_view("${shorten(action.title, 50)}", ${action.rows?.length ?? 0} linhas)`;
-    case 'stock_movers': return `stock_movers(${action.direction === 'losers' ? 'maiores quedas' : 'maiores altas'}${action.count ? `, ${action.count}` : ''})`;
+    case 'open_videos': return `open_videos("${shorten(action.query, 50)}"${action.count ? `, ${action.count} tabs` : ''})`;
+    case 'create_playlist': return `create_playlist(${action.songs?.length ?? 0} songs)`;
+    case 'make_supercut': return `make_supercut("${shorten(action.phrase, 50)}"${action.count ? `, ${action.count} clips` : ''})`;
+    case 'render_view': return `render_view("${shorten(action.title, 50)}", ${action.rows?.length ?? 0} rows)`;
+    case 'stock_movers': return `stock_movers(${action.direction === 'losers' ? 'biggest losers' : 'biggest gainers'}${action.count ? `, ${action.count}` : ''})`;
     case 'compare_prices': return `compare_prices("${shorten(action.query, 50)}")`;
     case 'google_news': return `google_news("${shorten(action.query, 50)}")`;
     case 'ask_ai': return `ask_ai("${shorten(action.question, 80)}")`;
     case 'find_file': return `find_file("${shorten(action.query, 50)}", ${action.filetype || 'pdf'})`;
-    case 'read_aloud': return `read_aloud(${action.text ? `"${shorten(action.text, 40)}"` : 'página atual'})`;
+    case 'read_aloud': return `read_aloud(${action.text ? `"${shorten(action.text, 40)}"` : 'current page'})`;
     case 'report': return `report("${shorten(action.summary, 120)}")`;
     case 'switch_tab': return `switch_tab(${action.tab})`;
     case 'new_tab': return `new_tab("${action.url}")`;
@@ -620,7 +620,7 @@ window.__browserTools = window.__browserTools || {
     const want = String(value || '');
     this.insertText(el, want, true);
     const got = this.fieldValue(el);
-    if (want && !got) return { success: false, error: 'O campo @' + ref + ' continuou vazio — não aceitou o texto (campo desabilitado/custom?). Tente outro elemento ou abordagem.' };
+    if (want && !got) return { success: false, error: 'Field @' + ref + ' stayed empty — did not accept the text (disabled/custom field?). Try another element or approach.' };
     return { success: true, info: { ref, tag: el.tagName, valueLength: got.length, verified: got === want } };
   },
   clickText(text, nth = 1) {

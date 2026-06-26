@@ -15,9 +15,9 @@ interface Props {
 
 const STATE_LABEL: Record<AgentVisualState, string> = {
   idle: '',
-  observing: 'lendo a página',
-  thinking: 'pensando',
-  acting: 'agindo',
+  observing: 'reading the page',
+  thinking: 'thinking',
+  acting: 'acting',
 };
 
 // Comet-style overlay: a soft flowing aurora glow around the viewport edges

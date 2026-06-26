@@ -591,7 +591,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   // (mesmo padrão da Pesquisa Rápida — não aparece, não vaza). Devolve só os títulos.
   // O tópico (contextual) e o cache ficam no AgentCommandBar.
   const fetchNewsHeadlines = useCallback(async (query: string): Promise<string[]> => {
-    const q = (query || 'inteligência artificial').trim();
+    const q = (query || 'artificial intelligence').trim();
     const bgId = store.addHiddenTab(`https://www.google.com/search?q=${encodeURIComponent(q)}&udm=12&${googleLocaleParams()}`);
     try {
       let waited = 0;
@@ -1474,7 +1474,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else {
                     tier = 'flash';
                   }
-                  const tierIcon = tier === 'local' ? '🏠 local' : tier === 'pro' ? '🧠 pensando mais fundo' : '⚡ flash';
+                  const tierIcon = tier === 'local' ? '🏠 local' : tier === 'pro' ? '🧠 thinking deeper' : '⚡ flash';
                   // Never send raw screenshot — OCR text is already in the payload
                   console.log(`[Agent] step ${step + 1} → aiAction (tier=${tier}, ocrUsed=${!!ocrText})`);
                   const result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, undefined, tier));
@@ -1561,7 +1561,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // Travado de vez na coleta → encerra com o TEXTO já extraído (conteúdo real,
                       // não o pensamento de planejamento). Pelo menos entrega a informação da página.
                       const answer = (lastExtractedText || '').replace(/\s+/g, ' ').trim().slice(0, 500)
-                        || (stepThought || stepEvaluation || '').trim() || 'Li o conteúdo da página.';
+                        || (stepThought || stepEvaluation || '').trim() || 'Read the page content.';
                       const done: BrowserAction = { type: 'done', success: true, reason: answer };
                       onProgress({ kind: 'status', message: `🛑 Stuck re-extracting — finished with the content already extracted.` });
                       setLastFooterMsg(answer);
@@ -1999,7 +1999,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           } catch { /* cai no erro abaixo */ }
                         }
                         if (!recovered) {
-                          toolResult = { success: false, error: (vr?.error || 'Falha no download do vídeo.') + ' O fallback de mídia direta também não encontrou um arquivo baixável na página.' };
+                          toolResult = { success: false, error: (vr?.error || 'Video download failed.') + ' The direct-media fallback also did not find a downloadable file on the page.' };
                         }
                       }
                     }
@@ -2099,7 +2099,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           const created = await trySaveNamedPlaylist(wv, saveName);
                           if (!created.ok) {
                             onProgress({ kind: 'status', message: `⚠️ Could not create the playlist (stopped at "${created.step}"). Are you logged in to YouTube?` });
-                            toolResult = { success: false, error: `Falha ao criar a playlist (passo ${created.step}). Precisa estar logado no YouTube.` };
+                            toolResult = { success: false, error: `Failed to create the playlist (step ${created.step}). You must be logged in to YouTube.` };
                           } else {
                             let added = 1;
                             for (let k = 1; k < ids.length; k++) {
@@ -2283,7 +2283,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         toolResult = { success: true, info: { count: sorted.length } };
                       } else {
-                        toolResult = { success: false, error: rv?.error || 'Falha ao montar a tabela de preços.' };
+                        toolResult = { success: false, error: rv?.error || 'Failed to build the price table.' };
                       }
                     } else {
                       // Scanner não pegou (consent wall / layout novo): deixa o agente
@@ -2312,7 +2312,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         columns: ['Manchete', 'Fonte', 'Quando'],
                         rows: valid.map(x => [x.title, x.source || '—', x.when || '']),
                         links: valid.map(x => x.url || undefined),
-                        sourceNote: `Fonte: Google Notícias — ${new Date().toLocaleString('pt-BR')}`,
+                        sourceNote: `Source: Google News — ${new Date().toLocaleString('pt-BR')}`,
                       };
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
@@ -2328,7 +2328,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         toolResult = { success: true, info: { count: valid.length } };
                       } else {
-                        toolResult = { success: false, error: rv?.error || 'Falha ao montar o painel de notícias.' };
+                        toolResult = { success: false, error: rv?.error || 'Failed to build the news panel.' };
                       }
                     } else {
                       history += `\nNEWS: auto-extraction returned nothing for "${q}". The Google News page IS OPEN — use extract_text to read the headlines and report them.`;
@@ -2341,11 +2341,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     let spec: any = null;
                     let failMsg = '';
                     if (action.type === 'stock_movers') {
-                      const dirWord = action.direction === 'losers' ? 'que mais caíram' : 'que mais valorizaram';
+                      const dirWord = action.direction === 'losers' ? 'that fell the most' : 'that rose the most';
                       onProgress({ kind: 'status', message: `📈 Fetching today's ${dirWord} stocks (direct source, no browsing)…` });
                       const sm = await window.electronAPI?.stockMovers?.(action.direction, action.count);
                       if (sm?.success && sm.spec) spec = sm.spec;
-                      else failMsg = sm?.error || 'Fontes de cotações indisponíveis agora.';
+                      else failMsg = sm?.error || 'Stock quote sources are unavailable right now.';
                     } else {
                       spec = {
                         title: action.title, columns: action.columns, rows: action.rows,
@@ -2367,7 +2367,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         toolResult = { success: true, info: { url: rv.url } };
                       } else {
-                        toolResult = { success: false, error: rv?.error || 'Falha ao montar a página de dados.' };
+                        toolResult = { success: false, error: rv?.error || 'Failed to build the data page.' };
                       }
                     } else {
                       toolResult = { success: false, error: failMsg };
@@ -3079,7 +3079,7 @@ async function runTrashDestroyer(
 
   const reason = injected?.success
     ? `Pagina limpa: ${summary.length} topicos, ${article.removedCount ?? 0} elementos de ruido detectados.`
-    : `Falha ao transformar a pagina: ${injected?.error ?? 'erro desconhecido'}`;
+    : `Failed to transform the page: ${injected?.error ?? 'unknown error'}`;
   const done: BrowserAction = { type: 'done', success: !!injected?.success, reason };
   return {
     thought: 'Detectei um pedido de resumo + limpeza visual e usei o fluxo dedicado de manipulacao DOM ao vivo.',
@@ -3566,7 +3566,7 @@ async function askWebGemini(wv: Electron.WebviewTag, question: string): Promise<
       // 1) achar o campo (textarea OU contenteditable/role=textbox)
       let el=null, t=Date.now();
       while(Date.now()-t<15000){ el=document.querySelector('textarea, [contenteditable="true"], [role="textbox"]'); if(el && el.offsetParent!==null) break; await sleep(400); }
-      if(!el) return { ok:false, error:'campo do Gemini não apareceu' };
+      if(!el) return { ok:false, error:'Gemini field did not appear' };
       el.focus();
       try {
         if(el.tagName==='TEXTAREA'){ const s=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; s.call(el,q); el.dispatchEvent(new Event('input',{bubbles:true})); }

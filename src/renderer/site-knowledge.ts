@@ -357,7 +357,7 @@ export function detectQuickAction(command: string): QuickAction | null {
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw); })
         .join(' ').trim();
       // sem assunto = "notícias do dia" (manchetes gerais)
-      return { type: 'google_news', query: q.length >= 2 ? q : 'principais notícias do dia' };
+      return { type: 'google_news', query: q.length >= 2 ? q : 'top news today' };
     }
   }
 

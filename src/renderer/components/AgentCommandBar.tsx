@@ -365,7 +365,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const actions = confirmActionsRef.current;
     confirmActionsRef.current = null;
     setPendingConfirm(null);
-    push({ kind: 'event', event: { kind: 'status', message: ok ? '✅ Você confirmou — seguindo.' : '✖️ Você cancelou a ação.' } });
+    push({ kind: 'event', event: { kind: 'status', message: ok ? '✅ You confirmed — continuing.' : '✖️ You canceled the action.' } });
     if (actions) (ok ? actions.onConfirm : actions.onCancel)();
   };
 
@@ -468,7 +468,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         const err = String(r.error || 'falhou');
         const conn = /ECONNREFUSED|ENOTFOUND|fetch failed|ECONNRESET|connect\b/i.test(err);
         setPullMsg(conn
-          ? `Não consegui falar com o Ollama em ${url}. Abra o app Ollama e tente de novo.`
+          ? `Could not reach Ollama at ${url}. Open the Ollama app and try again.`
           : `erro: ${err}`);
         setPulling(false); refreshModels();
       }
@@ -738,7 +738,7 @@ function notifyDone(message: string) {
   chime();
   try {
     if (!document.hasFocus() && 'Notification' in window) {
-      new Notification('✅ Bah', { body: (message || 'Tarefa concluída.').slice(0, 140) });
+      new Notification('✅ Bah', { body: (message || 'Task completed.').slice(0, 140) });
     }
   } catch {}
 }
