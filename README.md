@@ -51,7 +51,7 @@
 - **Reads the page** (DOM, numbered interactive elements, and OCR) and acts through structured tools — it doesn't rely on "seeing" the screen
 - **AI**: **DeepSeek** (cloud) — tested and recommended, fast and stable — or **Ollama** (local/offline) to run the AI on your own machine
 - **One-shot skills**: open N videos at once, build a "supercut" of a spoken phrase, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
-- **UI in your language** (English / Português / Español) — auto-detects your system language; the AI also replies in your language
+- **UI in English by default**, with **Português** and **Español** available in Settings — the AI replies in your chosen language
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
 - **Safe Browsing** (URLhaus malicious-hosts list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)

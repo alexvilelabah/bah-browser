@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// i18n leve (sem dependência). A UI segue o idioma do SISTEMA OPERACIONAL
-// (navigator.language), com INGLÊS de base — igual ao Chrome. O usuário pode
-// trocar nas Configurações (setLang salva e recarrega a UI). Fase 1: en/pt/es.
+// i18n leve (sem dependência). INGLÊS é o idioma PADRÃO/principal do Bah; pt-BR e
+// es são SECUNDÁRIOS (o usuário troca nas Configurações; a escolha fica salva).
+// REGRA DE DEV: toda string nova ou consertada vai em INGLÊS primeiro, depois
+// traduz es + pt-BR na sequência (o gate scripts/i18n-check.mjs obriga paridade).
 // ─────────────────────────────────────────────────────────────────────────────
 export type Lang = 'en' | 'pt' | 'es';
 
@@ -435,9 +436,8 @@ export function detectLang(): Lang {
     const saved = localStorage.getItem('uiLang');
     if (saved === 'en' || saved === 'pt' || saved === 'es') return saved;
   } catch {}
-  const nav = (typeof navigator !== 'undefined' ? navigator.language : 'en').toLowerCase();
-  if (nav.startsWith('pt')) return 'pt';
-  if (nav.startsWith('es')) return 'es';
+  // Inglês é o PADRÃO. Não auto-detectamos mais o idioma do SO: pt-BR e es são
+  // secundários, escolhidos nas Configurações (e salvos em localStorage.uiLang acima).
   return 'en';
 }
 

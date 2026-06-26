@@ -1917,7 +1917,9 @@ const STEALTH_SCRIPT = `
 // Site isolation stays disabled because the app's capture/injection pipeline spans frames.
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 app.commandLine.appendSwitch('enable-features', 'NetworkService,NetworkServiceInProcess');
-app.commandLine.appendSwitch('lang', 'pt-BR');
+// Accept-Language PADRÃO = inglês (idioma principal do Bah). Evita que sites sirvam
+// português pra quem usa o navegador em inglês/espanhol.
+app.commandLine.appendSwitch('lang', 'en');
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
