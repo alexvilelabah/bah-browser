@@ -343,6 +343,14 @@ export class AIEngine {
   }
 
   private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro'): Promise<any> {
+    // Rastro do provedor: deixa claro QUAL engine respondeu cada request e se usou chave
+    // (ex.: "[AI] provider=pollinations chat (no-key)"). Vai pro agent.log e pro console.
+    const trace = `[AI] provider=${this.provider} ${isAgentMode ? 'agent' : 'chat'} (${this.apiKey ? 'key' : 'no-key'})`;
+    try {
+      const logPath = require('path').join(require('electron').app.getPath('userData'), 'agent.log');
+      require('fs').appendFileSync(logPath, `${new Date().toISOString()} ${trace}\n`);
+    } catch {}
+    console.log(trace);
     switch (this.provider) {
       case 'anthropic': return this.callAnthropic(messages, isAgentMode);
       case 'openai': return this.callOpenAI(messages, isAgentMode);
