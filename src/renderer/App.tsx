@@ -1621,6 +1621,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
+                    // Retries esgotados num erro de JSON: troca a mensagem críptica por
+                    // orientação. No grátis (sem chave), empurra pra DeepSeek pro agente.
+                    if (/Invalid or missing action|did not return valid structured JSON/i.test(action.reason)) {
+                      action.reason = (!store.aiSettings.apiKey && !store.localSettings.enabled)
+                        ? 'The free model struggled with this multi-step task. For the full agent, add a DeepSeek key in settings (cheap) — the free tier is best for chat and image generation.'
+                        : 'The model kept returning an invalid response for this task. Try rephrasing it, or run it again.';
+                    }
                     if (commandLooksLikeSendEmail && action.success && !gmailDraftFilled) {
                       history += '\nSAFETY BLOCK: Gmail email task cannot be marked done because the local helper did not verify a filled/sent draft.';
                       onProgress({ kind: 'status', message: 'Gmail: blocked false completion; draft/send was not verified.' });
