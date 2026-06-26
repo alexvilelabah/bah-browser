@@ -440,6 +440,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const getProviderKey = () => {
     const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys'
       : settings.provider === 'nvidia' ? 'https://build.nvidia.com/'
+      : settings.provider === 'pollinations' ? 'https://enter.pollinations.ai/'
       : 'https://platform.deepseek.com/api_keys';
     try { ollamaApi()?.openExternal?.(url); } catch {}
   };
@@ -570,7 +571,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </select>
               </label>
               {settings.provider === 'pollinations' ? (
-                <div className="mm-hint">🆓 {t('set.pollinationsHint')}</div>
+                <>
+                  <div className="mm-hint">🆓 {t('set.pollinationsHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.register')}</button></div>
+                  <label>
+                    {t('set.pollinationsKeyOptional')}
+                    <input
+                      type="password"
+                      value={settings.apiKey}
+                      onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
+                      placeholder="pk_… / sk_…"
+                    />
+                  </label>
+                </>
               ) : (
                 <>
                   <label>
