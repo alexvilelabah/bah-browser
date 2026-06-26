@@ -118,6 +118,9 @@ const dict: Record<Lang, Record<string, string>> = {
     // Top bar / menu / footer / tabs
     'ai.toggle': 'Open/close the agent panel (AI)',
     'menu.adblockTitle': 'Native ad blocker (on/off)',
+    'menu.hwAccel': 'Hardware acceleration',
+    'menu.hwAccelTitle': 'Turn OFF if new tabs load blank/white (weak or old GPU). Restart to apply.',
+    'menu.hwAccelRestart': 'Saved. Restart Bah (close and reopen) to apply.',
     'menu.googleLoginTitle': 'Sign in to Google via the real Chrome/Edge and import the session into Bah',
     'fav.remove': 'Remove from favorites',
     'footer.lastStatus': 'Last status:',
@@ -247,6 +250,9 @@ const dict: Record<Lang, Record<string, string>> = {
     // Barra superior / menu / rodapé / abas
     'ai.toggle': 'Abrir/fechar o painel do agente (AI)',
     'menu.adblockTitle': 'Bloqueador de anúncios nativo (liga/desliga)',
+    'menu.hwAccel': 'Aceleração de hardware',
+    'menu.hwAccelTitle': 'DESLIGUE se abas novas abrem em branco (GPU fraca ou antiga). Reinicie pra aplicar.',
+    'menu.hwAccelRestart': 'Salvo. Reinicie o Bah (feche e abra) pra aplicar.',
     'menu.googleLoginTitle': 'Faz login no Google pelo Chrome/Edge real e importa a sessão para o Bah',
     'fav.remove': 'Remover dos favoritos',
     'footer.lastStatus': 'Último status:',
@@ -376,6 +382,9 @@ const dict: Record<Lang, Record<string, string>> = {
     // Barra superior / menú / pie / pestañas
     'ai.toggle': 'Abrir/cerrar el panel del agente (IA)',
     'menu.adblockTitle': 'Bloqueador de anuncios nativo (encender/apagar)',
+    'menu.hwAccel': 'Aceleración de hardware',
+    'menu.hwAccelTitle': 'APÁGALA si las pestañas nuevas salen en blanco (GPU débil o antigua). Reinicia para aplicar.',
+    'menu.hwAccelRestart': 'Guardado. Reinicia Bah (cerrar y abrir) para aplicar.',
     'menu.googleLoginTitle': 'Inicia sesión en Google con el Chrome/Edge real e importa la sesión a Bah',
     'fav.remove': 'Quitar de favoritos',
     'footer.lastStatus': 'Último estado:',

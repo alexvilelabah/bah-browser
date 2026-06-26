@@ -1563,6 +1563,21 @@ function setupIPC(): void {
   }
 
   ipcMain.handle('adblock:get-state', () => ({ enabled: userAdblockPref, active: actuallyEnabled, bypassedHosts: Array.from(ADBLOCK_BYPASS_HOSTS) }));
+  // Aceleração de hardware: lê/grava o flag em userData (aplicado no boot do main). enabled=true → accel ligada.
+  ipcMain.handle('app:get-hw-accel', () => {
+    try {
+      const hwFlag = path.join(app.getPath('userData'), 'hw-accel.flag');
+      const off = fs.existsSync(hwFlag) && fs.readFileSync(hwFlag, 'utf8').trim() === 'off';
+      return { enabled: !off };
+    } catch { return { enabled: true }; }
+  });
+  ipcMain.handle('app:set-hw-accel', (_e, on: boolean) => {
+    try {
+      const hwFlag = path.join(app.getPath('userData'), 'hw-accel.flag');
+      if (on) { try { fs.unlinkSync(hwFlag); } catch {} } else { fs.writeFileSync(hwFlag, 'off'); }
+      return { ok: true, enabled: on };
+    } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+  });
   ipcMain.handle('adblock:set-enabled', (_e, on: boolean) => {
     userAdblockPref = !!on;
     saveAdblockPref(userAdblockPref);
@@ -1903,6 +1918,17 @@ app.commandLine.appendSwitch('lang', 'pt-BR');
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+// Aceleração de hardware (GPU): em alguns PCs com vídeo integrado/driver velho, abrir uma aba
+// nova dá "tela branca" (o compositor da GPU não pinta o 1º frame; só carrega com F5). O usuário
+// pode DESLIGAR a aceleração (igual ao Chrome). A escolha fica salva num arquivo lido AQUI no
+// boot — disableHardwareAcceleration() só vale se chamado ANTES do app ficar 'ready'. Default: ligada.
+try {
+  const hwFlag = path.join(app.getPath('userData'), 'hw-accel.flag');
+  if (fs.existsSync(hwFlag) && fs.readFileSync(hwFlag, 'utf8').trim() === 'off') {
+    app.disableHardwareAcceleration();
+  }
+} catch {}
 
 // Flush periódico dos cookies (a cada 30s) — garante persistência mesmo se o app travar
 function startCookieFlushInterval() {

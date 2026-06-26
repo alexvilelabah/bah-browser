@@ -97,6 +97,8 @@ declare global {
       adblockGetState?: () => Promise<{ enabled: boolean; active: boolean; bypassedHosts: string[] }>;
       adblockSetEnabled?: (on: boolean) => Promise<{ enabled: boolean }>;
       adblockActiveHostChanged?: (host: string) => Promise<{ active: boolean }>;
+      getHwAccel?: () => Promise<{ enabled: boolean }>;
+      setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
       takeOcr?: (wcId: number, domText: string, force?: boolean) => Promise<{
         ocrText: string; ocrUsed: boolean; skipped: boolean;
@@ -203,6 +205,7 @@ export default function App() {
 
   const [adblockOn, setAdblockOn] = useState(true);
   const [adblockActive, setAdblockActive] = useState(true);
+  const [hwAccelOn, setHwAccelOn] = useState(true);
   // Menu ⋮ (canto superior) + favoritos (estilo Chrome, salvos localmente).
   const [menuOpen, setMenuOpen] = useState(false);
   const [favorites, setFavorites] = useState<Array<{ url: string; title: string }>>(() => {
@@ -219,6 +222,7 @@ export default function App() {
     }
     window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url));
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
+    window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       setLastFooterMsg(`⚠️ Site malicioso bloqueado: ${info.host} (${info.url})`);
     });
@@ -266,6 +270,12 @@ export default function App() {
     const r = await window.electronAPI?.adblockSetEnabled?.(!adblockOn);
     if (r) setAdblockOn(r.enabled);
   }, [adblockOn]);
+
+  const toggleHwAccel = useCallback(async () => {
+    const next = !hwAccelOn;
+    const r = await window.electronAPI?.setHwAccel?.(next);
+    if (r?.ok) { setHwAccelOn(next); window.alert(t('menu.hwAccelRestart')); }
+  }, [hwAccelOn]);
 
   // ── Favoritos (estilo Chrome) ──
   const saveFavorite = useCallback(() => {
@@ -733,6 +743,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🛡️</span>
                   <span className="menu-label">{t('menu.adblock')}</span>
                   <span className={`menu-switch ${adblockOn ? 'on' : ''}`}>{!adblockOn ? 'OFF' : (adblockActive ? 'ON' : 'BYPASS')}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleHwAccel()} title={t('menu.hwAccelTitle')}>
+                  <span className="menu-ic">⚡</span>
+                  <span className="menu-label">{t('menu.hwAccel')}</span>
+                  <span className={`menu-switch ${hwAccelOn ? 'on' : ''}`}>{hwAccelOn ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">🔑</span>
