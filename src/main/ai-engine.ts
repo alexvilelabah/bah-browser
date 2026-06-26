@@ -497,20 +497,27 @@ export class AIEngine {
     if (isAgentMode) body.response_format = { type: 'json_object' };
 
     // Endpoint OpenAI-compatible SEM chave. (O gen.pollinations.ai virou 401; este é o vivo.)
-    const res = await fetch(`${this.baseUrl}/openai`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Pollinations API error ${res.status}: ${await res.text()}`);
+    // O free é flaky (502/503/Cloudflare) → re-tenta em 5xx/429 e devolve erro LIMPO,
+    // sem despejar o HTML do Cloudflare na tela do usuário.
+    const url = `${this.baseUrl}/openai`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
+    };
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices?.[0]?.message?.content ?? '';
+      }
+      lastStatus = res.status;
+      try { await res.text(); } catch {}   // drena o corpo (não mostramos o HTML do erro)
+      if (res.status >= 500 || res.status === 429) continue;   // transitório → re-tenta
+      break;   // 4xx definitivo → para
     }
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content ?? '';
+    throw new Error(`Pollinations (free) is busy right now (${lastStatus || 'no response'}). Try again in a moment — or add a DeepSeek key in settings for reliability.`);
   }
 
   private deepseekModelsCache: Set<string> | null = null;
