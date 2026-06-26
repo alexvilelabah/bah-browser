@@ -95,6 +95,7 @@ export function useTabStore() {
   }, []);
 
   const closeTab = useCallback((id: string) => {
+    window.electronAPI?.clearChatHistory?.(id);   // libera a memória de chat daquela aba
     setTabs(prev => {
       const closing = prev.find(t => t.id === id);
       if (closing && !closing.hidden && closing.url && /^https?:\/\//i.test(closing.url)) {

@@ -698,13 +698,13 @@ function setupIPC(): void {
   });
 
   // AI chat — general conversation / page Q&A
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado.
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
     try {
-      const response = await engine.chat(message, pageContent, stateless);
+      const response = await engine.chat(message, pageContent, stateless, tabId);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
@@ -714,6 +714,14 @@ function setupIPC(): void {
       }
       return { error: m };
     }
+  });
+
+  // Limpa o histórico de chat de UMA aba (ao fechar a aba ou limpar o feed) nos dois
+  // engines (nuvem + local), pra não vazar memória de chat entre abas.
+  ipcMain.handle('ai:clear-history', async (_event, tabId?: string) => {
+    aiEngine?.clearHistory(tabId);
+    localEngine?.clearHistory(tabId);
+    return { ok: true };
   });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine

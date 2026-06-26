@@ -267,7 +267,9 @@ export class AIEngine {
   private baseUrl: string;
   private ollamaModel: string;
   private resolvedOllamaModel: string | null = null;  // modelo realmente usado (auto-detect)
-  private conversationHistory: Message[] = [];
+  // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
+  // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
+  private conversationHistories = new Map<string, Message[]>();
 
   constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string) {
     this.provider = provider;
@@ -290,11 +292,12 @@ export class AIEngine {
     }
   }
 
-  clearHistory(): void {
-    this.conversationHistory = [];
+  clearHistory(tabId?: string): void {
+    if (tabId) this.conversationHistories.delete(tabId);
+    else this.conversationHistories.clear();
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false): Promise<string> {
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default'): Promise<string> {
     const contextNote = pageContext
       ? `\n\n[Current page context]\n${pageContext.slice(0, 8000)}`
       : '';
@@ -307,14 +310,16 @@ export class AIEngine {
       return typeof reply === 'string' ? reply : (reply?.text ?? '');
     }
 
-    this.conversationHistory.push({
-      role: 'user',
-      content: userMessage + contextNote,
-    });
+    // Conversa DAQUELA aba (chaveada por tabId).
+    const history = this.conversationHistories.get(tabId) ?? [];
+    history.push({ role: 'user', content: userMessage + contextNote });
 
-    const reply = await this.callLLM(this.conversationHistory, false);
+    const reply = await this.callLLM(history, false);
     const text = typeof reply === 'string' ? reply : (reply?.text ?? '');
-    this.conversationHistory.push({ role: 'assistant', content: text });
+    history.push({ role: 'assistant', content: text });
+    const CAP = 40;   // teto de itens por aba (evita crescer sem limite com muitas abas)
+    if (history.length > CAP) history.splice(0, history.length - CAP);
+    this.conversationHistories.set(tabId, history);
     return text;
   }
 

@@ -53,7 +53,8 @@ declare global {
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) => Promise<{ response?: string; error?: string }>;
+      clearChatHistory?: (tabId?: string) => Promise<any>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
@@ -2842,6 +2843,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               }
             }}
             onSendChat={async (msg) => {
+              const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
               store.addChatMessage('user', msg);
               let pageContent = await getPageContent();
               // Se a aba é um vídeo do YouTube, anexa a TRANSCRIÇÃO (legenda) ao contexto pra
@@ -2858,7 +2860,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled);
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId);
               const raw = result?.response ?? (result?.error ? `Erro: ${result.error}` : 'Sem resposta.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
