@@ -681,6 +681,9 @@ function setupIPC(): void {
   // nuvem E local (engineLang é do módulo ai-engine, compartilhado).
   ipcMain.handle('ai:set-lang', async (_event, lang: string) => {
     setEngineLang(lang);
+    // Persiste a escolha de idioma pra o BOOT ajustar o Accept-Language (--lang) na próxima
+    // vez — assim os sites seguem o idioma escolhido (igual ao Chrome). Aplica no restart.
+    try { fs.writeFileSync(path.join(app.getPath('userData'), 'ui-lang.flag'), lang); } catch {}
     return { success: true };
   });
 
@@ -1917,9 +1920,19 @@ const STEALTH_SCRIPT = `
 // Site isolation stays disabled because the app's capture/injection pipeline spans frames.
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 app.commandLine.appendSwitch('enable-features', 'NetworkService,NetworkServiceInProcess');
-// Accept-Language PADRÃO = inglês (idioma principal do Bah). Evita que sites sirvam
-// português pra quem usa o navegador em inglês/espanhol.
-app.commandLine.appendSwitch('lang', 'en');
+// Accept-Language SEGUE o idioma escolhido pela pessoa (igual ao Chrome): lido de um arquivo
+// em userData (escrito pelo handler 'ai:set-lang' quando ela troca de idioma). Padrão = inglês.
+// É switch de boot (antes do 'ready') → a troca aplica nos sites no próximo restart.
+let uiLangSwitch = 'en';
+try {
+  const langFlag = path.join(app.getPath('userData'), 'ui-lang.flag');
+  if (fs.existsSync(langFlag)) {
+    const v = fs.readFileSync(langFlag, 'utf8').trim();
+    if (v === 'pt') uiLangSwitch = 'pt-BR';
+    else if (v === 'es') uiLangSwitch = 'es';
+  }
+} catch {}
+app.commandLine.appendSwitch('lang', uiLangSwitch);
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
