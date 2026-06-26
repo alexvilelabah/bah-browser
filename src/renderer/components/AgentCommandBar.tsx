@@ -357,7 +357,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     manualContinueRef.current = null;
     setPendingConfirm(null);
     confirmActionsRef.current = null;
-    push({ kind: 'event', event: { kind: 'status', message: 'Cancelando tarefa...' } });
+    push({ kind: 'event', event: { kind: 'status', message: 'Canceling task...' } });
   };
 
   // Freio de segurança: usuário decidiu (Sim, pode / Cancelar) na ação de risco.
@@ -374,7 +374,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (!resume) return;
     manualContinueRef.current = null;
     setManualHelp(null);
-    push({ kind: 'event', event: { kind: 'status', message: 'Continuando depois da intervencao manual...' } });
+    push({ kind: 'event', event: { kind: 'status', message: 'Continuing after the manual intervention...' } });
     resume();
   };
 

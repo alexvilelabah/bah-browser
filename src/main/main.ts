@@ -236,7 +236,7 @@ async function fetchJson(url: string, timeoutMs = 3000): Promise<any> {
 
 async function cdpCommand(wsUrl: string, method: string, params: any = {}, timeoutMs = 5000): Promise<any> {
   const WebSocketCtor = (globalThis as any).WebSocket;
-  if (!WebSocketCtor) throw new Error('WebSocket indisponivel no Node/Electron');
+  if (!WebSocketCtor) throw new Error('WebSocket unavailable in Node/Electron');
 
   return await new Promise((resolve, reject) => {
     const id = Math.floor(Math.random() * 1_000_000_000);
@@ -388,7 +388,7 @@ async function importGoogleCookiesFromBrowserProfile(
       return {
         ok: false,
         browser: browser.name,
-        error: `Nao consegui abrir o perfil em modo importacao. Feche a janela do ${browser.name} usada no login e tente novamente.`,
+        error: `Couldn't open the profile in import mode. Close the ${browser.name} window used for login and try again.`,
       };
     }
 
@@ -397,7 +397,7 @@ async function importGoogleCookiesFromBrowserProfile(
       return {
         ok: false,
         browser: browser.name,
-        error: `Ainda nao encontrei cookies de login do Google nesse perfil do ${browser.name}.`,
+        error: `I still couldn't find Google login cookies in this ${browser.name} profile.`,
       };
     }
 
@@ -417,7 +417,7 @@ async function importGoogleCookiesFromBrowserProfile(
 async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }> {
   const browser = findSystemBrowser();
   if (!browser) {
-    return { ok: false, error: 'Nao encontrei Chrome, Edge ou Brave instalado.' };
+    return { ok: false, error: 'Could not find Chrome, Edge or Brave installed.' };
   }
 
   const profileDir = path.join(app.getPath('userData'), 'google-system-login-profile');
@@ -462,7 +462,7 @@ async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number;
   }
   if (!ready) {
     await closeLoginBrowser();
-    return { ok: false, browser: browser.name, error: `Nao consegui abrir o ${browser.name} para o login.` };
+    return { ok: false, browser: browser.name, error: `Couldn't open ${browser.name} for the login.` };
   }
 
   // 2) Detecta SOZINHO o fim do login: polla os cookies até aparecer a sessão do Google
@@ -472,7 +472,7 @@ async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number;
     if (exited) {
       // usuário fechou a janela na mão → tenta importar do perfil por garantia
       const after = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
-      return after.ok ? after : { ok: false, browser: browser.name, error: 'Janela fechada antes de concluir o login.' };
+      return after.ok ? after : { ok: false, browser: browser.name, error: 'Window closed before completing the login.' };
     }
     let cookies: any[] = [];
     try { cookies = await getChromeDebugCookies(port); } catch {}
@@ -485,7 +485,7 @@ async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number;
     await sleepMs(2500);
   }
   await closeLoginBrowser();
-  return { ok: false, browser: browser.name, error: 'Tempo esgotado esperando o login.' };
+  return { ok: false, browser: browser.name, error: 'Timed out waiting for the login.' };
 }
 
 function createWindow(): void {
@@ -702,15 +702,15 @@ function setupIPC(): void {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado.
     const engine = (local && localEngine) ? localEngine : aiEngine;
-    if (!engine) return { error: 'IA não configurada. Abra as configurações.' };
+    if (!engine) return { error: 'AI not configured. Open the settings.' };
     try {
       const response = await engine.chat(message, pageContent, stateless);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
-      if (local) return { error: `A IA local falhou: ${m}. Confirme que o Ollama está aberto e que um modelo foi baixado e selecionado.` };
+      if (local) return { error: `Local AI failed: ${m}. Make sure Ollama is open and a model is downloaded and selected.` };
       if (/401|403|api.?key|unauthorized|invalid.*key|\bsk-/i.test(m)) {
-        return { error: 'A nuvem (DeepSeek) precisa de uma chave de API. Cole a chave nas configurações OU mude para 🏠 IA Local (offline, sem chave).' };
+        return { error: 'The cloud (DeepSeek) needs an API key. Paste the key in settings OR switch to 🏠 Local AI (offline, no key).' };
       }
       return { error: m };
     }
@@ -867,7 +867,7 @@ function setupIPC(): void {
   // Roda `ollama create <nome> -f <Modelfile>` com `FROM <caminho>`.
   ipcMain.handle('ollama:import-gguf', async (_e, name: string, ggufPath: string) => {
     try {
-      if (!ggufPath || !fs.existsSync(ggufPath)) return { ok: false, error: '.gguf não encontrado nesse caminho' };
+      if (!ggufPath || !fs.existsSync(ggufPath)) return { ok: false, error: '.gguf not found at this path' };
       const mf = path.join(app.getPath('temp'), `Modelfile_${Date.now()}`);
       fs.writeFileSync(mf, `FROM ${ggufPath.replace(/\\/g, '/')}\n`);
       return await new Promise((resolve) => {
@@ -1158,7 +1158,7 @@ function setupIPC(): void {
       } catch (e: any) {
         return { success: false, error: String(e?.message ?? e) };
       }
-    }, (ahead) => mainWindow?.webContents.send('agent:supercut-progress', { stage: 'searching', message: `Na fila — ${ahead} tarefa(s) de vídeo na frente…` }))
+    }, (ahead) => mainWindow?.webContents.send('agent:supercut-progress', { stage: 'searching', message: `In queue — ${ahead} video task(s) ahead…` }))
       .catch((e: any) => ({ success: false, error: String(e?.message ?? e) })));
 
   // ═══ Editor de vídeo: o navegador EDITA um vídeo local (ffmpeg nativo, 0 IA) ═══
@@ -1168,7 +1168,7 @@ function setupIPC(): void {
       title: mt('dlg.pickVideo'),
       properties: ['openFile'],
       filters: [
-        { name: 'Vídeos', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'flv', 'wmv', 'mpeg', 'mpg', 'ts'] },
+        { name: 'Videos', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'flv', 'wmv', 'mpeg', 'mpg', 'ts'] },
         { name: 'Todos os arquivos', extensions: ['*'] },
       ],
     });
@@ -1179,24 +1179,24 @@ function setupIPC(): void {
   // Edições entram na FILA (lane 'edit') — uma por vez, em ordem, sem rejeitar a
   // próxima. (Roda em paralelo com a lane 'download'.) Mesmas funções de sempre.
   const editProgress = (p: any) => mainWindow?.webContents.send('agent:videoedit-progress', p);
-  const onEditQueued = (ahead: number) => editProgress({ stage: 'preparing', message: `Na fila — ${ahead} edição(ões) na frente…` });
+  const onEditQueued = (ahead: number) => editProgress({ stage: 'preparing', message: `In queue — ${ahead} edit(s) ahead…` });
   const queueGuard = (e: any) => ({ success: false, error: String(e?.message ?? e) });
   ipcMain.handle('videoedit:trim', async (_e, input: string, startSec: number, endSec: number) => {
-    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    if (!isExistingFile(input)) return { success: false, error: 'Video file not found.' };
     return enqueueJob('edit', async () => {
       try { return await cortarTrecho(String(input), Number(startSec), Number(endSec), editProgress); }
       catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
     }, onEditQueued).catch(queueGuard);
   });
   ipcMain.handle('videoedit:remove-silence', async (_e, input: string, opts?: any) => {
-    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    if (!isExistingFile(input)) return { success: false, error: 'Video file not found.' };
     return enqueueJob('edit', async () => {
       try { return await removerSilencio(String(input), opts || {}, editProgress); }
       catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
     }, onEditQueued).catch(queueGuard);
   });
   ipcMain.handle('videoedit:extract-audio', async (_e, input: string) => {
-    if (!isExistingFile(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+    if (!isExistingFile(input)) return { success: false, error: 'Video file not found.' };
     return enqueueJob('edit', async () => {
       try { return await extrairAudio(String(input), editProgress); }
       catch (e: any) { return { success: false, error: String(e?.message ?? e) }; }
@@ -1213,7 +1213,7 @@ function setupIPC(): void {
       const roots = [app.getPath('downloads'), app.getPath('userData'), os.tmpdir()];
       if (!isInsideAllowedRoot(target, roots)) {
         console.warn('[shell:reveal] bloqueado (fora das pastas permitidas):', target);
-        return { success: false, error: 'Caminho fora das pastas permitidas.' };
+        return { success: false, error: 'Path outside the allowed folders.' };
       }
       const fsx = require('fs');
       // Se for arquivo, revela ele na pasta; se for pasta, abre a pasta.
@@ -1234,7 +1234,7 @@ function setupIPC(): void {
     try {
       const u = new URL(String(url));
       if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-        return { success: false, error: 'esquema não permitido' };
+        return { success: false, error: 'scheme not allowed' };
       }
       await shell.openExternal(u.toString());
       return { success: true };
@@ -1311,7 +1311,7 @@ function setupIPC(): void {
   ipcMain.handle('view:render', async (_e, spec: DataViewSpec) => {
     try {
       if (!spec || !Array.isArray(spec.columns) || !Array.isArray(spec.rows)) {
-        return { success: false, error: 'Spec inválida (columns/rows obrigatórios).' };
+        return { success: false, error: 'Invalid spec (columns/rows required).' };
       }
       spec.rows = spec.rows.slice(0, 200);
       return openDataView(spec);
@@ -1402,7 +1402,7 @@ function setupIPC(): void {
 
   // ═══ Video download (yt-dlp) with streamed progress ═══
   ipcMain.handle('media:download-video', async (_e, url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => {
-    if (!isHttpOrSearch(url)) return { success: false, error: 'URL ou busca inválida.' };
+    if (!isHttpOrSearch(url)) return { success: false, error: 'Invalid URL or search.' };
     const n = clampCount(count, 1, 50, 1);
     // FILA (lane 'download', compartilhada com o supercut): um download pesado por vez.
     return enqueueJob('download', async () => {
@@ -1413,7 +1413,7 @@ function setupIPC(): void {
       } catch (e: any) {
         return { success: false, error: String(e?.message ?? e) };
       }
-    }, (ahead) => mainWindow?.webContents.send('agent:video-progress', { state: 'preparing', title: `Na fila — ${ahead} download(s) na frente…` }))
+    }, (ahead) => mainWindow?.webContents.send('agent:video-progress', { state: 'preparing', title: `In queue — ${ahead} download(s) ahead…` }))
       .catch((e: any) => ({ success: false, error: String(e?.message ?? e) }));
   });
 

@@ -108,11 +108,11 @@ export async function harvestDownload(
   onProgress?: (saved: number, total: number) => void,
 ): Promise<HarvestResult> {
   const clean = Array.from(new Set((urls || []).filter(u => /^https?:\/\//i.test(u)))).slice(0, MAX_URLS);
-  if (clean.length === 0) return { success: false, saved: 0, error: 'Nenhuma URL de imagem para baixar.' };
+  if (clean.length === 0) return { success: false, saved: 0, error: 'No image URL to download.' };
 
   const dir = path.join(app.getPath('downloads'), slugify(theme));
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e: any) {
-    return { success: false, saved: 0, error: `Não consegui criar a pasta: ${e?.message ?? e}` };
+    return { success: false, saved: 0, error: `Could not create the folder: ${e?.message ?? e}` };
   }
 
   const paths: string[] = [];

@@ -27,7 +27,7 @@ class Lane {
 
   enqueue<T>(fn: () => Promise<T>, onWait?: (ahead: number) => void, label?: string): Promise<T> {
     if (this.pending >= this.maxPending) {
-      return Promise.reject(new Error('Muitas tarefas na fila — aguarde as atuais terminarem.'));
+      return Promise.reject(new Error('Too many tasks in the queue — wait for the current ones to finish.'));
     }
     const meta: JobInfo = { id: ++JOB_SEQ, label };
     const ahead = this.inflight.length;        // quantas (rodando + esperando) já estão na frente

@@ -57,7 +57,7 @@ function updateDueToday(): boolean {
 async function maybeAutoUpdate(bin: string, onStatus?: (msg: string) => void): Promise<void> {
   if (!updateDueToday()) return;
   try { fs.writeFileSync(updateStampPath(), String(Date.now())); } catch {} // marca já: falha não re-tenta a cada download
-  onStatus?.('Atualizando o motor de download (rápido)…');
+  onStatus?.('Updating the download engine (quick)…');
   await new Promise<void>((resolve) => {
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(); } };
@@ -98,13 +98,13 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
     return p;
   }
   if (ensurePromise) return ensurePromise;
-  onStatus?.('Preparando o motor de download de vídeo (primeira vez)…');
+  onStatus?.('Preparing the video download engine (first time)…');
   ensurePromise = downloadToFile(YTDLP_URL, p)
     .then(async () => {
       // recém-baixado = última versão; confere que NÃO veio corrompido antes de confiar
       if (!(await validateYtDlp(p))) {
         try { fs.unlinkSync(p); } catch {}
-        throw new Error('yt-dlp baixado parece inválido/corrompido — tente de novo.');
+        throw new Error('The downloaded yt-dlp looks invalid/corrupted — try again.');
       }
       onStatus?.('Motor de download pronto.');
       return p;
@@ -192,18 +192,18 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
     const zip = path.join(binDir(), 'ffmpeg-dl.zip');
     const extractDir = path.join(binDir(), 'ffmpeg-extract');
     try {
-      onStatus?.('Preparando o conversor de vídeo/áudio (primeira vez, ~80MB)…');
+      onStatus?.('Preparing the video/audio converter (first time, ~80MB)…');
       await downloadToFile(FFMPEG_URL, zip);
       onStatus?.('Descompactando o ffmpeg…');
-      if (!(await expandZipWindows(zip, extractDir))) throw new Error('falha ao descompactar');
+      if (!(await expandZipWindows(zip, extractDir))) throw new Error('failed to unzip');
       const exe = findFileRecursive(extractDir, 'ffmpeg.exe');
-      if (!exe) throw new Error('ffmpeg.exe não encontrado no pacote');
+      if (!exe) throw new Error('ffmpeg.exe not found in the package');
       fs.copyFileSync(exe, ffmpegExePath());
       const probe = path.join(path.dirname(exe), 'ffprobe.exe');     // yt-dlp também usa ffprobe
       if (fs.existsSync(probe)) { try { fs.copyFileSync(probe, path.join(binDir(), 'ffprobe.exe')); } catch {} }
       try { fs.rmSync(zip, { force: true }); } catch {}
       try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
-      if (!(await validateFfmpeg(ffmpegExePath()))) { try { fs.unlinkSync(ffmpegExePath()); } catch {} throw new Error('ffmpeg baixado inválido'); }
+      if (!(await validateFfmpeg(ffmpegExePath()))) { try { fs.unlinkSync(ffmpegExePath()); } catch {} throw new Error('downloaded ffmpeg is invalid'); }
       ffmpegDirCache = binDir();
       onStatus?.('Conversor pronto.');
       return binDir();
@@ -225,9 +225,9 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
  */
 export async function resolveTopVideo(query: string): Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }> {
   const q = (query || '').trim();
-  if (!q) return { ok: false, error: 'busca vazia' };
+  if (!q) return { ok: false, error: 'empty search' };
   let bin: string;
-  try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, error: `yt-dlp indisponível: ${e?.message ?? e}` }; }
+  try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, error: `yt-dlp unavailable: ${e?.message ?? e}` }; }
   const DURATION = 'duration >= 60 & duration <= 2400';   // pula Shorts (<1min); teto 40min (evita mixes/lives)
   return new Promise((resolve) => {
     const args = [
@@ -255,8 +255,8 @@ export async function resolveTopVideo(query: string): Promise<{ ok: boolean; url
       }
     });
     child.on('error', (e) => finish({ ok: false, error: String((e as any)?.message ?? e) }));
-    child.on('close', () => finish({ ok: false, error: 'nenhum vídeo adequado encontrado' }));
-    setTimeout(() => finish({ ok: false, error: 'timeout ao resolver o vídeo' }), 15_000);
+    child.on('close', () => finish({ ok: false, error: 'no suitable video found' }));
+    setTimeout(() => finish({ ok: false, error: 'timeout resolving the video' }), 15_000);
   });
 }
 
@@ -271,9 +271,9 @@ export async function resolveTopNVideos(
 ): Promise<{ ok: boolean; videos: Array<{ id: string; title: string; url: string }>; error?: string }> {
   const q = (query || '').trim();
   const count = Math.min(Math.max(n || 1, 1), 12);
-  if (!q) return { ok: false, videos: [], error: 'busca vazia' };
+  if (!q) return { ok: false, videos: [], error: 'empty search' };
   let bin: string;
-  try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, videos: [], error: `yt-dlp indisponível: ${e?.message ?? e}` }; }
+  try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, videos: [], error: `yt-dlp unavailable: ${e?.message ?? e}` }; }
   const DURATION = 'duration >= 60 & duration <= 2400';   // pula Shorts (<1min); teto 40min
   const pool = Math.min(count * 3 + 4, 40);               // oversample pra descartar Shorts/inválidos
   return new Promise((resolve) => {
@@ -291,7 +291,7 @@ export async function resolveTopNVideos(
     const finish = () => {
       if (done) return; done = true;
       try { child.kill(); } catch {}
-      resolve({ ok: videos.length > 0, videos, error: videos.length ? undefined : 'nenhum vídeo adequado encontrado' });
+      resolve({ ok: videos.length > 0, videos, error: videos.length ? undefined : 'no suitable video found' });
     };
     child.stdout.on('data', (d) => {
       buf += d.toString();
@@ -356,13 +356,13 @@ export async function downloadVideo(
 ): Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }> {
   // Accept a real URL OR a yt-dlp search target ("ytsearch1:..."), which lets us
   // find+download the top result without touching the YouTube UI (bulletproof).
-  if (!/^https?:\/\//i.test(url) && !/^ytsearch\d*:/i.test(url)) return { success: false, error: 'URL ou busca inválida.' };
+  if (!/^https?:\/\//i.test(url) && !/^ytsearch\d*:/i.test(url)) return { success: false, error: 'Invalid URL or search.' };
   let bin: string;
   try {
     onProgress({ state: 'preparing' });
     bin = await ensureYtDlp((m) => onProgress({ state: 'preparing', title: m }));
   } catch (e: any) {
-    return { success: false, error: `Não consegui preparar o yt-dlp: ${e?.message ?? e}` };
+    return { success: false, error: `Could not prepare yt-dlp: ${e?.message ?? e}` };
   }
 
   // mp3 (audioOnly) e "melhor qualidade" (merge 1080p+) PRECISAM de ffmpeg → auto-instala.
@@ -478,7 +478,7 @@ export async function downloadVideo(
           }
           resolve({ ok: true, paths, title });
         } else {
-          const err = stderrTail.split(/\r?\n/).filter(Boolean).pop() || `yt-dlp saiu com código ${code}`;
+          const err = stderrTail.split(/\r?\n/).filter(Boolean).pop() || `yt-dlp exited with code ${code}`;
           resolve({ ok: false, paths, title, err });
         }
       });
@@ -497,7 +497,7 @@ export async function downloadVideo(
   // entra em playlist e mix de 1h não é "faixa" → o que resta é música de verdade.
   if (usePlaylistRoute) {
     const plUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=EgIQAw%3D%3D`;
-    onProgress({ state: 'preparing', title: 'Procurando em playlists (música de verdade, sem Shorts)…' });
+    onProgress({ state: 'preparing', title: 'Searching playlists (real music, no Shorts)…' });
     const r = await runYtDlp(
       [...baseArgs(true), '--download-archive', archive, '--match-filter', DURATION, '--max-downloads', String(count), plUrl],
       0, count,
@@ -514,7 +514,7 @@ export async function downloadVideo(
     const searchArgs = [...baseArgs(false)];
     if (usePlaylistRoute) searchArgs.push('--download-archive', archive);   // não repete a faixa da playlist
     searchArgs.push('--match-filter', DURATION, '--max-downloads', String(need), url.replace(/^ytsearch\d*:/i, `ytsearch${pool}:`));
-    if (all.length > 0) onProgress({ state: 'preparing', title: 'Completando pela busca normal…' });
+    if (all.length > 0) onProgress({ state: 'preparing', title: 'Completing via normal search…' });
     const r = await runYtDlp(searchArgs, all.length, need);
     addPaths(r.paths);
     if (!r.ok && all.length === 0) lastErr = r.err || lastErr;

@@ -48,8 +48,8 @@ export function detectManualHelpNeed(
   if (CAPTCHA_PATTERNS.test(page)) {
     return {
       kind: 'captcha',
-      reason: `O site ${host || 'atual'} mostrou uma verificacao humana.`,
-      instruction: 'Resolva o captcha/verificacao manualmente nesta aba. Quando terminar, clique em Continuar para eu retomar a tarefa.',
+      reason: `The site ${host || 'you are on'} showed a human verification.`,
+      instruction: 'Solve the captcha/verification manually in this tab. When you are done, click Continue so I can resume the task.',
     };
   }
 
@@ -62,8 +62,8 @@ export function detectManualHelpNeed(
   if (PAYWALL_PATTERNS.test(page) && privateTask) {
     return {
       kind: 'paywall',
-      reason: `O conteudo em ${host || 'este site'} parece exigir assinatura ou acesso da conta.`,
-      instruction: 'Se voce tiver acesso, entre manualmente. Depois clique em Continuar. Se nao tiver, pare a tarefa ou peca para eu buscar outra fonte.',
+      reason: `The content on ${host || 'this site'} seems to require a subscription or account access.`,
+      instruction: 'If you have access, sign in manually. Then click Continue. If you do not, stop the task or ask me to find another source.',
     };
   }
 
@@ -83,8 +83,8 @@ export function detectManualHelpNeed(
   if ((hardLoginGate || likelyStuckOnLogin) && !publicTask) {
     return {
       kind: 'login',
-      reason: `Para essa tarefa, ${host || 'o site atual'} parece precisar de login.`,
-      instruction: 'Faca login ou crie a conta manualmente no proprio site. Eu nao preciso ver sua senha. Quando a pagina estiver logada, clique em Continuar para eu seguir daqui.',
+      reason: `For this task, ${host || 'the current site'} seems to need a login.`,
+      instruction: 'Log in or create the account manually on the site itself. I do not need to see your password. Once the page is logged in, click Continue so I can take it from here.',
     };
   }
 

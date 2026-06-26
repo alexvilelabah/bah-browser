@@ -128,34 +128,34 @@ export async function cortarTrecho(
   input: string, startSec: number, endSec: number,
   onProgress: (p: VideoEditProgress) => void,
 ): Promise<VideoEditResult> {
-  if (!input || !fs.existsSync(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+  if (!input || !fs.existsSync(input)) return { success: false, error: 'Video file not found.' };
   const start = Math.max(0, Number(startSec) || 0);
   const end = Number(endSec) || 0;
-  if (!(end > start)) return { success: false, error: 'O fim precisa ser maior que o início (ex.: de 1:00 até 2:30).' };
+  if (!(end > start)) return { success: false, error: 'The end must be greater than the start (e.g., from 1:00 to 2:30).' };
   const dur = end - start;
   const { ffmpeg, ffprobe } = await resolveBins();
   // Início depois do fim do vídeo = nada pra cortar (mensagem clara em vez de erro cru).
   const total = await probeDuration(ffprobe, input);
   if (total && start >= total) {
-    return { success: false, error: `O início (${fmtClock(start)}) passa do fim do vídeo (${fmtClock(total)}).` };
+    return { success: false, error: `The start (${fmtClock(start)}) is past the end of the video (${fmtClock(total)}).` };
   }
   const ext = /\.(mp4|mkv|mov|m4v)$/i.test(input) ? path.extname(input) : '.mp4';
   const out = outPath(input, '-corte', ext);
 
-  onProgress({ stage: 'processing', message: `Cortando de ${fmtClock(start)} até ${fmtClock(end)}…`, percent: 0 });
+  onProgress({ stage: 'processing', message: `Cutting from ${fmtClock(start)} to ${fmtClock(end)}…`, percent: 0 });
   // -ss ANTES do -i = seek rápido; -t = duração exata. Re-encode = corte preciso.
   const args = ['-y', '-ss', String(start), '-i', input, '-t', String(dur),
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', out];
   const r = await run(ffmpeg, args, 900_000, (line) => {
     const t = parseFfmpegTime(line);
-    if (t != null && dur > 0) onProgress({ stage: 'processing', message: 'Cortando o trecho…', percent: Math.min(99, Math.round((t / dur) * 100)) });
+    if (t != null && dur > 0) onProgress({ stage: 'processing', message: 'Cutting the clip…', percent: Math.min(99, Math.round((t / dur) * 100)) });
   });
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 10_000;
   if (!ok) {
     const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
-    return { success: false, error: `Não consegui cortar: ${tail}` };
+    return { success: false, error: `Could not cut: ${tail}` };
   }
-  onProgress({ stage: 'done', message: `Trecho salvo (${fmtClock(dur)}).` });
+  onProgress({ stage: 'done', message: `Clip saved (${fmtClock(dur)}).` });
   return { success: true, path: out, info: { start, end, dur } };
 }
 
@@ -165,25 +165,25 @@ export async function extrairAudio(
   input: string,
   onProgress: (p: VideoEditProgress) => void,
 ): Promise<VideoEditResult> {
-  if (!input || !fs.existsSync(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+  if (!input || !fs.existsSync(input)) return { success: false, error: 'Video file not found.' };
   const { ffmpeg, ffprobe } = await resolveBins();
   if (!(await hasAudioStream(ffprobe, input))) {
-    return { success: false, error: 'Esse vídeo não tem faixa de áudio pra extrair.' };
+    return { success: false, error: 'This video has no audio track to extract.' };
   }
   const out = outPath(input, '', '.mp3');
   const total = await probeDuration(ffprobe, input);
-  onProgress({ stage: 'processing', message: 'Extraindo o áudio (mp3)…' });
+  onProgress({ stage: 'processing', message: 'Extracting the audio (mp3)…' });
   const args = ['-y', '-i', input, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', out];
   const r = await run(ffmpeg, args, 300_000, (line) => {
     const t = parseFfmpegTime(line);
-    if (t != null && total > 0) onProgress({ stage: 'processing', message: 'Extraindo o áudio (mp3)…', percent: Math.min(99, Math.round((t / total) * 100)) });
+    if (t != null && total > 0) onProgress({ stage: 'processing', message: 'Extracting the audio (mp3)…', percent: Math.min(99, Math.round((t / total) * 100)) });
   });
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 1000;
   if (!ok) {
     const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
-    return { success: false, error: `Não consegui extrair o áudio: ${tail}` };
+    return { success: false, error: `Could not extract the audio: ${tail}` };
   }
-  onProgress({ stage: 'done', message: 'Áudio extraído.' });
+  onProgress({ stage: 'done', message: 'Audio extracted.' });
   return { success: true, path: out };
 }
 
@@ -202,20 +202,20 @@ export async function removerSilencio(
   opts: RemoveSilenceOpts,
   onProgress: (p: VideoEditProgress) => void,
 ): Promise<VideoEditResult> {
-  if (!input || !fs.existsSync(input)) return { success: false, error: 'Arquivo de vídeo não encontrado.' };
+  if (!input || !fs.existsSync(input)) return { success: false, error: 'Video file not found.' };
   const noiseDb = Number.isFinite(opts.noiseDb as number) ? (opts.noiseDb as number) : -30;
   const minSilence = opts.minSilence && opts.minSilence > 0 ? opts.minSilence : 0.6;
   const pad = opts.pad && opts.pad >= 0 ? opts.pad : 0.10;
   const { ffmpeg, ffprobe } = await resolveBins();
 
   const total = await probeDuration(ffprobe, input);
-  if (!total) return { success: false, error: 'Não consegui ler a duração do vídeo.' };
+  if (!total) return { success: false, error: 'Could not read the video duration.' };
   if (!(await hasAudioStream(ffprobe, input))) {
-    return { success: false, error: 'Esse vídeo não tem faixa de áudio — não há silêncio pra remover.' };
+    return { success: false, error: 'This video has no audio track — there is no silence to remove.' };
   }
 
   // 1) DETECTAR silêncios
-  onProgress({ stage: 'analyzing', message: 'Analisando o áudio pra achar os silêncios…' });
+  onProgress({ stage: 'analyzing', message: 'Analyzing the audio to find the silences…' });
   const silences: Array<{ start: number; end: number }> = [];
   let pendingStart: number | null = null;
   const detArgs = ['-i', input, '-af', `silencedetect=noise=${noiseDb}dB:d=${minSilence}`, '-f', 'null', '-'];
@@ -230,7 +230,7 @@ export async function removerSilencio(
   });
 
   if (silences.length === 0) {
-    return { success: true, path: undefined, info: { removed: 0, message: 'Nenhum silêncio significativo encontrado — o vídeo já é contínuo.' } };
+    return { success: true, path: undefined, info: { removed: 0, message: 'No significant silence found — the video is already continuous.' } };
   }
 
   // 2) TRECHOS COM FALA = complemento dos silêncios, com folga (pad) e merge.
@@ -254,7 +254,7 @@ export async function removerSilencio(
   const keptDur = padded.reduce((s, k) => s + (k.b - k.a), 0);
   const removedDur = Math.max(0, total - keptDur);
   if (padded.length === 0 || removedDur < 0.3) {
-    return { success: true, path: undefined, info: { removed: 0, message: 'Quase não havia silêncio pra remover.' } };
+    return { success: true, path: undefined, info: { removed: 0, message: 'There was almost no silence to remove.' } };
   }
 
   // 3) CONCAT só dos trechos com fala. Filtro num arquivo (evita estourar a linha).
@@ -269,11 +269,11 @@ export async function removerSilencio(
 
   const filterFile = path.join(os.tmpdir(), `nav-desilence-${Date.now()}.txt`);
   try { fs.writeFileSync(filterFile, filter, 'utf-8'); }
-  catch (e: any) { return { success: false, error: `Falha ao preparar o filtro: ${e?.message ?? e}` }; }
+  catch (e: any) { return { success: false, error: `Failed to prepare the filter: ${e?.message ?? e}` }; }
 
   const ext = path.extname(input) || '.mp4';
   const out = outPath(input, '-sem-silencio', ext);
-  onProgress({ stage: 'processing', message: `Removendo ${fmtClock(removedDur)} de silêncio (${padded.length} trechos com fala)…`, percent: 0 });
+  onProgress({ stage: 'processing', message: `Removing ${fmtClock(removedDur)} of silence (${padded.length} speech segments)…`, percent: 0 });
 
   const args = [
     '-y', '-i', input,
@@ -285,15 +285,15 @@ export async function removerSilencio(
   ];
   const r = await run(ffmpeg, args, 1_800_000, (line) => {
     const t = parseFfmpegTime(line);
-    if (t != null && keptDur > 0) onProgress({ stage: 'processing', message: `Removendo silêncio…`, percent: Math.min(99, Math.round((t / keptDur) * 100)) });
+    if (t != null && keptDur > 0) onProgress({ stage: 'processing', message: `Removing silence…`, percent: Math.min(99, Math.round((t / keptDur) * 100)) });
   });
   try { fs.unlinkSync(filterFile); } catch {}
 
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 10_000;
   if (!ok) {
     const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
-    return { success: false, error: `Não consegui remover o silêncio: ${tail}` };
+    return { success: false, error: `Could not remove the silence: ${tail}` };
   }
-  onProgress({ stage: 'done', message: `Pronto: ${fmtClock(removedDur)} de silêncio removidos.` });
+  onProgress({ stage: 'done', message: `Done: ${fmtClock(removedDur)} of silence removed.` });
   return { success: true, path: out, info: { removed: padded.length, removedDur: Math.round(removedDur), keptDur: Math.round(keptDur), total: Math.round(total) } };
 }

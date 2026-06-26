@@ -57,13 +57,13 @@ export async function makeSupercut(
 ): Promise<SupercutResult> {
   const want = Math.min(Math.max(count || 6, 1), 15);
   const clean = (phrase || '').trim();
-  if (clean.length < 2) return { success: false, error: 'Frase muito curta pro supercut.' };
+  if (clean.length < 2) return { success: false, error: 'Phrase too short for the supercut.' };
 
   // 1. Onde a frase é dita (reusa todo o pipeline de legendas do video-cuts).
-  onProgress({ stage: 'searching', message: `Procurando ${want} vídeos onde "${clean}" é dita…` });
+  onProgress({ stage: 'searching', message: `Looking for ${want} videos where "${clean}" is said…` });
   const found = await searchVideoCuts(clean, want);
   if (!found.success || found.cuts.length < 1) {
-    return { success: false, error: found.error || `Não achei vídeo onde "${clean}" é dita. Tente uma frase mais comum.` };
+    return { success: false, error: found.error || `Could not find a video where "${clean}" is said. Try a more common phrase.` };
   }
   const cuts: VideoCut[] = found.cuts;
 
@@ -71,9 +71,9 @@ export async function makeSupercut(
   const ffDir = await findFfmpegDir();
 
   // Salva os trechos numa subpasta temática do Downloads (não cola — arquivos separados).
-  const outDir = path.join(app.getPath('downloads'), `trechos-${slugify(clean)}`);
+  const outDir = path.join(app.getPath('downloads'), `clips-${slugify(clean)}`);
   try { fs.mkdirSync(outDir, { recursive: true }); } catch (e: any) {
-    return { success: false, error: `Não consegui criar a pasta: ${e?.message ?? e}` };
+    return { success: false, error: `Could not create the folder: ${e?.message ?? e}` };
   }
   const clipPaths: string[] = [];
   const usedCuts: VideoCut[] = [];
@@ -87,7 +87,7 @@ export async function makeSupercut(
     const c = cuts[i];
     const start = Math.max(0, c.seconds - PRE_ROLL);
     const end = c.seconds + POST_ROLL;
-    onProgress({ stage: 'clipping', current: i + 1, total: cuts.length, message: `Baixando trecho ${i + 1}/${cuts.length} (melhor qualidade): "${(c.title || c.videoId).slice(0, 50)}" @${c.seconds}s` });
+    onProgress({ stage: 'clipping', current: i + 1, total: cuts.length, message: `Downloading clip ${i + 1}/${cuts.length} (best quality): "${(c.title || c.videoId).slice(0, 50)}" @${c.seconds}s` });
     const out = path.join(outDir, `${pad(i + 1)}-%(title).60B.%(ext)s`);
     const fmt = ffDir ? 'bv*+ba/b' : 'b';   // melhor v+a (merge); sem ffmpeg, melhor progressivo
     const args = [
@@ -119,9 +119,9 @@ export async function makeSupercut(
   }
 
   if (clipPaths.length === 0) {
-    return { success: false, error: `Não consegui baixar nenhum trecho de "${clean}" — o YouTube pode estar limitando. Tente de novo em alguns minutos.` };
+    return { success: false, error: `Could not download any clip of "${clean}" — YouTube may be rate-limiting. Try again in a few minutes.` };
   }
 
-  onProgress({ stage: 'done', message: `${clipPaths.length} trechos baixados em ${outDir}` });
+  onProgress({ stage: 'done', message: `${clipPaths.length} clips downloaded to ${outDir}` });
   return { success: true, dir: outDir, paths: clipPaths, clipCount: clipPaths.length, clips: usedCuts.map((c) => ({ title: c.title, videoId: c.videoId, seconds: c.seconds })) };
 }

@@ -156,7 +156,7 @@ async function trySubtitles(phrase: string, count: number): Promise<VideoCut[]> 
 export async function searchVideoCuts(phrase: string, count: number): Promise<VideoCutsResult> {
   const n = Math.min(Math.max(count || 4, 1), 8);
   const clean = (phrase || '').trim();
-  if (clean.length < 2) return { success: false, cuts: [], error: 'Frase muito curta.' };
+  if (clean.length < 2) return { success: false, cuts: [], error: 'Phrase too short.' };
 
   const viaFilmot = await tryFilmot(clean, n);
   if (viaFilmot && viaFilmot.length > 0) return { success: true, cuts: viaFilmot, source: 'filmot' };
@@ -164,5 +164,5 @@ export async function searchVideoCuts(phrase: string, count: number): Promise<Vi
   const viaSubs = await trySubtitles(clean, n);
   if (viaSubs.length > 0) return { success: true, cuts: viaSubs, source: 'legendas' };
 
-  return { success: false, cuts: [], error: `Não achei vídeos onde "${clean}" é dita (tentei Filmot e legendas do YouTube).` };
+  return { success: false, cuts: [], error: `Could not find videos where "${clean}" is said (tried Filmot and YouTube captions).` };
 }

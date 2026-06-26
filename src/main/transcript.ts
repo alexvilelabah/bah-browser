@@ -51,7 +51,7 @@ function vttToText(vtt: string): string {
 
 export async function fetchTranscript(url: string): Promise<{ ok: boolean; text?: string; error?: string }> {
   const id = youtubeId(url);
-  if (!id) return { ok: false, error: 'não é um vídeo do YouTube' };
+  if (!id) return { ok: false, error: 'not a YouTube video' };
   const bin = await ensureYtDlp();
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tscript-'));
   try {
@@ -62,11 +62,11 @@ export async function fetchTranscript(url: string): Promise<{ ok: boolean; text?
       '-o', path.join(tmpDir, id),
     ], 30_000);
     const vtts = fs.readdirSync(tmpDir).filter((f) => f.startsWith(id) && f.endsWith('.vtt'));
-    if (!vtts.length) return { ok: false, error: 'esse vídeo não tem legenda disponível' };
+    if (!vtts.length) return { ok: false, error: 'this video has no captions available' };
     const pick = vtts.find((f) => /\.pt(-orig)?\.vtt$/.test(f)) || vtts[0];   // prefere PT
     let text = vttToText(fs.readFileSync(path.join(tmpDir, pick), 'utf8'));
-    if (!text) return { ok: false, error: 'legenda vazia' };
-    if (text.length > 14000) text = text.slice(0, 14000) + ' …(transcrição truncada)';
+    if (!text) return { ok: false, error: 'empty caption' };
+    if (text.length > 14000) text = text.slice(0, 14000) + ' …(transcript truncated)';
     return { ok: true, text };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };

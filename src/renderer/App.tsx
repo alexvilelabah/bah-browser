@@ -997,7 +997,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const sleep = (ms: number): Promise<void> => raceCancel(new Promise<void>(r => setTimeout(r, ms)));
               const waitForManualHelp = async (request: ManualHelpRequest, currentUrl: string) => {
                 setAgentVisual('idle');
-                setLastFooterMsg(`Ajuda manual: ${request.reason}`);
+                setLastFooterMsg(`Manual help: ${request.reason}`);
                 appendAgentRunStep(runLog, {
                   manualHelp: {
                     kind: request.kind,
@@ -1822,7 +1822,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = dl ?? { success: false, error: 'download API unavailable' };
                     if (dl?.success && dl.info) {
                       history += `\nDOWNLOADED: ${dl.info.path} (${Math.round(dl.info.bytes / 1024)} KB)`;
-                      onProgress({ kind: 'status', message: `💾 Baixado: ${dl.info.path.split(/[\\/]/).pop()} (${Math.round(dl.info.bytes / 1024)} KB)` });
+                      onProgress({ kind: 'status', message: `💾 Downloaded: ${dl.info.path.split(/[\\/]/).pop()} (${Math.round(dl.info.bytes / 1024)} KB)` });
                     }
                   } else if (action.type === 'ask_ai') {
                     // Responde uma pergunta usando a NOSSA IA (DeepSeek/Ollama) — instantâneo,
@@ -1885,7 +1885,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `📁 ${links.length} ${ft.toUpperCase()} file(s) found.` });
                       toolResult = { success: true, info: { count: links.length, filetype: ft, top: links[0] } };
                     } else {
-                      toolResult = { success: false, error: `Nenhum arquivo .${ft} direto encontrado para "${action.query}". Tente outra palavra ou filetype.` };
+                      toolResult = { success: false, error: `No direct .${ft} file found for "${action.query}". Try another word or filetype.` };
                     }
                   } else if (action.type === 'read_aloud') {
                     // Browser reads text aloud (TTS) — great for accessibility and demos.
@@ -2261,12 +2261,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                       const spec = {
                         title: `Prices: ${q}`,
-                        subtitle: 'Google Shopping (Mercado Livre, Amazon, Magalu, KaBuM e mais) — ordenado do mais barato',
-                        columns: ['Produto', 'Preço (R$)', 'Loja'],
+                        subtitle: 'Google Shopping (Mercado Livre, Amazon, Magalu, KaBuM and more) — sorted cheapest first',
+                        columns: ['Product', 'Price (R$)', 'Store'],
                         rows: sorted.map(x => [x.title, fmt(x.price), x.store || '—']),
                         links: sorted.map(x => x.url || undefined),
                         chart: { type: 'bar' as const, label: 'Price (R$)', labels: sorted.slice(0, 12).map(x => x.title.slice(0, 22)), values: sorted.slice(0, 12).map(x => x.price) },
-                        sourceNote: `Fonte: Google Shopping — ${new Date().toLocaleString('pt-BR')}. Preços variam; confirme na loja antes de comprar.`,
+                        sourceNote: `Source: Google Shopping — ${new Date().toLocaleString('pt-BR')}. Prices vary; confirm on the store before buying.`,
                       };
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
@@ -2452,7 +2452,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: `🖼️ ${sr.images.length} images found (largest: ${sr.images[0].width}x${sr.images[0].height}).` });
                         toolResult = { success: true, info: { count: sr.images.length, largest: `${sr.images[0].width}x${sr.images[0].height}`, top: sr.images[0].url } };
                       } else {
-                        toolResult = { success: false, error: sr?.error || `Nenhuma imagem encontrada para "${q}".` };
+                        toolResult = { success: false, error: sr?.error || `No image found for "${q}".` };
                       }
                     }
                   } else if (action.type === 'extract_images') {
@@ -2798,10 +2798,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           kind,
                           reason: recoveryVerdict.reason,
                           instruction: kind === 'captcha'
-                            ? 'Resolva a verificacao humana manualmente nesta aba. Quando terminar, clique em Continuar.'
+                            ? 'Solve the human verification manually in this tab. When you are done, click Continue.'
                             : kind === 'paywall'
-                            ? 'Se voce tiver acesso, entre manualmente. Depois clique em Continuar para eu tentar seguir daqui.'
-                            : 'Faca login manualmente no proprio site. Quando estiver logado, clique em Continuar para eu retomar a tarefa.',
+                            ? 'If you have access, sign in manually. Then click Continue so I can try to take it from here.'
+                            : 'Log in manually on the site itself. Once you are logged in, click Continue so I can resume the task.',
                         }, afterObservation.url);
                         continue;
                       }
@@ -2823,12 +2823,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // close_popup / retry → instruction is in history, AI will act on it next step.
                   }
                 }
-                setLastFooterMsg('Atingiu limite de passos');
-                finishRun('max_steps', 'Atingiu limite de passos');
+                setLastFooterMsg('Step limit reached');
+                finishRun('max_steps', 'Step limit reached');
                 return { thought: `${thoughts.join('\n\n')}\n\nReached max steps`, results: allResults };
               } catch (err: any) {
                 if (err?.message === 'TASK_CANCELLED_BY_USER') {
-                  const done: BrowserAction = { type: 'done', success: false, reason: 'Tarefa cancelada pelo usuario.' };
+                  const done: BrowserAction = { type: 'done', success: false, reason: 'Task canceled by the user.' };
                   setLastFooterMsg(done.reason);
                   finishRun('cancelled', done.reason);
                   return { thought: done.reason, results: allResults, done };
@@ -3061,15 +3061,15 @@ async function runTrashDestroyer(
   throwIfCancelled();
   const article = await raceTimeout(wv.executeJavaScript(TRASH_DESTROYER_EXTRACT_SCRIPT), 8000, null as any);
   if (!article?.text) {
-    const done: BrowserAction = { type: 'done', success: false, reason: 'Nao consegui extrair texto principal desta pagina.' };
+    const done: BrowserAction = { type: 'done', success: false, reason: 'Could not extract the main text from this page.' };
     return { thought: done.reason, results: [], done };
   }
 
-  onProgress({ kind: 'status', message: 'Destruidor de Lixo: resumindo em 3 pontos...' });
+  onProgress({ kind: 'status', message: 'Trash Destroyer: summarizing in 3 points...' });
   const summary = await summarizeForTrashDestroyer(article, command);
 
   throwIfCancelled();
-  onProgress({ kind: 'status', message: 'Destruidor de Lixo: removendo anuncios, popups e ruido visual...' });
+  onProgress({ kind: 'status', message: 'Trash Destroyer: removing ads, popups and visual noise...' });
   const injected = await raceTimeout(wv.executeJavaScript(`
     (function(payload) {
       ${TRASH_DESTROYER_RENDER_SCRIPT}
@@ -3078,11 +3078,11 @@ async function runTrashDestroyer(
   `), 10000, { success: false, error: 'inject timed out' });
 
   const reason = injected?.success
-    ? `Pagina limpa: ${summary.length} topicos, ${article.removedCount ?? 0} elementos de ruido detectados.`
+    ? `Clean page: ${summary.length} topics, ${article.removedCount ?? 0} noise elements detected.`
     : `Failed to transform the page: ${injected?.error ?? 'unknown error'}`;
   const done: BrowserAction = { type: 'done', success: !!injected?.success, reason };
   return {
-    thought: 'Detectei um pedido de resumo + limpeza visual e usei o fluxo dedicado de manipulacao DOM ao vivo.',
+    thought: 'Detected a summarize + visual cleanup request and used the dedicated live DOM manipulation flow.',
     results: [{ action: { type: 'report', summary: reason }, result: injected }],
     done,
   };

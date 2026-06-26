@@ -671,7 +671,7 @@ export class AIEngine {
         return this.callDeepSeek(messages, isAgentMode, 'pro');
       }
       if (res.status === 401) {
-        throw new Error('Chave da API DeepSeek invalida ou ausente. Abra as configuracoes do agente (barra lateral) e cole sua chave que comeca com "sk-".');
+        throw new Error('Invalid or missing DeepSeek API key. Open the agent settings (sidebar) and paste your key starting with "sk-".');
       }
       throw new Error(`DeepSeek API error ${res.status} (${model}): ${errText}`);
     }
