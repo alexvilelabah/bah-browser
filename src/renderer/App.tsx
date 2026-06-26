@@ -138,7 +138,9 @@ export default function App() {
   // O usuário emenda pedidos ("e com a palavra bom dia?") esperando que o agente
   // lembre do anterior. Guardamos os últimos comandos+desfechos (vai no GOAL do
   // modelo) e a última quick action (pra follow-up determinístico sem IA).
-  const recentRunsRef = useRef<Array<{ cmd: string; outcome: string }>>([]);
+  // Memória curta de tarefas do agente POR ABA (tabId → últimos comandos+desfecho).
+  // Antes era uma lista global → follow-up de agente vazava entre abas.
+  const recentRunsRef = useRef<Map<string, Array<{ cmd: string; outcome: string }>>>(new Map());
   const lastQuickActionRef = useRef<QuickAction | null>(null);
   // Gravação de macro: ações duráveis executadas com sucesso no run atual.
   // No fim (sucesso), vira a "receita" que o usuário repete sem gastar IA.
@@ -858,6 +860,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             tabIds={store.tabs.map(t => t.id).join(',')}
             onExecute={async (command, onProgress, signal) => {
               const runLog = startAgentRun(command);
+              const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
               if (isTrashDestroyerCommand(command)) {
                 const wv = getActiveWebview();
                 if (!wv) return { error: 'No active webview', results: [] };
@@ -880,7 +883,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
-              const convoCtx = recentRunsRef.current.slice(-3)
+              const convoCtx = (recentRunsRef.current.get(taskTabId) ?? []).slice(-3)
                 .map(r => `- "${r.cmd}" → ${r.outcome}`)
                 .join('\n');
               let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
@@ -971,8 +974,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 reason?: string,
               ) => {
                 // Memória curta da conversa: o próximo pedido pode ser um follow-up.
-                recentRunsRef.current.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}` });
-                if (recentRunsRef.current.length > 5) recentRunsRef.current.shift();
+                const tabRuns = recentRunsRef.current.get(taskTabId) ?? [];
+                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}` });
+                if (tabRuns.length > 5) tabRuns.shift();
+                recentRunsRef.current.set(taskTabId, tabRuns);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 if (status === 'success' && !repeatIntent && macroTraceRef.current.length > 0) {
