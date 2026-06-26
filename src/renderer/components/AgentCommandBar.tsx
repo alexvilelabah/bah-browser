@@ -843,20 +843,24 @@ function MediaStrip({ mediaKind, paths, dir, total, label }: { mediaKind: 'image
   const extra = Math.max(0, total - shown.length);
   const icon = mediaKind === 'audio' ? '🎵' : mediaKind === 'video' ? '🎬' : '🖼️';
   const fileUrl = (p: string) => 'file:///' + p.replace(/\\/g, '/').replace(/^\/+/, '');
-  const open = (target: string) => { try { (window as any).electronAPI?.revealInFolder?.(target); } catch {} };
+  // 1 mídia → abre o arquivo (a imagem/áudio/vídeo); 2+ → abre a pasta.
+  const single = total === 1 && shown.length === 1;
+  const openFile = (p: string) => { try { (window as any).electronAPI?.openFile?.(p); } catch {} };
+  const openFolder = () => { try { (window as any).electronAPI?.revealInFolder?.(dir || shown[0]); } catch {} };
+  const onTile = (p: string) => { if (single) openFile(p); else openFolder(); };
   return (
-    <div className="media-strip" title={t('media.openFolderTitle')}>
-      <div className="media-strip-head">{icon} {label} <span className="media-strip-open">{t('media.openFolder')}</span></div>
+    <div className="media-strip" title={single ? t('dl.openFile') : t('media.openFolderTitle')}>
+      <div className="media-strip-head">{icon} {label} <span className="media-strip-open">{single ? t('dl.openFile') : t('media.openFolder')}</span></div>
       <div className="media-tiles">
         {shown.map((p, i) => (
-          <div key={i} className="media-tile" onClick={() => open(p)} title={p.split(/[\\/]/).pop()}>
+          <div key={i} className="media-tile" onClick={() => onTile(p)} title={p.split(/[\\/]/).pop()}>
             {mediaKind === 'image'
               ? <img src={fileUrl(p)} alt="" draggable={false} onError={e => { (e.currentTarget.style.display = 'none'); }} />
               : <span className="media-tile-icon">{icon}</span>}
           </div>
         ))}
         {extra > 0 && (
-          <div className="media-tile media-tile-more" onClick={() => open(dir)} title={`mais ${extra} em ${dir}`}>+{extra}</div>
+          <div className="media-tile media-tile-more" onClick={openFolder} title={`mais ${extra} em ${dir}`}>+{extra}</div>
         )}
       </div>
     </div>
