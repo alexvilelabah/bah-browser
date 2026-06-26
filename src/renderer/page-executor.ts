@@ -424,7 +424,7 @@ export async function executeBrowserAction(wv: Electron.WebviewTag, action: Brow
     // etc. (rota pra ler arquivo local e mandar pra IA). Páginas internas do app
     // (data-view/supercut) abrem por outro caminho — store.addTab(rv.url) —, não aqui.
     if (!/^https?:\/\//i.test(target)) {
-      return { success: false, error: `Bloqueado: o agente só navega para páginas http(s), não "${action.url}".` };
+      return { success: false, error: `Blocked: the agent only navigates to http(s) pages, not "${action.url}".` };
     }
     try { await wv.loadURL(target); } catch (e: any) { /* ignore mid-load aborts */ }
     // Wait until page settles or timeout
@@ -678,7 +678,7 @@ window.__browserTools = window.__browserTools || {
     const want = String(text || '');
     this.insertText(el, want, false);
     const got = this.fieldValue(el);
-    if (want && !got) return { success: false, error: 'O campo focado não aceitou o texto (continuou vazio). Clique no campo certo antes de digitar.' };
+    if (want && !got) return { success: false, error: 'The focused field did not accept the text (still empty). Click the right field before typing.' };
     return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, textLength: got.length } };
   },
   fill(action) {
@@ -688,7 +688,7 @@ window.__browserTools = window.__browserTools || {
     const want = String(action.value || '');
     this.insertText(el, want, true);
     const got = this.fieldValue(el);
-    if (want && !got) return { success: false, error: 'O campo continuou vazio — não aceitou o texto (campo desabilitado/custom?). Tente outro elemento.' };
+    if (want && !got) return { success: false, error: 'The field stayed empty — did not accept the text (disabled/custom field?). Try another element.' };
     return { success: true, info: { tag: el.tagName, contentEditable: el.isContentEditable, valueLength: got.length, verified: got === want } };
   },
   insertText(el, value, replace) {

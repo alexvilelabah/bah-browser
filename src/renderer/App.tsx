@@ -224,7 +224,7 @@ export default function App() {
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     window.electronAPI?.onSafeBrowsingBlock?.((info) => {
-      setLastFooterMsg(`⚠️ Site malicioso bloqueado: ${info.host} (${info.url})`);
+      setLastFooterMsg(`⚠️ Malicious site blocked: ${info.host} (${info.url})`);
     });
     window.electronAPI?.onDownloadEvent?.((info) => {
       downloadEventsRef.current.push(info);
@@ -248,13 +248,13 @@ export default function App() {
         };
         return [merged, ...rest].slice(0, 50);
       });
-      if (info.state === 'completed') setLastFooterMsg(`💾 Baixado: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
-      else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download bloqueado: ${info.filename} (${info.reason || 'executável'})`);
+      if (info.state === 'completed') setLastFooterMsg(`💾 Downloaded: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
+      else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download blocked: ${info.filename} (${info.reason || 'executable'})`);
     });
     window.electronAPI?.onVideoProgress?.((p) => {
       // Sem card de progresso no meio do site: a animação na barra de digitar já mostra o
       // trabalho. Só um aviso discreto no rodapé quando o download termina.
-      if (p.state === 'completed') setLastFooterMsg(`🎬 Vídeo salvo: ${p.title ?? ''}`);
+      if (p.state === 'completed') setLastFooterMsg(`🎬 Video saved: ${p.title ?? ''}`);
     });
   }, []);
 
@@ -280,12 +280,12 @@ export default function App() {
   // ── Favoritos (estilo Chrome) ──
   const saveFavorite = useCallback(() => {
     const t = store.activeTab;
-    if (!t?.url || !/^https?:\/\//i.test(t.url)) { setLastFooterMsg('Abra uma página antes de favoritar.'); return; }
+    if (!t?.url || !/^https?:\/\//i.test(t.url)) { setLastFooterMsg('Open a page before bookmarking.'); return; }
     setFavorites(prev => {
-      if (prev.some(f => f.url === t.url)) { setLastFooterMsg('⭐ Esta página já está nos favoritos.'); return prev; }
+      if (prev.some(f => f.url === t.url)) { setLastFooterMsg('⭐ This page is already bookmarked.'); return prev; }
       const next = [{ url: t.url, title: (t.title || t.url).slice(0, 80) }, ...prev].slice(0, 60);
       try { localStorage.setItem('favorites.v1', JSON.stringify(next)); } catch {}
-      setLastFooterMsg('⭐ Favorito salvo.');
+      setLastFooterMsg('⭐ Bookmark saved.');
       return next;
     });
   }, [store.activeTab]);
@@ -368,14 +368,14 @@ export default function App() {
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
   const handleGoogleLogin = useCallback(async () => {
-    setLastFooterMsg('🔑 Abrindo Chrome/Edge — faça o login lá. Eu detecto e importo sozinho (não precisa fechar nada nem clicar em importar).');
+    setLastFooterMsg('🔑 Opening Chrome/Edge — sign in there. I detect and import it automatically (no need to close anything or click import).');
     try {
       const result = await window.electronAPI?.googleLogin?.();
-      if (!result?.ok) { setLastFooterMsg(result?.error || 'Não consegui importar o login do Google.'); return; }
-      setLastFooterMsg(`✅ Login importado de ${result.browser || 'Chrome/Edge'} (${result.copied || 0} cookies). Recarregando…`);
+      if (!result?.ok) { setLastFooterMsg(result?.error || 'Could not import the Google login.'); return; }
+      setLastFooterMsg(`✅ Login imported from ${result.browser || 'Chrome/Edge'} (${result.copied || 0} cookies). Reloading…`);
       const wv = webviewRefs.current.get(store.activeTab?.id) as any;
       try { wv?.reload?.(); } catch {}
-    } catch { setLastFooterMsg('Não consegui abrir o login do Google.'); }
+    } catch { setLastFooterMsg('Could not open the Google login.'); }
   }, [store]);
 
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
@@ -553,7 +553,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   // PAINEL onde o usuário digita. A aba dele não muda; ele não "lê a página".
   const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }> }> => {
     const q = (query || '').trim();
-    if (!q) return { answer: 'Pergunta vazia.', sources: [] };
+    if (!q) return { answer: 'Empty question.', sources: [] };
     // Aba OCULTA: carrega e raspa "por baixo dos panos" — nunca aparece na barra de
     // abas nem rouba o foco do usuário (ele continua exatamente onde estava).
     const bgId = store.addHiddenTab(`https://www.google.com/search?q=${encodeURIComponent(q)}&${googleLocaleParams()}`);
@@ -568,17 +568,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
       let waited = 0;
       let bgWv = webviewRefs.current.get(bgId) as Electron.WebviewTag | undefined;
       while (waited < 6000 && !bgWv) { await new Promise(r => setTimeout(r, 150)); waited += 150; bgWv = webviewRefs.current.get(bgId) as any; }
-      if (!bgWv) return { answer: 'Não consegui abrir a busca agora.', sources: [] };
+      if (!bgWv) return { answer: 'Could not open the search right now.', sources: [] };
       let results = await scrape(bgWv);
       if (results.length < 2) {   // Google não rendeu → tenta Bing na mesma aba de fundo
         try { await bgWv.loadURL(`https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=${bingLocale()}`); } catch {}
         results = await scrape(bgWv);
       }
-      if (results.length === 0) return { answer: 'Não encontrei resultados úteis pra essa busca agora. Pode reformular?', sources: [] };
+      if (results.length === 0) return { answer: 'I did not find useful results for this search right now. Could you rephrase?', sources: [] };
       const snippetsBlock = results.map((x, i) => `[${i + 1}] ${x.title}\n${x.snippet || ''}\n(${x.url})`).join('\n\n');
       const prompt = `Pergunta do usuário: "${q}"\n\nResultados de busca da web (de HOJE):\n${snippetsBlock}\n\nResponda à pergunta de forma DIRETA e útil em ${uiLangName()}, usando SOMENTE estes resultados. Cite as fontes pelo nome do site entre parênteses (ex.: (Wikipedia)). Seja conciso: no máximo ~6 linhas ou uma lista curta. Se os resultados não responderem com clareza, diga o que dá pra concluir. NÃO escreva nenhuma linha [[ACTION:]].`;
       const r = await window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled);   // stateless: não polui o histórico
-      const answer = (r?.response || '').trim() || (r?.error ? `Erro ao resumir: ${r.error}` : 'Não consegui resumir os resultados.');
+      const answer = (r?.response || '').trim() || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
       return { answer, sources: results.map(x => ({ title: x.title, url: x.url })) };
     } finally {
       try { store.closeTab(bgId); } catch {}   // remove a aba oculta (nunca foi vista)
@@ -859,7 +859,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const wv = getActiveWebview();
                 if (!wv) return { error: 'No active webview', results: [] };
                 setAgentVisual('observing');
-                onProgress({ kind: 'status', message: 'Destruidor de Lixo: lendo o DOM da pagina...' });
+                onProgress({ kind: 'status', message: 'Trash Destroyer: reading the page DOM...' });
                 try {
                   const result = await runTrashDestroyer(wv, command, onProgress, signal);
                   const rdone = result.done as { reason?: string; success?: boolean };
@@ -974,7 +974,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 if (status === 'success' && !repeatIntent && macroTraceRef.current.length > 0) {
                   saveLastMacro({ command, steps: [...macroTraceRef.current], savedAt: Date.now() });
-                  onProgress({ kind: 'status', message: `🧠 Sequência gravada (${macroTraceRef.current.length} passo(s)). Diga "repete" ou "repete 100 vezes" pra reexecutar sem gastar IA.` });
+                  onProgress({ kind: 'status', message: `🧠 Sequence recorded (${macroTraceRef.current.length} step(s)). Say "repeat" or "repeat 100 times" to re-run it without spending AI.` });
                 }
                 return finishAgentRun(runLog, status, reason);
               };
@@ -1044,8 +1044,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
                 setAgentVisual('idle');
-                setLastFooterMsg(`Confirmação: ${risk.kind}`);
-                const verb = risk.kind === 'dados de cartão' ? 'preencher' : 'clicar em';
+                setLastFooterMsg(`Confirmation: ${risk.kind}`);
+                const verb = risk.kind === 'card data' ? 'fill in' : 'click';
                 return new Promise<boolean>((resolve) => {
                   let done = false;
                   const finish = (v: boolean) => { if (!done) { done = true; setLastFooterMsg(''); resolve(v); } };
@@ -1054,7 +1054,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     kind: 'confirm',
                     risk: risk.kind,
                     label: risk.label,
-                    message: `⚠️ Pausa de segurança — isto envolve ${risk.kind}. Vou ${verb} "${risk.label}". Quer que eu continue?`,
+                    message: `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`,
                     onConfirm: () => finish(true),
                     onCancel: () => finish(false),
                   });
@@ -1067,8 +1067,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const ok = await confirmRisky(risk);
                 throwIfCancelled();
                 if (ok) return null;
-                onProgress({ kind: 'status', message: `✖️ Cancelado por você: não fiz "${risk.label}".` });
-                return { success: false, reason: 'user_cancelled', error: `Você cancelou — não fiz "${risk.label}".` };
+                onProgress({ kind: 'status', message: `✖️ Canceled by you: I did not do "${risk.label}".` });
+                return { success: false, reason: 'user_cancelled', error: `You canceled — I did not do "${risk.label}".` };
               };
               try {
                 throwIfCancelled();
@@ -1078,14 +1078,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 if (repeatIntent) {
                   const macro = loadLastMacro();
                   if (!macro) {
-                    const msg = 'Ainda não tenho nenhuma automação gravada. Faça a tarefa uma vez (ex.: "entre no site X e clique em Y") — eu gravo a sequência e aí você pode repetir quantas vezes quiser.';
+                    const msg = 'I have no recorded automation yet. Do the task once (e.g.: "go to site X and click Y") — I record the sequence, and then you can repeat it as many times as you want.';
                     setLastFooterMsg(msg);
                     finishRun('failed', msg);
                     return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
                   }
                   const times = repeatIntent.times;
                   const pause = repeatIntent.intervalMs ?? 1200;
-                  onProgress({ kind: 'status', message: `🔁 Automação: "${macro.command.slice(0, 70)}" — ${macro.steps.length} passo(s) × ${times >= 100000 ? '∞ (até você parar)' : times}${repeatIntent.intervalMs ? `, a cada ${Math.round(repeatIntent.intervalMs / 1000)}s` : ''}. Zero IA.` });
+                  onProgress({ kind: 'status', message: `🔁 Automation: "${macro.command.slice(0, 70)}" — ${macro.steps.length} step(s) × ${times >= 100000 ? '∞ (until you stop)' : times}${repeatIntent.intervalMs ? `, every ${Math.round(repeatIntent.intervalMs / 1000)}s` : ''}. Zero AI.` });
                   // FREIO: se a automação inclui uma ação de risco (pagar/excluir/cartão),
                   // confirma UMA vez antes de repetir (não a cada repetição — seria absurdo).
                   const riskyStep = macro.steps.map(s => riskForAction(s as any)).find((r): r is RiskInfo => !!r);
@@ -1093,7 +1093,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const ok = await confirmRisky(riskyStep);
                     throwIfCancelled();
                     if (!ok) {
-                      const msg = `Cancelado — a automação inclui uma ação de risco ("${riskyStep.label}") e você não confirmou.`;
+                      const msg = `Canceled — the automation includes a sensitive action ("${riskyStep.label}") and you did not confirm.`;
                       setLastFooterMsg(msg);
                       finishRun('cancelled', msg);
                       return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
@@ -1108,7 +1108,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     throwIfCancelled();
                     const wv = getActiveWebview();
                     if (!wv) break;
-                    if (times > 1) onProgress({ kind: 'status', message: `🔁 Repetição ${rep + 1}${times < 100000 ? `/${times}` : ''}` });
+                    if (times > 1) onProgress({ kind: 'status', message: `🔁 Repeat ${rep + 1}${times < 100000 ? `/${times}` : ''}` });
                     for (let j = 0; j < macro.steps.length; j++) {
                       throwIfCancelled();
                       const a = macro.steps[j];
@@ -1119,7 +1119,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         r = await executeBrowserAction(wv, a);
                       }
                       if (!r?.success) {
-                        const msg = `Automação quebrou na repetição ${rep + 1}, passo ${j + 1} (${formatAction(a)}): ${r?.error || 'elemento não encontrado'}. O site deve ter mudado — faça a tarefa uma vez de novo pra eu regravar.`;
+                        const msg = `Automation broke on repeat ${rep + 1}, step ${j + 1} (${formatAction(a)}): ${r?.error || 'element not found'}. The site likely changed — do the task once more so I can re-record it.`;
                         setLastFooterMsg(msg);
                         finishRun('failed', msg);
                         return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
@@ -1129,7 +1129,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                     if (rep + 1 < times) await sleepCancelable(pause);
                   }
-                  const okMsg = `Automação executada ${rep} vez(es) sem quebrar (${macro.steps.length} passo(s) cada, zero IA).`;
+                  const okMsg = `Automation ran ${rep} time(s) without breaking (${macro.steps.length} step(s) each, zero AI).`;
                   setLastFooterMsg(`✅ ${okMsg}`);
                   finishRun('success', okMsg);
                   return { thought: okMsg, results: allResults, done: { type: 'done', reason: okMsg, success: true } as BrowserAction };
@@ -1151,7 +1151,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     else if (last.type === 'open_video') quickAction = { ...last, query: term };
                     else if (last.type === 'open_videos') quickAction = { ...last, query: term };
                     else if (last.type === 'find_file') quickAction = { ...last, query: term };
-                    if (quickAction) onProgress({ kind: 'status', message: `🔗 Continuando o pedido anterior com "${term}"` });
+                    if (quickAction) onProgress({ kind: 'status', message: `🔗 Continuing the previous request with "${term}"` });
                   }
                 }
                 if (quickAction) lastQuickActionRef.current = quickAction;
@@ -1159,14 +1159,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 if (quickAction) {
                   actionQueue.push({ action: quickAction as BrowserAction });
                   usedInitialShortcut = true;
-                  onProgress({ kind: 'status', message: `⚡ Intenção reconhecida: ${formatAction(quickAction as BrowserAction)}` });
+                  onProgress({ kind: 'status', message: `⚡ Recognized intent: ${formatAction(quickAction as BrowserAction)}` });
                   console.log(`[Agent] quick action -> ${formatAction(quickAction as BrowserAction)}`);
                 }
                 if (initialShortcut) {
                   const wv = getActiveWebview();
-                  if (!wv) { setLastFooterMsg('Nenhuma webview ativa'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
+                  if (!wv) { setLastFooterMsg('No active webview'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
                   setAgentVisual('acting');
-                  onProgress({ kind: 'status', message: `Atalho conhecido: ${initialShortcut.reason}` });
+                  onProgress({ kind: 'status', message: `Known shortcut: ${initialShortcut.reason}` });
                   console.log(`[Agent] fast path -> ${initialShortcut.reason}`);
                   const beforeUrl = wv.getURL();
                   // FREIO: atalho aprendido também passa pela confirmação se for de risco.
@@ -1203,7 +1203,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
                   if (Date.now() - taskStartedAt > TASK_DEADLINE_MS) {
-                    const done: BrowserAction = { type: 'done', success: false, reason: 'Tempo limite da tarefa atingido (5 min). Encerrando para evitar loop.' };
+                    const done: BrowserAction = { type: 'done', success: false, reason: 'Task time limit reached (5 min). Stopping to avoid a loop.' };
                     setLastFooterMsg(done.reason);
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1211,19 +1211,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Etapa 6: prune unbounded history to keep token usage and memory in check
                   if (history.length > 8000) history = `GOAL: ${command}\n...[older steps trimmed]...\n` + history.slice(-6000);
                   const wv = getActiveWebview();
-                  if (!wv) { setLastFooterMsg('Nenhuma webview ativa'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
+                  if (!wv) { setLastFooterMsg('No active webview'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
                   if (commandLooksLikeGoogleLogin && step >= 8) {
                     const done: BrowserAction = {
                       type: 'done',
                       success: false,
-                      reason: 'Login com Google nao foi concluido rapidamente. Pode haver bloqueio, popup, captcha ou escolha de conta que precisa de intervencao manual.',
+                      reason: 'Google login was not completed quickly. There may be a block, popup, captcha or account choice that needs manual intervention.',
                     };
                     setLastFooterMsg(done.reason);
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                   }
                   setAgentVisual('observing');
-                  onProgress({ kind: 'status', message: `Passo ${step + 1}: observando pagina...` });
+                  onProgress({ kind: 'status', message: `Step ${step + 1}: observing the page...` });
                   const observeTimeoutMs = commandLooksLikeGoogleLogin ? 6000 : 8000;
                   // Reuse last step's post-action observation when the page hasn't changed.
                   const observationWasCarried: boolean = !!(carriedObservation
@@ -1236,7 +1236,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   carriedObservation = null;
                   // Porteiro fechou um aviso de cookie/consent → avisa no feed (uma vez).
                   if (observation?.dismissed) {
-                    onProgress({ kind: 'status', message: `🚪 Fechei um aviso de cookies/consent (${observation.dismissed})` });
+                    onProgress({ kind: 'status', message: `🚪 Closed a cookie/consent notice (${observation.dismissed})` });
                     observation.dismissed = undefined;
                   }
                   throwIfCancelled();
@@ -1259,7 +1259,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else {
                     const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
                     if (manualHelpNeed) {
-                      onProgress({ kind: 'status', message: `Pausa para ajuda manual: ${manualHelpNeed.reason}` });
+                      onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       await waitForManualHelp(manualHelpNeed, observation.url);
                       continue;
                     }
@@ -1269,9 +1269,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const compose = await tryComposeGmailDraft(wv, parsedEmailDraft);
                     if (compose.success) {
                       gmailDraftFilled = true;
-                      onProgress({ kind: 'status', message: 'Gmail: rascunho preenchido automaticamente.' });
+                      onProgress({ kind: 'status', message: 'Gmail: draft filled automatically.' });
                       if (compose.sent) {
-                        const done: BrowserAction = { type: 'done', success: true, reason: 'E-mail enviado pelo Gmail.' };
+                        const done: BrowserAction = { type: 'done', success: true, reason: 'Email sent via Gmail.' };
                         setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1279,16 +1279,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       observation = await withTimeout(observePageViaAXTree(wv), observeTimeoutMs, observation);
                       rememberObservedSite(observation);
                     } else {
-                      onProgress({ kind: 'status', message: `Gmail: assistente de rascunho nao conseguiu preencher (${compose.reason || 'sem detalhe'}).` });
+                      onProgress({ kind: 'status', message: `Gmail: draft assistant could not fill it (${compose.reason || 'no detail'}).` });
                     }
                   }
                   if (commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
                     const assist = await tryRevealYouTubeCommentBox(wv);
                     if (assist.success) {
-                      onProgress({ kind: 'status', message: 'YouTube: caixa de comentario localizada/ativada.' });
+                      onProgress({ kind: 'status', message: 'YouTube: comment box located/activated.' });
                       const commentKey = makeYouTubeCommentKey(observation.url, youtubeCommentText);
                       if (submittedYouTubeComments.has(commentKey)) {
-                        const done: BrowserAction = { type: 'done', success: true, reason: `Comentario ja enviado nesta tarefa: "${youtubeCommentText}"` };
+                        const done: BrowserAction = { type: 'done', success: true, reason: `Comment already sent in this task: "${youtubeCommentText}"` };
                         setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1298,7 +1298,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         submittedYouTubeComments.add(commentKey);
                         youtubeCommentFilled = true;
                         youtubeCommentSubmitted = true;
-                        const done: BrowserAction = { type: 'done', success: true, reason: `Comentario enviado no YouTube: "${youtubeCommentText}"` };
+                        const done: BrowserAction = { type: 'done', success: true, reason: `Comment sent on YouTube: "${youtubeCommentText}"` };
                         setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1327,13 +1327,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                     action = a;
                     fromQueue = true;
-                    onProgress({ kind: 'status', message: `⚡ ação em lote (${actionQueue.length} restante(s))` });
+                    onProgress({ kind: 'status', message: `⚡ batch action (${actionQueue.length} remaining)` });
                     break;
                   }
 
                   if (!fromQueue) {
                   setAgentVisual('thinking');
-                  onProgress({ kind: 'status', message: `Passo ${step + 1}: pensando...` });
+                  onProgress({ kind: 'status', message: `Step ${step + 1}: thinking...` });
 
                   // ── OCR enrichment (local, free) ──────────────────────────────
                   // Run Tesseract on a screenshot only when DOM text is sparse.
@@ -1348,7 +1348,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const ocrResult = await window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead);
                       if (ocrResult?.ocrUsed && ocrResult.ocrText) {
                         ocrText = ocrResult.ocrText;
-                        onProgress({ kind: 'status', message: `🔍 OCR local: ${ocrText.length} chars (conf: ${ocrResult.confidence ?? '?'}%)` });
+                        onProgress({ kind: 'status', message: `🔍 Local OCR: ${ocrText.length} chars (conf: ${ocrResult.confidence ?? '?'}%)` });
                       }
                     } catch { /* non-fatal */ }
                   }
@@ -1484,7 +1484,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
                   if (result?.error) {
-                    onProgress({ kind: 'status', message: `Erro: ${result.error}` });
+                    onProgress({ kind: 'status', message: `Error: ${result.error}` });
                     setLastFooterMsg(result.error);
                     finishRun('failed', result.error);
                     return { error: result.error, thought: thoughts.join('\n'), results: allResults };
@@ -1522,7 +1522,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       return { action: a, stableId };
                     });
-                    onProgress({ kind: 'status', message: `⚡ lote de ${result.actions.length} ações planejado` });
+                    onProgress({ kind: 'status', message: `⚡ batch of ${result.actions.length} actions planned` });
                   }
                   } // end if (!fromQueue)
                   if (!action) {
@@ -1542,7 +1542,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (recentActionHashes.length > 6) recentActionHashes.shift();
                   if (!internalForDedupe && priorRepeats >= 2) {
                     history += `\nLOOP DETECTED: You proposed "${actionHash}" ${priorRepeats + 1} times without progress. Do NOT repeat it — pick a different element, scroll, or change strategy entirely.`;
-                    onProgress({ kind: 'status', message: `Loop detectado: ${actionHash} repetido. Mudando estrategia.` });
+                    onProgress({ kind: 'status', message: `Loop detected: ${actionHash} repeated. Changing strategy.` });
                     noEffectCount = Math.max(noEffectCount, 2); // forces cloud 'pro' on next call
                     continue;
                   }
@@ -1563,28 +1563,28 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const answer = (lastExtractedText || '').replace(/\s+/g, ' ').trim().slice(0, 500)
                         || (stepThought || stepEvaluation || '').trim() || 'Li o conteúdo da página.';
                       const done: BrowserAction = { type: 'done', success: true, reason: answer };
-                      onProgress({ kind: 'status', message: `🛑 Travou re-extraindo — encerrei com o conteúdo extraído.` });
+                      onProgress({ kind: 'status', message: `🛑 Stuck re-extracting — finished with the content already extracted.` });
                       setLastFooterMsg(answer);
                       finishRun('success', answer);
                       return { thought: thoughts.join('\n\n') || answer, results: allResults, done };
                     }
                     // 2ª/3ª extração seguida: NÃO re-extrai — manda reportar com o texto que já tem.
                     history += `\nSTOP GATHERING: You ALREADY extracted the page text (see "EXTRACTED FROM ..." in RECENT HISTORY). Do NOT call extract_text again. Answer the user's question NOW with report({"summary":"..."}) using that text.`;
-                    onProgress({ kind: 'status', message: `🛑 Já tenho o texto — pedindo a resposta (${consecutiveExtracts}×).` });
+                    onProgress({ kind: 'status', message: `🛑 I already have the text — asking for the answer (${consecutiveExtracts}×).` });
                     continue;
                   }
                   if (commandRequiresGmailPromotions && isPotentialDeleteAction(action, observation)) {
                     const inPromotions = isGmailPromotionsView(observation);
                     if (!inPromotions) {
                       history += '\nSAFETY BLOCK: Delete/remove action blocked because Gmail Promotions was not verified. Navigate to https://mail.google.com/mail/u/0/#category/promotions first.';
-                      onProgress({ kind: 'status', message: 'Seguranca: bloqueei exclusao fora da aba Promocoes do Gmail.' });
+                      onProgress({ kind: 'status', message: 'Safety: blocked deletion outside the Gmail Promotions tab.' });
                       noEffectCount++;
                       continue;
                     }
                   }
                   if (commandLooksLikeYouTubeComment && (youtubeCommentFilled || youtubeCommentSubmitted) && action.type === 'navigate') {
                     history += '\nSAFETY BLOCK: Navigation blocked after typing a YouTube comment. Find and click the Comentar/Comment submit button instead.';
-                    onProgress({ kind: 'status', message: 'Seguranca: bloqueei navegacao depois de preencher comentario. Procurando botao Comentar.' });
+                    onProgress({ kind: 'status', message: 'Safety: blocked navigation after filling the comment. Looking for the Comment button.' });
                     noEffectCount++;
                     continue;
                   }
@@ -1594,7 +1594,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const assist = await tryRevealYouTubeCommentBox(wv);
                       if (assist.success) {
                         history += '\nYOUTUBE COMMENT ASSIST: Replaced another blind scroll with direct reveal/click of the comments box.';
-                        onProgress({ kind: 'status', message: 'YouTube: evitei scroll repetido e fui direto para comentarios.' });
+                        onProgress({ kind: 'status', message: 'YouTube: avoided repeated scrolling and went straight to comments.' });
                         noEffectCount = 0;
                         continue;
                       }
@@ -1608,13 +1608,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (/Invalid or missing action|did not return valid structured JSON/i.test(action.reason) && invalidActionRetries < 3) {
                       invalidActionRetries++;
                       history += '\nFORMAT ERROR: Your previous reply was not a valid action. Reply with ONE JSON object exactly: keys "evaluation", "thought", "action" (a tool name string) plus that tool\'s flat params. Try again now.';
-                      onProgress({ kind: 'status', message: `Resposta malformada do modelo — re-tentando (${invalidActionRetries}/3)` });
+                      onProgress({ kind: 'status', message: `Malformed model response — retrying (${invalidActionRetries}/3)` });
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
                     if (commandLooksLikeSendEmail && action.success && !gmailDraftFilled) {
                       history += '\nSAFETY BLOCK: Gmail email task cannot be marked done because the local helper did not verify a filled/sent draft.';
-                      onProgress({ kind: 'status', message: 'Gmail: bloqueei conclusao falsa; rascunho/envio nao foi verificado.' });
+                      onProgress({ kind: 'status', message: 'Gmail: blocked false completion; draft/send was not verified.' });
                       noEffectCount++;
                       continue;
                     }
@@ -1661,8 +1661,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         throwIfCancelled();
                         if (!ok) {
                           cancelled = true;
-                          toolResult = { success: false, reason: 'user_cancelled', error: `Você cancelou — não fiz "${risk.label}".` };
-                          onProgress({ kind: 'status', message: `✖️ Cancelado por você: não toquei em "${risk.label}".` });
+                          toolResult = { success: false, reason: 'user_cancelled', error: `You canceled — I did not do "${risk.label}".` };
+                          onProgress({ kind: 'status', message: `✖️ Canceled by you: I did not touch "${risk.label}".` });
                         }
                       }
                       if (!cancelled) {
@@ -1758,8 +1758,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       throwIfCancelled();
                       if (!ok) {
                         cancelledT = true;
-                        toolResult = { success: false, reason: 'user_cancelled', error: `Você cancelou — não cliquei em "${action.text}".` };
-                        onProgress({ kind: 'status', message: `✖️ Cancelado por você.` });
+                        toolResult = { success: false, reason: 'user_cancelled', error: `You canceled — I did not click "${action.text}".` };
+                        onProgress({ kind: 'status', message: `✖️ Canceled by you.` });
                       }
                     }
                     if (!cancelledT) {
@@ -1832,13 +1832,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: 'ask_ai needs a question.' };
                     } else {
                       setAgentVisual('thinking');
-                      onProgress({ kind: 'status', message: `🤖 Consultando a IA: "${q.slice(0, 80)}"` });
+                      onProgress({ kind: 'status', message: `🤖 Asking the AI: "${q.slice(0, 80)}"` });
                       let answered = false;
                       try {
                         const r = await window.electronAPI?.aiChat?.(q, undefined, undefined, store.localSettings.enabled);
                         if (r?.response && r.response.trim()) {
                           history += `\n\nAI ANSWER to "${q}":\n${r.response}\n(Use this to answer the user.)`;
-                          onProgress({ kind: 'status', message: `🤖 Respondido (${r.response.length} chars).` });
+                          onProgress({ kind: 'status', message: `🤖 Answered (${r.response.length} chars).` });
                           toolResult = { success: true, info: { provider: 'own-ai', chars: r.response.length, preview: r.response.slice(0, 120) } };
                           answered = true;
                         }
@@ -1846,17 +1846,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (!answered) {
                         // Fallback GRÁTIS: Gemini web (gemini.google.com/app) — funciona deslogado.
                         // Se pedir CAPTCHA/login, NÃO resolvemos (anti-robô) — desiste limpo.
-                        onProgress({ kind: 'status', message: `🌐 Consultando o Gemini (grátis) na web…` });
+                        onProgress({ kind: 'status', message: `🌐 Asking Gemini (free) on the web…` });
                         const g = await askWebGemini(wv, q);
                         if (g.success && g.answer) {
                           history += `\n\nGEMINI (web) ANSWER to "${q}":\n${g.answer}\n(Use this to answer the user.)`;
-                          onProgress({ kind: 'status', message: `🤖 Gemini respondeu (${g.answer.length} chars).` });
+                          onProgress({ kind: 'status', message: `🤖 Gemini answered (${g.answer.length} chars).` });
                           toolResult = { success: true, info: { provider: 'gemini-web', chars: g.answer.length, preview: g.answer.slice(0, 120) } };
                         } else if (g.reason === 'captcha') {
-                          toolResult = { success: false, error: 'O Gemini web pediu verificação/login (anti-robô) e eu não resolvo isso. Configure a IA própria (DeepSeek/Ollama/Gemini API) nas configurações que eu respondo direto.' };
-                          onProgress({ kind: 'status', message: '⚠️ Gemini web pediu verificação — não resolvo (anti-robô). Use a IA própria nas configurações.' });
+                          toolResult = { success: false, error: 'Gemini web asked for verification/login (anti-bot) and I cannot solve that. Set up your own AI (DeepSeek/Ollama/Gemini API) in settings and I answer directly.' };
+                          onProgress({ kind: 'status', message: '⚠️ Gemini web asked for verification — I cannot solve that (anti-bot). Use your own AI in settings.' });
                         } else {
-                          toolResult = { success: false, error: `Não consegui responder: ${g.error || 'IA indisponível'}. Configure a IA própria nas configurações.` };
+                          toolResult = { success: false, error: `Could not answer: ${g.error || 'AI unavailable'}. Set up your own AI in settings.` };
                         }
                       }
                     }
@@ -1864,7 +1864,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // "Ache um PDF/planilha/etc de X" → Google filetype: operator → direct file URLs.
                     const ft = (action.filetype || 'pdf').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'pdf';
                     const gq = `${action.query} filetype:${ft}`;
-                    onProgress({ kind: 'status', message: `📁 Procurando arquivo (${ft.toUpperCase()}): "${action.query}"` });
+                    onProgress({ kind: 'status', message: `📁 Looking for file (${ft.toUpperCase()}): "${action.query}"` });
                     try { await wv.loadURL(`https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(gq)}`); } catch {}
                     await waitForWebviewSettled(wv, '');
                     await new Promise(r => setTimeout(r, 900));
@@ -1882,7 +1882,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     })(${JSON.stringify(ft)})`), 8000, null);
                     if (links && links.length) {
                       history += `\n\nFILES FOUND (${ft}, direct download URLs):\n${links.map((u, i) => `[file${i}] ${u}`).join('\n')}\n`;
-                      onProgress({ kind: 'status', message: `📁 ${links.length} arquivo(s) ${ft.toUpperCase()} encontrado(s).` });
+                      onProgress({ kind: 'status', message: `📁 ${links.length} ${ft.toUpperCase()} file(s) found.` });
                       toolResult = { success: true, info: { count: links.length, filetype: ft, top: links[0] } };
                     } else {
                       toolResult = { success: false, error: `Nenhum arquivo .${ft} direto encontrado para "${action.query}". Tente outra palavra ou filetype.` };
@@ -1897,7 +1897,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       })()`), 5000, '');
                     }
                     if (!speakText) {
-                      toolResult = { success: false, error: 'Nada para ler na página.' };
+                      toolResult = { success: false, error: 'Nothing to read on the page.' };
                     } else {
                       try {
                         window.speechSynthesis.cancel();
@@ -1908,10 +1908,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         u.lang = pt?.lang || 'pt-BR';
                         u.rate = 1.0;
                         window.speechSynthesis.speak(u);
-                        onProgress({ kind: 'status', message: `🔊 Lendo em voz alta (${speakText.length} chars)…` });
+                        onProgress({ kind: 'status', message: `🔊 Reading aloud (${speakText.length} chars)…` });
                         toolResult = { success: true, info: { chars: speakText.length, voice: u.voice?.name } };
                       } catch (e: any) {
-                        toolResult = { success: false, error: `TTS indisponível: ${String(e?.message ?? e)}` };
+                        toolResult = { success: false, error: `TTS unavailable: ${String(e?.message ?? e)}` };
                       }
                     }
                   } else if (action.type === 'download_video') {
@@ -1927,14 +1927,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: 'No video URL/query — provide a query or open the video page.' };
                     } else {
                       setAgentVisual('acting');
-                      const noun = action.audio_only ? 'música' : 'vídeo';
+                      const noun = action.audio_only ? 'song' : 'video';
                       // Mensagem neutra: nunca ecoa a URL/origem (ex.: link do YouTube).
                       // Mostra só o que o usuário pediu (a query), nunca de ONDE veio.
                       onProgress({ kind: 'status', message: count > 1
-                        ? `🎵 Baixando ${count} ${noun}s${isSearch ? ` "${action.query}"` : ''}…`
+                        ? `🎵 Downloading ${count} ${noun}s${isSearch ? ` "${action.query}"` : ''}…`
                         : (action.audio_only
-                            ? `🎵 Baixando música${isSearch ? ` "${action.query}"` : ''}…`
-                            : `🎬 Baixando vídeo${isSearch ? ` "${action.query}"` : ''}…`) });
+                            ? `🎵 Downloading song${isSearch ? ` "${action.query}"` : ''}…`
+                            : `🎬 Downloading video${isSearch ? ` "${action.query}"` : ''}…`) });
                       const qual = action.quality === 'low' ? 'low' : action.quality === 'best' ? 'best' : undefined;
                       if (action.query) {
                         lastQuickActionRef.current = { type: 'download_video', query: action.query, audio_only: action.audio_only, count, quality: qual };
@@ -1950,14 +1950,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         const list = files.join(', ') || vr.title;
                         const doneMsg = nFiles > 1
                           ? (action.audio_only
-                              ? `${nFiles} músicas baixadas e salvas em Downloads: ${list}`
-                              : `${nFiles} vídeos baixados e salvos em Downloads: ${list}`)
-                          : `${action.audio_only ? 'Música baixada e salva' : 'Vídeo baixado e salvo'} em Downloads: ${list}`;
+                              ? `${nFiles} songs downloaded and saved to Downloads: ${list}`
+                              : `${nFiles} videos downloaded and saved to Downloads: ${list}`)
+                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`;
                         // miniaturas clicáveis no feed (clique → abre a pasta Downloads)
                         const fullPaths = (vr.paths && vr.paths.length ? vr.paths : (vr.path ? [vr.path] : []));
                         if (fullPaths.length) {
                           const dlDir = fullPaths[0].split(/[\\/]/).slice(0, -1).join('/');
-                          onProgress({ kind: 'media', mediaKind: action.audio_only ? 'audio' : 'video', paths: fullPaths, dir: dlDir, total: fullPaths.length, label: `${fullPaths.length} ${action.audio_only ? (fullPaths.length > 1 ? 'músicas' : 'música') : (fullPaths.length > 1 ? 'vídeos' : 'vídeo')}` });
+                          onProgress({ kind: 'media', mediaKind: action.audio_only ? 'audio' : 'video', paths: fullPaths, dir: dlDir, total: fullPaths.length, label: `${fullPaths.length} ${action.audio_only ? (fullPaths.length > 1 ? 'songs' : 'song') : (fullPaths.length > 1 ? 'videos' : 'video')}` });
                         }
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { paths: vr.paths, title: vr.title } } });
@@ -1977,13 +1977,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         let recovered = false;
                         if (!isSearch && window.electronAPI?.downloadUrl) {
                           try {
-                            onProgress({ kind: 'status', message: '⚠️ yt-dlp falhou — procurando mídia direta na página…' });
+                            onProgress({ kind: 'status', message: '⚠️ yt-dlp failed — looking for direct media on the page…' });
                             const media: string[] = await withTimeout(wv.executeJavaScript(MEDIA_SCAN_JS), 5000, [] as any);
                             for (const mUrl of (media || []).slice(0, 4)) {
                               const dr = await window.electronAPI.downloadUrl(mUrl);
                               if (dr?.success) {
                                 const name = dr.info?.path ? dr.info.path.split(/[\\/]/).pop() : mUrl.split('/').pop();
-                                const doneMsg = `Mídia baixada direto da página (fallback): ${name}`;
+                                const doneMsg = `Media downloaded directly from the page (fallback): ${name}`;
                                 onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                                 allResults.push({ action, result: { success: true, info: dr.info } });
                                 if (actionQueue.length === 0) {
@@ -2018,7 +2018,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const onAnyVideoPage = /youtube\.com\/watch|youtu\.be\/|vimeo\.com\/\d|twitch\.tv\/|tiktok\.com\/.*\/video|dailymotion\.com\/video|globoplay|facebook\.com\/.*\/videos?\/|instagram\.com\/(reel|p|tv)\/|\.mp4($|\?)/i.test(curUrlOV);
                     if (refersThisVideo && onAnyVideoPage) {
                       await forcePlayVideo(wv);
-                      const doneMsg = `▶️ Dei play no vídeo desta página.`;
+                      const doneMsg = `▶️ Played the video on this page.`;
                       onProgress({ kind: 'status', message: doneMsg });
                       allResults.push({ action, result: { success: true, info: { url: curUrlOV } } });
                       if (actionQueue.length === 0) {
@@ -2028,14 +2028,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { url: curUrlOV } };
                     } else {
-                    onProgress({ kind: 'status', message: `🎬 Procurando um vídeo de "${vq}" (pulando Shorts)…` });
+                    onProgress({ kind: 'status', message: `🎬 Looking for a video of "${vq}" (skipping Shorts)…` });
                     const v = await window.electronAPI?.resolveVideo?.(vq);
                     if (v?.ok && v.url) {
                       const beforeUrl = wv.getURL();
                       await executeBrowserAction(wv, { type: 'navigate', url: `${v.url}&autoplay=1` } as BrowserAction);
                       await waitForWebviewSettled(wv, beforeUrl);
                       await forcePlayVideo(wv);   // abre TOCANDO (sem o usuário clicar)
-                      const doneMsg = `Abri o vídeo: ${v.title || v.url}`;
+                      const doneMsg = `Opened the video: ${v.title || v.url}`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { url: v.url, title: v.title } } });
                       if (actionQueue.length === 0) {
@@ -2052,8 +2052,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       await executeBrowserAction(wv, { type: 'navigate', url: su } as BrowserAction);
                       await waitForWebviewSettled(wv, beforeUrl);
                       history += `\nOPEN_VIDEO: não resolvi um vídeo direto (${v?.error || '?'}). Abri a busca do YouTube — escolha um vídeo DE VERDADE (NÃO um Short, NÃO /shorts/) e abra clicando no título.`;
-                      onProgress({ kind: 'status', message: `🔎 Não achei direto; abri a busca do YouTube pra escolher um vídeo (sem Shorts).` });
-                      toolResult = { success: false, error: v?.error || 'não resolvi um vídeo direto' };
+                      onProgress({ kind: 'status', message: `🔎 Did not find it directly; opened YouTube search to pick a video (no Shorts).` });
+                      toolResult = { success: false, error: v?.error || 'could not resolve a video directly' };
                     }
                     } // fim do else (não era "esse vídeo" da página atual)
                   } else if (action.type === 'create_playlist') {
@@ -2064,15 +2064,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     setAgentVisual('acting');
                     const songs = (action.songs || []).map(s => String(s).trim()).filter(Boolean).slice(0, 25);
                     if (songs.length < 2) {
-                      toolResult = { success: false, error: 'Preciso de pelo menos 2 músicas pra montar a playlist.' };
+                      toolResult = { success: false, error: 'I need at least 2 songs to build the playlist.' };
                       history += '\nCREATE_PLAYLIST: poucas músicas. Reemita create_playlist com a lista de títulos (use seu conhecimento do artista).';
                     } else {
-                      onProgress({ kind: 'status', message: `🎵 Montando a playlist — achando ${songs.length} músicas no YouTube (pulando Shorts)…` });
+                      onProgress({ kind: 'status', message: `🎵 Building the playlist — finding ${songs.length} songs on YouTube (skipping Shorts)…` });
                       const resolved = (await window.electronAPI?.resolveVideos?.(songs)) || [];
                       const ok = resolved.filter(r => r.id);
                       const ids = ok.map(r => r.id as string);
                       if (ids.length < 2) {
-                        toolResult = { success: false, error: `Só achei ${ids.length} vídeo(s) das ${songs.length} músicas — não dá pra montar a playlist.` };
+                        toolResult = { success: false, error: `Only found ${ids.length} video(s) of the ${songs.length} songs — cannot build the playlist.` };
                       } else {
                         const plUrl = `https://www.youtube.com/watch_videos?video_ids=${ids.join(',')}`;
                         const beforeUrl = wv.getURL();
@@ -2092,13 +2092,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           // criamos a playlist com o 1º e ADICIONAMOS os outros um a um (navegando
                           // em cada vídeo; você vê o navegador montar a lista, música a música).
                           const saveName = plName || `${(songs[0] || 'Minha').split(/\s+/)[0]} — playlist`;
-                          onProgress({ kind: 'status', message: `🎶 Salvando "${saveName}"${wantPrivate ? ' (privada)' : ''}: criando e adicionando ${ids.length} músicas…` });
+                          onProgress({ kind: 'status', message: `🎶 Saving "${saveName}"${wantPrivate ? ' (private)' : ''}: creating and adding ${ids.length} songs…` });
                           await executeBrowserAction(wv, { type: 'navigate', url: `https://www.youtube.com/watch?v=${ids[0]}` } as BrowserAction);
                           await waitForWebviewSettled(wv, plUrl);
                           await new Promise(r => setTimeout(r, 1200));
                           const created = await trySaveNamedPlaylist(wv, saveName);
                           if (!created.ok) {
-                            onProgress({ kind: 'status', message: `⚠️ Não criei a playlist (parou em "${created.step}"). Está logado no YouTube?` });
+                            onProgress({ kind: 'status', message: `⚠️ Could not create the playlist (stopped at "${created.step}"). Are you logged in to YouTube?` });
                             toolResult = { success: false, error: `Falha ao criar a playlist (passo ${created.step}). Precisa estar logado no YouTube.` };
                           } else {
                             let added = 1;
@@ -2109,20 +2109,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               await new Promise(r => setTimeout(r, 900));
                               const a = await tryAddToExistingPlaylist(wv, saveName);
                               if (a.ok) added++;
-                              onProgress({ kind: 'status', message: `➕ "${saveName}": ${added}/${ids.length} músicas…` });
+                              onProgress({ kind: 'status', message: `➕ "${saveName}": ${added}/${ids.length} songs…` });
                             }
                             // Volta pra tocar a playlist inteira (confirmação visual).
                             await executeBrowserAction(wv, { type: 'navigate', url: plUrl } as BrowserAction);
                             await waitForWebviewSettled(wv, '');
                             await forcePlayVideo(wv);
-                            const doneMsg = `✅ Playlist "${saveName}" salva na sua conta (privada), com ${added} de ${ids.length} músicas${added < ids.length ? ' (algumas falharam ao adicionar)' : ''}. Tocando agora.`;
+                            const doneMsg = `✅ Playlist "${saveName}" saved to your account (private), with ${added} of ${ids.length} songs${added < ids.length ? ' (some failed to add)' : ''}. Playing now.`;
                             onProgress({ kind: 'status', message: doneMsg });
                             setLastFooterMsg(doneMsg);
                             finishRun(added >= 2 ? 'success' : 'failed', doneMsg);
                             return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: added >= 2 } as BrowserAction };
                           }
                         } else {
-                          const doneMsg = `🎶 Playlist criada e tocando: ${ids.length} músicas (${titles.slice(0, 3).join(', ')}${titles.length > 3 ? '…' : ''}).`;
+                          const doneMsg = `🎶 Playlist created and playing: ${ids.length} songs (${titles.slice(0, 3).join(', ')}${titles.length > 3 ? '…' : ''}).`;
                           onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                           if (actionQueue.length === 0) {
                             setLastFooterMsg(`✅ ${doneMsg}`);
@@ -2141,7 +2141,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const vq = (action.query || '').trim();
                     const want = Math.min(Math.max((action as any).count || 3, 2), 12);
                     lastQuickActionRef.current = { type: 'open_videos', query: vq, count: want } as any;
-                    onProgress({ kind: 'status', message: `🎬 Procurando ${want} vídeos de "${vq}" (pulando Shorts)…` });
+                    onProgress({ kind: 'status', message: `🎬 Looking for ${want} videos of "${vq}" (skipping Shorts)…` });
                     const rmv = await window.electronAPI?.resolveManyVideos?.(vq, want);
                     const vids = (rmv?.videos || []) as Array<{ url: string; title: string }>;
                     if (vids.length > 0) {
@@ -2156,7 +2156,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       store.setActiveTabId(originTabId);
                       activeTabIdRef.current = originTabId;
                       opened.forEach(id => { pausedCutTabsRef.current.set(id, 0); armCutTab(id); });
-                      const doneMsg = `Abri ${vids.length} aba(s) com vídeos de "${vq}": ${vids.map(v => v.title).slice(0, 5).join(' · ')}`;
+                      const doneMsg = `Opened ${vids.length} tab(s) with videos of "${vq}": ${vids.map(v => v.title).slice(0, 5).join(' · ')}`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { count: vids.length } } });
                       if (actionQueue.length === 0) {
@@ -2169,8 +2169,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const su = `https://www.youtube.com/results?search_query=${encodeURIComponent(vq)}`;
                       await executeBrowserAction(wv, { type: 'navigate', url: su } as BrowserAction);
                       history += `\nOPEN_VIDEOS: não resolvi vídeos direto (${rmv?.error || '?'}). Abri a busca — abra ${want} vídeos DE VERDADE (NÃO Shorts) em abas.`;
-                      onProgress({ kind: 'status', message: `🔎 Não achei direto; abri a busca do YouTube.` });
-                      toolResult = { success: false, error: `open_videos: ${rmv?.error || 'não resolvi direto'}` };
+                      onProgress({ kind: 'status', message: `🔎 Did not find it directly; opened YouTube search.` });
+                      toolResult = { success: false, error: `open_videos: ${rmv?.error || 'could not resolve directly'}` };
                     }
                   } else if (action.type === 'open_video_cuts') {
                     // Supercut helper: acha vídeos onde a FRASE É DITA (Filmot →
@@ -2181,7 +2181,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Lembra a intenção mesmo quando veio do modelo — permite o
                     // follow-up "e com a palavra X?" reaproveitar (inclusive após falha).
                     lastQuickActionRef.current = { type: 'open_video_cuts', phrase: action.phrase, count: want };
-                    onProgress({ kind: 'status', message: `🎯 Procurando ${want} vídeo(s) onde "${action.phrase}" é dita… (busca em legendas, ~30s)` });
+                    onProgress({ kind: 'status', message: `🎯 Looking for ${want} video(s) where "${action.phrase}" is said… (caption search, ~30s)` });
                     const vc = await window.electronAPI?.searchVideoCuts?.(action.phrase, want);
                     if (vc?.success && vc.cuts?.length) {
                       // Abre TODAS em segundo plano (pausadas/mudas) e volta pra aba
@@ -2196,7 +2196,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       opened.forEach((id, i) => { pausedCutTabsRef.current.set(id, vc.cuts[i].seconds); armCutTab(id); });
                       const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
                       const listing = vc.cuts.map(c => `"${(c.title || c.videoId).slice(0, 50)}" @${fmt(c.seconds)}`).join(', ');
-                      const doneMsg = `${vc.cuts.length} aba(s) abertas em segundo plano, pausadas no segundo exato em que "${action.phrase}" é dita — clique numa aba e o vídeo dá play na hora certa. ${listing} (fonte: ${vc.source === 'filmot' ? 'Filmot' : 'legendas do YouTube'})`;
+                      const doneMsg = `${vc.cuts.length} tab(s) opened in the background, paused at the exact second where "${action.phrase}" is said — click a tab and the video plays right at that moment. ${listing} (source: ${vc.source === 'filmot' ? 'Filmot' : 'YouTube captions'})`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { cuts: vc.cuts } } });
                       if (actionQueue.length === 0) {
@@ -2206,7 +2206,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { cuts: vc.cuts } };
                     } else {
-                      toolResult = { success: false, error: vc?.error || `Não achei vídeos onde "${action.phrase}" é dita.` };
+                      toolResult = { success: false, error: vc?.error || `Could not find videos where "${action.phrase}" is said.` };
                     }
                   } else if (action.type === 'make_supercut') {
                     // Acha onde a frase é dita e BAIXA cada trecho SEPARADO, na MELHOR
@@ -2215,7 +2215,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     setAgentVisual('acting');
                     const want = Math.min(Math.max(Number(action.count) || 6, 1), 15);
                     lastQuickActionRef.current = { type: 'make_supercut', phrase: action.phrase, count: want } as any;
-                    onProgress({ kind: 'status', message: `🎬 Buscando ${want} trechos onde "${action.phrase}" é dita e baixando na melhor qualidade…` });
+                    onProgress({ kind: 'status', message: `🎬 Finding ${want} clips where "${action.phrase}" is said and downloading in best quality…` });
                     const unsub = window.electronAPI?.onSupercutProgress?.((p) => {
                       const icon = p.stage === 'searching' ? '🔎' : p.stage === 'clipping' ? '⬇️' : '🎬';
                       onProgress({ kind: 'status', message: `${icon} ${p.message}` });
@@ -2226,9 +2226,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     } finally { try { unsub?.(); } catch {} }
                     if (sc?.success && sc.paths && sc.paths.length) {
                       const folder = sc.dir ? sc.dir.split(/[\\/]/).pop() : action.phrase;
-                      const doneMsg = `${sc.clipCount} trechos onde "${action.phrase}" é dita, baixados na melhor qualidade em Downloads/${folder}/`;
+                      const doneMsg = `${sc.clipCount} clips where "${action.phrase}" is said, downloaded in best quality to Downloads/${folder}/`;
                       // miniaturas de vídeo clicáveis (clique → abre a pasta)
-                      onProgress({ kind: 'media', mediaKind: 'video', paths: sc.paths, dir: sc.dir || '', total: sc.clipCount || sc.paths.length, label: `${sc.clipCount} trechos de "${action.phrase}"` });
+                      onProgress({ kind: 'media', mediaKind: 'video', paths: sc.paths, dir: sc.dir || '', total: sc.clipCount || sc.paths.length, label: `${sc.clipCount} clips of "${action.phrase}"` });
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { dir: sc.dir, clips: sc.clipCount } } });
                       if (actionQueue.length === 0) {
@@ -2238,7 +2238,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { dir: sc.dir } };
                     } else {
-                      toolResult = { success: false, error: sc?.error || 'Falha ao baixar os trechos.' };
+                      toolResult = { success: false, error: sc?.error || 'Failed to download the clips.' };
                     }
                   } else if (action.type === 'compare_prices') {
                     // "por fora" igual ao yt-dlp: vai direto no Google Shopping (que
@@ -2247,7 +2247,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // agente clicando. Determinístico → auto-done.
                     setAgentVisual('acting');
                     const q = action.query;
-                    onProgress({ kind: 'status', message: `🛒 Comparando preços de "${q}" — Google Shopping (Mercado Livre, Amazon, Magalu…)…` });
+                    onProgress({ kind: 'status', message: `🛒 Comparing prices for "${q}" — Google Shopping (Mercado Livre, Amazon, Magalu…)…` });
                     const shopUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=28&${googleLocaleParams()}`;
                     const beforeUrl = wv.getURL();
                     await executeBrowserAction(wv, { type: 'navigate', url: shopUrl } as BrowserAction);
@@ -2260,12 +2260,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const sorted = valid.sort((a, b) => a.price - b.price).slice(0, 30);
                       const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                       const spec = {
-                        title: `Preços: ${q}`,
+                        title: `Prices: ${q}`,
                         subtitle: 'Google Shopping (Mercado Livre, Amazon, Magalu, KaBuM e mais) — ordenado do mais barato',
                         columns: ['Produto', 'Preço (R$)', 'Loja'],
                         rows: sorted.map(x => [x.title, fmt(x.price), x.store || '—']),
                         links: sorted.map(x => x.url || undefined),
-                        chart: { type: 'bar' as const, label: 'Preço (R$)', labels: sorted.slice(0, 12).map(x => x.title.slice(0, 22)), values: sorted.slice(0, 12).map(x => x.price) },
+                        chart: { type: 'bar' as const, label: 'Price (R$)', labels: sorted.slice(0, 12).map(x => x.title.slice(0, 22)), values: sorted.slice(0, 12).map(x => x.price) },
                         sourceNote: `Fonte: Google Shopping — ${new Date().toLocaleString('pt-BR')}. Preços variam; confirme na loja antes de comprar.`,
                       };
                       const rv = await window.electronAPI?.renderView?.(spec);
@@ -2273,7 +2273,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         const c = sorted[0];
                         const newId = store.addTab(rv.url);
                         activeTabIdRef.current = newId;
-                        const doneMsg = `${sorted.length} ofertas de "${q}". Mais barato: ${c.title} — R$ ${fmt(c.price)}${c.store ? ` (${c.store})` : ''}. Tabela comparativa aberta numa aba.`;
+                        const doneMsg = `${sorted.length} offers for "${q}". Cheapest: ${c.title} — R$ ${fmt(c.price)}${c.store ? ` (${c.store})` : ''}. Comparison table opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { count: sorted.length, cheapest: c } } });
                         if (actionQueue.length === 0) {
@@ -2289,14 +2289,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // Scanner não pegou (consent wall / layout novo): deixa o agente
                       // ler a página do Shopping que já está aberta, em vez de travar.
                       history += `\nPRICE COMPARE: auto-extraction from Google Shopping returned nothing for "${q}". The Shopping page IS OPEN — use extract_text to read the visible prices and answer, or report the cheapest you can see.`;
-                      toolResult = { success: false, error: 'Não consegui raspar os preços automaticamente. A página do Google Shopping está aberta — vou ler ela.' };
+                      toolResult = { success: false, error: 'Could not scrape the prices automatically. The Google Shopping page is open — I will read it.' };
                     }
                   } else if (action.type === 'google_news') {
                     // Vertical Notícias do Google (udm=12) — raspa as manchetes do DOM
                     // renderizado e monta um painel clicável. Determinístico → auto-done.
                     setAgentVisual('acting');
                     const q = action.query;
-                    onProgress({ kind: 'status', message: `📰 Buscando notícias de "${q}" no Google…` });
+                    onProgress({ kind: 'status', message: `📰 Searching news for "${q}" on Google…` });
                     const newsUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=12&${googleLocaleParams()}`;
                     const beforeUrl = wv.getURL();
                     await executeBrowserAction(wv, { type: 'navigate', url: newsUrl } as BrowserAction);
@@ -2307,8 +2307,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const valid = (news || []).filter(x => x && x.title && x.title.length > 12).slice(0, 30);
                     if (valid.length >= 2) {
                       const spec = {
-                        title: `Notícias: ${q}`,
-                        subtitle: `As ${valid.length} manchetes mais recentes — clique pra abrir a matéria`,
+                        title: `News: ${q}`,
+                        subtitle: `The ${valid.length} most recent headlines — click to open the article`,
                         columns: ['Manchete', 'Fonte', 'Quando'],
                         rows: valid.map(x => [x.title, x.source || '—', x.when || '']),
                         links: valid.map(x => x.url || undefined),
@@ -2318,7 +2318,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         const newId = store.addTab(rv.url);
                         activeTabIdRef.current = newId;
-                        const doneMsg = `${valid.length} notícias sobre "${q}". Destaque: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Painel aberto numa aba.`;
+                        const doneMsg = `${valid.length} news for "${q}". Top: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Panel opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { count: valid.length } } });
                         if (actionQueue.length === 0) {
@@ -2332,7 +2332,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                     } else {
                       history += `\nNEWS: auto-extraction returned nothing for "${q}". The Google News page IS OPEN — use extract_text to read the headlines and report them.`;
-                      toolResult = { success: false, error: 'Não consegui raspar as manchetes. A página de notícias está aberta — vou ler ela.' };
+                      toolResult = { success: false, error: 'Could not scrape the headlines. The news page is open — I will read it.' };
                     }
                   } else if (action.type === 'render_view' || action.type === 'stock_movers') {
                     // A "mágica" visual: dados → página bonita (tabela ordenável +
@@ -2342,7 +2342,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     let failMsg = '';
                     if (action.type === 'stock_movers') {
                       const dirWord = action.direction === 'losers' ? 'que mais caíram' : 'que mais valorizaram';
-                      onProgress({ kind: 'status', message: `📈 Buscando as ações ${dirWord} hoje (fonte direta, sem navegar)…` });
+                      onProgress({ kind: 'status', message: `📈 Fetching today's ${dirWord} stocks (direct source, no browsing)…` });
                       const sm = await window.electronAPI?.stockMovers?.(action.direction, action.count);
                       if (sm?.success && sm.spec) spec = sm.spec;
                       else failMsg = sm?.error || 'Fontes de cotações indisponíveis agora.';
@@ -2357,7 +2357,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         const newId = store.addTab(rv.url);
                         activeTabIdRef.current = newId;
-                        const doneMsg = `Pronto: "${spec.title}" aberta numa nova aba (${spec.rows?.length ?? 0} linhas, tabela ordenável + gráfico).`;
+                        const doneMsg = `Done: "${spec.title}" opened in a new tab (${spec.rows?.length ?? 0} rows, sortable table + chart).`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { url: rv.url, rows: spec.rows?.length } } });
                         if (actionQueue.length === 0) {
@@ -2383,7 +2383,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (q.length < 2) {
                       toolResult = { success: false, error: 'harvest_images precisa de um tema.' };
                     } else {
-                      onProgress({ kind: 'status', message: `🪄 Colhendo ${want} imagens de "${q}" (alta qualidade)…` });
+                      onProgress({ kind: 'status', message: `🪄 Harvesting ${want} images of "${q}" (high quality)…` });
                       let urls: string[] = [];
                       // Raspa numa ABA OCULTA (same-origin evita 403, mas NÃO abre o buscador
                       // na cara do usuário — igual à Pesquisa Rápida). A aba some no fim.
@@ -2401,7 +2401,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           } catch { /* tenta Bing */ }
                           if (urls.length < want) {
                             try {
-                              onProgress({ kind: 'status', message: `🪄 Completando no Bing Images…` });
+                              onProgress({ kind: 'status', message: `🪄 Topping up with Bing Images…` });
                               await bgWv.loadURL(`https://www.bing.com/images/search?q=${encodeURIComponent(q)}`);
                               await waitForWebviewSettled(bgWv, '');
                               await waitForSettle(bgWv, { maxMs: 3000, minMs: 250 });
@@ -2415,15 +2415,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       urls = urls.slice(0, want);
                       if (urls.length === 0) {
-                        toolResult = { success: false, error: `Não consegui colher URLs de imagem para "${q}".` };
+                        toolResult = { success: false, error: `Could not harvest image URLs for "${q}".` };
                       } else {
-                        onProgress({ kind: 'status', message: `⬇️ Baixando ${urls.length} imagens em paralelo…` });
+                        onProgress({ kind: 'status', message: `⬇️ Downloading ${urls.length} images in parallel…` });
                         const hr = await window.electronAPI?.harvestImages?.(urls, q);
                         if (hr?.success && hr.saved > 0) {
                           const folder = hr.dir ? hr.dir.split(/[\\/]/).pop() : q;
-                          const doneMsg = `Mágica feita! ${hr.saved} imagens de "${q}" salvas em Downloads/${folder}/`;
+                          const doneMsg = `Magic done! ${hr.saved} images of "${q}" saved to Downloads/${folder}/`;
                           // miniaturas clicáveis no feed (clique → abre a pasta)
-                          onProgress({ kind: 'media', mediaKind: 'image', paths: hr.paths || [], dir: hr.dir || '', total: hr.saved, label: `${hr.saved} imagens de "${q}"` });
+                          onProgress({ kind: 'media', mediaKind: 'image', paths: hr.paths || [], dir: hr.dir || '', total: hr.saved, label: `${hr.saved} images of "${q}"` });
                           onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                           allResults.push({ action, result: { success: true, info: { saved: hr.saved, dir: hr.dir } } });
                           if (actionQueue.length === 0) {
@@ -2433,7 +2433,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           }
                           toolResult = { success: true, info: { saved: hr.saved } };
                         } else {
-                          toolResult = { success: false, error: hr?.error || 'Falha ao baixar as imagens colhidas.' };
+                          toolResult = { success: false, error: hr?.error || 'Failed to download the harvested images.' };
                         }
                       }
                     }
@@ -2444,12 +2444,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (!q || q.length < 2) {
                       toolResult = { success: false, error: 'search_images needs a query.' };
                     } else {
-                      onProgress({ kind: 'status', message: `🖼️ Buscando imagens (alta resolução, livres): "${q}"` });
+                      onProgress({ kind: 'status', message: `🖼️ Searching images (high-res, free): "${q}"` });
                       const sr = await window.electronAPI?.searchImages?.(q, action.min_width, action.count);
                       if (sr?.success && sr.images.length) {
                         const listing = sr.images.map((im, i) => `[img${i}] ${im.width}x${im.height} (${im.source}, ${im.license || 'lic?'}) ${im.url}`).join('\n');
                         history += `\n\nIMAGES FOUND (direct full-res URLs, ready to download):\n${listing}\n`;
-                        onProgress({ kind: 'status', message: `🖼️ ${sr.images.length} imagens encontradas (maior: ${sr.images[0].width}x${sr.images[0].height}).` });
+                        onProgress({ kind: 'status', message: `🖼️ ${sr.images.length} images found (largest: ${sr.images[0].width}x${sr.images[0].height}).` });
                         toolResult = { success: true, info: { count: sr.images.length, largest: `${sr.images[0].width}x${sr.images[0].height}`, top: sr.images[0].url } };
                       } else {
                         toolResult = { success: false, error: sr?.error || `Nenhuma imagem encontrada para "${q}".` };
@@ -2571,7 +2571,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     await sleep(1500);
                   } else if (action.type === 'new_tab') {
                     if (!/^https?:\/\//i.test(action.url || '')) {
-                      toolResult = { success: false, error: `Bloqueado: o agente só abre páginas http(s), não "${action.url}".` };
+                      toolResult = { success: false, error: `Blocked: the agent only opens http(s) pages, not "${action.url}".` };
                     } else {
                     const newId = store.addTab(action.url);
                     activeTabIdRef.current = newId;
@@ -3582,7 +3582,7 @@ async function askWebGemini(wv: Electron.WebviewTag, question: string): Promise<
       for(let k=0;k<24;k++){ await sleep(1000); if(blocked()) return {ok:false,blocked:true}; const a=extract(); if(a && a===ans){ stable++; if(stable>=3) break; } else { ans=a; stable=0; } }
       return { ok: ans.length>0, answer: ans.slice(0,4000), error: ans.length?undefined:'sem resposta' };
     })(${JSON.stringify(question)})`), 90000, { ok: false, error: 'tempo esgotado consultando o Gemini' });
-    if (res?.blocked) return { success: false, reason: 'captcha', error: 'Gemini pediu verificação/login.' };
+    if (res?.blocked) return { success: false, reason: 'captcha', error: 'Gemini asked for verification/login.' };
     if (res?.ok) return { success: true, answer: res.answer };
     return { success: false, error: res?.error || 'sem resposta' };
   } catch (e: any) {

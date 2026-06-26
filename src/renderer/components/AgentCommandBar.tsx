@@ -921,19 +921,19 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   // status — detect engine chip lines vs metric lines vs generic
   const msg = event.message;
 
-  if (msg.startsWith('Atalho conhecido:')) {
-    return <StatusChip label="FAST PATH" message={msg.replace('Atalho conhecido:', '').trim()} color="#5b9e92" />;
+  if (msg.startsWith('Known shortcut:')) {
+    return <StatusChip label="FAST PATH" message={msg.replace('Known shortcut:', '').trim()} color="#5b9e92" />;
   }
 
-  if (msg.includes('OCR local:')) {
-    return <StatusChip label="OCR LOCAL" message={msg.replace(/^.*OCR local:/, '').trim()} color="#b59a4d" />;
+  if (msg.includes('Local OCR:')) {
+    return <StatusChip label="OCR LOCAL" message={msg.replace(/^.*Local OCR:/, '').trim()} color="#b59a4d" />;
   }
 
-  if (/Passo \d+: observando/.test(msg)) {
+  if (/Step \d+: observing/.test(msg)) {
     return <StatusChip label="OBSERVE" message={msg} color="#6b93b8" subtle />;
   }
 
-  if (/Passo \d+: pensando/.test(msg)) {
+  if (/Step \d+: thinking/.test(msg)) {
     return <StatusChip label="THINK" message={msg} color="#8b80b5" subtle />;
   }
 

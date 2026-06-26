@@ -162,7 +162,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (domain && input.blockedDomains.has(domain)) {
     return {
       decision: 'search_alternative',
-      reason: `Domínio ${domain} foi marcado como bloqueado nesta sessão. Buscando outra fonte.`,
+      reason: `Domain ${domain} was marked as blocked this session. Looking for another source.`,
       blocker: 'access_denied',
       maxRetries: 0,
     };
@@ -173,14 +173,14 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (input.commandRequiresThisSite) {
       return {
         decision: 'ask_user',
-        reason: `Verificação humana/captcha detectada em ${domain}. Este site é necessário para a tarefa — resolva o captcha manualmente.`,
+        reason: `Human/captcha verification detected on ${domain}. This site is needed for the task — solve the captcha manually.`,
         blocker: 'captcha',
         maxRetries: 0,
       };
     }
     return {
       decision: 'search_alternative',
-      reason: `Encontrei uma verificação humana em ${domain}. Vou procurar outra fonte.`,
+      reason: `Found a human verification on ${domain}. I will look for another source.`,
       blocker: 'captcha',
       maxRetries: 0,
     };
@@ -190,7 +190,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (ACCESS_DENIED_PATTERNS.test(text) || (lr && !lr.success && /403|429/.test(lr.error || ''))) {
     return {
       decision: 'search_alternative',
-      reason: `Acesso negado ou tráfego bloqueado em ${domain}. Vou procurar outra fonte.`,
+      reason: `Access denied or traffic blocked on ${domain}. I will look for another source.`,
       blocker: 'access_denied',
       maxRetries: 0,
     };
@@ -205,14 +205,14 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (input.commandRequiresThisSite) {
       return {
         decision: 'ask_user',
-        reason: `Este site (${domain}) exige login para continuar. Faça login manualmente para prosseguir.`,
+        reason: `This site (${domain}) requires login to continue. Log in manually to proceed.`,
         blocker: 'login_required',
         maxRetries: 0,
       };
     }
     return {
       decision: 'search_alternative',
-      reason: `Site ${domain} exige login para continuar. Vou procurar outra fonte pública.`,
+      reason: `Site ${domain} requires login to continue. I will look for another public source.`,
       blocker: 'login_required',
       maxRetries: 0,
     };
@@ -224,14 +224,14 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (input.commandRequiresThisSite) {
       return {
         decision: 'ask_user',
-        reason: `Conteúdo bloqueado por paywall em ${domain}. Precisa de assinatura para acessar.`,
+        reason: `Content blocked by a paywall on ${domain}. A subscription is required to access it.`,
         blocker: 'paywall',
         maxRetries: 0,
       };
     }
     return {
       decision: 'search_alternative',
-      reason: `Paywall detectado em ${domain}. Vou procurar outra fonte aberta.`,
+      reason: `Paywall detected on ${domain}. I will look for another open source.`,
       blocker: 'paywall',
       maxRetries: 0,
     };
@@ -242,7 +242,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (input.popupCloseAttempts >= 3) {
       return {
         decision: 'search_alternative',
-        reason: `Overlay/popup persistente em ${domain} após ${input.popupCloseAttempts} tentativas de fechar. Abandonando.`,
+        reason: `Persistent overlay/popup on ${domain} after ${input.popupCloseAttempts} close attempts. Giving up.`,
         blocker: 'popup_overlay',
         maxRetries: 0,
       };
@@ -251,7 +251,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (btn) {
       return {
         decision: 'close_popup',
-        reason: `Elemento coberto por overlay. Tentando fechar: "${btn.text}".`,
+        reason: `Element covered by an overlay. Trying to close: "${btn.text}".`,
         suggestedAction: `click_ref(@${btn.ref}) to close the popup/cookie banner ("${btn.text}")`,
         blocker: 'popup_overlay',
         maxRetries: 2,
@@ -259,7 +259,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     }
     return {
       decision: 'close_popup',
-      reason: `Elemento coberto por overlay (${lr.covering || 'desconhecido'}). Procure e clique em "Fechar", "Rejeitar", "X", "Aceitar" ou "OK".`,
+      reason: `Element covered by an overlay (${lr.covering || 'unknown'}). Find and click "Close", "Reject", "X", "Accept" or "OK".`,
       suggestedAction: `Look for close/dismiss/reject/accept buttons on the overlay: click_text("Fechar") or click_text("Rejeitar") or click_text("Accept") or press("Escape")`,
       blocker: 'popup_overlay',
       maxRetries: 2,
@@ -270,7 +270,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (lr && lr.reason === 'stale_ref') {
     return {
       decision: 'retry',
-      reason: 'Elemento desapareceu da página (stale_ref). Re-observando e tentando de novo.',
+      reason: 'Element disappeared from the page (stale_ref). Re-observing and trying again.',
       suggestedAction: 'Re-observe the page and pick a new ref for the same target.',
       blocker: 'stale_ref',
       maxRetries: 1,
@@ -281,7 +281,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (NOT_FOUND_PATTERNS.test(text) && input.elements.length < 15) {
     return {
       decision: 'search_alternative',
-      reason: `Página não encontrada ou conteúdo indisponível em ${domain}. Buscando alternativa.`,
+      reason: `Page not found or content unavailable on ${domain}. Looking for an alternative.`,
       blocker: 'not_found',
       maxRetries: 0,
     };
@@ -291,7 +291,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (input.elements.length < 3 && input.textSample.trim().length < 50 && input.step > 0) {
     return {
       decision: 'retry',
-      reason: 'Página parece vazia ou travada (poucos elementos, pouco texto). Recarregando.',
+      reason: 'Page looks empty or stuck (few elements, little text). Reloading.',
       suggestedAction: 'navigate(current_url) to reload, or go_back if this is a dead end.',
       blocker: 'page_timeout',
       maxRetries: 1,
@@ -302,7 +302,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText)) {
     return {
       decision: 'go_back',
-      reason: `Caminho sem saída: a página pede app/extensão/SMS/2FA. Voltando.`,
+      reason: `Dead end: the page asks for app/extension/SMS/2FA. Going back.`,
       blocker: 'dead_end',
       maxRetries: 0,
     };
@@ -312,7 +312,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   if (REDIRECT_SUSPICIOUS_DOMAINS.test(input.url)) {
     return {
       decision: 'go_back',
-      reason: `URL suspeita detectada (${domain}). Voltando para fonte anterior.`,
+      reason: `Suspicious URL detected (${domain}). Going back to the previous source.`,
       blocker: 'redirect_suspicious',
       maxRetries: 0,
     };
@@ -328,7 +328,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (targetText && SENSITIVE_ACTION_PATTERNS.test(targetText)) {
       return {
         decision: 'ask_user',
-        reason: 'Ação sensível detectada (compra/pagamento/exclusão). Pedindo confirmação ao usuário antes de prosseguir.',
+        reason: 'Sensitive action detected (purchase/payment/deletion). Asking the user for confirmation before proceeding.',
         blocker: 'sensitive_action',
         maxRetries: 0,
       };
@@ -340,14 +340,14 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
     if (input.stepsOnSameUrl >= 5) {
       return {
         decision: 'search_alternative',
-        reason: `${input.noEffectCount} ações sem efeito e ${input.stepsOnSameUrl} passos na mesma URL. Abandonando este site.`,
+        reason: `${input.noEffectCount} actions with no effect and ${input.stepsOnSameUrl} steps on the same URL. Abandoning this site.`,
         blocker: 'no_effect',
         maxRetries: 0,
       };
     }
     return {
       decision: 'retry',
-      reason: `${input.noEffectCount} ações consecutivas sem efeito. Mudando estratégia: tente scroll, Enter, outro botão ou volte.`,
+      reason: `${input.noEffectCount} consecutive actions with no effect. Changing strategy: try scroll, Enter, another button, or go back.`,
       suggestedAction: 'Try a completely different approach: scroll, press Enter, click a different element, or navigate back.',
       blocker: 'no_effect',
       maxRetries: 1,
@@ -367,14 +367,14 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
       if (input.commandRequiresThisSite) {
         return {
           decision: 'ask_user',
-          reason: `Formulário de login detectado em ${domain}. Faça login manualmente.`,
+          reason: `Login form detected on ${domain}. Log in manually.`,
           blocker: 'login_required',
           maxRetries: 0,
         };
       }
       return {
         decision: 'search_alternative',
-        reason: `Preso em tela de login de ${domain}. Vou procurar outra fonte.`,
+        reason: `Stuck on the login screen of ${domain}. I will look for another source.`,
         blocker: 'login_required',
         maxRetries: 0,
       };

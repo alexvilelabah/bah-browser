@@ -19,7 +19,7 @@ export function classifyRisk(
   // preencher campo de cartão → confirma os DADOS (não confirma todo preenchimento)
   const CARD = /\b(numero do cartao|card number|cartao de credito|cartao de debito|cvv|cvc|codigo de seguranca|security code|validade do cartao)\b/;
   if (actionType === 'fill_ref' || actionType === 'fill') {
-    return CARD.test(hay) ? { kind: 'dados de cartão', label: shown || 'campo de cartão' } : null;
+    return CARD.test(hay) ? { kind: 'card data', label: shown || 'card field' } : null;
   }
 
   // cliques (click_ref / click_text)
@@ -27,8 +27,8 @@ export function classifyRisk(
   const DEL = /\b(excluir|apagar|deletar|delete|remover|remove|descartar|discard|esvaziar (a )?lixeira|empty trash|excluir conta|delete account|remover conta|remove account|apagar tudo|delete all|excluir permanentemente|delete permanently|excluir email|excluir mensagem|excluir tudo)\b/;
   // "apagar busca", "remover filtro", "esvaziar carrinho" = inofensivo → não confirma.
   const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form)\b/;
-  if (PAY.test(hay)) return { kind: 'pagamento', label: shown || 'pagamento' };
-  if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'exclusão', label: shown || 'exclusão' };
+  if (PAY.test(hay)) return { kind: 'payment', label: shown || 'payment' };
+  if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
   return null;
 }
 
@@ -55,7 +55,7 @@ export function riskForAction(
       // Enter pode submeter um pagamento. Como não há rótulo, só freia em página de checkout.
       const k = (action.key || '').toLowerCase();
       const checkout = !!currentUrl && /checkout|payment|pagamento|\/cart\b|carrinho|comprar|order\/?confirm|pedido\/?confirm|finalizar/i.test(currentUrl);
-      return (k === 'enter' || k === 'return') && checkout ? { kind: 'pagamento', label: 'Enter na página de pagamento' } : null;
+      return (k === 'enter' || k === 'return') && checkout ? { kind: 'payment', label: 'Enter on the payment page' } : null;
     }
     default:
       return null;
