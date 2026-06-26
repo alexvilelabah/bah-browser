@@ -1094,6 +1094,7 @@ body {
 .media-strip{ margin:6px 0; }
 .media-strip-head{ font-size:11px; color:var(--text-secondary); margin-bottom:6px; display:flex; gap:6px; align-items:center; }
 .media-strip-open{ color:var(--text-muted); font-size:10px; }
+.free-badge{ display:inline-block; margin-left:6px; padding:1px 7px; border-radius:10px; background:#1f7a3d; color:#fff; font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; vertical-align:middle; }
 .media-tiles{ display:flex; gap:6px; flex-wrap:wrap; }
 .media-tile{
   position:relative;

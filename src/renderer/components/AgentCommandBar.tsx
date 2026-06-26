@@ -558,12 +558,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           {!localCfg.enabled && (
             <>
               <label>
-                {t('set.provider')}
+                {t('set.provider')} {settings.provider === 'pollinations' && <span className="free-badge">{t('set.free')}</span>}
                 <select
                   value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : settings.provider === 'pollinations' ? 'pollinations' : 'deepseek'}
                   onChange={e => setSettings({ ...settings, provider: e.target.value as AISettings['provider'], baseUrl: '' })}
                 >
-                  <option value="pollinations">Pollinations</option>
+                  <option value="pollinations">Pollinations ({t('set.free')})</option>
                   <option value="deepseek">DeepSeek</option>
                   <option value="mistral">Mistral</option>
                   <option value="nvidia">NVIDIA NIM</option>
