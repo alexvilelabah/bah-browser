@@ -4,8 +4,10 @@
 // com limite e tentar de novo. O DownloadItem é guardado num registry por id pra
 // poder ser controlado pela UI depois que o handler do will-download retorna.
 // (Multi-conexão/aceleração via aria2c = Fase B, fora daqui.)
-import { ipcMain, shell } from 'electron';
+import { ipcMain, shell, app } from 'electron';
 import * as path from 'path';
+import * as os from 'os';
+import { isInsideAllowedRoot } from './validate';
 
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
@@ -144,6 +146,13 @@ export function setupDownloadManager(deps: Deps) {
     catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   });
   ipcMain.handle('download:open-file', (_e, p: string) => {
+    // GUARD: só abre arquivo DENTRO das pastas que o app de fato usa (Downloads/userData/temp),
+    // mesma regra do shell:reveal — nunca abre um caminho arbitrário do sistema.
+    const roots = [app.getPath('downloads'), app.getPath('userData'), os.tmpdir()];
+    if (!isInsideAllowedRoot(p, roots)) {
+      console.warn('[download:open-file] bloqueado (fora das pastas permitidas):', p);
+      return { ok: false, error: 'Path outside the allowed folders.' };
+    }
     try { shell.openPath(p); } catch {}
     return { ok: true };
   });

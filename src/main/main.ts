@@ -747,11 +747,12 @@ function setupIPC(): void {
         if (result.error) throw new Error(result.error);
         return { ...result, _engine: 'local' };
       } catch (err: any) {
-        // Local failed → fallback to main engine with flash
-        console.warn('[HybridRouter] Local engine failed, falling back to cloud flash:', err.message);
-        if (!pageAgent) return { error: err.message ?? String(err) };
-        const result = await pageAgent.executeCommand(command, pageContent, screenshot, 'flash');
-        return { ...result, _engine: 'cloud-flash-fallback' };
+        // PRIVACIDADE: em modo local a falha do Ollama NÃO vaza pra nuvem. Em vez de mandar
+        // o conteúdo da página pro DeepSeek/Pollinations sem avisar, devolve um erro claro —
+        // o modo local fica offline de verdade. (Trocar de provedor é escolha explícita do usuário.)
+        const msg = err?.message ?? String(err);
+        console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
+        return { error: `Local AI (Ollama) failed: ${msg}. Local mode stays offline — start Ollama or switch to a cloud provider in settings.` };
       }
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };

@@ -6,6 +6,22 @@ interface Message {
   image?: string;
 }
 
+// fetch com timeout via AbortController: o timeout ABORTA a request de verdade
+// (≠ Promise.race, que rejeita mas deixa o socket vivo / a request rodando). Re-lança como
+// erro de "timeout" pra o retry/fallback que já existe nos provedores reconhecerem.
+async function fetchWithTimeout(url: string, opts: any, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error(`Request timeout (${Math.round(ms / 1000)}s)`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 /**
  * Limpa texto raspado antes de virar JSON pro provedor de IA. Páginas (YouTube,
  * redes) têm emojis = pares surrogate UTF-16; quando o texto é cortado (.slice)
@@ -515,7 +531,14 @@ export class AIEngine {
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));
-      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      let res: Response;
+      try {
+        // Timeout: uma request do free travada não pode congelar o passo do agente.
+        res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 45000);
+      } catch {
+        lastStatus = 0;   // timeout/rede → transitório; re-tenta (ou cai no erro limpo abaixo)
+        continue;
+      }
       if (res.ok) {
         const data = await res.json();
         return data.choices?.[0]?.message?.content ?? '';
@@ -628,19 +651,16 @@ export class AIEngine {
     let res: Response | null = null;
     let lastErr: any = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const fetchPromise = fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
-        body: bodyJson,
-      });
       // Pensar (chain-of-thought) leva bem mais tempo que a voz rápida — damos folga.
       const reqTimeoutMs = useThinking ? 90000 : 45000;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<Response>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(`DeepSeek request timeout (${reqTimeoutMs / 1000}s)`)), reqTimeoutMs);
-      });
       try {
-        const candidate = await Promise.race([fetchPromise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+        // Timeout que ABORTA o fetch de verdade (o Promise.race antigo rejeitava mas deixava
+        // a request rodando). O erro contém "timeout" → o fallback do thinking abaixo reconhece.
+        const candidate = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+          body: bodyJson,
+        }, reqTimeoutMs);
         // Retry server-side transient failures (429 rate-limit, 5xx) — but not 4xx like 401/404.
         if ((candidate.status === 429 || candidate.status >= 500) && attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
