@@ -19,6 +19,8 @@ import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
 import { decidePopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
+// Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
+import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -1503,7 +1505,7 @@ function setupIPC(): void {
       const dlHeaders = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Accept-Language': ACCEPT_LANGUAGE,
         'Referer': new URL(url).origin + '/',
       };
       // Many .gov.br / older sites have an incomplete TLS cert chain ("unable to verify
@@ -1836,7 +1838,7 @@ const STEALTH_SCRIPT = `
     });
 
     // 3. languages
-    Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'], configurable: true });
+    Object.defineProperty(navigator, 'languages', { get: () => ${JSON.stringify(NAV_LANGUAGES)}, configurable: true });
 
     // 4. window.chrome — populate with realistic structure
     if (!window.chrome) window.chrome = {};
@@ -1944,19 +1946,9 @@ const STEALTH_SCRIPT = `
 // Site isolation stays disabled because the app's capture/injection pipeline spans frames.
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
 app.commandLine.appendSwitch('enable-features', 'NetworkService,NetworkServiceInProcess');
-// Accept-Language SEGUE o idioma escolhido pela pessoa (igual ao Chrome): lido de um arquivo
-// em userData (escrito pelo handler 'ai:set-lang' quando ela troca de idioma). Padrão = inglês.
-// É switch de boot (antes do 'ready') → a troca aplica nos sites no próximo restart.
-let uiLangSwitch = 'en';
-try {
-  const langFlag = path.join(app.getPath('userData'), 'ui-lang.flag');
-  if (fs.existsSync(langFlag)) {
-    const v = fs.readFileSync(langFlag, 'utf8').trim();
-    if (v === 'pt') uiLangSwitch = 'pt-BR';
-    else if (v === 'es') uiLangSwitch = 'es';
-  }
-} catch {}
-app.commandLine.appendSwitch('lang', uiLangSwitch);
+// Accept-Language / navigator.languages / --lang SEGUEM o idioma escolhido (ver site-locale.ts).
+// Switch de boot (antes do 'ready') → trocar o idioma aplica nos sites no próximo restart.
+app.commandLine.appendSwitch('lang', LANG_SWITCH);
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -2064,7 +2056,7 @@ app.whenReady().then(() => {
   const applyHeaders = (details: any, callback: any) => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = CHROME_UA;
-    headers['Accept-Language'] = 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7';
+    headers['Accept-Language'] = ACCEPT_LANGUAGE;
     headers['sec-ch-ua'] = CHROME_SEC_CH_UA;
     headers['sec-ch-ua-mobile'] = '?0';
     headers['sec-ch-ua-platform'] = '"Windows"';

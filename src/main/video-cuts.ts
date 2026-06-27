@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { ACCEPT_LANGUAGE } from './site-locale';
 import { ensureYtDlp } from './media-downloader';
 
 export interface VideoCut {
@@ -49,7 +50,7 @@ async function tryFilmot(phrase: string, count: number): Promise<VideoCut[] | nu
     const ctrl = new AbortController();
     const tm = setTimeout(() => ctrl.abort(), 12_000);
     const res = await ses.fetch(url, {
-      headers: { 'User-Agent': CHROME_UA, 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' },
+      headers: { 'User-Agent': CHROME_UA, 'Accept-Language': ACCEPT_LANGUAGE },
       signal: ctrl.signal,
     }).finally(() => clearTimeout(tm));
     if (!res.ok) return null;
