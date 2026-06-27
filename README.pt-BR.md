@@ -20,7 +20,7 @@
 
 > Você dá comandos em linguagem natural ("abre o gmail e apaga os spams") e a IA opera o navegador no seu lugar — vendo a tela, clicando com mouse real, digitando e seguindo até concluir.
 
-> 💸 **Funciona de graça assim que abre — sem chave, sem GPU.** Conversar e gerar imagem rodam **grátis via Pollinations**, sem chave de API. Pro agente autônomo completo (ou mais velocidade), adicione uma chave **DeepSeek** baratíssima — também aceita **Mistral** / **NVIDIA NIM** — ou um cadastro grátis no Pollinations. Prefere 100% local + offline? Roda um modelo com **Ollama**.
+> 💸 **Funciona de graça assim que abre — sem chave, sem GPU.** Conversar e gerar imagem rodam sem chave de API. Pro agente autônomo completo (ou mais velocidade), adicione uma chave barata — **DeepSeek** (recomendado), **Mistral** ou **NVIDIA NIM**. Prefere 100% local + offline? Roda um modelo com **Ollama**.
 
 <p align="center">
   <a href="https://www.electronjs.org"><img src="https://img.shields.io/badge/Electron-2B2E3A?style=flat-square&logo=electron&logoColor=white" alt="Electron" /></a>
@@ -60,7 +60,7 @@
 - **Navegador completo** com abas, navegação, URL, tema dark
 - **Painel AGENTE** lateral: digita um comando → a IA decide passo a passo até concluir
 - **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela
-- **IA**: **funciona grátis de cara** via **Pollinations** (sem chave) — ótimo pra conversar e gerar imagem. Pro agente autônomo completo: **DeepSeek** (barato, recomendado) — também **Mistral** / **NVIDIA NIM** — ou **Ollama** (local/offline)
+- **IA**: **funciona grátis de cara** (sem chave) — ótimo pra conversar e gerar imagem. Pro agente autônomo completo: **DeepSeek** (barato, recomendado) — também **Mistral** / **NVIDIA NIM** — ou **Ollama** (local/offline)
 - **Chat por aba** — cada aba do navegador tem a sua própria conversa; a IA lembra de cada aba separadamente
 - **Atalhos de uma tacada**: abrir N vídeos de uma vez, montar um "supercut" de uma frase falada, **conversar sobre um vídeo do YouTube usando a transcrição**, comparar preços, buscar notícias — atalhos determinísticos que gastam zero tokens
 - **UI em inglês por padrão**, com **Português** e **Español** disponíveis nas Configurações — a IA responde no idioma que você escolher
@@ -78,7 +78,7 @@
 |---|---|
 | Shell do navegador | **Electron 42** + Chromium |
 | UI | **React 19** + **TypeScript** + Vite |
-| IA (nuvem) | **Pollinations** (grátis, padrão) · **DeepSeek** (recomendado) · **Mistral** · **NVIDIA NIM** |
+| IA (nuvem) | **DeepSeek** (recomendado) · **Mistral** · **NVIDIA NIM** · fallback grátis sem chave (Pollinations) |
 | IA (local) | **Ollama** |
 | Adblock | `@ghostery/adblocker-electron` |
 | Webview | Tag `<webview>` com partition persistente |
@@ -137,7 +137,7 @@ Atalho Windows: clique duplo em `Abrir-Bah.bat`.
 
 1. Abra o navegador, clique no botão **AI** na barra de endereço.
 2. Engrenagem → escolha o provedor.
-3. **Já funciona grátis (padrão):** não precisa configurar nada — roda grátis via **Pollinations** (sem chave). **Pro agente completo / mais velocidade:** escolha **DeepSeek**, **Mistral** ou **NVIDIA NIM** e cole a chave dele (a da DeepSeek é baratíssima), ou faça um cadastro grátis no Pollinations. → Salvar.
+3. **Já funciona grátis (padrão):** não precisa configurar nada — conversar e gerar imagem rodam sem chave. **Pro agente completo / mais velocidade:** escolha **DeepSeek**, **Mistral** ou **NVIDIA NIM** e cole a chave dele (a da DeepSeek é baratíssima). → Salvar.
 4. **Local (opcional, grátis/offline):** instale o [Ollama](https://ollama.com) e **deixe-o rodando** (fica na bandeja e serve os modelos em `127.0.0.1:11434`). Depois baixe um modelo dentro do Bah (☁️/🏠 → 🏠 IA Local → digite o nome → **Baixar**) ou no terminal (ex.: `ollama pull qwen3:14b`). O local roda offline, mas a nuvem (DeepSeek) é mais confiável.
 
 ---
