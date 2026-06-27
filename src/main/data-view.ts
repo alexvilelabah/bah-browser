@@ -310,6 +310,6 @@ export async function fetchStockMovers(direction: 'gainers' | 'losers', count: n
       labels: quotes.slice(0, 20).map((q: any) => q.symbol),
       values: quotes.slice(0, 20).map((q: any) => q.regularMarketChangePercent ?? 0),
     },
-    sourceNote: `Fonte: Yahoo Finance (screener day_${direction}) — ${new Date().toLocaleString('pt-BR')}`,
+    sourceNote: `Source: Yahoo Finance (screener day_${direction}) — ${new Date().toLocaleString('pt-BR')}`,
   };
 }

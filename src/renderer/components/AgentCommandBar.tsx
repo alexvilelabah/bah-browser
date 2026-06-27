@@ -502,11 +502,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const r = await ollamaApi()?.ollamaPull?.(m, localCfg.baseUrl);
       // Sucesso e cancelamento são tratados pelo onOllamaPullProgress. Aqui só erro real.
       if (r && !r.ok && !r.canceled) {
-        const err = String(r.error || 'falhou');
+        const err = String(r.error || 'failed');
         const conn = /ECONNREFUSED|ENOTFOUND|fetch failed|ECONNRESET|connect\b/i.test(err);
         setPullMsg(conn
           ? `Could not reach Ollama at ${url}. Open the Ollama app and try again.`
-          : `erro: ${err}`);
+          : `error: ${err}`);
         setPulling(false); refreshModels();
       }
     } catch (e: any) { setPullMsg(`error: ${e?.message || e}`); setPulling(false); }
@@ -523,7 +523,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const handleImportGguf = async () => {
     if (!ggufPath.trim() || pulling) return;
     setPulling(true); setPullMsg('Importing .gguf…');
-    try { const r = await ollamaApi()?.ollamaImportGguf?.(ggufName.trim(), ggufPath.trim()); setPullMsg(r?.ok ? '✅ importado!' : `erro: ${r?.error || 'falhou'}`); refreshModels(); }
+    try { const r = await ollamaApi()?.ollamaImportGguf?.(ggufName.trim(), ggufPath.trim()); setPullMsg(r?.ok ? '✅ imported!' : `error: ${r?.error || 'failed'}`); refreshModels(); }
     catch (e: any) { setPullMsg(`error: ${e?.message || e}`); }
     setPulling(false);
   };
@@ -894,7 +894,7 @@ function MediaStrip({ mediaKind, paths, dir, total, label }: { mediaKind: 'image
           </div>
         ))}
         {extra > 0 && (
-          <div className="media-tile media-tile-more" onClick={openFolder} title={`mais ${extra} em ${dir}`}>+{extra}</div>
+          <div className="media-tile media-tile-more" onClick={openFolder} title={`${extra} more in ${dir}`}>+{extra}</div>
         )}
       </div>
     </div>
@@ -941,7 +941,7 @@ function StepCard({ step }: { step: StepRecord }) {
 
       {/* Screenshot always visible — the live "replay" the feed is about */}
       {step.screenshot && (
-        <img src={step.screenshot} alt={`passo ${step.step}`}
+        <img src={step.screenshot} alt={`step ${step.step}`}
           style={{ width: '100%', borderRadius: '6px', border: '1px solid var(--border)', marginTop: '6px', cursor: 'pointer' }}
           onClick={() => setOpen(o => !o)} />
       )}
@@ -996,7 +996,7 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   }
 
   if (msg.includes('Local OCR:')) {
-    return <StatusChip label="OCR LOCAL" message={msg.replace(/^.*Local OCR:/, '').trim()} color="#b59a4d" />;
+    return <StatusChip label="LOCAL OCR" message={msg.replace(/^.*Local OCR:/, '').trim()} color="#b59a4d" />;
   }
 
   if (/Step \d+: observing/.test(msg)) {
@@ -1017,7 +1017,7 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
     const isFallback = msg.includes('fallback');
     const isPro = msg.includes('pro');
     const chipColor = isLocal ? '#5a9e6f' : isFallback ? '#c0793f' : isPro ? '#8b6fb0' : '#5e7fc0';
-    const chipLabel = isLocal ? '🏠 GPU LOCAL' : isFallback ? '⚠️ FALLBACK CLOUD' : isPro ? '🧠 PRO CLOUD' : '⚡ FLASH CLOUD';
+    const chipLabel = isLocal ? '🏠 LOCAL GPU' : isFallback ? '⚠️ FALLBACK CLOUD' : isPro ? '🧠 PRO CLOUD' : '⚡ FLASH CLOUD';
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0' }}>
         <span style={{

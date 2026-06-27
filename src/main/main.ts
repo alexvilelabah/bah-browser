@@ -376,7 +376,7 @@ async function importGoogleCookiesFromBrowserProfile(
     const readyBy = Date.now() + 18_000;
     let ready = false;
     while (Date.now() < readyBy) {
-      if (exited) return { ok: false, browser: browser.name, error: `${browser.name} fechou antes da importacao.` };
+      if (exited) return { ok: false, browser: browser.name, error: `${browser.name} closed before the import.` };
       try {
         await fetchJson(`http://127.0.0.1:${port}/json/version`, 1200);
         ready = true;

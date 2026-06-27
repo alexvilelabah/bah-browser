@@ -2428,7 +2428,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const want = Math.min(Math.max(Number(action.count) || 10, 1), 100);
                     const minW = Math.max(Number(action.min_width) || 800, 0);
                     if (q.length < 2) {
-                      toolResult = { success: false, error: 'harvest_images precisa de um tema.' };
+                      toolResult = { success: false, error: 'harvest_images needs a topic.' };
                     } else {
                       onProgress({ kind: 'status', message: `🪄 Harvesting ${want} images of "${q}" (high quality)…` });
                       let urls: string[] = [];
@@ -2906,7 +2906,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
               const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId);
-              const raw = result?.response ?? (result?.error ? `Erro: ${result.error}` : 'Sem resposta.');
+              const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
               // ela vira o botão "⚡ Fazer isso" (e um "sim" do usuário também a executa).
@@ -3464,7 +3464,7 @@ const ddgHarvestScript = (query: string, count: number, minW: number) => `(async
   try {
     var html = document.documentElement.innerHTML;
     var m = html.match(/vqd=\\"([0-9-]+)\\"/) || html.match(/vqd=([0-9-]{6,})/);
-    if (!m) return { error: 'sem vqd' };
+    if (!m) return { error: 'missing vqd' };
     var vqd = m[1];
     var want = ${count}, minW = ${minW};
     var q = ${JSON.stringify(query)};
@@ -3620,7 +3620,7 @@ async function askWebGemini(wv: Electron.WebviewTag, question: string): Promise<
       try {
         if(el.tagName==='TEXTAREA'){ const s=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set; s.call(el,q); el.dispatchEvent(new Event('input',{bubbles:true})); }
         else { document.execCommand('insertText',false,q); el.dispatchEvent(new InputEvent('input',{bubbles:true,data:q,inputType:'insertText'})); }
-      } catch(e){ return { ok:false, error:'falha ao digitar' }; }
+      } catch(e){ return { ok:false, error:'failed to type' }; }
       await sleep(500);
       // 2) enviar (botão Enviar/Send; senão Enter)
       const btn=[...document.querySelectorAll('button,[role=button]')].find(b=>{ const a=((b.getAttribute('aria-label')||'')+' '+(b.innerText||'')).toLowerCase(); return /enviar|send|submit/.test(a) && !b.disabled && b.offsetParent!==null; });
@@ -3629,11 +3629,11 @@ async function askWebGemini(wv: Electron.WebviewTag, question: string): Promise<
       const extract=()=>{ const body=(document.body&&document.body.innerText||'').replace(/\\s+/g,' '); const low=body.toLowerCase(); let i=low.lastIndexOf('o gemini disse'); let mk='o gemini disse'; const ie=low.lastIndexOf('gemini said'); if(ie>i){i=ie;mk='gemini said';} if(i<0) return ''; let a=body.slice(i+mk.length).trim(); a=a.split(/o gemini (é|e) uma ia|gemini can make mistakes|enviar feedback|mostrar rascunhos|new flash|verifique as informa/i)[0].trim(); return a; };
       let ans='', stable=0;
       for(let k=0;k<24;k++){ await sleep(1000); if(blocked()) return {ok:false,blocked:true}; const a=extract(); if(a && a===ans){ stable++; if(stable>=3) break; } else { ans=a; stable=0; } }
-      return { ok: ans.length>0, answer: ans.slice(0,4000), error: ans.length?undefined:'sem resposta' };
-    })(${JSON.stringify(question)})`), 90000, { ok: false, error: 'tempo esgotado consultando o Gemini' });
+      return { ok: ans.length>0, answer: ans.slice(0,4000), error: ans.length?undefined:'no response' };
+    })(${JSON.stringify(question)})`), 90000, { ok: false, error: 'timed out while asking Gemini' });
     if (res?.blocked) return { success: false, reason: 'captcha', error: 'Gemini asked for verification/login.' };
     if (res?.ok) return { success: true, answer: res.answer };
-    return { success: false, error: res?.error || 'sem resposta' };
+    return { success: false, error: res?.error || 'no response' };
   } catch (e: any) {
     return { success: false, error: String(e?.message ?? e) };
   }

@@ -152,7 +152,7 @@ export async function cortarTrecho(
   });
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 10_000;
   if (!ok) {
-    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
+    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg failed';
     return { success: false, error: `Could not cut: ${tail}` };
   }
   onProgress({ stage: 'done', message: `Clip saved (${fmtClock(dur)}).` });
@@ -180,7 +180,7 @@ export async function extrairAudio(
   });
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 1000;
   if (!ok) {
-    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
+    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg failed';
     return { success: false, error: `Could not extract the audio: ${tail}` };
   }
   onProgress({ stage: 'done', message: 'Audio extracted.' });
@@ -291,7 +291,7 @@ export async function removerSilencio(
 
   const ok = (r.code === 0) && fs.existsSync(out) && fs.statSync(out).size > 10_000;
   if (!ok) {
-    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg falhou';
+    const tail = (r.stderr || '').split(/\r?\n/).filter(Boolean).pop() || 'ffmpeg failed';
     return { success: false, error: `Could not remove the silence: ${tail}` };
   }
   onProgress({ stage: 'done', message: `Done: ${fmtClock(removedDur)} of silence removed.` });

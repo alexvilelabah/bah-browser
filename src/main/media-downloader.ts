@@ -106,7 +106,7 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
         try { fs.unlinkSync(p); } catch {}
         throw new Error('The downloaded yt-dlp looks invalid/corrupted — try again.');
       }
-      onStatus?.('Motor de download pronto.');
+      onStatus?.('Download engine ready.');
       return p;
     })
     .catch((e) => { ensurePromise = null; throw e; });
@@ -194,7 +194,7 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
     try {
       onStatus?.('Preparing the video/audio converter (first time, ~80MB)…');
       await downloadToFile(FFMPEG_URL, zip);
-      onStatus?.('Descompactando o ffmpeg…');
+      onStatus?.('Extracting ffmpeg…');
       if (!(await expandZipWindows(zip, extractDir))) throw new Error('failed to unzip');
       const exe = findFileRecursive(extractDir, 'ffmpeg.exe');
       if (!exe) throw new Error('ffmpeg.exe not found in the package');
@@ -205,7 +205,7 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
       try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
       if (!(await validateFfmpeg(ffmpegExePath()))) { try { fs.unlinkSync(ffmpegExePath()); } catch {} throw new Error('downloaded ffmpeg is invalid'); }
       ffmpegDirCache = binDir();
-      onStatus?.('Conversor pronto.');
+      onStatus?.('Converter ready.');
       return binDir();
     } catch {
       try { fs.rmSync(zip, { force: true }); } catch {}

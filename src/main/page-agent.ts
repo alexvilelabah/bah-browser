@@ -252,7 +252,7 @@ export class PageAgent {
         const rows = Array.isArray(action.rows) ? action.rows.filter((r: any) => Array.isArray(r)).slice(0, 60) : [];
         return {
           type: 'render_view',
-          title: String(action.title ?? 'Resultado'),
+          title: String(action.title ?? 'Result'),
           columns, rows,
           subtitle: action.subtitle ? String(action.subtitle) : undefined,
           source_note: action.source_note ? String(action.source_note) : undefined,
