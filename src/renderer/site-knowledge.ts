@@ -284,7 +284,13 @@ const QUALITY_RE = /\b(?:n[ao]|em|com|de|in)?\s*(?:(?:melhor|boa|alta|m[aá]xima
 // QUALITY_RE fica só pros .replace() (que precisam do /g e zeram lastIndex sozinhos).
 const QUALITY_TEST_RE = new RegExp(QUALITY_RE.source, 'i');
 
-export function detectQuickAction(command: string): QuickAction | null {
+export function detectQuickAction(command: string, opts?: { forceImage?: boolean }): QuickAction | null {
+  // MODO IMAGEM (caixinha do chat marcada): trata o texto INTEIRO como prompt de imagem,
+  // sem depender de palavra-gatilho/idioma. Vem antes de tudo (até de URL) — marcou, é imagem.
+  if (opts?.forceImage) {
+    const prompt = stripAgentMeta(command).trim() || command.trim();
+    if (prompt) return { type: 'generate_image', prompt, count: 1 };
+  }
   // URL/site explícito no comando → cede pro agente NAVEGAR pra lá (não sequestrar pra
   // um atalho de busca tipo google_news). Conserta "vá no site X e busque Y" virar uma
   // query-lixo no Google News. Baixar por URL não passa por aqui (a quick action de
@@ -324,11 +330,11 @@ export function detectQuickAction(command: string): QuickAction | null {
   // Pollinations grátis (sem chave). Diferente de BAIXAR imagem (colheita). 0 token.
   {
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2');
-    const isGen = /\b(ger[ae]\w*|cri[ae]\w*|desenh\w*|imagin\w*|generate|create|draw|imagine|make)\b/.test(sp)
-      && /\b(imagem|imagens|figura|figuras|desenho|arte|wallpapers?|image|images?|picture|pictures?|drawing|art)\b/.test(sp)
-      && !/\b(baix\w*|download|downloading|salv\w*|save|saving|pega\w*)\b/.test(sp);
+    const isGen = /\b(ger[ae]\w*|generar|cri[ae]\w*|cre[ae]\w*|desenh\w*|dibuj\w*|imagin\w*|generate|create|draw|imagine|make)\b/.test(sp)
+      && /\b(imagem|imagens|figura|figuras|desenho|foto|fotos|arte|wallpapers?|image|images?|picture|pictures?|photos?|imagen|imagenes|dibujos?|drawing|art)\b/.test(sp)
+      && !/\b(baix\w*|download|downloading|salv\w*|save|saving|pega\w*|descarg\w*)\b/.test(sp);
     if (isGen) {
-      const cm = sp.match(/\b(\d{1,2})\s+(?:imagens|imagem|figuras|images?|pictures?)\b/);
+      const cm = sp.match(/\b(\d{1,2})\s+(?:imagens|imagem|figuras|fotos?|images?|pictures?|photos?|imagenes)\b/);
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 1), 4) : 1;
       const STRIP = new Set(('gere gera gerar crie cria criar desenhe desenha desenhar faca faça facam imagine imagina ' +
         'uma um de do da dos das uns umas imagem imagens figura figuras desenho arte wallpaper wallpapers foto fotos por favor me pra ' +
@@ -507,11 +513,11 @@ export function detectQuickAction(command: string): QuickAction | null {
   // Não sequestrar perguntas / pesquisa / tutoriais ("como baixar", "qual o melhor app")
   if (/\b(como|o que|oque|qual|quais|porque|por que|melhor|recomend\w*|tutorial|ensina|explica|aprende|significa|diferenca|site|aplicativo|app|programa|how|what|which|why|best|recommend\w*|teaches?|explains?|software|program)\b/.test(n)) return null;
 
-  const hasGet = /\b(baix\w*|download|downloading|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|save|saving|get|getting|grab|grabbing|fetch|want|need)\b/.test(n);
+  const hasGet = /\b(baix\w*|download|downloading|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|descarg\w*|quiero|guard\w*|save|saving|get|getting|grab|grabbing|fetch|want|need)\b/.test(n);
   // "quero VER o vídeo" / "quero OUVIR a música" é consumo, não download — só
   // sequestra se houver verbo explícito de baixar junto.
   const hasWatch = /\b(ver|assistir|veja|assista|olh\w*|ouvir|escut\w*|toc\w*|coloc\w*|abr\w*|watch|watching|see|seeing|view|viewing|listen|listening|play|playing|open|opening)\b/.test(n);
-  const hasDl = /\b(baix\w*|download|downloading|salv\w*|arquiv\w*|save|saving|file)\b/.test(n);
+  const hasDl = /\b(baix\w*|download|downloading|salv\w*|arquiv\w*|descarg\w*|guard\w*|save|saving|file)\b/.test(n);
   const wantsDownload = hasDl || (hasGet && !hasWatch);
   const count = parseCount(n);
   // Drop helper words, the count digit (e.g. "3"), number-words and quality words so they
@@ -539,7 +545,7 @@ export function detectQuickAction(command: string): QuickAction | null {
   }
 
   // MÚSICA (mp3 / música / áudio) — dispara com mp3 OU com intenção de download
-  if (/\b(mp3|musica|musicas|audio|som|cancao|song|songs|track|tracks|sound)\b/.test(n) && (wantsDownload || /\bmp3\b/.test(n))) {
+  if (/\b(mp3|musica|musicas|audio|som|cancao|cancion|canciones|song|songs|track|tracks|sound)\b/.test(n) && (wantsDownload || /\bmp3\b/.test(n))) {
     const q = cleanQuery();
     if (q.length >= 2) return { type: 'download_video', query: q, audio_only: true, count };
   }

@@ -859,7 +859,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           <AgentCommandBar
             activeTabId={store.activeTabId}
             tabIds={store.tabs.map(t => t.id).join(',')}
-            onExecute={async (command, onProgress, signal) => {
+            onExecute={async (command, onProgress, signal, opts) => {
               const runLog = startAgentRun(command);
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
               if (isTrashDestroyerCommand(command)) {
@@ -1145,7 +1145,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 // QUICK INTENT: layperson media/file requests ("mp3 musica X", "baixe o
                 // pdf de Y") → execute the right action at step 0 WITHOUT calling the AI.
-                let quickAction = detectQuickAction(command);
+                let quickAction = detectQuickAction(command, opts?.forceImage ? { forceImage: true } : undefined);
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
                 if (!quickAction && lastQuickActionRef.current) {
@@ -1811,7 +1811,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = await window.electronAPI?.realType?.(wcId, action.text);
                     if (commandLooksLikeYouTubeComment && action.text.trim()) youtubeCommentFilled = true;
                   } else if (action.type === 'press' && wcId != null) {
-                    toolResult = await window.electronAPI?.realKey?.(wcId, action.key);
+                    // FREIO: Enter (press) numa página de checkout pode submeter pagamento.
+                    // Esta é a 1ª branch que pega press — sem o gate aqui, o freio do `else`
+                    // lá embaixo nunca rodava pra press.
+                    const c = await gateRisk(riskForAction(action as any, undefined, wv?.getURL?.() || ''));
+                    toolResult = c ?? await window.electronAPI?.realKey?.(wcId, action.key);
                   } else if (action.type === 'plan') {
                     plan = action.steps || [];
                     toolResult = { success: true, info: { steps: plan.length } };
@@ -2633,13 +2637,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (target) { store.closeTab(target.id); toolResult = { success: true, info: { closed: action.tab } }; }
                     else toolResult = { success: false, error: `Tab ${action.tab} not found` };
                   } else {
-                    // FREIO: Enter (press) numa página de checkout pode submeter pagamento.
-                    const pressCancel = action.type === 'press'
-                      ? await gateRisk(riskForAction(action as any, undefined, wv.getURL?.() || ''))
-                      : null;
+                    // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
+                    // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
+                    // gate só checava `press`. riskForAction devolve null pra ação inofensiva,
+                    // então o caminho normal (scroll/click/fill comum) não muda.
+                    const riskCancel = await gateRisk(riskForAction(action as any, undefined, wv.getURL?.() || ''));
                     // Bounded: on hung pages any executeJavaScript-based action (scroll,
                     // click_text fallback, fill...) would otherwise never resolve.
-                    toolResult = pressCancel ?? await withTimeout(executeBrowserAction(wv, action),
+                    toolResult = riskCancel ?? await withTimeout(executeBrowserAction(wv, action),
                       12000,
                       { success: false, error: `${action.type} timed out — page scripts are unresponsive. Use OCR TEXT or navigate to a DIFFERENT site.` });
                   }

@@ -105,7 +105,7 @@ function hostOf(url: string): string {
 }
 
 interface Props {
-  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal) => Promise<ActionResult>;
+  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
   onSendChat: (message: string) => Promise<{ reply: string; suggestedCommand?: string }>;
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
@@ -159,6 +159,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   }, [input]);
   const [loading, setLoading] = useState(false);       // agent task running
   const [chatLoading, setChatLoading] = useState(false);
+  // Caixinha "modo imagem" (one-shot): marcada, a PRÓXIMA mensagem vira geração de imagem e
+  // a caixa desmarca sozinha. Default OFF, NÃO persiste (reabrir nunca volta no modo imagem).
+  const [imageMode, setImageMode] = useState(false);
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
   const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
@@ -232,7 +235,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const runAgent = async (cmd: string) => {
+  const runAgent = async (cmd: string, opts?: { forceImage?: boolean }) => {
     convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
@@ -260,7 +263,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         } else {
           push({ kind: 'event', event });
         }
-      }, abortController.signal);
+      }, abortController.signal, opts);
       if (result.error) {
         push({ kind: 'error', text: result.error });
       } else if ((result.done as any)?.reason) {
@@ -369,10 +372,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     routeCommand(msg);
   };
 
+  // MODO IMAGEM (one-shot): gera UMA imagem do texto digitado e desmarca a caixinha.
+  const runImage = (prompt: string) => {
+    setImageMode(false);
+    setInput('');
+    runAgent(prompt, { forceImage: true });
+  };
+
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
     if (loading || chatLoading) return;
+    if (imageMode) { runImage(msg); return; }
     runUnified(msg);
   };
 
@@ -730,10 +741,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
-          placeholder={ph}
+          placeholder={imageMode ? t('composer.phImage') : ph}
           disabled={loading || chatLoading}
         />
         <div className="composer-bar">
+          <button
+            type="button"
+            className={`composer-image-toggle${imageMode ? ' on' : ''}`}
+            onClick={() => setImageMode(v => !v)}
+            disabled={loading || chatLoading}
+            title={t('composer.imageMode')}
+            aria-pressed={imageMode}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l1.7 4.6 4.6 1.7-4.6 1.7L12 15.1l-1.7-4.6L5.7 8.8l4.6-1.7L12 2.5z"/><path d="M18.7 14.2l.85 2.25 2.25.85-2.25.85-.85 2.25-.85-2.25-2.25-.85 2.25-.85.85-2.25z"/></svg>
+            <span>{t('composer.imageMode')}</span>
+          </button>
           <div className="composer-hint">{t('composer.hint')}</div>
           {manualHelp ? (
             <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
