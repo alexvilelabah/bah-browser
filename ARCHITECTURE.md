@@ -1,5 +1,7 @@
 # Architecture & repository map
 
+**English** · [Português](ARCHITECTURE.pt-BR.md)
+
 A guide for reading the codebase. Pair it with [SECURITY.md](SECURITY.md) (threat model +
 audit checklist). The whole of `src/` is ~30 files — small enough to read in a sitting.
 
@@ -49,6 +51,7 @@ sites behave exactly as they would for a human.
 |---|---|
 | `main.ts` | App bootstrap, window, `<webview>` session, **all IPC handlers**, real input (`sendInputEvent`), adblock, downloads wiring, safe-browsing, hardware-accel toggle |
 | `ai-engine.ts` | Every cloud/local AI call (DeepSeek / Mistral / NVIDIA NIM / Pollinations / Ollama) + the system prompt and tool list |
+| `site-locale.ts` | **Single source** for the language sites receive (Accept-Language / navigator.languages / --lang follow the UI choice) |
 | `page-agent.ts` | Cloud-side reasoning helpers for the agent |
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
 | `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |

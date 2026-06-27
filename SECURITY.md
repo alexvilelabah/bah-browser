@@ -1,5 +1,7 @@
 # Security & how to audit Bah
 
+**English** · [Português](SECURITY.pt-BR.md)
+
 Bah is **source-available** (PolyForm Small Business license — not OSI "open source", but
 the full source is in this repo for you to read and verify). This document is a map for
 anyone who wants to audit it: the threat model, what leaves your machine, every
