@@ -589,6 +589,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 />
               </label>
               <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
+              <div className="mm-hint">🆓 {t('set.freeFallback')}</div>
               <details className="mm-imp">
                 <summary>{t('set.advanced')}</summary>
                 <label>
