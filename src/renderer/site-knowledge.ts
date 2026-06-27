@@ -242,6 +242,8 @@ const NUM_WORDS: Record<string, number> = {
   dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, cem: 100,
   // EN — paridade pro público open-source (mesmos atalhos de 0 token em inglês).
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, fifty: 50, hundred: 100,
+  // ES — paridade trilingue.
+  dos: 2, cuatro: 4, siete: 7, ocho: 8, nueve: 9, diez: 10,
 };
 
 // "baixe 3 músicas...", "baixe vinte músicas..." → quantos arquivos pegar (default 1).
@@ -308,9 +310,11 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // open_video_cuts (abrir abas), então testa PRIMEIRO.
   {
     const sp0 = n.replace(/([a-z])(\d)/g, '$1 $2');
-    const isSupercut = /\bsuper\s*cut\b|\bsupercorte\b/.test(sp0)
+    // Pergunta definicional ("o que é um supercut?", "what is a supercut") NÃO é pedido de criar.
+    const defQ = /\b(o que (e|é)|oque (e|é)|que (e|é)\s+(um|uma|o|a)|what\s*(is|'s|are)|qu[eé]\s+es)\b/.test(sp0);
+    const isSupercut = !defQ && (/\bsuper\s*cut\b|\bsupercorte\b/.test(sp0)
       || ((/\b(pessoas|gente)\s+(falando|dizendo)\b/.test(sp0) || /\b(people|persons?)\s+(talking|saying)\b/.test(sp0))
-          && /\b(fa\w+|mont\w+|cri\w+|ger\w+|junt\w+|edit\w+|video|make|made|build|creat\w+|generat\w+)\b/.test(sp0));
+          && /\b(fa\w+|mont\w+|cri\w+|ger\w+|junt\w+|edit\w+|video|make|made|build|creat\w+|generat\w+)\b/.test(sp0)));
     if (isSupercut) {
       const cm = sp0.match(/\b(\d{1,2}|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:pessoas|videos|trechos|cortes|gente|people|clips?|cuts?)\b/);
       const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 6) : 6;
@@ -330,9 +334,10 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // Pollinations grátis (sem chave). Diferente de BAIXAR imagem (colheita). 0 token.
   {
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2');
-    const isGen = /\b(ger[ae]\w*|generar|cri[ae]\w*|cre[ae]\w*|desenh\w*|dibuj\w*|imagin\w*|generate|create|draw|imagine|make)\b/.test(sp)
+    const isGen = /\b(ger[ae]\w*|gener[ae]r?|cri[ae]\w*|cre[ae]\w*|desenh\w*|dibuj\w*|imagin\w*|generate|create|draw|imagine|make)\b/.test(sp)
       && /\b(imagem|imagens|figura|figuras|desenho|foto|fotos|arte|wallpapers?|image|images?|picture|pictures?|photos?|imagen|imagenes|dibujos?|drawing|art)\b/.test(sp)
-      && !/\b(baix\w*|download|downloading|salv\w*|save|saving|pega\w*|descarg\w*)\b/.test(sp);
+      && !/\b(baix\w*|download|downloading|salv\w*|save|saving|pega\w*|descarg\w*)\b/.test(sp)
+      && !/^\s*(como|c[oó]mo|how|o que|oque|whats?|what's|qual|quais|cu[aá]l|por que|porqu[eê]|why)\b/.test(sp);   // "como criar uma imagem?" é pergunta, não pedido de gerar
     if (isGen) {
       const cm = sp.match(/\b(\d{1,2})\s+(?:imagens|imagem|figuras|fotos?|images?|pictures?|photos?|imagenes)\b/);
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 1), 4) : 1;
@@ -351,11 +356,12 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // (Diferente de search_images, que traz poucas e "limpas".) ANTES de outras regras.
   {
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2'); // "baixe10 imagens" → "baixe 10 imagens"
-    if (/\b(imagens|fotos|imagem|fotografias|figuras|wallpapers?|papeis?\s+de\s+parede|images?|photos?|pictures?|pics?)\b/.test(sp)
-        && /\b(baix\w*|quero|queria|salv\w*|pega\w*|arruma|me\s+da|junta|colhe|coleta|download|downloading|want|save|saving|get|getting|grab|grabbing|fetch)\b/.test(sp)) {
+    if (/\b(imagens|fotos|imagem|imagenes|fotografias|figuras|wallpapers?|papeis?\s+de\s+parede|images?|photos?|pictures?|pics?)\b/.test(sp)
+        && /\b(baix\w*|quero|queria|salv\w*|pega\w*|arruma|me\s+da|junta|colhe|coleta|descarg\w*|quiero|guard\w*|download|downloading|want|save|saving|get|getting|grab|grabbing|fetch)\b/.test(sp)
+        && !/\b(desta|dessa|deste|desse|nesta|nessa|aqui|daqui|da\s+p[aá]gina|do\s+site|this\s+page|from\s+(this|the)\s+page|on\s+(this|the)\s+page|here|current\s+page|esta\s+p[aá]gina)\b/.test(sp)) {
       // quantidade: dígito ("3") OU por extenso ("tres") OU "varias/um monte". N>=2.
       const IMG_NUM: Record<string, number> = { uma: 1, duas: 2, dois: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, fifty: 50 };
-      const noun = '(imagens|fotos|imagem|foto|figuras|wallpapers?|images?|photos?|pictures?|pics?)';
+      const noun = '(imagens|imagenes|fotos|imagem|foto|figuras|wallpapers?|images?|photos?|pictures?|pics?)';
       const dm = sp.match(new RegExp('\\b(\\d{1,3})\\s+' + noun));
       const wm = sp.match(new RegExp('\\b(uma|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|doze|quinze|vinte|trinta|cinquenta|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty)\\s+' + noun));
       const many = /\b(varias|varios|um\s+monte|monte\s+de|diversas|v[aá]rias|several|many|a\s+bunch|bunch\s+of|lots?\s+of|a\s+lot)\b/.test(sp);
@@ -402,14 +408,14 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // X", "compare preços de Y". Vai direto pro Google Shopping (agrega ML/Amazon/
   // Magalu) e raspa os preços. ANTES do filtro anti-pergunta ("qual o mais barato").
   {
-    const isPrice = /\b(prec[oô]s?|quanto\s+custa|quanto\s+(?:ta|esta|é)|barat[oa]s?|onde\s+(?:comprar|compro|acho)|compar\w*\s+(?:de\s+)?prec\w*|menor\s+preco|valor\s+d[eo]|prices?|how\s+much|cheap(?:est|er)?|where\s+to\s+buy|compare\s+prices?)\b/.test(n);
+    const isPrice = /\b(prec[oô]s?|precio|quanto\s+custa|cuanto\s+cuesta|quanto\s+(?:ta|esta|é)|barat[oa]s?|onde\s+(?:comprar|compro|acho)|donde\s+comprar|compar\w*\s+(?:de\s+)?prec\w*|menor\s+preco|valor\s+d[eo]|prices?|how\s+much|cheap(?:est|er)?|where\s+to\s+buy|compare\s+prices?)\b/.test(n);
     // cotação (ações/moedas/cripto) NÃO é produto — deixa pro fluxo certo
     const isQuote = /\b(acoes?|bolsa|d[oó]lar|euro|bitcoin|cripto|cota[cç][aã]o|ibovespa|stocks?|shares?|dollar|crypto)\b/.test(n);
     if (isPrice && !isQuote) {
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +
-        'price prices how much cheap cheapest cheaper where to buy compare of the a an for find show best value cost').split(' '));
+        'price prices how much cheap cheapest cheaper where to buy compare of the a an for find show best value cost precio cuanto cuesta donde').split(' '));
       const toks = stripAgentMeta(command).split(/\s+/)
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^procur/.test(nw) && !/^compar/.test(nw) && !/^barat/.test(nw) && !/^localiz/.test(nw) && !(nw in NUM_WORDS); });
       // Tira um número de CONTAGEM no início ("3 raspberry" → "raspberry"), mas mantém
@@ -451,9 +457,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // "quais ações mais caíram". Dado direto da fonte (BRAPI/Yahoo) + página local.
   {
     const sp2 = n.replace(/([a-z])(\d)/g, '$1 $2');
-    if (/\b(acoes|stocks?|shares?)\b/.test(sp2) && /\b(valoriz\w+|subiram|sobem|alta(s)?|ganha\w+|cair\w*|cairam|caem|queda(s)?|desvaloriz\w+|perde\w+|gain\w*|rose|rising|rallied|up|fell|fall\w*|dropp?\w*|down|losers?|gainers?)\b/.test(sp2)) {
-      const direction: 'gainers' | 'losers' = /\b(cair\w*|cairam|caem|queda(s)?|desvaloriz\w+|perde\w+|baixa(s)?|fell|fall\w*|dropp?\w*|down|losers?|losing)\b/.test(sp2) ? 'losers' : 'gainers';
-      const cm = sp2.match(/\b(\d{1,3})\s+(?:acoes|stocks?|shares?)\b/) || sp2.match(/\b(?:acoes?|stocks?|shares?)\D{0,12}\b(\d{1,3})\b/);
+    if (/\b(acoes|acciones|stocks?|shares?)\b/.test(sp2) && /\b(valoriz\w+|subi\w+|sobem|alta(s)?|ganha\w+|cair\w*|cairam|caem|baj\w+|cay\w+|queda(s)?|desvaloriz\w+|perde\w+|gain\w*|rose|rising|rallied|up|fell|fall\w*|dropp?\w*|down|losers?|gainers?)\b/.test(sp2)) {
+      const direction: 'gainers' | 'losers' = /\b(cair\w*|cairam|caem|baj\w*|cay\w*|queda(s)?|desvaloriz\w+|perde\w+|baixa(s)?|fell|fall\w*|dropp?\w*|down|losers?|losing)\b/.test(sp2) ? 'losers' : 'gainers';
+      const cm = sp2.match(/\b(\d{1,3})\s+(?:acoes|acciones|stocks?|shares?)\b/) || sp2.match(/\b(?:acoes?|acciones|stocks?|shares?)\D{0,12}\b(\d{1,3})\b/);
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 5), 100) : 50;
       return { type: 'stock_movers', direction, count };
     }
@@ -469,7 +475,7 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const isDl = /\b(baix\w*|download|downloading|salv\w*|save|saving)\b/.test(sp);
     const watchVerb = /\b(abr\w+|mostr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|p[oõ]e\b|pon\b|poner\b|pong\w+|ponme\b|bota\w*|reprodu\w+|assist\w+|open\w*|play\w*|show\w*|watch\w*)\b/.test(sp);
     const mediaWord = /\b(video|videos|clipe|clipes|musica|musicas|cancao|cancoes|cancion|canciones|song|songs|track|tracks|clip|clips)\b/.test(sp);
-    const cm = sp.match(/\b(\d{1,2}|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|two|three|four|five|six|seven|eight|nine|ten)\s+(?:abas?|guias?|tabs?|musicas?|videos?|cancoes|clipes?|songs?|tracks?|clips?)\b/);
+    const cm = sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+(?:abas?|guias?|tabs?|musicas?|videos?|cancoes|canciones|clipes?|songs?|tracks?|clips?)\b/);
     const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : 0;
     if (!isDl && watchVerb && mediaWord && cnt >= 2) {
       const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga bota botar reproduz reproduzir reproducir reproduce assistir assista navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch tab tabs each one with in on the of a an song songs track tracks video videos clip clips musica musicas cancao cancoes cancion canciones clipe clipes filme').split(' '));
