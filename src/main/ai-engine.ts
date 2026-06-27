@@ -541,7 +541,14 @@ export class AIEngine {
       }
       if (res.ok) {
         const data = await res.json();
-        return data.choices?.[0]?.message?.content ?? '';
+        let content: string = data.choices?.[0]?.message?.content ?? '';
+        // Tira o anuncio que o Pollinations injeta nas respostas do tier gratis
+        // ("Support Pollinations / Powered by Pollinations / 🌸 Ad 🌸 ..."): o usuario NAO deve ver isso.
+        content = content
+          .replace(/\n+[-*_\s]*\n*\*{0,2}\s*(?:Support Pollinations|Powered by Pollinations|🌸)[\s\S]*$/i, '')
+          .replace(/\[[^\]]*\]\(https?:\/\/[^)]*pollinations\.ai\/redirect[^)]*\)/gi, '')
+          .trimEnd();
+        return content;
       }
       lastStatus = res.status;
       try { await res.text(); } catch {}   // drena o corpo (não mostramos o HTML do erro)

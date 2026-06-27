@@ -61,9 +61,16 @@ export function useTabStore() {
   const [aiSettings, setAISettings] = useState<AISettings>(() => {
     try {
       const saved = localStorage.getItem('aiSettings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const s = JSON.parse(saved);
+        // Pollinations deixou de ser provedor SELECIONÁVEL (virou só fallback sem-chave +
+        // gerador de imagem). Quem tinha ele salvo migra pra DeepSeek; sem chave, o engine
+        // cai no Pollinations sozinho — mesmo comportamento, UI consistente.
+        if (s && s.provider === 'pollinations') s.provider = 'deepseek';
+        return s;
+      }
     } catch {}
-    return { provider: 'pollinations', apiKey: '', baseUrl: '' };
+    return { provider: 'deepseek', apiKey: '', baseUrl: '' };
   });
 
   const [localSettings, setLocalSettingsState] = useState<LocalSettings>(() => {
