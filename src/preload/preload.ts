@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   makeSupercut: (phrase: string, count?: number) => ipcRenderer.invoke('media:make-supercut', phrase, count),
   // ── Editor de vídeo local (ffmpeg nativo) ──
   pickVideo: () => ipcRenderer.invoke('video:pick'),
+  pickDocument: () => ipcRenderer.invoke('file:pick-extract'),
   // Resolve o caminho real de um arquivo arrastado (File → path) no Electron 33.
   getPathForFile: (file: File) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   editTrim: (input: string, startSec: number, endSec: number) => ipcRenderer.invoke('videoedit:trim', input, startSec, endSec),

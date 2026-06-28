@@ -1216,6 +1216,48 @@ function setupIPC(): void {
     return { canceled: false, path: r.filePaths[0] };
   });
 
+  // Attach a DOCUMENT (PDF/Word/Markdown/txt) to ask about it: native dialog → extract
+  // the text → the renderer sends it as chat context (works with ANY text model, free).
+  async function extractTextFromFile(p: string): Promise<{ ok: boolean; name?: string; text?: string; error?: string }> {
+    const name = path.basename(p);
+    const ext = path.extname(p).toLowerCase();
+    const MAX = 100000;   // cap the context so a huge file doesn't blow the prompt
+    try {
+      let text = '';
+      if (ext === '.pdf') {
+        const { PDFParse } = require('pdf-parse');
+        const parser = new PDFParse({ data: fs.readFileSync(p) });
+        const res = await parser.getText();
+        text = String(res?.text || '');
+      } else if (ext === '.docx') {
+        const mammoth = require('mammoth');
+        const res = await mammoth.extractRawText({ path: p });
+        text = String(res?.value || '');
+      } else {
+        text = fs.readFileSync(p, 'utf8');   // .md/.markdown/.txt/.csv/.json/.log…
+      }
+      text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      if (!text) return { ok: false, name, error: 'No readable text found (a scanned/image-only file?).' };
+      if (text.length > MAX) text = text.slice(0, MAX) + '\n…[truncated]';
+      return { ok: true, name, text };
+    } catch (e: any) {
+      return { ok: false, name, error: String(e?.message ?? e) };
+    }
+  }
+  ipcMain.handle('file:pick-extract', async () => {
+    if (process.env.E2E_DOC_PATH) return extractTextFromFile(process.env.E2E_DOC_PATH);   // test seam (no native dialog)
+    const r = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Pick a document',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'csv', 'json', 'rtf', 'log'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return extractTextFromFile(r.filePaths[0]);
+  });
+
   // Edições entram na FILA (lane 'edit') — uma por vez, em ordem, sem rejeitar a
   // próxima. (Roda em paralelo com a lane 'download'.) Mesmas funções de sempre.
   const editProgress = (p: any) => mainWindow?.webContents.send('agent:videoedit-progress', p);

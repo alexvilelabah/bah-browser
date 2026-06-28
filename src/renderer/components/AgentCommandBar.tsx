@@ -106,7 +106,7 @@ function hostOf(url: string): string {
 
 interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
-  onSendChat: (message: string) => Promise<{ reply: string; suggestedCommand?: string }>;
+  onSendChat: (message: string, docText?: string) => Promise<{ reply: string; suggestedCommand?: string }>;
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
   onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
@@ -164,6 +164,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Caixinha "modo imagem" (one-shot): marcada, a PRÓXIMA mensagem vira geração de imagem e
   // a caixa desmarca sozinha. Default OFF, NÃO persiste (reabrir nunca volta no modo imagem).
   const [imageMode, setImageMode] = useState(false);
+  const [attachedDoc, setAttachedDoc] = useState<{ name: string; text: string } | null>(null);
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
   const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
@@ -286,14 +287,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     }
   };
 
-  const runChat = async (msg: string) => {
+  const runChat = async (msg: string, docText?: string) => {
     convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
     push({ kind: 'chat-user', text: msg });
     setInput('');
     try {
-      const { reply, suggestedCommand } = await onSendChat(msg);
+      const { reply, suggestedCommand } = await onSendChat(msg, docText);
       pendingSuggestionRef.current = suggestedCommand ?? null;
       push({ kind: 'chat-assistant', text: reply, suggestedCommand });
     } catch (e: any) {
@@ -381,10 +382,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     runAgent(prompt, { forceImage: true });
   };
 
+  // Anexar um DOCUMENTO (PDF/Word/MD/txt) pra perguntar sobre ele. O dialog nativo (main)
+  // extrai o texto; fica no compositor até remover (✕), então follow-ups reusam o mesmo doc.
+  const pickDoc = async () => {
+    if (loading || chatLoading) return;
+    const r = await (window as any).electronAPI?.pickDocument?.();
+    if (!r) return;   // cancelado
+    if (r.ok && r.text) setAttachedDoc({ name: r.name || 'document', text: r.text });
+    else push({ kind: 'error', text: r.error || 'Could not read the file.' });
+  };
+
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
     if (loading || chatLoading) return;
+    if (attachedDoc) { runChat(msg, `[Attached file "${attachedDoc.name}"]\n\n${attachedDoc.text}`); return; }   // doc Q&A
     if (imageMode) { runImage(msg); return; }
     runUnified(msg);
   };
@@ -732,6 +744,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
       {/* ── Composer: um bloco ÚNICO, limpo e generoso (estilo Comet) ── */}
       <div className="composer">
+        {attachedDoc && (
+          <div className="composer-attach">
+            <span className="composer-attach-ic">📄</span>
+            <span className="composer-attach-name">{attachedDoc.name}</span>
+            <button type="button" className="composer-attach-x" onClick={() => setAttachedDoc(null)} title={t('composer.removeAttach')}>✕</button>
+          </div>
+        )}
         <textarea
           ref={inputRef}
           data-testid="agent-command-input"
@@ -740,7 +759,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
-          placeholder={imageMode ? t('composer.phImage') : ph}
+          placeholder={attachedDoc ? t('composer.phFile') : imageMode ? t('composer.phImage') : ph}
           disabled={loading || chatLoading}
         />
         <div className="composer-bar">
@@ -754,6 +773,16 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l1.7 4.6 4.6 1.7-4.6 1.7L12 15.1l-1.7-4.6L5.7 8.8l4.6-1.7L12 2.5z"/><path d="M18.7 14.2l.85 2.25 2.25.85-2.25.85-.85 2.25-.85-2.25-2.25-.85 2.25-.85.85-2.25z"/></svg>
             <span>{t('composer.imageMode')}</span>
+          </button>
+          <button
+            type="button"
+            className={`composer-attach-btn${attachedDoc ? ' on' : ''}`}
+            onClick={pickDoc}
+            disabled={loading || chatLoading}
+            title={t('composer.attachFile')}
+            aria-label={t('composer.attachFile')}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
           </button>
           <div className="composer-hint">{t('composer.hint')}</div>
           {manualHelp ? (

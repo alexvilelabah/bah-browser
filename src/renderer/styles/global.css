@@ -1514,6 +1514,27 @@ body {
 .agent-side-panel-host .composer-image-toggle:hover:not(:disabled) { background:var(--bg-hover); color:var(--text-primary); }
 .agent-side-panel-host .composer-image-toggle.on { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 2px 10px rgba(138,99,255,0.35); }
 .agent-side-panel-host .composer-image-toggle:disabled { opacity:0.4; cursor:default; }
+/* Anexar documento (perguntar sobre o arquivo): botão redondo + chip com o nome */
+.agent-side-panel-host .composer-attach-btn {
+  flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:26px; border:1px solid var(--border); background:var(--bg-tertiary);
+  color:var(--text-muted); cursor:pointer; border-radius:999px;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.agent-side-panel-host .composer-attach-btn:hover:not(:disabled) { background:var(--bg-hover); color:var(--text-primary); }
+.agent-side-panel-host .composer-attach-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.agent-side-panel-host .composer-attach-btn:disabled { opacity:0.4; cursor:default; }
+.agent-side-panel-host .composer-attach {
+  display:flex; align-items:center; gap:8px; margin:0 0 8px;
+  padding:6px 10px; border:1px solid var(--border); border-radius:10px; background:var(--bg-tertiary);
+}
+.agent-side-panel-host .composer-attach-ic { flex:0 0 auto; font-size:15px; }
+.agent-side-panel-host .composer-attach-name { flex:1 1 auto; font-size:12.5px; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-side-panel-host .composer-attach-x {
+  flex:0 0 auto; border:none; background:transparent; color:var(--text-muted);
+  cursor:pointer; font-size:13px; padding:2px 6px; border-radius:6px;
+}
+.agent-side-panel-host .composer-attach-x:hover { background:var(--bg-hover); color:var(--text-primary); }
 /* Botão "⚡ Fazer isso" sob uma resposta que propôs uma ação → dispara o agente. */
 .chat-action-btn {
   margin-top:8px; display:inline-flex; align-items:center; gap:5px;

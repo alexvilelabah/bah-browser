@@ -91,6 +91,7 @@ declare global {
       onSupercutProgress?: (cb: (p: { stage: string; message: string; current?: number; total?: number }) => void) => () => void;
       // ── Editor de vídeo local (ffmpeg nativo) ──
       pickVideo?: () => Promise<{ canceled: boolean; path?: string }>;
+      pickDocument?: () => Promise<{ ok: boolean; name?: string; text?: string; error?: string } | null>;
       getPathForFile?: (file: File) => string;
       editTrim?: (input: string, startSec: number, endSec: number) => Promise<{ success: boolean; path?: string; error?: string; info?: any }>;
       editRemoveSilence?: (input: string, opts?: { noiseDb?: number; minSilence?: number; pad?: number }) => Promise<{ success: boolean; path?: string; error?: string; info?: any }>;
@@ -2915,9 +2916,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 setAgentVisual('idle');
               }
             }}
-            onSendChat={async (msg) => {
+            onSendChat={async (msg, docText) => {
               const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
               store.addChatMessage('user', msg);
+              // Document attached → the question is about the FILE: use its extracted text
+              // as context (skip the page/transcript) and answer with the selected model.
+              if (docText) {
+                const r = await window.electronAPI?.aiChat(msg, docText, undefined, store.localSettings.enabled, chatTabId);
+                const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
+                store.addChatMessage('assistant', reply);
+                return { reply };
+              }
               let pageContent = await getPageContent();
               // Se a aba é um vídeo do YouTube, anexa a TRANSCRIÇÃO (legenda) ao contexto pra
               // a IA conversar sobre o que é DITO, não só título/descrição. Cache por vídeo.
