@@ -962,16 +962,23 @@ function setupIPC(): void {
     }
   });
 
+  // Stop must interrupt a long in-flight type (text is sent char-by-char in the main
+  // process). Without this, clicking Stop kept typing the whole string into the page.
+  let typingAbort = false;
+  ipcMain.handle('input:type-abort', () => { typingAbort = true; return { ok: true }; });
   ipcMain.handle('input:type', async (_e, wcId: number, text: string) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { success: false, error: 'webContents not found' };
     try {
       wc.focus();
-      // Humanizado: cadência variável por tecla + pausa ocasional após espaço/pontuação.
-      // Mesmo texto digitado; só o ritmo muda (menos "robô"). Textos longos = ritmo menor.
+      typingAbort = false;
+      // Humanized: variable cadence per key + occasional pause after space/punctuation.
+      // Same text typed; only the rhythm changes (less "robotic"). Long text = faster rhythm.
       const s = String(text);
       const longText = s.length > 60;
+      let typed = 0;
       for (const ch of s) {
+        if (typingAbort) break;   // Stop pressed → stop typing immediately
         if (ch === '\n' || ch === '\r') {
           wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' } as any);
           wc.sendInputEvent({ type: 'char', keyCode: 'Enter' } as any);
@@ -979,11 +986,12 @@ function setupIPC(): void {
         } else {
           wc.sendInputEvent({ type: 'char', keyCode: ch } as any);
         }
+        typed++;
         let d = longText ? rnd(10, 28) : rnd(25, 70);
         if (/[\s.,!?;:]/.test(ch) && Math.random() < 0.35) d += rnd(120, 300);
         await sleepMs(d);
       }
-      return { success: true, info: { typed: s.length } };
+      return { success: !typingAbort, aborted: typingAbort, info: { typed } };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
     }

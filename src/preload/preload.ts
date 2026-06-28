@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),
   realType: (wcId: number, text: string) =>
     ipcRenderer.invoke('input:type', wcId, text),
+  abortTyping: () => ipcRenderer.invoke('input:type-abort'),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
   // Accessibility tree via CDP

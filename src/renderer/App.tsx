@@ -59,6 +59,7 @@ declare global {
       onOpenNewTab?: (cb: (url: string) => void) => void;
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
+      abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
@@ -1014,6 +1015,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 (signal ? (Promise.race([Promise.resolve(p), abortP]) as Promise<Awaited<T>>)
                         : (Promise.resolve(p) as Promise<Awaited<T>>));
               const sleep = (ms: number): Promise<void> => raceCancel(new Promise<void>(r => setTimeout(r, ms)));
+              // Typing runs char-by-char in the main process; on Stop, tell main to abort
+              // the in-flight type so it doesn't keep typing into the page after cancel.
+              const realTypeCancellable = async (id: number, text: string) => {
+                const onAbort = () => { window.electronAPI?.abortTyping?.(); };
+                signal?.addEventListener('abort', onAbort, { once: true });
+                try { return await window.electronAPI?.realType?.(id, text); }
+                finally { signal?.removeEventListener('abort', onAbort); }
+              };
               const waitForManualHelp = async (request: ManualHelpRequest, currentUrl: string) => {
                 setAgentVisual('idle');
                 setLastFooterMsg(`Manual help: ${request.reason}`);
@@ -1752,8 +1761,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                       }
                       if (r === undefined) {
+                        // Bounded: the offscreen fallback runs click_text via executeJavaScript,
+                        // which would never resolve on a hung page. Same 12s cap as the general path.
                         r = isOffscreen && target.text
-                          ? await executeBrowserAction(wv, { type: 'click_text', text: target.text })
+                          ? await withTimeout(
+                              executeBrowserAction(wv, { type: 'click_text', text: target.text }),
+                              12000,
+                              { success: false, error: `click_text timed out — page scripts are unresponsive. Re-observe or navigate elsewhere.` })
                           : await window.electronAPI?.realClick?.(wcId, clickX, clickY, target.backendNodeId);
                       }
                       if (action.type === 'fill_ref') {
@@ -1763,7 +1777,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           wv.executeJavaScript(`(function(){const el=document.activeElement;if(!el)return;try{if(el.select)el.select();else if(el.setSelectionRange)el.setSelectionRange(0,(el.value||'').length);else{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);}}catch(e){}})()`),
                           3000, null);
                         await new Promise(rr => setTimeout(rr, 80));
-                        await window.electronAPI?.realType?.(wcId, action.value);
+                        await realTypeCancellable(wcId, action.value);
+                        throwIfCancelled();
                         if (commandLooksLikeYouTubeComment && action.value.trim()) youtubeCommentFilled = true;
                       }
                       toolResult = r ?? { success: true };
@@ -1818,7 +1833,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                     } // fim do if(!cancelledT) — freio de segurança
                   } else if (action.type === 'type' && wcId != null) {
-                    toolResult = await window.electronAPI?.realType?.(wcId, action.text);
+                    toolResult = await realTypeCancellable(wcId, action.text);
+                    throwIfCancelled();
                     if (commandLooksLikeYouTubeComment && action.text.trim()) youtubeCommentFilled = true;
                   } else if (action.type === 'press' && wcId != null) {
                     // FREIO: Enter (press) numa página de checkout pode submeter pagamento.

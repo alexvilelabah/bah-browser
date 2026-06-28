@@ -51,6 +51,22 @@ export async function terminateOcrWorkers(): Promise<void> {
   await Promise.all(all.map(async p => { try { (await p).terminate(); } catch {} }));
 }
 
+// OCR must never hang the agent step. Cap worker creation and recognition; on timeout
+// resolve to null so the caller degrades to empty text (best-effort fallback).
+const OCR_WORKER_TIMEOUT_MS = 15000;
+const OCR_RECOGNIZE_TIMEOUT_MS = 25000;
+
+function ocrWithTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms);
+    p.then(
+      (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } },
+      () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } },
+    );
+  });
+}
+
 /**
  * Roda OCR local com Tesseract.js, reusando um worker persistente por idioma.
  *
@@ -62,9 +78,18 @@ export async function runOCR(
   lang = 'por+eng'
 ): Promise<OcrResult> {
   const t0 = Date.now();
-  const worker = await getWorker(lang);
+  const empty = (): OcrResult => ({ text: '', confidence: 0, words: [], durationMs: Date.now() - t0, skipped: false });
 
-  const { data } = await worker.recognize(imagePath);
+  const worker = await ocrWithTimeout(getWorker(lang), OCR_WORKER_TIMEOUT_MS);
+  if (!worker) { workerCache.delete(lang); return empty(); }
+
+  const data = await ocrWithTimeout(worker.recognize(imagePath).then((r: any) => r.data), OCR_RECOGNIZE_TIMEOUT_MS);
+  if (!data) {
+    // Recognition stalled → drop this worker so the next call gets a fresh one.
+    workerCache.delete(lang);
+    try { worker.terminate(); } catch {}
+    return empty();
+  }
   const raw = data as any;
 
   const words = ((raw.words ?? []) as any[]).map((w: any) => ({
