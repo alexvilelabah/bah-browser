@@ -7,8 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.invoke('window:close'),
 
   // AI
-  setAIProvider: (provider: string, apiKey: string, baseUrl?: string) =>
-    ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl),
+  setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
+    ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl, model),
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
   onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
   aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) =>

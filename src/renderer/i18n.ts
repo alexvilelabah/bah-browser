@@ -64,6 +64,7 @@ const dict: Record<Lang, Record<string, string>> = {
     // Configurações / IA Local
     'set.cloudMode': 'Cloud',
     'set.provider': 'Provider',
+    'set.model': 'Model',
     'set.cloudSmall': 'cloud · API · recommended',
     'set.localSmall': 'your GPU · offline',
     'set.localMode': 'Local AI',
@@ -205,6 +206,7 @@ const dict: Record<Lang, Record<string, string>> = {
     // Configurações / IA Local
     'set.cloudMode': 'Nuvem',
     'set.provider': 'Provedor',
+    'set.model': 'Modelo',
     'set.cloudSmall': 'nuvem · API · recomendado',
     'set.localSmall': 'sua GPU · offline',
     'set.localMode': 'IA Local',
@@ -346,6 +348,7 @@ const dict: Record<Lang, Record<string, string>> = {
     // Configuración / IA Local
     'set.cloudMode': 'Nube',
     'set.provider': 'Proveedor',
+    'set.model': 'Modelo',
     'set.cloudSmall': 'nube · API · recomendado',
     'set.localSmall': 'tu GPU · sin conexión',
     'set.localMode': 'IA Local',

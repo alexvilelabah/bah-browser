@@ -24,6 +24,7 @@ export interface AISettings {
   provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
   apiKey: string;
   baseUrl: string;
+  model?: string;                      // cloud model override (e.g. pick an NVIDIA model); empty = provider default
   apiKeys?: Record<string, string>;   // key PER provider — the DeepSeek one never leaks into the Pollinations field
 }
 

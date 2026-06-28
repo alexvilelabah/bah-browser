@@ -574,7 +574,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 {t('set.provider')}
                 <select
                   value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : 'deepseek'}
-                  onChange={e => { const next = e.target.value as AISettings['provider']; setSettings(s => { const keys = { ...(s.apiKeys || {}), [s.provider]: s.apiKey }; return { ...s, provider: next, baseUrl: '', apiKey: keys[next] || '', apiKeys: keys }; }); }}
+                  onChange={e => { const next = e.target.value as AISettings['provider']; setSettings(s => { const keys = { ...(s.apiKeys || {}), [s.provider]: s.apiKey }; return { ...s, provider: next, baseUrl: '', model: '', apiKey: keys[next] || '', apiKeys: keys }; }); }}
                 >
                   <option value="deepseek">DeepSeek</option>
                   <option value="mistral">Mistral</option>
@@ -590,6 +590,22 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
                 />
               </label>
+              {settings.provider === 'nvidia' && (
+                <label>
+                  {t('set.model')}
+                  <select
+                    value={settings.model || 'meta/llama-3.3-70b-instruct'}
+                    onChange={e => setSettings({ ...settings, model: e.target.value })}
+                  >
+                    <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B (fast)</option>
+                    <option value="deepseek-ai/deepseek-v4-flash">DeepSeek V4 Flash (fast)</option>
+                    <option value="deepseek-ai/deepseek-v4-pro">DeepSeek V4 Pro (strong)</option>
+                    <option value="nvidia/llama-3.3-nemotron-super-49b-v1">Nemotron Super 49B</option>
+                    <option value="z-ai/glm-5.1">GLM 5.1</option>
+                    <option value="qwen/qwen3-next-80b-a3b-instruct">Qwen3 Next 80B</option>
+                  </select>
+                </label>
+              )}
               <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
               <div className="mm-hint">🆓 {t('set.freeFallback')}</div>
               <details className="mm-imp">

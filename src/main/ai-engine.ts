@@ -283,18 +283,20 @@ export class AIEngine {
   private apiKey: string;
   private baseUrl: string;
   private ollamaModel: string;
+  private cloudModel: string;   // optional cloud model override (e.g. NVIDIA model picker)
   private resolvedOllamaModel: string | null = null;  // modelo realmente usado (auto-detect)
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
 
-  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string) {
+  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string, cloudModel?: string) {
     this.provider = provider;
     // Defensive trim: pasted API keys often carry a trailing space/newline,
     // which makes DeepSeek/OpenAI reject the "Bearer <key>" header with 401.
     this.apiKey = (apiKey || '').trim();
     this.baseUrl = (baseUrl && baseUrl.trim()) ? baseUrl.trim() : this.defaultBaseUrl(provider);
     this.ollamaModel = ollamaModel || 'qwen3-vl:8b';
+    this.cloudModel = (cloudModel || '').trim();
   }
 
   private defaultBaseUrl(provider: AIProvider): string {
@@ -472,7 +474,7 @@ export class AIEngine {
   // other providers so nada se afeta.
   private async callNim(messages: Message[], isAgentMode: boolean): Promise<string> {
     const body: any = {
-      model: 'meta/llama-3.3-70b-instruct',
+      model: this.cloudModel || 'meta/llama-3.3-70b-instruct',
       messages: [
         { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
         ...messages,

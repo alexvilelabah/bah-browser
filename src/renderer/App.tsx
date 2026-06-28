@@ -49,7 +49,7 @@ declare global {
       minimize: () => void;
       maximize: () => void;
       close: () => void;
-      setAIProvider: (provider: string, apiKey: string, baseUrl?: string) => Promise<any>;
+      setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) => Promise<any>;
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
@@ -219,7 +219,7 @@ export default function App() {
   });
 
   useEffect(() => {
-    window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiKey, store.aiSettings.baseUrl);
+    window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiKey, store.aiSettings.baseUrl, store.aiSettings.model);
     window.electronAPI?.setUILanguage?.(getLang());   // i18n Fase 2: agente responde no idioma da UI
     window.electronAPI?.onZoom?.((pct) => showZoom(pct));   // Ctrl+roda → badge de zoom na tela
     // Initialize local (GPU) engine if hybrid is enabled
@@ -2955,7 +2955,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             aiSettings={store.aiSettings}
             onSettingsChange={async (settings) => {
               store.setAISettings(settings);
-              await window.electronAPI?.setAIProvider(settings.provider, settings.apiKey, settings.baseUrl);
+              await window.electronAPI?.setAIProvider(settings.provider, settings.apiKey, settings.baseUrl, settings.model);
             }}
             localSettings={store.localSettings}
             onLocalSettingsChange={async (ls) => {
