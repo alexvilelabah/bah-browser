@@ -25,8 +25,10 @@ export function classifyRisk(
   // cliques (click_ref / click_text)
   const PAY = /\b(pagar|pague|pagar agora|pagamento|finalizar (compra|pedido|a compra)|confirmar (pedido|compra|pagamento)|comprar agora|fazer pedido|place order|buy now|complete (purchase|order|payment)|checkout|finalizar e pagar|assinar agora|assinar plano|transferir|enviar pix)\b/;
   const DEL = /\b(excluir|apagar|deletar|delete|remover|remove|descartar|discard|esvaziar (a )?lixeira|empty trash|excluir conta|delete account|remover conta|remove account|apagar tudo|delete all|excluir permanentemente|delete permanently|excluir email|excluir mensagem|excluir tudo)\b/;
-  // "clear search", "remove filter", "empty cart" = harmless → no confirmation.
-  const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form)\b/;
+  // Benign words that defuse a delete/remove match (clearing UI state or social toggles
+  // like/unlike/subscribe/follow/vote). e.g. "remove like" on an already-liked video must
+  // NOT prompt. Real destructive deletes (file/email/account/server) have none of these.
+  const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form|like|gostei|curtir|descurtir|dislike|playlist|inscri\w*|subscrib\w*|unsubscribe|seguir|unfollow|follow|voto|votar|vote|upvote|downvote|reacao|reaction|notificac\w*|notification)\b/;
   if (PAY.test(hay)) return { kind: 'payment', label: shown || 'payment' };
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
   return null;
