@@ -28,18 +28,23 @@ function ytDlpPath(): string {
 function downloadToFile(url: string, dest: string, redirects = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     if (redirects > 6) return reject(new Error('too many redirects'));
-    https.get(url, { headers: { 'User-Agent': 'bah-browser' } }, (res) => {
+    const tmp = dest + '.part';
+    const fail = (e: any) => { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} reject(e); };   // limpa o .part em qualquer falha
+    const req = https.get(url, { headers: { 'User-Agent': 'bah-browser' } }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         return resolve(downloadToFile(res.headers.location, dest, redirects + 1));
       }
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`HTTP ${res.statusCode}`)); }
-      const tmp = dest + '.part';
+      if (res.statusCode !== 200) { res.resume(); return fail(new Error(`HTTP ${res.statusCode}`)); }
       const file = fs.createWriteStream(tmp);
       res.pipe(file);
-      file.on('finish', () => file.close(() => { try { fs.renameSync(tmp, dest); resolve(); } catch (e) { reject(e); } }));
-      file.on('error', reject);
-    }).on('error', reject);
+      res.on('error', fail);
+      file.on('finish', () => file.close(() => { try { fs.renameSync(tmp, dest); resolve(); } catch (e) { fail(e); } }));
+      file.on('error', fail);
+    });
+    req.on('error', fail);
+    // Conexão travada (rede ruim no setup) → 20s de socket ocioso aborta, em vez de "Preparando…" pra sempre.
+    req.setTimeout(20000, () => req.destroy(new Error('download timeout')));
   });
 }
 
@@ -417,14 +422,25 @@ export async function downloadVideo(
     new Promise((resolve) => {
       const paths: string[] = [];
       const startedAt = Date.now();
+      let lastActivity = startedAt;   // pra detectar yt-dlp travado (sem nenhuma saída)
       let title = '';
       let stderrTail = '';
       let seenMerge = false;
       const child = spawn(bin, runArgs, { windowsHide: true });
+      // Sem deadline o yt-dlp pode travar pra sempre (vídeo bloqueado/rede parada) e prender a fila.
+      // 2 min SEM nenhuma saída = travado → mata (download lento mas em progresso não dispara).
+      const idleKill = setInterval(() => {
+        if (Date.now() - lastActivity > 120000) {
+          clearInterval(idleKill);
+          try { child.kill(); } catch {}
+          resolve({ ok: false, paths, title, err: 'yt-dlp stalled (no output for 2 min) — canceled' });
+        }
+      }, 15000);
 
       const handleLine = (raw: string) => {
         const line = raw.trim();
         if (!line) return;
+        lastActivity = Date.now();
         const m = line.match(/DLPROG:\s*([\d.]+)%\|([^|]*)\|(.*)$/);
         if (m) {
           const done = priorCount + paths.length + 1;
@@ -458,8 +474,9 @@ export async function downloadVideo(
       const stderrSink = mkSink();
       child.stderr.on('data', (d) => { stderrTail = (stderrTail + d.toString()).slice(-800); stderrSink(d); });
 
-      child.on('error', (e) => resolve({ ok: false, paths, title, err: String((e as any)?.message ?? e) }));
+      child.on('error', (e) => { clearInterval(idleKill); resolve({ ok: false, paths, title, err: String((e as any)?.message ?? e) }); });
       child.on('close', (code) => {
+        clearInterval(idleKill);
         // 101 = MaxDownloadsReached (do nosso --max-downloads): isso é SUCESSO.
         if (code === 0 || code === 101) {
           leftovers.forEach(fl => { try { fl(); } catch {} });

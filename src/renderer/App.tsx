@@ -2873,7 +2873,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 setLastFooterMsg('Step limit reached');
                 finishRun('max_steps', 'Step limit reached');
-                return { thought: `${thoughts.join('\n\n')}\n\nReached max steps`, results: allResults };
+                // Bater o limite de passos é FALHA, não conclusão: devolve error (a barra mostra
+                // como problema, sem o sino de "pronto"), em vez de um thought que parece relatório.
+                return { thought: thoughts.join('\n\n'), results: allResults, error: "I couldn't finish this within the step limit. Try rephrasing it, or break it into smaller steps." };
               } catch (err: any) {
                 if (err?.message === 'TASK_CANCELLED_BY_USER') {
                   const done: BrowserAction = { type: 'done', success: false, reason: 'Task canceled by the user.' };

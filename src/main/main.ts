@@ -1527,8 +1527,10 @@ function setupIPC(): void {
       // Many .gov.br / older sites have an incomplete TLS cert chain ("unable to verify
       // the first certificate"). Try strict first; on a cert error retry tolerantly
       // (the file's MZ/executable checks below still protect the user).
+      const dlCtrl = new AbortController();
+      const dlTimer = setTimeout(() => { try { dlCtrl.abort(); } catch {} }, 60000);   // teto de 60s: servidor lento/infinito nao trava o main
       const doFetch = (lenient: boolean) => {
-        const opts: any = { headers: dlHeaders };
+        const opts: any = { headers: dlHeaders, signal: dlCtrl.signal };
         if (lenient && url.startsWith('https:')) opts.agent = new (require('https').Agent)({ rejectUnauthorized: false });
         return fetch(url, opts);
       };
@@ -1545,10 +1547,31 @@ function setupIPC(): void {
         await new Promise(r => setTimeout(r, 2500));
         res = await doFetch(false).catch(() => doFetch(true));
       }
-      if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
-      const buf = Buffer.from(await res.arrayBuffer());
+      if (!res.ok) { clearTimeout(dlTimer); return { success: false, error: `HTTP ${res.status}` }; }
+      // Teto de 100MB ANTES de bufferizar: Content-Length corta cedo; sem ele, lê em stream e
+      // aborta ao passar do teto (evita OOM quando o servidor manda/mente um arquivo gigante).
+      const MAX_DL = 100 * 1024 * 1024;
+      if (Number(res.headers.get('content-length') || 0) > MAX_DL) {
+        clearTimeout(dlTimer); try { (res.body as any)?.destroy?.(); } catch {}
+        return { success: false, error: 'File larger than 100MB — refused.' };
+      }
+      let buf: Buffer;
+      if (res.body && typeof (res.body as any)[Symbol.asyncIterator] === 'function') {
+        const chunks: Buffer[] = []; let total = 0;
+        try {
+          for await (const chunk of res.body as any) {
+            total += chunk.length;
+            if (total > MAX_DL) { try { (res.body as any).destroy?.(); } catch {} return { success: false, error: 'File larger than 100MB — refused.' }; }
+            chunks.push(Buffer.from(chunk));
+          }
+        } finally { clearTimeout(dlTimer); }
+        buf = Buffer.concat(chunks);
+      } else {
+        buf = Buffer.from(await res.arrayBuffer());
+        clearTimeout(dlTimer);
+        if (buf.length > MAX_DL) return { success: false, error: 'File larger than 100MB — refused.' };
+      }
       if (buf.length === 0) return { success: false, error: 'Empty file.' };
-      if (buf.length > 100 * 1024 * 1024) return { success: false, error: 'File larger than 100MB — refused.' };
       // Content sniff: block Windows executables regardless of extension (MZ header)
       if (buf.length > 2 && buf[0] === 0x4d && buf[1] === 0x5a) {
         return { success: false, error: 'Blocked: file content is a Windows executable.' };
