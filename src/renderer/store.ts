@@ -9,8 +9,8 @@ export interface Tab {
   isLoading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
-  hidden?: boolean;   // aba de trabalho (Pesquisa Rápida): carrega mas não aparece na barra
-  startup?: boolean;  // a aba que nasce no boot — só ela mostra as boas-vindas do painel
+  hidden?: boolean;   // work tab (Quick Search): loads but is hidden from the tab bar
+  startup?: boolean;  // the tab created at boot — only it shows the panel's welcome
 }
 
 export interface ChatMessage {
@@ -24,7 +24,7 @@ export interface AISettings {
   provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
   apiKey: string;
   baseUrl: string;
-  apiKeys?: Record<string, string>;   // chave POR provedor — a do DeepSeek não vaza pro campo do Pollinations
+  apiKeys?: Record<string, string>;   // key PER provider — the DeepSeek one never leaks into the Pollinations field
 }
 
 export interface LocalSettings {
@@ -34,8 +34,8 @@ export interface LocalSettings {
   model: string;             // e.g. qwen3-vl:8b
 }
 
-// Página inicial = Google no idioma da pessoa (não força o Brasil pra todo mundo).
-// Quem tem o PC em inglês abre o Google em inglês; pt-BR continua no Google do Brasil.
+// Home page = Google in the user's language (don't force Brazil on everyone).
+// An English OS opens Google in English; pt-BR still gets Google Brazil.
 function googleHome(): string {
   const lang = detectLang();
   if (lang === 'pt') return 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr';
@@ -64,9 +64,9 @@ export function useTabStore() {
       const saved = localStorage.getItem('aiSettings');
       if (saved) {
         const s = JSON.parse(saved);
-        // Pollinations deixou de ser provedor SELECIONÁVEL (virou só fallback sem-chave +
-        // gerador de imagem). Quem tinha ele salvo migra pra DeepSeek; sem chave, o engine
-        // cai no Pollinations sozinho — mesmo comportamento, UI consistente.
+        // Pollinations is no longer a SELECTABLE provider (just the keyless fallback +
+        // image generator). Anyone who had it saved migrates to DeepSeek; with no key the
+        // engine falls back to Pollinations on its own — same behavior, consistent UI.
         if (s && s.provider === 'pollinations') {
           s.provider = 'deepseek';
           s.apiKey = (s.apiKeys && s.apiKeys.deepseek) || '';   // nao mandar a chave do Pollinations pro DeepSeek; sem chave cai no Pollinations
@@ -98,9 +98,9 @@ export function useTabStore() {
     return tab.id;
   }, []);
 
-  // Aba OCULTA (Pesquisa Rápida): monta o webview e carrega a URL, mas NÃO vira a aba
-  // ativa nem aparece na barra de abas — a busca roda "por baixo dos panos". É removida
-  // com closeTab quando termina. A barra (TabBar) ignora abas com hidden=true.
+  // HIDDEN tab (Quick Search): mounts the webview and loads the URL, but does NOT become
+  // the active tab nor appear in the tab bar — the search runs "behind the scenes". It's
+  // removed with closeTab when done. The TabBar ignores tabs with hidden=true.
   const addHiddenTab = useCallback((url?: string): string => {
     const tab = { ...createTab(url), hidden: true };
     setTabs(prev => [...prev, tab]);
@@ -108,7 +108,7 @@ export function useTabStore() {
   }, []);
 
   const closeTab = useCallback((id: string) => {
-    window.electronAPI?.clearChatHistory?.(id);   // libera a memória de chat daquela aba
+    window.electronAPI?.clearChatHistory?.(id);   // free that tab's chat memory
     setTabs(prev => {
       const closing = prev.find(t => t.id === id);
       if (closing && !closing.hidden && closing.url && /^https?:\/\//i.test(closing.url)) {
@@ -134,7 +134,7 @@ export function useTabStore() {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
   }, []);
 
-  // Reabre a última aba fechada (Ctrl+Shift+T).
+  // Reopen the last closed tab (Ctrl+Shift+T).
   const reopenClosedTab = useCallback(() => {
     const url = closedTabsRef.current.pop();
     if (url) addTab(url);

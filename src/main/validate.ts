@@ -1,30 +1,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// VALIDADORES DE IPC — helpers pequenos e puros pra checar entradas dos handlers
-// sensíveis (URL, contagem, caminho). Defesa em profundidade: não muda comportamento
-// de sucesso, só rejeita entrada claramente inválida/perigosa.
+// IPC VALIDATORS — small, pure helpers to check inputs of the sensitive handlers
+// (URL, count, path). Defense in depth: doesn't change success behavior, only
+// rejects clearly invalid/dangerous input.
 // ─────────────────────────────────────────────────────────────────────────────
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** URL http(s) válida. */
+/** Valid http(s) URL. */
 export function isHttpUrl(u: unknown): u is string {
   if (typeof u !== 'string' || !/^https?:\/\//i.test(u)) return false;
   try { new URL(u); return true; } catch { return false; }
 }
 
-/** http(s) OU alvo de busca do yt-dlp ("ytsearch5:..."). */
+/** http(s) OR a yt-dlp search target ("ytsearch5:..."). */
 export function isHttpOrSearch(u: unknown): u is string {
   return isHttpUrl(u) || (typeof u === 'string' && /^ytsearch\d*:/i.test(u));
 }
 
-/** Inteiro preso entre [min,max]; usa `def` se inválido. */
+/** Integer clamped to [min,max]; uses `def` if invalid. */
 export function clampCount(n: unknown, min: number, max: number, def: number): number {
   const v = Math.floor(Number(n));
   if (!Number.isFinite(v)) return def;
   return Math.min(Math.max(v, min), max);
 }
 
-/** O caminho resolvido está DENTRO de alguma das raízes permitidas? (anti path-escape) */
+/** Is the resolved path INSIDE one of the allowed roots? (anti path-escape) */
 export function isInsideAllowedRoot(target: unknown, roots: string[]): boolean {
   if (typeof target !== 'string' || !target) return false;
   let resolved: string;
@@ -41,7 +41,7 @@ export function isInsideAllowedRoot(target: unknown, roots: string[]): boolean {
   return false;
 }
 
-/** É um arquivo (existente, não diretório)? */
+/** Is it a file (existing, not a directory)? */
 export function isExistingFile(p: unknown): p is string {
   if (typeof p !== 'string' || !p) return false;
   try { return fs.statSync(p).isFile(); } catch { return false; }
