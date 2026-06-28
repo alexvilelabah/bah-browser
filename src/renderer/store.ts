@@ -66,7 +66,11 @@ export function useTabStore() {
         // Pollinations deixou de ser provedor SELECIONÁVEL (virou só fallback sem-chave +
         // gerador de imagem). Quem tinha ele salvo migra pra DeepSeek; sem chave, o engine
         // cai no Pollinations sozinho — mesmo comportamento, UI consistente.
-        if (s && s.provider === 'pollinations') s.provider = 'deepseek';
+        if (s && s.provider === 'pollinations') {
+          s.provider = 'deepseek';
+          s.apiKey = (s.apiKeys && s.apiKeys.deepseek) || '';   // nao mandar a chave do Pollinations pro DeepSeek; sem chave cai no Pollinations
+          s.baseUrl = '';
+        }
         return s;
       }
     } catch {}

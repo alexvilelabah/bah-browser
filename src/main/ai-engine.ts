@@ -545,7 +545,7 @@ export class AIEngine {
         // Tira o anuncio que o Pollinations injeta nas respostas do tier gratis
         // ("Support Pollinations / Powered by Pollinations / 🌸 Ad 🌸 ..."): o usuario NAO deve ver isso.
         content = content
-          .replace(/\n+[-*_\s]*\n*\*{0,2}\s*(?:Support Pollinations|Powered by Pollinations|🌸)[\s\S]*$/i, '')
+          .replace(/\n+[-*_\s]*\n*\*{0,2}\s*(?:Support Pollinations|Powered by Pollinations|🌸\s*\**\s*Ad\b)[\s\S]*$/i, '')
           .replace(/\[[^\]]*\]\(https?:\/\/[^)]*pollinations\.ai\/redirect[^)]*\)/gi, '')
           .trimEnd();
         return content;
