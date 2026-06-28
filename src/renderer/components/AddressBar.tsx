@@ -21,12 +21,15 @@ export default function AddressBar({
   isBookmarked, onToggleBookmark, getSuggestions,
 }: Props) {
   const [input, setInput] = useState(url);
-  const [sugg, setSugg] = useState<Array<{ url: string; title: string; display: string; prefix: boolean }>>([]);
+  const [sugg, setSugg] = useState<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
   const [showSugg, setShowSugg] = useState(false);
   const [hi, setHi] = useState(-1);   // item destacado (-1 = usa o texto digitado)
   const inputRef = useRef<HTMLInputElement>(null);
   const lastKeyRef = useRef('');      // pra NÃO autocompletar quando o usuário está apagando
   const selRef = useRef<{ s: number; e: number } | null>(null);
+  const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);   // debounce do Google Suggest
+  const queryRef = useRef('');                                          // query atual (descarta resposta velha)
+  const localRef = useRef<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
 
   useEffect(() => { setInput(url); setShowSugg(false); }, [url]);
 
@@ -38,10 +41,32 @@ export default function AddressBar({
     }
   }, [input]);
 
+  // Sugestões do Google (estilo Chrome): fetch no main (sem CORS), com debounce, e mescla
+  // com as locais. Pula quando o texto parece um domínio sendo digitado (deixa pro inline local).
+  const fetchWebSuggest = (val: string) => {
+    if (debRef.current) clearTimeout(debRef.current);
+    const domainLike = !val.includes(' ') && /\.[a-z]{2,}/i.test(val);
+    if (!val.trim() || domainLike || /^https?:\/\//i.test(val)) return;
+    debRef.current = setTimeout(async () => {
+      try {
+        const web: string[] = (await (window as any).electronAPI?.suggest?.(val)) || [];
+        if (queryRef.current !== val || !web.length) return;   // resposta velha ou vazia
+        const seen = new Set(localRef.current.map(s => (s.display || s.title).toLowerCase()));
+        const items = web
+          .filter(s => s && s.toLowerCase() !== val.toLowerCase() && !seen.has(s.toLowerCase()))
+          .map(s => ({ url: s, title: s, display: '', prefix: false, search: true }));
+        if (!items.length) return;
+        setSugg([...localRef.current, ...items].slice(0, 8));
+        setShowSugg(true);
+      } catch {}
+    }, 120);
+  };
+
   const onType = (val: string) => {
     const deleting = lastKeyRef.current === 'Backspace' || lastKeyRef.current === 'Delete' || val.length < input.length;
     const list = (val.trim() && getSuggestions) ? getSuggestions(val) : [];
     const top = list[0];
+    queryRef.current = val; localRef.current = list;
     // Autocomplete inline: topo é match de prefixo e seu display começa com o que foi digitado
     // → completa o resto (ex.: "youtube.co" → "youtube.com") com o sufixo selecionado. Só ao
     // DIGITAR (nunca apagando), e o Enter passa a ir pro site completo, não pro typo.
@@ -54,6 +79,7 @@ export default function AddressBar({
       setInput(val);
       setSugg(list); setShowSugg(list.length > 0); setHi(!deleting && top && top.prefix ? 0 : -1);
     }
+    fetchWebSuggest(val);
   };
   const go = (target: string) => { setShowSugg(false); onNavigate(target); };
 
@@ -120,11 +146,12 @@ export default function AddressBar({
           <ul className="omni-suggest">
             {sugg.map((s, i) => (
               <li
-                key={s.url}
-                className={`omni-item${i === hi ? ' on' : ''}`}
+                key={(s.search ? 's:' : 'u:') + s.url}
+                className={`omni-item${i === hi ? ' on' : ''}${s.search ? ' search' : ''}`}
                 onMouseDown={e => { e.preventDefault(); go(s.url); }}
                 onMouseEnter={() => setHi(i)}
               >
+                {s.search && <span className="omni-ico" aria-hidden="true">🔍</span>}
                 <span className="omni-title">{s.title}</span>
                 {s.display && s.display !== s.title && <span className="omni-url">{s.display}</span>}
               </li>

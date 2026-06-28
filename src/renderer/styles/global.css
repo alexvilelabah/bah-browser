@@ -215,6 +215,7 @@ body {
   cursor:pointer; white-space:nowrap; overflow:hidden;
 }
 .omni-item.on{ background:rgba(255,255,255,0.08); }
+.omni-ico{ flex:0 0 auto; font-size:11px; opacity:0.55; }
 .omni-title{ color:var(--text-primary); font-size:13px; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; max-width:55%; }
 .omni-url{ color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; }
 

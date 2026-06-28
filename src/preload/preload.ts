@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateImage: (prompt: string, count?: number) => ipcRenderer.invoke('image:generate', prompt, count),
   revealInFolder: (target: string) => ipcRenderer.invoke('shell:reveal', target),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
+  suggest: (q: string) => ipcRenderer.invoke('suggest:query', q),
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),

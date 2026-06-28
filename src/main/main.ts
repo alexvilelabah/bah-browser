@@ -672,6 +672,22 @@ function setupIPC(): void {
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
 
+  // Sugestoes da barra de endereco (Google Suggest, estilo Chrome) — fetch no MAIN pra nao
+  // esbarrar em CORS. Sem chave. hl segue o idioma da UI. Offline/erro -> [] (cai so nas locais).
+  ipcMain.handle('suggest:query', async (_e, q: string) => {
+    try {
+      const query = (q || '').trim();
+      if (!query || /^https?:\/\//i.test(query)) return [];
+      const ctrl = new AbortController();
+      const tm = setTimeout(() => ctrl.abort(), 3000);
+      const url = `https://suggestqueries.google.com/complete/search?client=firefox&hl=${encodeURIComponent(LANG_SWITCH)}&q=${encodeURIComponent(query)}`;
+      const res = await fetch(url, { signal: ctrl.signal } as any).finally(() => clearTimeout(tm));
+      if (!res.ok) return [];
+      const data = JSON.parse(await res.text());
+      return Array.isArray(data?.[1]) ? data[1].slice(0, 6).map((s: any) => String(s)) : [];
+    } catch { return []; }
+  });
+
   // AI configuration
   ipcMain.handle('ai:set-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string) => {
     // Sem chave → cai no Pollinations (grátis, keyless) em vez de quebrar: o app
