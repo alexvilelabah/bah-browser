@@ -1218,40 +1218,79 @@ function setupIPC(): void {
 
   // Attach a DOCUMENT (PDF/Word/Markdown/txt) to ask about it: native dialog → extract
   // the text → the renderer sends it as chat context (works with ANY text model, free).
-  // Decode a text file respecting its encoding (Notepad saves UTF-8/UTF-16/ANSI).
+  // Decode a text file respecting its encoding (Notepad saves UTF-8/UTF-16/ANSI), and
+  // reject binary files (scattered NULs) so we never dump bytes at the user.
   function decodeTextFile(buf: Buffer): string {
-    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.toString('utf16le').replace(/^﻿/, '');       // UTF-16 LE BOM
-    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) { const sw = Buffer.from(buf); sw.swap16(); return sw.toString('utf16le').replace(/^﻿/, ''); }   // UTF-16 BE BOM
-    let s = buf.toString('utf8');
-    if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);                                  // UTF-8 BOM
-    const bad = (s.match(/�/g) || []).length;                                   // many replacement chars → not utf8
-    if (bad > 0 && bad > s.length * 0.02) s = buf.toString('latin1');               // fall back to latin1/cp1252 (ANSI)
+    const stripBom = (s: string) => s.replace(/^﻿/, '');
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return stripBom(buf.toString('utf16le'));                                 // UTF-16 LE BOM
+    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) { const sw = Buffer.from(buf); sw.swap16(); return stripBom(sw.toString('utf16le')); }   // UTF-16 BE BOM
+    // No BOM: many NULs = UTF-16 (ASCII on alternating bytes) or binary (scattered NULs).
+    const probe = buf.subarray(0, Math.min(buf.length, 4096));
+    let nul = 0, nulOdd = 0, nulEven = 0;
+    for (let i = 0; i < probe.length; i++) if (probe[i] === 0) { nul++; if (i % 2) nulOdd++; else nulEven++; }
+    if (nul > 0) {   // real text (UTF-8/ASCII/ANSI) has NO NUL bytes; UTF-16 has them aligned on one side
+      if (nulOdd >= probe.length * 0.30 && nulEven <= probe.length * 0.02) return stripBom(buf.toString('utf16le'));                     // UTF-16 LE, no BOM
+      if (nulEven >= probe.length * 0.30 && nulOdd <= probe.length * 0.02) { const sw = Buffer.from(buf); sw.swap16(); return stripBom(sw.toString('utf16le')); }   // UTF-16 BE, no BOM
+      return '';                                                                                                                         // NULs but not a clean UTF-16 pattern → binary, not text
+    }
+    let s = stripBom(buf.toString('utf8'));
+    const bad = (s.match(/�/g) || []).length;                                                                                       // many replacement chars → not utf8
+    if (bad > 0 && bad > s.length * 0.02) s = new TextDecoder('windows-1252').decode(buf);                                               // ANSI / cp1252
     return s;
+  }
+  const DOC_MAX_BYTES = 30 * 1024 * 1024;   // reject files over 30 MB BEFORE reading (no OOM/freeze)
+  const DOC_EXTRACT_TIMEOUT_MS = 30000;     // cap PDF/DOCX parsing so a bad file can't hang the main process
+  const DOC_TEXT_EXT = new Set(['.md', '.markdown', '.txt', '.text', '.csv', '.tsv', '.json', '.log', '.xml', '.yaml', '.yml', '.ini', '.srt', '.vtt']);
+  function docRaceTimeout(promise: Promise<any>, ms: number): Promise<any> {
+    return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('extract timed out')), ms))]);
   }
   async function extractTextFromFile(p: string): Promise<{ ok: boolean; name?: string; text?: string; error?: string }> {
     const name = path.basename(p);
     const ext = path.extname(p).toLowerCase();
-    const MAX = 100000;   // cap the context so a huge file doesn't blow the prompt
+    const MAX = 100000;   // cap the extracted text
+    // Reject by SIZE before reading — a 300 MB log/PDF would freeze the main process.
+    try {
+      if (fs.statSync(p).size > DOC_MAX_BYTES) return { ok: false, name, error: 'This file is too large (over 30 MB). Try a smaller file.' };
+    } catch { return { ok: false, name, error: 'Could not open the file.' }; }
+    // Reject types we cannot actually read (so we never dump markup/garbage at the user).
+    if (ext === '.doc') return { ok: false, name, error: 'Old Word ".doc" is not supported — open it in Word and "Save As" .docx.' };
+    if (ext === '.rtf') return { ok: false, name, error: 'RTF is not supported yet — save it as .txt or .docx.' };
+    if (ext !== '.pdf' && ext !== '.docx' && !DOC_TEXT_EXT.has(ext)) {
+      return { ok: false, name, error: `Unsupported file type "${ext || '(none)'}". Use PDF, Word (.docx), Markdown or a text file.` };
+    }
     try {
       let text = '';
       if (ext === '.pdf') {
         const { PDFParse } = require('pdf-parse');
         const parser = new PDFParse({ data: fs.readFileSync(p) });
-        const res = await parser.getText();
-        text = String(res?.text || '');
+        try {
+          const res = await docRaceTimeout(parser.getText(), DOC_EXTRACT_TIMEOUT_MS);
+          text = String(res?.text || '');
+        } catch (e: any) {
+          const info = String(e?.name || '') + ' ' + String(e?.message || '');
+          if (/password/i.test(info)) return { ok: false, name, error: 'This PDF is password-protected — remove the password and try again.' };
+          if (/timed out/i.test(info)) return { ok: false, name, error: 'Reading the PDF took too long — it may be very large or damaged.' };
+          if (/invalid|format|corrupt/i.test(info)) return { ok: false, name, error: 'This PDF looks corrupted or invalid.' };
+          throw e;
+        } finally {
+          try { await parser.destroy?.(); } catch {}   // free pdf.js memory (recommended by pdf-parse)
+        }
       } else if (ext === '.docx') {
         const mammoth = require('mammoth');
-        const res = await mammoth.extractRawText({ path: p });
+        const res = await docRaceTimeout(mammoth.extractRawText({ path: p }), DOC_EXTRACT_TIMEOUT_MS);
         text = String(res?.value || '');
       } else {
-        text = decodeTextFile(fs.readFileSync(p));   // .md/.markdown/.txt/.csv/.json/.log… (BOM/UTF-16/latin1)
+        text = decodeTextFile(fs.readFileSync(p));   // .md/.txt/.csv/.json/.log… (BOM/UTF-16/cp1252; rejects binary)
       }
       text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-      if (!text) return { ok: false, name, error: 'No readable text found (a scanned/image-only file?).' };
+      if (!text) return { ok: false, name, error: ext === '.pdf'
+        ? 'No selectable text — this PDF looks scanned (image-only) and would need OCR.'
+        : 'No readable text found — the file may be empty or not a text file.' };
       if (text.length > MAX) text = text.slice(0, MAX) + '\n…[truncated]';
       return { ok: true, name, text };
-    } catch (e: any) {
-      return { ok: false, name, error: String(e?.message ?? e) };
+    } catch {
+      // Sanitized: never surface a raw fs/parser path or stack trace to the user.
+      return { ok: false, name, error: 'Could not read this file — it may be corrupted or in an unsupported format.' };
     }
   }
   ipcMain.handle('file:pick-extract', async () => {
@@ -1260,7 +1299,7 @@ function setupIPC(): void {
       title: 'Pick a document',
       properties: ['openFile'],
       filters: [
-        { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'csv', 'json', 'rtf', 'log'] },
+        { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'text', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml', 'ini', 'srt', 'vtt'] },
         { name: 'All files', extensions: ['*'] },
       ],
     });
