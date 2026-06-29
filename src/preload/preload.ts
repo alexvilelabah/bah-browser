@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // AI
   setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
     ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl, model),
+  // Cifra (cofre do SO) o que vai pro disco; decifra na hora de carregar. Chave em texto puro só na memória.
+  encryptSecret: (t: string): Promise<string> => ipcRenderer.invoke('secure:encrypt', t),
+  decryptSecretSync: (t: string): string => { try { return ipcRenderer.sendSync('secure:decrypt-sync', t); } catch { return t; } },
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
   onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
   aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) =>

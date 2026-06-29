@@ -50,6 +50,8 @@ declare global {
       maximize: () => void;
       close: () => void;
       setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) => Promise<any>;
+      encryptSecret?: (t: string) => Promise<string>;
+      decryptSecretSync?: (t: string) => string;
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { ElectronBlocker } from '@ghostery/adblocker-electron';
 import fetch from 'cross-fetch';
@@ -686,6 +686,23 @@ function setupIPC(): void {
       const data = JSON.parse(await res.text());
       return Array.isArray(data?.[1]) ? data[1].slice(0, 6).map((s: any) => String(s)) : [];
     } catch { return []; }
+  });
+
+  // Cifra/decifra segredos (a chave de API) com o cofre do SO (safeStorage). A chave fica
+  // em texto puro SÓ na memória; no disco (localStorage) vai cifrada. Fallback: texto puro
+  // se o cofre não estiver disponível (ex.: Linux sem keyring) — nunca quebra o app.
+  ipcMain.handle('secure:encrypt', (_e, t: string) => {
+    try {
+      if (!t || !safeStorage.isEncryptionAvailable()) return t;
+      return 'enc:' + safeStorage.encryptString(t).toString('base64');
+    } catch { return t; }
+  });
+  ipcMain.on('secure:decrypt-sync', (e, t: string) => {
+    try {
+      e.returnValue = (typeof t === 'string' && t.startsWith('enc:'))
+        ? safeStorage.decryptString(Buffer.from(t.slice(4), 'base64'))
+        : t;
+    } catch { e.returnValue = t; }
   });
 
   // AI configuration
@@ -1767,12 +1784,6 @@ function setupIPC(): void {
   ipcMain.handle('adblock:active-host-changed', (_e, host: string) => {
     if (host) evalAdblockForHost(host);
     return { active: actuallyEnabled };
-  });
-
-  ipcMain.handle('page:execute-js', async (_event, code: string) => {
-    // Forwarded to renderer which injects into webview
-    if (!mainWindow) return { error: 'No window' };
-    return { code };
   });
 
   // ═══ OCR-only handler — used by the agent loop to enrich DOM with local OCR ═══

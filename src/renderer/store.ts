@@ -65,6 +65,13 @@ export function useTabStore() {
       const saved = localStorage.getItem('aiSettings');
       if (saved) {
         const s = JSON.parse(saved);
+        // Decifra a chave (cofre do SO) de volta pra texto puro NA MEMÓRIA. Chave legada em
+        // texto puro passa intacta (decryptSecretSync só decifra o que começa com 'enc:').
+        const _dec = (window as any).electronAPI?.decryptSecretSync;
+        if (_dec && s) {
+          if (typeof s.apiKey === 'string') s.apiKey = _dec(s.apiKey);
+          if (s.apiKeys) for (const _k of Object.keys(s.apiKeys)) s.apiKeys[_k] = _dec(s.apiKeys[_k]);
+        }
         // Pollinations is no longer a SELECTABLE provider (just the keyless fallback +
         // image generator). Anyone who had it saved migrates to DeepSeek; with no key the
         // engine falls back to Pollinations on its own — same behavior, consistent UI.
@@ -153,8 +160,19 @@ export function useTabStore() {
     setActiveTabId, addTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
     setSidebarOpen, addChatMessage, clearChat,
     setAISettings: (s: AISettings) => {
-      setAISettings(s);
-      try { localStorage.setItem('aiSettings', JSON.stringify(s)); } catch {}
+      setAISettings(s);   // memória = texto puro (UI/agente intactos)
+      // No disco vai CIFRADO (cofre do SO); fire-and-forget. Se falhar, grava texto puro (nunca perde a config).
+      (async () => {
+        try {
+          const _enc = (window as any).electronAPI?.encryptSecret;
+          const copy: AISettings = { ...s };
+          if (_enc) {
+            if (s.apiKey) copy.apiKey = await _enc(s.apiKey);
+            if (s.apiKeys) { copy.apiKeys = {}; for (const _k of Object.keys(s.apiKeys)) copy.apiKeys[_k] = s.apiKeys[_k] ? await _enc(s.apiKeys[_k]) : s.apiKeys[_k]; }
+          }
+          localStorage.setItem('aiSettings', JSON.stringify(copy));
+        } catch { try { localStorage.setItem('aiSettings', JSON.stringify(s)); } catch {} }
+      })();
     },
     setLocalSettings: (s: LocalSettings) => {
       setLocalSettingsState(s);
