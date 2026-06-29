@@ -396,7 +396,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const msg = input.trim();
     if (!msg) return;
     if (loading || chatLoading) return;
-    if (attachedDoc) { runChat(msg, `[Attached file "${attachedDoc.name}"]\n\n${attachedDoc.text}`); return; }   // doc Q&A
+    if (attachedDoc) {
+      // Instrução explícita: faz ATÉ um modelo fraco usar o texto fornecido em vez de
+      // dizer "não consigo ver o arquivo, cole o texto".
+      const ctx = `The user attached a file named "${attachedDoc.name}". Its FULL text is provided below, between the markers. Answer the user's question using ONLY this text — do NOT say you can't see the file.\n\n===== FILE CONTENT =====\n${attachedDoc.text}\n===== END FILE =====`;
+      runChat(msg, ctx); return;   // doc Q&A
+    }
     if (imageMode) { runImage(msg); return; }
     runUnified(msg);
   };

@@ -316,10 +316,15 @@ export class AIEngine {
     else this.conversationHistories.clear();
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default'): Promise<string> {
-    const contextNote = pageContext
-      ? `\n\n[Current page context]\n${pageContext.slice(0, 8000)}`
-      : '';
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string): Promise<string> {
+    // rawContext = a self-contained block the caller already wrote (e.g. an attached
+    // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
+    // label — that label made weak models think there was an attachment they couldn't open.
+    const contextNote = rawContext
+      ? `\n\n${rawContext.slice(0, 24000)}`
+      : pageContext
+        ? `\n\n[Current page context]\n${pageContext.slice(0, 8000)}`
+        : '';
 
     // Stateless: usado pela Pesquisa Rápida (síntese de snippets). NÃO entra no
     // histórico de conversa — senão cada busca enfia ~2KB de snippets no contexto

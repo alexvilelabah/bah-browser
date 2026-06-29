@@ -53,7 +53,7 @@ declare global {
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) => Promise<{ response?: string; error?: string }>;
       clearChatHistory?: (tabId?: string) => Promise<any>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
@@ -2922,7 +2922,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
-                const r = await window.electronAPI?.aiChat(msg, docText, undefined, store.localSettings.enabled, chatTabId);
+                // docText = self-contained doc context: pass as rawContext + stateless (each
+                // question carries the full doc, so no history bloat and no misleading label).
+                const r = await window.electronAPI?.aiChat(msg, '', true, store.localSettings.enabled, chatTabId, docText);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 store.addChatMessage('assistant', reply);
                 return { reply };

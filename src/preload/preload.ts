@@ -11,8 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl, model),
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
   onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext),
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
   aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') =>
     ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier),

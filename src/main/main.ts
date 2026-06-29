@@ -721,13 +721,13 @@ function setupIPC(): void {
   });
 
   // AI chat — general conversation / page Q&A
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
-    // Só cai na nuvem quando o modo local está desligado.
+    // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
     try {
-      const response = await engine.chat(message, pageContent, stateless, tabId);
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
@@ -1218,6 +1218,16 @@ function setupIPC(): void {
 
   // Attach a DOCUMENT (PDF/Word/Markdown/txt) to ask about it: native dialog → extract
   // the text → the renderer sends it as chat context (works with ANY text model, free).
+  // Decode a text file respecting its encoding (Notepad saves UTF-8/UTF-16/ANSI).
+  function decodeTextFile(buf: Buffer): string {
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.toString('utf16le').replace(/^﻿/, '');       // UTF-16 LE BOM
+    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) { const sw = Buffer.from(buf); sw.swap16(); return sw.toString('utf16le').replace(/^﻿/, ''); }   // UTF-16 BE BOM
+    let s = buf.toString('utf8');
+    if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);                                  // UTF-8 BOM
+    const bad = (s.match(/�/g) || []).length;                                   // many replacement chars → not utf8
+    if (bad > 0 && bad > s.length * 0.02) s = buf.toString('latin1');               // fall back to latin1/cp1252 (ANSI)
+    return s;
+  }
   async function extractTextFromFile(p: string): Promise<{ ok: boolean; name?: string; text?: string; error?: string }> {
     const name = path.basename(p);
     const ext = path.extname(p).toLowerCase();
@@ -1234,7 +1244,7 @@ function setupIPC(): void {
         const res = await mammoth.extractRawText({ path: p });
         text = String(res?.value || '');
       } else {
-        text = fs.readFileSync(p, 'utf8');   // .md/.markdown/.txt/.csv/.json/.log…
+        text = decodeTextFile(fs.readFileSync(p));   // .md/.markdown/.txt/.csv/.json/.log… (BOM/UTF-16/latin1)
       }
       text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
       if (!text) return { ok: false, name, error: 'No readable text found (a scanned/image-only file?).' };
