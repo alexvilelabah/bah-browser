@@ -424,6 +424,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (p !== 'pollinations' && !aiSettings.apiKey?.trim()) return 'Pollinations';
     if (p === 'deepseek') return 'DeepSeek';
     if (p === 'mistral') return 'Mistral';
+    if (p === 'openai') return 'OpenAI';
+    if (p === 'anthropic') return 'Anthropic';
     if (p === 'nvidia') {
       const names: Record<string, string> = { 'meta/llama-3.3-70b-instruct': 'Llama 3.3 70B', 'deepseek-ai/deepseek-v4-flash': 'DeepSeek V4 Flash', 'deepseek-ai/deepseek-v4-pro': 'DeepSeek V4 Pro', 'nvidia/llama-3.3-nemotron-super-49b-v1': 'Nemotron 49B', 'z-ai/glm-5.1': 'GLM 5.1', 'qwen/qwen3-next-80b-a3b-instruct': 'Qwen3 80B' };
       return aiSettings.model && names[aiSettings.model] ? `NVIDIA · ${names[aiSettings.model]}` : 'NVIDIA';
@@ -459,8 +461,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const buf = await blob.arrayBuffer();
     const AC = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
     const ac = new AC();
-    const decoded = await ac.decodeAudioData(buf);
-    await ac.close();
+    let decoded: AudioBuffer;
+    try { decoded = await ac.decodeAudioData(buf); }
+    finally { try { await ac.close(); } catch {} }   // fecha SEMPRE — senão vaza AudioContext e a voz trava após ~6 falhas
     const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
     const src = offline.createBufferSource();
     src.buffer = decoded;
@@ -506,6 +509,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       setVoiceState('listening');
     } catch (err: any) {
       setVoiceState('idle');
+      try { mediaStreamRef.current?.getTracks().forEach(tr => tr.stop()); } catch {}   // se o MediaRecorder falhar após o getUserMedia, solta o mic (senão o ícone fica preso)
+      mediaStreamRef.current = null;
       push({ kind: 'error', text: `Voice: ${String(err?.message || err)}` });
     }
   };

@@ -396,7 +396,7 @@ export class AIEngine {
       messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     };
 
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
+    const res = await fetchWithTimeout(`${this.baseUrl}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -404,7 +404,7 @@ export class AIEngine {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-    });
+    }, 45000);
 
     if (!res.ok) {
       throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
@@ -425,14 +425,14 @@ export class AIEngine {
     };
     if (isAgentMode) body.response_format = { type: 'json_object' };
 
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+    const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, 45000);
 
     if (!res.ok) {
       throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
@@ -853,22 +853,17 @@ export class AIEngine {
     const t0 = Date.now();
     console.log(`[Ollama] → POST /api/chat (model=${model}, isAgent=${isAgentMode})`);
 
-    const fetchPromise = fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    // 1ª chamada carrega o modelo na VRAM (pode levar minutos num modelo grande/frio);
-    // depois fica quente. Damos folga na fria e apertamos depois.
+    // 1ª chamada carrega o modelo na VRAM (pode levar minutos num modelo grande/frio); depois
+    // fica quente. fetchWithTimeout ABORTA de verdade no estouro (!= Promise.race, que vazava o
+    // socket e nunca limpava o timer — deixava o event loop ativo por ate 5 min por request).
     const timeoutMs = this.ollamaWarmed ? 120_000 : 300_000;
-    const timeoutPromise = new Promise<Response>((_, reject) =>
-      setTimeout(() => reject(new Error(`Ollama request timeout (${timeoutMs / 1000}s)`)), timeoutMs)
-    );
-
     let res: Response;
     try {
-      res = await Promise.race([fetchPromise, timeoutPromise]);
+      res = await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }, timeoutMs);
     } catch (e: any) {
       throw new Error(`Ollama connection failed: ${e.message}`);
     }

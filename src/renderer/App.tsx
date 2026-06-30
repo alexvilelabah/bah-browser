@@ -2635,8 +2635,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   } else if (action.type === 'close_tab') {
                     const target = tabsRef.current[action.tab];
-                    if (target) { store.closeTab(target.id); toolResult = { success: true, info: { closed: action.tab } }; }
-                    else toolResult = { success: false, error: `Tab ${action.tab} not found` };
+                    if (target) {
+                      // Se a aba fechada é a aba de TRABALHO do agente, o freio anti-troca-de-aba
+                      // (taskRunningRef) impede o espelhamento de corrigir o ref → ele apontaria pra
+                      // aba MORTA e o passo seguinte quebraria (getActiveWebview null). Então
+                      // atualizamos na mão pra próxima aba ativa (mesma lógica do store.closeTab).
+                      const wasActive = target.id === activeTabIdRef.current;
+                      store.closeTab(target.id);
+                      if (wasActive) {
+                        const idx = tabsRef.current.findIndex(t => t.id === target.id);
+                        const remaining = tabsRef.current.filter(t => t.id !== target.id);
+                        if (remaining.length > 0) activeTabIdRef.current = remaining[Math.min(idx, remaining.length - 1)].id;
+                      }
+                      toolResult = { success: true, info: { closed: action.tab } };
+                    } else toolResult = { success: false, error: `Tab ${action.tab} not found` };
                   } else {
                     // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
