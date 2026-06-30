@@ -2964,6 +2964,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 await window.electronAPI?.setLocalProvider?.(ls.provider, 'local', ls.baseUrl, ls.model);
               }
             }}
+            onSwitchToCloud={() => {
+              // Saída de 1 clique de um modo IA Local travado (Ollama off) → nuvem grátis.
+              // O motor de nuvem já foi configurado no boot; aiChat roteia pela flag por chamada.
+              store.setLocalSettings({ ...store.localSettings, enabled: false });
+            }}
           />
         </div>
       </div>

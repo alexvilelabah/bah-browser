@@ -40,7 +40,7 @@ interface ActionResult {
 type FeedData =
   | { kind: 'task'; text: string }
   | { kind: 'chat-user'; text: string; file?: string }
-  | { kind: 'chat-assistant'; text: string; suggestedCommand?: string; sources?: Array<{ title: string; url: string }> }
+  | { kind: 'chat-assistant'; text: string; suggestedCommand?: string; sources?: Array<{ title: string; url: string }>; localFailed?: boolean }
   | { kind: 'event'; event: AgentProgressEvent }
   | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
   | { kind: 'step'; step: StepRecord }
@@ -122,9 +122,11 @@ interface Props {
   onSettingsChange: (settings: AISettings) => Promise<void>;
   localSettings: LocalSettings;
   onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
+  /** Sai do modo IA Local travado (Ollama off) → volta pra nuvem grátis. Escolha explícita, não auto-fallback. */
+  onSwitchToCloud: () => void;
 }
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
@@ -313,7 +315,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     try {
       const { reply, suggestedCommand } = await onSendChat(msg, docText);
       pendingSuggestionRef.current = suggestedCommand ?? null;
-      push({ kind: 'chat-assistant', text: reply, suggestedCommand });
+      // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
+      const localFailed = /Local AI failed/i.test(reply);
+      push({ kind: 'chat-assistant', text: reply, suggestedCommand, localFailed });
     } catch (e: any) {
       push({ kind: 'error', text: String(e?.message ?? e) });
     } finally {
@@ -880,7 +884,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <div className="showcase-sub">{t('login.subline')}</div>
           </div>
         )}
-        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} />)}
+        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />)}
         {chatLoading && convoTabRef.current === activeTabId && (
           <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content typing"><span /><span /><span /></div></div>
         )}
@@ -1008,7 +1012,7 @@ function notifyDone(message: string) {
   } catch {}
 }
 
-function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void }) {
+function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void }) {
   switch (item.kind) {
     case 'task':
       return <div className="chat-msg user"><div className="msg-content">⚡ {item.text}</div></div>;
@@ -1031,6 +1035,11 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
           {item.suggestedCommand && (
             <button className="chat-action-btn" onClick={() => onRunSuggestion(item.suggestedCommand!)} title={t('feed.runTaskTitle')}>
               ⚡ {t('feed.doThis')}{item.suggestedCommand.length <= 48 ? `: ${item.suggestedCommand}` : ''}
+            </button>
+          )}
+          {item.localFailed && (
+            <button className="chat-action-btn" onClick={onSwitchToCloud}>
+              🌥️ {t('feed.useFreeCloud')}
             </button>
           )}
         </div>
