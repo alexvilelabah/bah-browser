@@ -425,7 +425,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const activeAiLabel = (): string => {
     if (localSettings.enabled) return `Ollama · ${localSettings.model || 'local'}`;
     const p = aiSettings.provider;
-    if (p !== 'pollinations' && !aiSettings.apiKey?.trim()) return 'Pollinations';
+    if (aiSettings.apiPaused || (p !== 'pollinations' && !aiSettings.apiKey?.trim())) return 'Pollinations';
     if (p === 'deepseek') return 'DeepSeek';
     if (p === 'mistral') return 'Mistral';
     if (p === 'openai') return 'OpenAI';
@@ -723,14 +723,15 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button
               type="button"
               className={`mode-opt ${!localCfg.enabled ? 'on' : ''}`}
-              onClick={() => { setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, provider: (s.provider === 'mistral' || s.provider === 'nvidia') ? s.provider : 'deepseek' })); }}
+              onClick={() => { const next = { ...localCfg, enabled: false }; setLocalCfg(next); onLocalSettingsChange(next); setSettings(s => ({ ...s, provider: (s.provider === 'mistral' || s.provider === 'nvidia') ? s.provider : 'deepseek' })); }}
             >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
               className={`mode-opt ${localCfg.enabled ? 'on' : ''}`}
-              onClick={() => setLocalCfg(p => ({ ...p, enabled: true }))}
+              onClick={() => { const next = { ...localCfg, enabled: true }; setLocalCfg(next); onLocalSettingsChange(next); }}
             >🏠 {t('set.localMode')}<small>{t('set.localSmall')}</small></button>
           </div>
+          <div className="ai-active-line">{t('set.activeAi')}: <b>{activeAiLabel()}</b></div>
           {!localCfg.enabled && (
             <>
               <label>
@@ -753,6 +754,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
                 />
               </label>
+              <button type="button" className={`ai-pause-btn ${settings.apiPaused ? 'paused' : ''}`}
+                onClick={() => { const next = { ...settings, apiPaused: !settings.apiPaused }; setSettings(next); onSettingsChange(next); }}>
+                {settings.apiPaused ? `▶ ${t('set.resumeApi')}` : `⏸ ${t('set.pauseApi')}`}
+              </button>
+              {settings.apiPaused && <div className="mm-hint">🆓 {t('set.apiPausedHint')}</div>}
               {settings.provider === 'nvidia' && (
                 <label>
                   {t('set.model')}
@@ -787,6 +793,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           {localCfg.enabled && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div className="mm-hint">💡 {t('set.localHint')}</div>
+              <button type="button" className="ai-pause-btn" onClick={() => { const next = { ...localCfg, enabled: false }; setLocalCfg(next); onLocalSettingsChange(next); }}>
+                ⏸ {t('set.pauseLocal')}
+              </button>
                 <label>
                   {t('set.ollamaUrl')}
                   <input type="text" value={localCfg.baseUrl}
