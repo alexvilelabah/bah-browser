@@ -426,7 +426,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'mm.statusNone': 'Ollama no está instalado',
     'mm.started': '✅ Ollama encendido — {n} modelo(s)',
     'mm.notInstalled': 'Ollama aún no está instalado. Instálalo (botón) y luego enciéndelo.',
-    'mm.startFailed': 'No pude contactar a Ollama. Abre el app de Ollama e inténtalo de nuevo.',
+    'mm.startFailed': 'No pude contactar a Ollama. Abre la app de Ollama e inténtalo de nuevo.',
     'mm.installed': 'Modelos instalados',
     'mm.refresh': 'Actualizar lista',
     'mm.emptyNoOllama': 'Instala Ollama arriba para empezar.',
