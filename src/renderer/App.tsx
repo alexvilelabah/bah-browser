@@ -87,6 +87,7 @@ declare global {
       revealInFolder?: (target: string) => Promise<{ success: boolean; error?: string }>;
       googleLogin?: () => Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }>;
       googleCheckLogin?: () => Promise<{ loggedIn: boolean }>;
+      clearGoogleCookies?: () => Promise<{ ok: boolean; cleared?: number; error?: string }>;
       onShortcut?: (cb: (action: string) => void) => (() => void) | void;
       dismissOverlays?: (wcId: number) => Promise<{ dismissed: string }>;
       pickDocument?: () => Promise<{ ok: boolean; name?: string; text?: string; error?: string } | null>;
@@ -444,6 +445,7 @@ export default function App() {
   // Aviso de "sessão do Google expirou": liga quando a aba ativa cai na tela de
   // login/erro do Google (sinal forte de sessão quebrada). Oferece reentrar em 1 clique.
   const [showGoogleRelogin, setShowGoogleRelogin] = useState(false);
+  const [showCookieFix, setShowCookieFix] = useState(false);
   useEffect(() => {
     const u = store.activeTab?.url || '';
     // No uso normal logado a URL é mail.google.com/…; cair na tela de login do
@@ -451,7 +453,17 @@ export default function App() {
     const broken = /^https?:\/\/accounts\.google\.com\/(ServiceLogin|signin|v3\/signin|InteractiveLogin)/i.test(u);
     setShowGoogleRelogin(broken);   // dispensar (✕) fica dispensado até a URL mudar (dep abaixo)
     if (broken) setGoogleLoggedIn(false);   // sessão caiu → volta a oferecer "Entrar no Google"
+    // Cookies inconsistentes do Google → tela "CookieMismatch". Oferece limpar só os
+    // cookies do Google em 1 clique (a própria página do Google recomenda limpar cookies).
+    setShowCookieFix(/^https?:\/\/accounts\.google\.com\/CookieMismatch/i.test(u));
   }, [store.activeTab?.url]);
+  const fixGoogleCookies = useCallback(async () => {
+    setShowCookieFix(false);
+    try { await window.electronAPI?.clearGoogleCookies?.(); } catch {}
+    setGoogleLoggedIn(false);
+    // Recarrega numa base limpa do Google → sem os cookies quebrados, a tela some.
+    try { (getActiveWebview() as any)?.loadURL('https://www.google.com/'); } catch {}
+  }, [getActiveWebview]);
   const runFind = useCallback((text: string, opts?: { findNext?: boolean; forward?: boolean }) => {
     const wv = getActiveWebview() as any;
     if (!wv) return;
@@ -882,6 +894,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               <span className="relogin-text">🔑 {t('relogin.title')}</span>
               <button className="relogin-btn" onClick={() => { setShowGoogleRelogin(false); handleGoogleLogin(); }}>{t('relogin.btn')}</button>
               <button className="relogin-x" onClick={() => setShowGoogleRelogin(false)} title={t('relogin.dismiss')}>✕</button>
+            </div>
+          )}
+          {showCookieFix && (
+            <div className="relogin-bar">
+              <span className="relogin-text">🍪 {t('cookiefix.title')}</span>
+              <button className="relogin-btn" onClick={fixGoogleCookies}>{t('cookiefix.btn')}</button>
+              <button className="relogin-x" onClick={() => setShowCookieFix(false)} title={t('relogin.dismiss')}>✕</button>
             </div>
           )}
         </div>

@@ -1392,6 +1392,28 @@ function setupIPC(): void {
     } catch { return { loggedIn: false }; }
   });
 
+  // Limpa APENAS os cookies do Google (resolve o "CookieMismatch" — cookies inconsistentes).
+  // A própria tela de erro do Google recomenda limpar os cookies; aqui é 1 clique, só nos
+  // domínios do Google (não toca no resto da navegação/logins de outros sites).
+  ipcMain.handle('cookies:clear-google', async () => {
+    try {
+      const ses = session.fromPartition(BROWSER_PARTITION);
+      const GOOGLE = ['google.com', 'google.com.br', 'youtube.com', 'googleusercontent.com', 'gstatic.com', 'googleapis.com'];
+      const isGoogle = (dom: string) => { const d = (dom || '').replace(/^\./, ''); return GOOGLE.some(g => d === g || d.endsWith('.' + g)); };
+      const cookies = await ses.cookies.get({});
+      let cleared = 0;
+      for (const c of cookies) {
+        if (!isGoogle(c.domain || '')) continue;
+        const host = (c.domain || '').replace(/^\./, '');
+        const url = `http${c.secure ? 's' : ''}://${host}${c.path || '/'}`;
+        try { await ses.cookies.remove(url, c.name); cleared++; } catch {}
+      }
+      return { ok: true, cleared };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
   // ═══ Porteiro de overlays: roda o dispensador de cookie/consent em TODOS os frames ═══
   // Só o processo principal alcança iframes de OUTRA ORIGEM (ex.: Sourcepoint da CNN/Guardian).
   // Tenta o frame principal primeiro (evita clicar dentro de iframe de anúncio). Retorna o
