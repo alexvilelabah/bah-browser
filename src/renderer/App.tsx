@@ -886,12 +886,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           )}
         </div>
 
-        {store.sidebarOpen && (
-          <div className="panel-resize-handle" onMouseDown={startPanelResize} title={t('panel.resize')} />
-        )}
         {isResizing && <div className="resize-overlay" />}
         {/* Kept mounted even when closed so a running task survives toggling the sidebar */}
         <div className={`agent-side-panel-host ${store.sidebarOpen ? '' : 'collapsed'}`} style={store.sidebarOpen ? { width: panelWidth } : undefined}>
+          {store.sidebarOpen && (
+            <div className="panel-resize-handle" onMouseDown={startPanelResize} title={t('panel.resize')} />
+          )}
           <AgentCommandBar
             activeTabId={store.activeTabId}
             tabIds={store.tabs.map(t => t.id).join(',')}
