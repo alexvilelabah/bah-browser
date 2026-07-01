@@ -268,7 +268,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const runAgent = async (cmd: string, opts?: { forceImage?: boolean }) => {
+  const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean }) => {
     convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
@@ -276,7 +276,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     setManualHelp(null);
     manualContinueRef.current = null;
     stickToBottomRef.current = true;
-    push({ kind: 'task', text: cmd });
+    if (!opts?.skipPush) push({ kind: 'task', text: cmd });
     try {
       const result = await onExecute(cmd, event => {
         if (event.kind === 'step') {
@@ -319,11 +319,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     }
   };
 
-  const runChat = async (msg: string, docText?: string, fileName?: string) => {
+  const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
     convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
-    push({ kind: 'chat-user', text: msg, file: fileName });
+    if (!skipPush) push({ kind: 'chat-user', text: msg, file: fileName });
     setInput('');
     try {
       const { reply, suggestedCommand } = await onSendChat(msg, docText);
@@ -339,12 +339,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   // ── Pesquisa Rápida: busca na web em segundo plano e responde NO PAINEL com fontes. ──
-  const runResearch = async (msg: string) => {
+  const runResearch = async (msg: string, skipPush = false) => {
     if (loading || chatLoading) return;
     convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
-    push({ kind: 'chat-user', text: msg });
+    if (!skipPush) push({ kind: 'chat-user', text: msg });
     push({ kind: 'event', event: { kind: 'status', message: t('feed.searchingWeb') } });
     setInput('');
     try {
@@ -370,29 +370,33 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // navegação: roda o agente direto (alta confiança, 0 token). Garante que dar um site
     // não caia no classificador nem vire query-lixo de atalho (bug do feedback do tarkam).
     if (commandHasExplicitUrl(msg) && isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    // 2) A IA classifica o pedido (agir / página atual / web / chat) com o contexto da aba.
-    //    Se a chamada falhar/demorar/estiver indisponível, cai no roteador determinístico abaixo.
+    // 2) Passou pelas ações instantâneas → agora vem a classificação (IA, COM espera) ou o
+    //    fallback. Sobe a mensagem do usuário AGORA, antes do await, pra ela aparecer NA HORA
+    //    (sem "engasgar" esperando a classificação). As rotas abaixo NÃO re-empurram (skipPush).
+    convoTabRef.current = activeTabId;
+    stickToBottomRef.current = true;
+    push({ kind: 'chat-user', text: msg });
     if (onClassify && !classifyingRef.current) {
       classifyingRef.current = true;
       let cls: 'action' | 'page' | 'web' | 'chat' | null = null;
       try { cls = await onClassify(msg); } catch { cls = null; }
       classifyingRef.current = false;
-      if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg); return; }
-      if (cls === 'page' || cls === 'chat') { runChat(msg); return; }
-      if (cls === 'web') { runResearch(msg); return; }
+      if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
+      if (cls === 'page' || cls === 'chat') { runChat(msg, undefined, undefined, true); return; }
+      if (cls === 'web') { runResearch(msg, true); return; }
       // cls === null → segue pro fallback determinístico.
     }
-    routeDeterministic(msg);
+    routeDeterministic(msg, true);
   };
 
   // Fallback determinístico (o roteamento de antes da IA): usado quando a classificação por IA
   // falha/demora/está indisponível (API caiu, modo local travado). 0 token, nunca deixa a caixa morta.
-  const routeDeterministic = (msg: string) => {
-    if (isAboutCurrentPage(msg)) { runChat(msg); return; }
-    if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    if (isInfoRequest(msg)) { runResearch(msg); return; }
-    if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
-    runChat(msg);
+  const routeDeterministic = (msg: string, skipPush = false) => {
+    if (isAboutCurrentPage(msg)) { runChat(msg, undefined, undefined, skipPush); return; }
+    if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
+    if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    runChat(msg, undefined, undefined, skipPush);
   };
 
   const runUnified = (msg: string) => {
