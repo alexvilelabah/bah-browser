@@ -517,7 +517,8 @@ body {
   margin-top:4px;
   box-shadow:0 -10px 14px -2px var(--bg-primary);
 }
-.save-settings:hover{opacity:0.88;}
+.save-settings:hover:not(:disabled){opacity:0.88;}
+.save-settings:disabled{background:var(--bg-tertiary);color:var(--text-muted);cursor:default;box-shadow:none;}
 
 /* CHAT */
 .chat-messages {
