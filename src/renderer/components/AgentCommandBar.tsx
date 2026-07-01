@@ -59,8 +59,8 @@ const MODEL_SUGGESTIONS: Array<{ tier: string; models: string[] }> = [
   { tier: '~16GB', models: ['qwen3:14b', 'gpt-oss:20b', 'gemma3:12b'] },
   { tier: '24–32GB', models: ['qwen3:32b', 'gemma3:27b', 'deepseek-r1:32b'] },
   { tier: '64GB+', models: ['llama3.3:70b', 'deepseek-r1:70b'] },
-  { tier: '128GB+ (Mac unificado)', models: ['gpt-oss:120b', 'qwen3:235b'] },
-  { tier: '~250GB (servidor/Mac topo)', models: ['llama3.1:405b'] },
+  { tier: '128GB+', models: ['gpt-oss:120b', 'qwen3:235b'] },
+  { tier: '~250GB', models: ['llama3.1:405b'] },
 ];
 
 // "sim/pode/faça/manda/bora…" — confirmação curta a uma proposta de ação do chat.
