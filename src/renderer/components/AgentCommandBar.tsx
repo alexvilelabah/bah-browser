@@ -205,6 +205,15 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Qual aba de config está aberta (nuvem/local) — SEPARADO de "local ativo". Abrir a aba local
   // só mostra os modelos pra escolher; o local só liga quando você seleciona um modelo.
   const [localView, setLocalView] = useState(localSettings.enabled);
+  // Ao ABRIR as Configurações, sincroniza o rascunho com o que está salvo → abre sempre limpo
+  // (Salvar apagado), sem arrastar uma mudança não-salva de uma abertura anterior.
+  useEffect(() => {
+    if (!showSettings) return;
+    setSettings(aiSettings);
+    setLocalCfg(localSettings);
+    setLocalView(localSettings.enabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSettings]);
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
   const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string }>>([]);
   const [pullName, setPullName] = useState('');
@@ -757,11 +766,15 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
                 />
               </label>
-              <button type="button" className={`ai-pause-btn ${settings.apiPaused ? 'paused' : ''}`}
-                onClick={() => setSettings(s => ({ ...s, apiPaused: !s.apiPaused }))}>
-                {settings.apiPaused ? `▶ ${t('set.resumeApi')}` : `⏸ ${t('set.pauseApi')}`}
-              </button>
-              {settings.apiPaused && <div className="mm-hint">🆓 {t('set.apiPausedHint')}</div>}
+              {settings.apiKey?.trim() && (
+                <>
+                  <button type="button" className={`ai-pause-btn ${settings.apiPaused ? 'paused' : ''}`}
+                    onClick={() => setSettings(s => ({ ...s, apiPaused: !s.apiPaused }))}>
+                    {settings.apiPaused ? `▶ ${t('set.resumeApi')}` : `⏸ ${t('set.pauseApi')}`}
+                  </button>
+                  {settings.apiPaused && <div className="mm-hint">🆓 {t('set.apiPausedHint')}</div>}
+                </>
+              )}
               {settings.provider === 'nvidia' && (
                 <label>
                   {t('set.model')}
