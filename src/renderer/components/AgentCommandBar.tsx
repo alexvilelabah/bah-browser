@@ -867,9 +867,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   ) : (
                     <div className="mm-list">
                       {models.map(m => (
-                        <div key={m.name} className={`mm-item ${m.name === localCfg.model ? 'on' : ''}`}>
+                        <div key={m.name} className={`mm-item ${localCfg.enabled && m.name === localCfg.model ? 'on' : ''}`}>
                           <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name, enabled: true }))} title={t('mm.use')}>
-                            <span className="mm-name">{m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
+                            <span className="mm-name">{localCfg.enabled && m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
                             <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : ''].filter(Boolean).join(' · ')}</span>
                           </button>
                           <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title={t('mm.delete')}>
