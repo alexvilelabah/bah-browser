@@ -17,10 +17,11 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: 
         {tabs.filter(tab => !tab.hidden).map(tab => (
           <div
             key={tab.id}
-            className={`tab ${tab.id === activeTabId ? 'active' : ''}`}
+            className={`tab ${tab.id === activeTabId ? 'active' : ''}${tab.discarded ? ' discarded' : ''}`}
             onClick={() => onSelect(tab.id)}
+            title={tab.discarded ? t('tab.sleeping') : undefined}
           >
-            {tab.isLoading ? <span className="tab-spinner" /> : <TabFavicon url={tab.url} />}
+            {tab.discarded ? <span className="tab-sleep">💤</span> : tab.isLoading ? <span className="tab-spinner" /> : <TabFavicon url={tab.url} />}
             <span className="tab-title">{tab.title || t('tab.new')}</span>
             <button
               className="tab-close"

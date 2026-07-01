@@ -45,10 +45,11 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
       boundHandlers.current.set(tabId, { wv, handlers });
     });
 
-    // Cleanup removed tabs — detach listeners so closed webviews don't linger.
-    const currentIds = new Set(tabs.map(t => t.id));
+    // Cleanup removed OR discarded tabs — detach listeners so unmounted webviews don't
+    // linger (a discarded tab must re-bind cleanly when it wakes up and remounts).
+    const mountedIds = new Set(tabs.filter(t => !t.discarded).map(t => t.id));
     for (const id of Array.from(boundIds.current)) {
-      if (!currentIds.has(id)) {
+      if (!mountedIds.has(id)) {
         const bound = boundHandlers.current.get(id);
         if (bound) { for (const [ev, fn] of bound.handlers) { try { bound.wv.removeEventListener(ev, fn); } catch {} } }
         boundHandlers.current.delete(id);
@@ -58,9 +59,15 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
     }
   });
 
-  // Capture each tab's initial src ONCE so React re-renders don't trigger reloads
+  // Capture each tab's initial src ONCE so React re-renders don't trigger reloads.
+  // A discarded tab loses its entry → when it wakes, it remounts at the CURRENT url.
   const initialSrcRef = useRef<Map<string, string>>(new Map());
+  const liveIds = new Set(tabs.map(t => t.id));
+  for (const id of Array.from(initialSrcRef.current.keys())) {
+    if (!liveIds.has(id)) initialSrcRef.current.delete(id);   // closed tabs: free the entry
+  }
   for (const tab of tabs) {
+    if (tab.discarded) { initialSrcRef.current.delete(tab.id); continue; }
     if (!initialSrcRef.current.has(tab.id)) {
       initialSrcRef.current.set(tab.id, tab.url || 'about:blank');
     }
@@ -68,7 +75,7 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
 
   return (
     <div className="webview-container" ref={containerRef}>
-      {tabs.map(tab => (
+      {tabs.filter(tab => !tab.discarded).map(tab => (
         <webview
           key={tab.id}
           data-tab-id={tab.id}
@@ -82,6 +89,8 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
           // @ts-ignore
           allowpopups="true"
           partition="persist:browser"
+          // Cache de bytecode V8: o JS dos sites compila 1x e reusa nas visitas seguintes.
+          webpreferences="v8CacheOptions=bypassHeatCheck"
         />
       ))}
     </div>

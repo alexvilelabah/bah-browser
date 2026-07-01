@@ -11,6 +11,8 @@ export interface Tab {
   canGoForward: boolean;
   hidden?: boolean;   // work tab (Quick Search): loads but is hidden from the tab bar
   startup?: boolean;  // the tab created at boot — only it shows the panel's welcome
+  discarded?: boolean;    // Memory Saver: webview unmounted (RAM freed); reloads on activation
+  lastActiveAt?: number;  // when the tab was last the active one (drives the discard sweep)
 }
 
 export interface ChatMessage {
@@ -53,6 +55,7 @@ export function createTab(url = googleHome()): Tab {
     isLoading: false,
     canGoBack: false,
     canGoForward: false,
+    lastActiveAt: Date.now(),
   };
 }
 
@@ -95,6 +98,16 @@ export function useTabStore() {
   });
 
   const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
+
+  // Ativar uma aba também a "acorda" (Memory Saver) e carimba o relógio de inatividade:
+  // a que ENTRA zera o descarte; a que SAI ganha lastActiveAt=agora (esteve ativa até aqui).
+  const activateTab = useCallback((id: string) => {
+    setTabs(prev => prev.map(t =>
+      t.id === id ? { ...t, discarded: false, lastActiveAt: Date.now() }
+      : t.id === activeTabId ? { ...t, lastActiveAt: Date.now() }
+      : t));
+    setActiveTabId(id);
+  }, [activeTabId]);
 
   // Pilha de URLs de abas fechadas → reabrir com Ctrl+Shift+T (estilo Chrome).
   const closedTabsRef = useRef<string[]>([]);
@@ -151,7 +164,7 @@ export function useTabStore() {
   return {
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
-    setActiveTabId, addTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
+    setActiveTabId: activateTab, addTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
     setSidebarOpen,
     setAISettings: (s: AISettings) => {
       setAISettings(s);   // memória = texto puro (UI/agente intactos)

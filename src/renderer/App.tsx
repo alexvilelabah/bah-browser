@@ -319,6 +319,32 @@ export default function App() {
     if (r?.ok) { setHwAccelOn(next); window.alert(t('menu.hwAccelRestart')); }
   }, [hwAccelOn]);
 
+  // ── Economia de memória (Memory Saver, estilo Chrome) ──
+  // Aba parada há 30+ min (não ativa, sem áudio) tem o webview DESMONTADO → o Chromium
+  // libera o processo/RAM. Ao clicar na aba ela recarrega na URL onde estava (💤 na aba).
+  const [memSaverOn, setMemSaverOn] = useState<boolean>(() => { try { return localStorage.getItem('memSaver') !== '0'; } catch { return true; } });
+  const toggleMemSaver = useCallback(() => {
+    setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
+  }, []);
+  const sweepTabsRef = useRef(store.tabs); sweepTabsRef.current = store.tabs;
+  const sweepActiveIdRef = useRef(store.activeTabId); sweepActiveIdRef.current = store.activeTabId;
+  useEffect(() => {
+    if (!memSaverOn) return;
+    let idleMs = 30 * 60 * 1000;
+    try { const o = Number(localStorage.getItem('memSaverIdleMs')); if (o > 0) idleMs = o; } catch {}   // override p/ testes internos
+    const iv = setInterval(() => {
+      const now = Date.now();
+      for (const tb of sweepTabsRef.current) {
+        if (tb.id === sweepActiveIdRef.current || tb.hidden || tb.discarded) continue;
+        if (now - (tb.lastActiveAt || now) < idleMs) continue;
+        const wv = webviewRefs.current.get(tb.id) as any;
+        try { if (wv?.isCurrentlyAudible?.()) continue; } catch {}   // nunca dorme aba tocando som
+        store.updateTab(tb.id, { discarded: true });
+      }
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [memSaverOn, store.updateTab]);
+
   // ── Favoritos (estilo Chrome) ──
   const saveFavorite = useCallback(() => {
     const t = store.activeTab;
@@ -835,6 +861,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">⚡</span>
                   <span className="menu-label">{t('menu.hwAccel')}</span>
                   <span className={`menu-switch ${hwAccelOn ? 'on' : ''}`}>{hwAccelOn ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleMemSaver()} title={t('menu.memSaverTitle')}>
+                  <span className="menu-ic">💤</span>
+                  <span className="menu-label">{t('menu.memSaver')}</span>
+                  <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>

@@ -544,6 +544,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
+      v8CacheOptions: 'bypassHeatCheck',   // bytecode da UI compila 1x e reusa (boot mais rápido)
     },
   });
 
