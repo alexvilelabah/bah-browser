@@ -833,7 +833,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {localCfg.enabled && (
                 <button type="button" className="ai-pause-btn" onClick={() => setLocalCfg(p => ({ ...p, enabled: false }))}>
-                  ⏸ {t('set.pauseLocal')}
+                  {t('set.pauseLocal')}
                 </button>
               )}
                 <label>
