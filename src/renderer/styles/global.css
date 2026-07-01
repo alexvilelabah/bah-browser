@@ -1727,10 +1727,10 @@ body {
 .menu-wrap { position:relative; flex:none; }
 .menu-btn {
   width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center;
-  border:1px solid var(--border-bright); background:var(--bg-tertiary); color:var(--text-secondary);
-  border-radius:10px; cursor:pointer; transition:all .15s var(--ease);
+  border:none; background:transparent; color:var(--text-secondary);
+  border-radius:8px; cursor:pointer; transition:background .15s var(--ease), color .15s var(--ease);
 }
-.menu-btn:hover { border-color:var(--accent); color:var(--text-primary); box-shadow:var(--shadow-glow); transform:translateY(-1px); }
+.menu-btn:hover { background:var(--bg-hover); color:var(--text-primary); }
 .menu-overlay { position:fixed; inset:0; z-index:8999; background:transparent; }
 .menu-panel {
   position:absolute; top:calc(100% + 6px); right:0; z-index:9000;
