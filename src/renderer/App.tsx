@@ -888,7 +888,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
         {isResizing && <div className="resize-overlay" />}
         {/* Kept mounted even when closed so a running task survives toggling the sidebar */}
-        <div className={`agent-side-panel-host ${store.sidebarOpen ? '' : 'collapsed'}`} style={store.sidebarOpen ? { width: panelWidth } : undefined}>
+        <div className={`agent-side-panel-host ${store.sidebarOpen ? '' : 'collapsed'}`} style={store.sidebarOpen ? { width: panelWidth, minWidth: panelWidth, maxWidth: panelWidth } : undefined}>
           {store.sidebarOpen && (
             <div className="panel-resize-handle" onMouseDown={startPanelResize} title={t('panel.resize')} />
           )}

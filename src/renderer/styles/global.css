@@ -460,6 +460,9 @@ body {
   to{transform:translateX(0);opacity:1;}
 }
 .sidebar-header {
+  /* flex:none → NUNCA encolhe. Sem isto, quando as Config abrem (conteúdo alto) a
+     coluna do painel estoura e o flex-shrink padrão espreme o cabeçalho (muda de tamanho). */
+  flex:none;
   display:flex;align-items:center;justify-content:space-between;
   padding:13px 16px;
   border-bottom:1px solid var(--border);
