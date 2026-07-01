@@ -471,6 +471,8 @@ body {
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
 }
 .sidebar-actions{display:flex;gap:3px;}
+.sidebar-title-wrap{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto;}
+.sidebar-active-ai{font-size:10px;font-weight:600;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:0.02em;opacity:0.85;}
 .sidebar-actions button {
   width:28px;height:28px;border:none;background:transparent;
   color:var(--text-muted);cursor:pointer;

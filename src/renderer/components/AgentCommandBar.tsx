@@ -730,7 +730,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   return (
     <div className="agent-command-bar" data-testid="agent-command-bar">
       <div className="sidebar-header">
-        <h3>{t('assist.title')}</h3>
+        <div className="sidebar-title-wrap">
+          <h3>{t('assist.title')}</h3>
+          <span className="sidebar-active-ai" title={activeAiLabel()}>{activeAiLabel()}</span>
+        </div>
         <div className="sidebar-actions">
           <button onClick={() => setShowSettings(!showSettings)} title={t('assist.settings')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
