@@ -14,8 +14,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   decryptSecretSync: (t: string): string => { try { return ipcRenderer.sendSync('secure:decrypt-sync', t); } catch { return t; } },
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
   onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId),
+  // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
+  onChatDelta: (cb: (p: { streamId: string; delta: string }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('ai:chat-delta', listener);
+    return () => ipcRenderer.removeListener('ai:chat-delta', listener);
+  },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
   aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') =>
     ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier),

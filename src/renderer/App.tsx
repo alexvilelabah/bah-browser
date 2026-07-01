@@ -57,7 +57,8 @@ declare global {
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
       setLocalEnabled?: (enabled: boolean) => Promise<boolean>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => Promise<{ response?: string; error?: string }>;
+      onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
@@ -616,6 +617,27 @@ export default function App() {
   // da caixa (agir / página atual / web / chat). Chamada barata (resposta de UMA palavra, stateless).
   // Retorna null em qualquer falha/timeout → o AgentCommandBar usa o roteador determinístico.
   const classifyIntent = useCallback(async (msg: string): Promise<'action' | 'page' | 'web' | 'chat' | null> => {
+    // ── Pré-classificador determinístico (0 token, 0 latência) ──
+    // Padrões de ALTA precisão resolvem na hora os casos óbvios — a resposta começa já,
+    // sem esperar o round-trip (até 6s) do classificador na nuvem. Só entra aqui o que é
+    // inequívoco; qualquer dúvida segue pro classificador de sempre (conservador).
+    try {
+      const m = msg.trim().toLowerCase();
+      const greeting = m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
+      if (greeting) return 'chat';
+      const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
+      const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
+      if (!actionVerb && !hasUrl) {
+        const questionStart = /^(o ?que|oq\b|qual|quais|quem|como|por ?qu[eê]|pra ?que|para ?que|quando|onde|cad[êe]|what|who|whose|how|why|when|where|which|cu[áa]l(es)?|qu[ée]\b|qui[ée]n|c[óo]mo|por ?qu[ée]|cu[áa]ndo|d[óo]nde)\b/.test(m);
+        const questionEnd = /\?\s*$/.test(m);
+        if (questionStart || questionEnd) {
+          // Pergunta sobre o próprio assistente → chat (a identidade da engine responde).
+          if (/\b(voc[êe]|vc|you|tu|usted)\b/.test(m)) return 'chat';
+          const aboutPage = /\b(ess[ae]|est[ae]|dess[ae]|dest[ae]|ness[ae]|nest[ae]) (p[áa]gina|aba|site|v[íi]deo|texto|artigo)|this (page|tab|site|video|article)|esta (p[áa]gina|pesta[ñn]a|web|video)|\bresum[air]|\bsummar|traduz|translate|traduce/.test(m);
+          return aboutPage ? 'page' : 'web';
+        }
+      }
+    } catch {}
     try {
       const url = store.activeTab?.url || '';
       const title = (store.activeTab as any)?.title || '';
@@ -1467,9 +1489,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       rememberObservedSite(observation);
                     }
                   }
-                  const screenshot = await withTimeout(captureScreenshot(), 8000, undefined as any);
-                  const screenshotHashBefore = hashScreenshotDataUrl(screenshot);
-                  const stateKeyBefore = `${observation.url}|${observation.title}|${screenshotHashBefore}`;
+                  // Screenshot em PARALELO com o OCR abaixo (a imagem não vai pro modelo —
+                  // vira só o hash de detecção de mudança) → corta o tempo serial do passo.
+                  const screenshotP = withTimeout(captureScreenshot(), 8000, undefined as any);
+                  let screenshot: string | undefined;
+                  let stateKeyBefore = '';
+                  const settleShotBefore = async () => {
+                    screenshot = await screenshotP;
+                    stateKeyBefore = `${observation.url}|${observation.title}|${hashScreenshotDataUrl(screenshot)}`;
+                  };
 
                   // ── FAST MODE: try to consume a queued batched action (no LLM call) ──
                   let action: BrowserAction | undefined;
@@ -1489,6 +1517,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `⚡ batch action (${actionQueue.length} remaining)` });
                     break;
                   }
+                  if (fromQueue) await settleShotBefore();   // caminho da fila: pega o screenshot já
 
                   if (!fromQueue) {
                   setAgentVisual('thinking');
@@ -1512,6 +1541,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     } catch { /* non-fatal */ }
                   }
                   carriedOcrText = ocrText;
+                  await settleShotBefore();   // OCR rodou em paralelo com a captura
                   // Mark elements that are NEW since the previous observation with a leading '*'
                   // (browser-use technique — helps the model spot a popup/modal that just appeared).
                   const curElementKeys = new Set<string>();
@@ -3032,14 +3062,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 activeTabIdRef.current = userTabRef.current;
               }
             }}
-            onSendChat={async (msg, docText) => {
+            onSendChat={async (msg, docText, streamId) => {
               const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
                 // docText = self-contained doc context (rawContext). Non-stateless so the doc
                 // stays in THIS tab's history → follow-up questions still work after the chip clears.
-                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText);
+                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 return { reply };
               }
@@ -3058,7 +3088,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId);
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId);
               const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —

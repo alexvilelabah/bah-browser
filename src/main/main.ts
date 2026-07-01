@@ -812,13 +812,18 @@ function setupIPC(): void {
   ipcMain.handle('ai:set-local-enabled', (_event, enabled: boolean) => { localModeOn = !!enabled; return true; });
 
   // AI chat — general conversation / page Q&A
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
     try {
-      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext);
+      // Streaming: o renderer manda um streamId → os pedaços da resposta vão chegando
+      // por evento e aparecem na tela conforme o modelo escreve (fallback: resposta cheia).
+      const onDelta = (streamId && !stateless)
+        ? (delta: string) => { try { mainWindow?.webContents.send('ai:chat-delta', { streamId, delta }); } catch {} }
+        : undefined;
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);

@@ -124,6 +124,10 @@ body {
   transition:color 0.12s var(--ease);
 }
 .tab.active .tab-title{color:var(--text-primary);font-weight:500;}
+/* Cursor do streaming do chat (resposta pingando palavra por palavra) */
+.stream-caret{display:inline-block;margin-left:2px;color:var(--text-muted);animation:streamBlink 1s steps(1) infinite;}
+@keyframes streamBlink{50%{opacity:0;}}
+
 /* Memory Saver: aba dormindo (webview descartado) — discreta, com 💤 no lugar do favicon */
 .tab.discarded .tab-title{opacity:0.55;}
 .tab-sleep{font-size:11px;line-height:1;flex:none;opacity:0.8;}

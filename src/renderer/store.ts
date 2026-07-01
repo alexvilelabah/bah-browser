@@ -144,7 +144,11 @@ export function useTabStore() {
       }
       if (id === activeTabId) {
         const idx = prev.findIndex(t => t.id === id);
-        const newActive = next[Math.min(idx, next.length - 1)];
+        const pos = Math.min(idx, next.length - 1);
+        const newActive = next[pos];
+        // A vizinha que assume pode estar DORMINDO (Memory Saver) → acorda ela junto,
+        // senão viraria aba ativa sem webview montado (tela em branco).
+        if (newActive.discarded) next[pos] = { ...newActive, discarded: false, lastActiveAt: Date.now() };
         setActiveTabId(newActive.id);
       }
       return next;

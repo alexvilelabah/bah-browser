@@ -22,6 +22,50 @@ async function fetchWithTimeout(url: string, opts: any, ms: number): Promise<Res
   }
 }
 
+// Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas de texto conforme
+// chegam. Devolve o texto completo no fim. `holdbackChars` segura os últimos N chars até
+// o stream terminar (ex.: Pollinations injeta anúncio no FIM — seguramos o rabo pra ele
+// nunca aparecer na tela; o texto final vem limpo pelo caminho normal).
+// Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
+async function readSseStream(res: Response, onDelta: (d: string) => void, holdbackChars = 0): Promise<string> {
+  const reader = (res.body as any)?.getReader?.();
+  if (!reader) throw new Error('stream unsupported');
+  const decoder = new TextDecoder();
+  let buf = '';
+  let full = '';
+  let emitted = 0;
+  const emitUpTo = () => {
+    const target = Math.max(0, full.length - holdbackChars);
+    if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
+  };
+  try {
+    while (true) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('stream stalled (30s)')), 30000)),
+      ]) as { done: boolean; value?: Uint8Array };
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') return full;
+        try {
+          const j = JSON.parse(payload);
+          const d = j.choices?.[0]?.delta?.content ?? '';
+          if (d) { full += d; emitUpTo(); }
+        } catch { /* linha parcial/keep-alive — ignora */ }
+      }
+    }
+  } finally {
+    try { reader.releaseLock?.(); } catch {}
+  }
+  return full;
+}
+
 /**
  * Limpa texto raspado antes de virar JSON pro provedor de IA. Páginas (YouTube,
  * redes) têm emojis = pares surrogate UTF-16; quando o texto é cortado (.slice)
@@ -337,7 +381,26 @@ export class AIEngine {
     else this.conversationHistories.clear();
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string): Promise<string> {
+  // Chama o LLM em modo chat com streaming quando há onDelta; se o stream falhar ANTES
+  // do primeiro pedaço, refaz sem stream (fallback transparente — nunca pior que antes).
+  private async callChatLLM(messages: Message[], onDelta?: (d: string) => void): Promise<string> {
+    if (!onDelta) {
+      const reply = await this.callLLM(messages, false);
+      return typeof reply === 'string' ? reply : (reply?.text ?? '');
+    }
+    let sawDelta = false;
+    const wrapped = (d: string) => { sawDelta = true; try { onDelta(d); } catch {} };
+    try {
+      const reply = await this.callLLM(messages, false, 'pro', wrapped);
+      return typeof reply === 'string' ? reply : (reply?.text ?? '');
+    } catch (e) {
+      if (sawDelta) throw e;   // stream morreu no meio → erro real (o preview parcial some no final)
+      const reply = await this.callLLM(messages, false);   // fallback sem stream
+      return typeof reply === 'string' ? reply : (reply?.text ?? '');
+    }
+  }
+
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void): Promise<string> {
     // rawContext = a self-contained block the caller already wrote (e.g. an attached
     // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
     // label — that label made weak models think there was an attachment they couldn't open.
@@ -351,16 +414,14 @@ export class AIEngine {
     // histórico de conversa — senão cada busca enfia ~2KB de snippets no contexto
     // compartilhado, que cresceria sem limite e poluiria o chat seguinte.
     if (stateless) {
-      const reply = await this.callLLM([{ role: 'user', content: userMessage + contextNote }], false);
-      return typeof reply === 'string' ? reply : (reply?.text ?? '');
+      return this.callChatLLM([{ role: 'user', content: userMessage + contextNote }], onDelta);
     }
 
     // Conversa DAQUELA aba (chaveada por tabId).
     const history = this.conversationHistories.get(tabId) ?? [];
     history.push({ role: 'user', content: userMessage + contextNote });
 
-    const reply = await this.callLLM(history, false);
-    const text = typeof reply === 'string' ? reply : (reply?.text ?? '');
+    const text = await this.callChatLLM(history, onDelta);
     history.push({ role: 'assistant', content: text });
     const CAP = 40;   // teto de itens por aba (evita crescer sem limite com muitas abas)
     if (history.length > CAP) history.splice(0, history.length - CAP);
@@ -386,7 +447,7 @@ export class AIEngine {
     return reply;
   }
 
-  private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro'): Promise<any> {
+  private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void): Promise<any> {
     // Rastro do provedor: deixa claro QUAL engine respondeu cada request e se usou chave
     // (ex.: "[AI] provider=pollinations chat (no-key)"). Vai pro agent.log e pro console.
     const trace = `[AI] provider=${this.provider} ${isAgentMode ? 'agent' : 'chat'} (${this.apiKey ? 'key' : 'no-key'})`;
@@ -397,14 +458,14 @@ export class AIEngine {
     console.log(trace);
     switch (this.provider) {
       case 'anthropic': return this.callAnthropic(messages, isAgentMode);
-      case 'openai': return this.callOpenAI(messages, isAgentMode);
+      case 'openai': return this.callOpenAI(messages, isAgentMode, onDelta);
       // DeepSeek does NOT support image_url — strip screenshots to avoid 400 + retry waste
-      case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier);
+      case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier, onDelta);
       // Mistral is OpenAI-compatible; strip screenshots (text-first, avoids 400s)
-      case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
+      case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta);
       // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
-      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
-      case 'pollinations': return this.callPollinations(messages, isAgentMode);
+      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta);
+      case 'pollinations': return this.callPollinations(messages, isAgentMode, onDelta);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
       case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode);
     }
@@ -436,7 +497,8 @@ export class AIEngine {
     return data.content?.[0]?.text ?? '';
   }
 
-  private async callOpenAI(messages: Message[], isAgentMode: boolean): Promise<string> {
+  private async callOpenAI(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+    const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: 'gpt-4o',
       messages: [
@@ -446,6 +508,7 @@ export class AIEngine {
       max_tokens: 4096,
     };
     if (isAgentMode) body.response_format = { type: 'json_object' };
+    if (streaming) body.stream = true;
 
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -460,6 +523,7 @@ export class AIEngine {
       throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
     }
 
+    if (streaming) return readSseStream(res, onDelta!);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -467,7 +531,8 @@ export class AIEngine {
   // Mistral: OpenAI-compatible chat completions. Default model is the cheap one;
   // override via a custom baseUrl/model later if needed. Separate from DeepSeek's
   // model chain so neither path affects the other.
-  private async callMistral(messages: Message[], isAgentMode: boolean): Promise<string> {
+  private async callMistral(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+    const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: 'mistral-small-latest',
       messages: [
@@ -477,6 +542,7 @@ export class AIEngine {
       max_tokens: 4096,
     };
     if (isAgentMode) body.response_format = { type: 'json_object' };
+    if (streaming) body.stream = true;
 
     // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do DeepSeek/Pollinations
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
@@ -492,6 +558,7 @@ export class AIEngine {
       throw new Error(`Mistral API error ${res.status}: ${await res.text()}`);
     }
 
+    if (streaming) return readSseStream(res, onDelta!);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -499,7 +566,8 @@ export class AIEngine {
   // NVIDIA NIM: OpenAI-compatible hosted endpoint (free tier). Default model is a
   // capable free one; override via custom baseUrl later if needed. Separate from the
   // other providers so nada se afeta.
-  private async callNim(messages: Message[], isAgentMode: boolean): Promise<string> {
+  private async callNim(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+    const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: this.cloudModel || 'meta/llama-3.3-70b-instruct',
       messages: [
@@ -509,6 +577,7 @@ export class AIEngine {
       max_tokens: 4096,
     };
     if (isAgentMode) body.response_format = { type: 'json_object' };
+    if (streaming) body.stream = true;
 
     // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do DeepSeek/Pollinations
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
@@ -524,11 +593,13 @@ export class AIEngine {
       throw new Error(`NVIDIA NIM API error ${res.status}: ${await res.text()}`);
     }
 
+    if (streaming) return readSseStream(res, onDelta!);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
 
-  private async callPollinations(messages: Message[], isAgentMode: boolean): Promise<string> {
+  private async callPollinations(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+    const streaming = !!onDelta && !isAgentMode;
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     const formatted = messages.map(m => {
       if (m.image) {
@@ -549,6 +620,7 @@ export class AIEngine {
       max_tokens: 4096,
     };
     if (isAgentMode) body.response_format = { type: 'json_object' };
+    if (streaming) body.stream = true;
 
     // Endpoint OpenAI-compatible SEM chave. (O gen.pollinations.ai virou 401; este é o vivo.)
     // O free é flaky (502/503/Cloudflare) → re-tenta em 5xx/429 e devolve erro LIMPO,
@@ -570,8 +642,15 @@ export class AIEngine {
         continue;
       }
       if (res.ok) {
-        const data = await res.json();
-        let content: string = data.choices?.[0]?.message?.content ?? '';
+        let content: string;
+        if (streaming) {
+          // Holdback de 350 chars: o anúncio do free vem no FIM — seguramos o rabo do
+          // stream pra ele nunca piscar na tela; o texto final sai limpo logo abaixo.
+          content = await readSseStream(res, onDelta!, 350);
+        } else {
+          const data = await res.json();
+          content = data.choices?.[0]?.message?.content ?? '';
+        }
         // Tira o anuncio que o Pollinations injeta nas respostas do tier gratis
         // ("Support Pollinations / Powered by Pollinations / 🌸 Ad 🌸 ..."): o usuario NAO deve ver isso.
         content = content
@@ -632,7 +711,8 @@ export class AIEngine {
     return 'deepseek-chat';
   }
 
-  private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro'): Promise<any> {
+  private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void): Promise<any> {
+    const streaming = !!onDelta && !isAgentMode;
     // Always tell the model TODAY's real date — its training data lives in the past
     // and it will otherwise state wrong years for "hoje"/"atual" questions.
     const now = new Date();
@@ -667,6 +747,7 @@ export class AIEngine {
         body.response_format = { type: 'json_object' };
       }
     }
+    if (streaming) body.stream = true;
 
     const t0 = Date.now();
     const bodyJson = JSON.stringify(body);
@@ -718,7 +799,7 @@ export class AIEngine {
         if (/timeout/i.test(String(e?.message)) && useThinking) {
           appendLog('[DeepSeek] thinking timed out → retry sem pensar (flash rápido)');
           console.warn('[DeepSeek] thinking timed out → retry without thinking (fast flash)');
-          return this.callDeepSeek(messages, isAgentMode, 'flash');
+          return this.callDeepSeek(messages, isAgentMode, 'flash', onDelta);
         }
         if (attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
@@ -748,7 +829,7 @@ export class AIEngine {
       if (useFlash && (res.status === 404 || errText.includes('model') || errText.includes('not found'))) {
         console.warn(`[DeepSeek] ${model} failed → falling back to pro`);
         if (this.deepseekModelsCache) this.deepseekModelsCache.delete('deepseek-v4-flash');
-        return this.callDeepSeek(messages, isAgentMode, 'pro');
+        return this.callDeepSeek(messages, isAgentMode, 'pro', onDelta);
       }
       if (res.status === 401) {
         throw new Error('Invalid or missing DeepSeek API key. Open the agent settings (sidebar) and paste your key starting with "sk-".');
@@ -756,6 +837,10 @@ export class AIEngine {
       throw new Error(`DeepSeek API error ${res.status} (${model}): ${errText}`);
     }
 
+    if (streaming) {
+      const text = await readSseStream(res, onDelta!);
+      return { text, usage: undefined, latencyMs: Date.now() - t0, model };
+    }
     let data: any = null;
     try {
       data = await res.json();

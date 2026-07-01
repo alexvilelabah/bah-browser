@@ -106,7 +106,7 @@ function hostOf(url: string): string {
 
 interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
-  onSendChat: (message: string, docText?: string) => Promise<{ reply: string; suggestedCommand?: string }>;
+  onSendChat: (message: string, docText?: string, streamId?: string) => Promise<{ reply: string; suggestedCommand?: string }>;
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
   onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
@@ -206,6 +206,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // só mostra os modelos pra escolher; o local só liga quando você seleciona um modelo.
   const [localView, setLocalView] = useState(localSettings.enabled);
   const [thinkIdx, setThinkIdx] = useState(0);   // frase de "pensando" que cicla no loading do chat
+  // Streaming do chat: a resposta vai aparecendo palavra por palavra (estilo ChatGPT).
+  // streamIdRef identifica QUAL request está na tela (deltas de outra request são ignorados).
+  const [streamText, setStreamText] = useState('');
+  const streamIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const off = (window as any).electronAPI?.onChatDelta?.((p: { streamId: string; delta: string }) => {
+      if (!p || p.streamId !== streamIdRef.current) return;
+      setStreamText(prev => prev + p.delta);
+    });
+    return () => { try { off?.(); } catch {} };
+  }, []);
   const thinkPhrases = t('think.phrases').split('|');
   // Ao ABRIR as Configurações, sincroniza o rascunho com o que está salvo → abre sempre limpo
   // (Salvar apagado), sem arrastar uma mudança não-salva de uma abertura anterior.
@@ -263,7 +274,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   useEffect(() => {
     const el = feedRef.current;
     if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [feed, chatLoading]);
+  }, [feed, chatLoading, streamText]);
 
   // Enquanto espera a resposta do chat, cicla as frases de "pensando" (efeito de IA processando)
   // — mantém a pessoa olhando a tela enquanto o tempo passa. Para quando a resposta chega.
@@ -336,8 +347,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     stickToBottomRef.current = true;
     if (!skipPush) push({ kind: 'chat-user', text: msg, file: fileName });
     setInput('');
+    // Streaming: id único desta request — os deltas vão pintando no lugar do "pensando".
+    const sid = 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    streamIdRef.current = sid;
+    setStreamText('');
     try {
-      const { reply, suggestedCommand } = await onSendChat(msg, docText);
+      const { reply, suggestedCommand } = await onSendChat(msg, docText, sid);
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
@@ -345,6 +360,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     } catch (e: any) {
       push({ kind: 'error', text: String(e?.message ?? e) });
     } finally {
+      streamIdRef.current = null;
+      setStreamText('');
       setChatLoading(false);
     }
   };
@@ -963,7 +980,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         )}
         {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />)}
         {chatLoading && convoTabRef.current === activeTabId && (
-          <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content thinking-line">{thinkPhrases[thinkIdx % thinkPhrases.length] || '…'}</div></div>
+          streamText
+            ? <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content">{streamText}<span className="stream-caret">▍</span></div></div>
+            : <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content thinking-line">{thinkPhrases[thinkIdx % thinkPhrases.length] || '…'}</div></div>
         )}
         {loading && convoTabRef.current === activeTabId && (
           <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
