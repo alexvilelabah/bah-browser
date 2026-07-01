@@ -30,8 +30,14 @@ export default function AddressBar({
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);   // debounce do Google Suggest
   const queryRef = useRef('');                                          // query atual (descarta resposta velha)
   const localRef = useRef<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
+  const focusSelectRef = useRef(false);   // 1º clique na barra seleciona TUDO (estilo Chrome)
 
-  useEffect(() => { setInput(url); setShowSugg(false); }, [url]);
+  useEffect(() => {
+    // NÃO sobrescreve o que a pessoa está digitando: só sincroniza a URL quando a barra
+    // não está em foco (evita a URL "voltar" se a página atualizar enquanto você edita).
+    if (document.activeElement === inputRef.current) return;
+    setInput(url); setShowSugg(false);
+  }, [url]);
 
   // Depois que o input re-renderiza com o texto completado, seleciona o sufixo (estilo Chrome).
   useEffect(() => {
@@ -127,7 +133,9 @@ export default function AddressBar({
           value={input}
           onChange={e => onType(e.target.value)}
           onKeyDown={handleKeyDown}
+          onMouseDown={() => { focusSelectRef.current = document.activeElement !== inputRef.current; }}
           onFocus={e => e.target.select()}
+          onMouseUp={e => { if (focusSelectRef.current) { e.preventDefault(); focusSelectRef.current = false; } }}
           onBlur={() => setTimeout(() => setShowSugg(false), 150)}
           placeholder={t('addr.placeholder')}
           spellCheck={false}
