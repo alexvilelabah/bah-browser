@@ -735,7 +735,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button
               type="button"
               className={`mode-opt ${!localView ? 'on' : ''}`}
-              onClick={() => { setLocalView(false); const next = { ...localCfg, enabled: false }; setLocalCfg(next); onLocalSettingsChange(next); }}
+              onClick={() => { setLocalView(false); setLocalCfg(p => ({ ...p, enabled: false })); }}
             >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
@@ -769,7 +769,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               {settings.apiKey?.trim() && (
                 <>
                   <button type="button" className={`ai-pause-btn ${settings.apiPaused ? 'paused' : ''}`}
-                    onClick={() => { const next = { ...settings, apiPaused: !settings.apiPaused }; setSettings(next); onSettingsChange(next); }}>
+                    onClick={() => setSettings(s => ({ ...s, apiPaused: !s.apiPaused }))}>
                     {settings.apiPaused ? `▶ ${t('set.resumeApi')}` : `⏸ ${t('set.pauseApi')}`}
                   </button>
                   {settings.apiPaused && <div className="mm-hint">🆓 {t('set.apiPausedHint')}</div>}
@@ -810,7 +810,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div className="mm-hint">💡 {t('set.localHint')}</div>
               {localCfg.enabled && (
-                <button type="button" className="ai-pause-btn" onClick={() => { const next = { ...localCfg, enabled: false }; setLocalCfg(next); onLocalSettingsChange(next); }}>
+                <button type="button" className="ai-pause-btn" onClick={() => setLocalCfg(p => ({ ...p, enabled: false }))}>
                   ⏸ {t('set.pauseLocal')}
                 </button>
               )}
@@ -840,7 +840,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     <div className="mm-list">
                       {models.map(m => (
                         <div key={m.name} className={`mm-item ${m.name === localCfg.model ? 'on' : ''}`}>
-                          <button className="mm-pick" onClick={() => { const next = { ...localCfg, model: m.name, enabled: true }; setLocalCfg(next); onLocalSettingsChange(next); }} title={t('mm.use')}>
+                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name, enabled: true }))} title={t('mm.use')}>
                             <span className="mm-name">{m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
                             <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : ''].filter(Boolean).join(' · ')}</span>
                           </button>
@@ -880,6 +880,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   </details>
                 </div>
             </div>
+          )}
+          {(JSON.stringify(settings) !== JSON.stringify(aiSettings) || JSON.stringify(localCfg) !== JSON.stringify(localSettings)) && (
+            <div className="mm-hint unsaved">⚠️ {t('set.unsavedHint')}</div>
           )}
           <button className="save-settings"
             disabled={JSON.stringify(settings) === JSON.stringify(aiSettings) && JSON.stringify(localCfg) === JSON.stringify(localSettings)}

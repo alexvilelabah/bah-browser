@@ -1655,6 +1655,7 @@ body {
 .mm-imp-open summary { font-size:12.5px; color:var(--text-primary); }
 .mm-hint { font-size:10.5px; color:var(--text-muted); line-height:1.45; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; padding:6px 9px; }
 .mm-hint b { color:var(--text-secondary); font-weight:700; }
+.mm-hint.unsaved { color:#e0b567; border-color:rgba(224,181,103,0.4); background:rgba(224,181,103,0.08); font-weight:600; }
 .mode-switch { display:flex; gap:4px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:11px; padding:3px; }
 .ai-active-line { font-size:11px; color:var(--text-muted); padding:2px 2px 0; }
 .ai-active-line b { color:var(--text-secondary); font-weight:800; }
