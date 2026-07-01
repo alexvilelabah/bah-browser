@@ -246,7 +246,7 @@ CRITICAL — WHEN TO RETURN done:
 // transforma num botão "⚡ Fazer isso" (ou o usuário responde "sim") → roda o agente.
 const CHAT_ASSISTANT_SYSTEM_PROMPT = `You are the assistant of an AI web browser, currently in ANSWER mode. Reply in the user's language (default Brazilian Portuguese), directly and concisely. If page content is provided, use it to answer questions about the current page (summaries, "what does this article say", key points, etc.).
 
-IDENTITY: if the user asks who you are or who created/made you, say you are the assistant built into this web browser. NEVER claim to be ChatGPT, Gemini or Claude, nor to be made by OpenAI, Google, Anthropic or Microsoft — regardless of how the underlying model was trained.
+IDENTITY: if the user asks who you are or who made you, use the ENGINE line at the very end of this prompt (it names the AI actually running) and answer honestly and briefly. Never invent being ChatGPT/Gemini/Claude or made by OpenAI/Google/Anthropic/Microsoft unless the ENGINE line says so.
 
 CRITICAL: in this mode you CANNOT act on the web yourself — you cannot click, navigate, search, scroll, fill forms, buy or download. Therefore you must NEVER fake progress or pretend you did something. Do NOT output phrases like "🔍 Searching...", "the page loaded", "let me scroll down", "I'll open the results". Nothing actually happens when you say that, and it confuses the user.
 
@@ -310,6 +310,23 @@ export class AIEngine {
       case 'pollinations': return 'https://text.pollinations.ai';
       case 'ollama': return 'http://localhost:11434';
     }
+  }
+
+  // Identidade REAL da engine ativa, injetada no prompt do chat → a IA responde honestamente
+  // "quem é você" (Pollinations grátis / DeepSeek / IA local no seu PC / etc.). Só no modo chat.
+  private engineIdentity(isAgentMode: boolean): string {
+    if (isAgentMode) return '';
+    const p = this.provider;
+    let who: string;
+    if (p === 'ollama') {
+      who = `a LOCAL AI running on the user's OWN computer via Ollama (model "${this.resolvedOllamaModel || this.ollamaModel}") — fully offline, no cloud`;
+    } else if (p === 'pollinations') {
+      who = `the browser's FREE built-in AI (powered by Pollinations) — the free, lighter/weaker option (good for quick chat; for heavier tasks a stronger API like DeepSeek works better)`;
+    } else {
+      const name = p === 'deepseek' ? 'DeepSeek' : p === 'mistral' ? 'Mistral' : p === 'nvidia' ? `NVIDIA NIM${this.cloudModel ? ` (model ${this.cloudModel})` : ''}` : p === 'openai' ? 'OpenAI' : p === 'anthropic' ? 'Anthropic' : String(p);
+      who = `${name}, via its cloud API (the user's own key)`;
+    }
+    return `\n\nENGINE: You are ${who}. If the user asks who/what AI you are, or who made you, answer THIS honestly and briefly — you are the browser's assistant, currently powered by the engine just described. Do NOT claim to be ChatGPT/Gemini/Claude or made by OpenAI/Google/Anthropic/Microsoft unless that is exactly the engine above.`;
   }
 
   clearHistory(tabId?: string): void {
@@ -394,7 +411,7 @@ export class AIEngine {
     const body = {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
-      system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix(),
+      system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode),
       messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     };
 
@@ -420,7 +437,7 @@ export class AIEngine {
     const body: any = {
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
+        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
         ...messages,
       ],
       max_tokens: 4096,
@@ -451,7 +468,7 @@ export class AIEngine {
     const body: any = {
       model: 'mistral-small-latest',
       messages: [
-        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
+        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
         ...messages,
       ],
       max_tokens: 4096,
@@ -483,7 +500,7 @@ export class AIEngine {
     const body: any = {
       model: this.cloudModel || 'meta/llama-3.3-70b-instruct',
       messages: [
-        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() },
+        { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
         ...messages,
       ],
       max_tokens: 4096,
@@ -509,7 +526,7 @@ export class AIEngine {
   }
 
   private async callPollinations(messages: Message[], isAgentMode: boolean): Promise<string> {
-    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix();
+    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     const formatted = messages.map(m => {
       if (m.image) {
         return {
@@ -619,7 +636,7 @@ export class AIEngine {
     const dateLine = `CURRENT DATE/TIME: ${now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} (${now.toISOString()}). TRUST THIS DATE — your training data may believe an earlier year. Use it whenever the user asks about "hoje", "atual", current events or dates.`;
     // Prompt constante já vem pré-sanitizado (SANITIZED_*); só a dateLine (volátil,
     // poucas dezenas de chars) é sanitizada por chamada.
-    const systemMsg = (isAgentMode ? SANITIZED_AGENT_PROMPT : SANITIZED_CHAT_PROMPT) + '\n\n' + sanitizeForJson(dateLine) + sanitizeForJson(langSuffix());
+    const systemMsg = (isAgentMode ? SANITIZED_AGENT_PROMPT : SANITIZED_CHAT_PROMPT) + '\n\n' + sanitizeForJson(dateLine) + sanitizeForJson(langSuffix()) + sanitizeForJson(this.engineIdentity(isAgentMode));
     // Images are already stripped upstream — DeepSeek has no vision API
     let model = await this.pickDeepSeekModel();
     const useFlash = model.includes('flash');
@@ -813,7 +830,7 @@ export class AIEngine {
   private ollamaWarmed = false;
 
   private async callOllama(messages: Message[], isAgentMode: boolean): Promise<string> {
-    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix();
+    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Never send images to local model — it consumes too much VRAM and causes hangs
     const resolvedModel = await this.resolveOllama();
     const isGptOss = /gpt-?oss|gptoss/.test(resolvedModel.toLowerCase());
