@@ -6,13 +6,21 @@ name: macOS build + smoke test
 # inconclusivo (servidor sem tela) — por isso ele não derruba o job.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publicar o .dmg como pre-release EXPERIMENTAL (Apple Silicon)'
+        type: boolean
+        default: true
   push:
     branches: [ main ]
     paths-ignore:
       - 'README.md'
       - 'assets/**'
       - 'LICENSE'
+
+permissions:
+  contents: write   # pro passo de publicar a pre-release (só no dispatch manual)
 
 jobs:
   mac:
@@ -61,3 +69,23 @@ jobs:
           name: bah-macos-dmg
           path: release/*.dmg
           if-no-files-found: ignore
+
+      # SÓ no dispatch manual com publish=true: cria/atualiza uma PRE-RELEASE separada
+      # (tag vX.Y.Z-macos-test) com o .dmg. Pre-release NUNCA vira "Latest" → não empurra
+      # auto-update pros usuários Windows (que leem o latest.yml, não tocado aqui).
+      - name: Publicar pre-release macOS (EXPERIMENTAL)
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VER=$(node -p "require('./package.json').version")
+          TAG="v${VER}-macos-test"
+          echo "Publicando pre-release $TAG"
+          # recria limpo (mesma versão pode ser re-testada)
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" release/*.dmg \
+            --title "Bah ${VER} — macOS (EXPERIMENTAL · testers only)" \
+            --prerelease \
+            --notes-file .github/mac-test-notes.md
+          gh release view "$TAG" --json isLatest,isPrerelease,assets --jq '{isLatest,isPrerelease,assets:[.assets[].name]}'
