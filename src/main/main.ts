@@ -829,7 +829,15 @@ function setupIPC(): void {
       const m = err?.message ?? String(err);
       if (local) return { error: `Local AI failed: ${m}. Make sure Ollama is open and a model is downloaded and selected.` };
       if (/401|403|api.?key|unauthorized|invalid.*key|\bsk-/i.test(m)) {
-        return { error: 'The cloud (DeepSeek) needs an API key. Paste the key in settings OR switch to 🏠 Local AI (offline, no key).' };
+        // Diz QUAL provedor rejeitou (antes culpava sempre o DeepSeek — um usuário com
+        // chave Mistral inválida lia "DeepSeek precisa de chave" e não entendia nada).
+        const prov = engine.getProvider();
+        if (prov === 'pollinations') {
+          return { error: 'The free AI refused the request right now. Try again in a moment — or add a cloud API key in settings (⚙️).' };
+        }
+        const label = prov === 'mistral' ? 'Mistral' : prov === 'nvidia' ? 'NVIDIA NIM'
+          : prov === 'openai' ? 'OpenAI' : prov === 'anthropic' ? 'Anthropic' : 'DeepSeek';
+        return { error: `${label} rejected your API key (invalid, expired or unauthorized). Check the ${label} key in settings (⚙️) — or switch to the 🆓 Free tab there (no key needed).` };
       }
       return { error: m };
     }

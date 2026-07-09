@@ -416,6 +416,10 @@ export class AIEngine {
   // Endpoint ativo (pro pré-aquecimento de conexão no boot/troca de provedor).
   getBaseUrl(): string { return this.baseUrl; }
 
+  // Provedor ativo — pro main montar mensagens de erro HONESTAS (dizer qual provedor
+  // rejeitou a chave, em vez de culpar sempre o DeepSeek).
+  getProvider(): AIProvider { return this.provider; }
+
   private defaultBaseUrl(provider: AIProvider): string {
     switch (provider) {
       case 'anthropic': return 'https://api.anthropic.com';
