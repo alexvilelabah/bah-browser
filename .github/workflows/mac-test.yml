@@ -88,4 +88,4 @@ jobs:
             --title "Bah ${VER} — macOS (EXPERIMENTAL · testers only)" \
             --prerelease \
             --notes-file .github/mac-test-notes.md
-          gh release view "$TAG" --json isLatest,isPrerelease,assets --jq '{isLatest,isPrerelease,assets:[.assets[].name]}'
+          gh release view "$TAG" --json isPrerelease,assets --jq '{isPrerelease,assets:[.assets[].name]}'
