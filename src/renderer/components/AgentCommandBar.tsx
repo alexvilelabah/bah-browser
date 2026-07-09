@@ -227,9 +227,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(aiSettings);
   const [localCfg, setLocalCfg] = useState(localSettings);
-  // Qual aba de config está aberta (nuvem/local) — SEPARADO de "local ativo". Abrir a aba local
-  // só mostra os modelos pra escolher; o local só liga quando você seleciona um modelo.
-  const [localView, setLocalView] = useState(localSettings.enabled);
+  // Qual aba de config está aberta (nuvem/grátis/local) — SEPARADO de "qual IA está ativa".
+  // Abrir a aba local só mostra os modelos; o local liga ao escolher um modelo. A aba Grátis
+  // dá um caminho EXPLÍCITO pro Pollinations keyless (antes era invisível: só pausando a API,
+  // e o botão de pausar nem aparecia sem chave — ninguém achava).
+  const viewFor = (ai: typeof aiSettings, ls: typeof localSettings): 'cloud' | 'free' | 'local' =>
+    ls.enabled ? 'local' : (ai.apiPaused || !ai.apiKey?.trim()) ? 'free' : 'cloud';
+  const [view, setView] = useState<'cloud' | 'free' | 'local'>(viewFor(aiSettings, localSettings));
+  const [savedFlash, setSavedFlash] = useState(false);   // "✓ Salvo!" por 1.8s após salvar
   const [thinkIdx, setThinkIdx] = useState(0);   // frase de "pensando" que cicla no loading do chat
   // Streaming do chat: a resposta vai aparecendo palavra por palavra (estilo ChatGPT).
   // streamIdRef identifica QUAL request está na tela (deltas de outra request são ignorados).
@@ -298,7 +303,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (!showSettings) return;
     setSettings(aiSettings);
     setLocalCfg(localSettings);
-    setLocalView(localSettings.enabled);
+    setView(viewFor(aiSettings, localSettings));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings]);
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
@@ -572,6 +577,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     return 'Pollinations';
   };
 
+  // Rascunho das Configurações difere do salvo? (liga o aviso ⚠️ + o pulso do Salvar)
+  const settingsDirty = JSON.stringify(settings) !== JSON.stringify(aiSettings)
+    || JSON.stringify(localCfg) !== JSON.stringify(localSettings);
+
   // Idioma da UI → nome que o Whisper entende (auto se vazio).
   const whisperLang = (): string | undefined => ({ pt: 'portuguese', en: 'english', es: 'spanish' } as Record<string, string>)[getLang()];
 
@@ -778,7 +787,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     try { ollamaApi()?.openExternal?.(url); } catch {}
   };
   useEffect(() => {
-    if (!showSettings || !localView) return;
+    if (!showSettings || view !== 'local') return;
     refreshModels();
     const off = ollamaApi()?.onOllamaPullProgress?.((p: any) => {
       if (p?.canceled) { setPullMsg('canceled'); setPulling(false); refreshModels(); return; }
@@ -788,7 +797,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     });
     return typeof off === 'function' ? off : undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showSettings, localView, localCfg.baseUrl]);
+  }, [showSettings, view, localCfg.baseUrl]);
   const handlePull = async () => {
     const m = pullName.trim(); if (!m || pulling) return;
     setPulling(true); setPullMsg('Preparing Ollama…');
@@ -884,6 +893,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
       {showSettings && (
         <div className="settings-panel">
+          <div className="set-active-ai">{t('set.activeAi')}: <b>{activeAiLabel()}</b></div>
           <label>
             {t('settings.language')}
             <select value={getLang()} onChange={e => setLang(e.target.value as Lang)}>
@@ -893,16 +903,27 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           <div className="mode-switch" role="tablist" aria-label="Where the AI runs">
             <button
               type="button"
-              className={`mode-opt ${!localView ? 'on' : ''}`}
-              onClick={() => { setLocalView(false); setLocalCfg(p => ({ ...p, enabled: false })); }}
+              className={`mode-opt ${view === 'cloud' ? 'on' : ''}`}
+              onClick={() => { setView('cloud'); setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, apiPaused: false })); }}
             >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
             <button
               type="button"
-              className={`mode-opt ${localView ? 'on' : ''}`}
-              onClick={() => setLocalView(true)}
+              className={`mode-opt ${view === 'free' ? 'on' : ''}`}
+              onClick={() => { setView('free'); setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, apiPaused: true })); }}
+            >🆓 {t('set.freeMode')}<small>{t('set.freeSmall')}</small></button>
+            <button
+              type="button"
+              className={`mode-opt ${view === 'local' ? 'on' : ''}`}
+              onClick={() => setView('local')}
             >🏠 {t('set.localMode')}<small>{t('set.localSmall')}</small></button>
           </div>
-          {!localView && (
+          {view === 'free' && (
+            <div className="free-box">
+              <div className="mm-hint">🆓 {t('set.freeHint')}</div>
+              {settings.apiKey?.trim() && <div className="mm-hint">🔑 {t('set.freeKeyKept')}</div>}
+            </div>
+          )}
+          {view === 'cloud' && (
             <>
               <label>
                 {t('set.provider')}
@@ -924,15 +945,6 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
                 />
               </label>
-              {settings.apiKey?.trim() && (
-                <>
-                  <button type="button" className={`ai-pause-btn ${settings.apiPaused ? 'paused' : ''}`}
-                    onClick={() => setSettings(s => ({ ...s, apiPaused: !s.apiPaused }))}>
-                    {settings.apiPaused ? `▶ ${t('set.resumeApi')}` : `⏸ ${t('set.pauseApi')}`}
-                  </button>
-                  {settings.apiPaused && <div className="mm-hint">🆓 {t('set.apiPausedHint')}</div>}
-                </>
-              )}
               {settings.provider === 'nvidia' && (
                 <label>
                   {t('set.model')}
@@ -964,7 +976,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               </details>
             </>
           )}
-          {localView && (
+          {view === 'local' && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {localCfg.enabled && (
                 <button type="button" className="ai-pause-btn" onClick={() => setLocalCfg(p => ({ ...p, enabled: false }))}>
@@ -1043,18 +1055,20 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </div>
             </div>
           )}
-          {(JSON.stringify(settings) !== JSON.stringify(aiSettings) || JSON.stringify(localCfg) !== JSON.stringify(localSettings)) && (
+          {settingsDirty && (
             <div className="mm-hint unsaved">⚠️ {t('set.unsavedHint')}</div>
           )}
-          <button className="save-settings"
-            disabled={JSON.stringify(settings) === JSON.stringify(aiSettings) && JSON.stringify(localCfg) === JSON.stringify(localSettings)}
+          <button className={`save-settings ${settingsDirty ? 'dirty' : ''} ${savedFlash ? 'saved' : ''}`}
+            disabled={!settingsDirty}
             onClick={async () => {
-            // Salva e MANTÉM o painel aberto (não fecha) — assim o "Desativar IA Local"
-            // aparece na hora e a pessoa vê que aplicou. Fecha só pela engrenagem/✕.
+            // Salva e MANTÉM o painel aberto (não fecha) — assim o "IA ativa" lá em cima
+            // muda na hora e a pessoa VÊ que aplicou. Fecha só pela engrenagem/✕.
             await onSettingsChange(settings);
             await onLocalSettingsChange(localCfg);
+            setSavedFlash(true);
+            setTimeout(() => setSavedFlash(false), 1800);
           }}>
-            {t('settings.save')}
+            {savedFlash ? `✓ ${t('set.saved')}` : t('settings.save')}
           </button>
         </div>
       )}

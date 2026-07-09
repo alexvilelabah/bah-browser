@@ -531,7 +531,9 @@ body {
   font-size:12.5px;font-weight:700;cursor:pointer;
   transition:opacity 0.2s;letter-spacing:0.3px;
   font-family:inherit;
-  /* Rola junto com o conteúdo do painel (não fica preso no rodapé). */
+  /* PRESO no rodapé do painel (sticky): o Salvar fica SEMPRE visível, mesmo com a
+     lista de modelos gigante rolando — era o botão "que some" que confundia geral. */
+  position:sticky;bottom:0;z-index:2;
   flex:none;margin-top:8px;
 }
 .save-settings:hover:not(:disabled){opacity:0.88;}
@@ -1841,3 +1843,28 @@ body {
 .fav-url { font-size:10.5px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .fav-del { border:none; background:transparent; color:var(--text-muted); cursor:pointer; width:26px; height:26px; border-radius:7px; flex:none; margin-right:3px; font-size:12px; }
 .fav-del:hover { background:rgba(255,77,94,0.18); color:#ff7a86; }
+
+/* ── Configurações: IA ativa + Salvar que se destaca (feedback do público) ── */
+/* Linha "IA ativa: X" no topo do painel — a pessoa vê o que está rodando AGORA
+   (e vê a linha mudar na hora ao clicar Salvar, fechando o ciclo de feedback). */
+.set-active-ai {
+  font-size:11.5px; color:var(--text-secondary);
+  padding:7px 10px; border:1px solid var(--border); border-radius:var(--radius);
+  background:var(--bg-tertiary);
+}
+.set-active-ai b { color:var(--text-primary); font-weight:700; }
+/* Aba Grátis (Pollinations explícito — antes era invisível) */
+.free-box { display:flex; flex-direction:column; gap:8px; }
+/* Salvar com mudança pendente: pulso sutil pra ninguém mais "não achar" o botão. */
+.save-settings.dirty {
+  box-shadow:0 0 0 1px var(--accent), 0 0 12px 1px var(--accent-glow);
+  animation:savePulse 1.5s ease-in-out infinite;
+}
+@keyframes savePulse {
+  50% { box-shadow:0 0 0 1px var(--accent), 0 0 18px 4px var(--accent-glow); }
+}
+/* Flash "✓ Salvo!" (1.8s) — confirmação de que aplicou. */
+.save-settings.saved:disabled {
+  background:#2e7d4f; border-color:transparent; color:#fff;
+  box-shadow:none; animation:none;
+}
