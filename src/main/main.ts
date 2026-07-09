@@ -2375,6 +2375,11 @@ app.whenReady().then(() => {
     label: `${mt('mnu.tab')} ${i + 1}`, accelerator: `CmdOrCtrl+${i + 1}`, click: () => sendSc(`tab-${i + 1}`),
   }));
   const menu = Menu.buildFromTemplate([
+    // macOS: o 1º item do template vira o menu do APP ("Bah", ao lado do ) — é nele que
+    // moram About/Hide/QUIT (Cmd+Q). Sem ele o Mac ficava SEM opção de sair (bug do 1º
+    // testador de Mac). O Quit cai no app.quit() → before-quit → flush → fecha (fluxo já
+    // comprovado da bandeja). No Windows/Linux o spread vazio não muda nada.
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     { role: 'editMenu' },
     {
       label: mt('mnu.navigate'),
@@ -2406,6 +2411,8 @@ app.whenReady().then(() => {
         { role: 'togglefullscreen' },
       ],
     },
+    // macOS: menu Janela padrão (Minimizar Cmd+M, Zoom) — esperado em qualquer app Mac.
+    ...(process.platform === 'darwin' ? [{ role: 'windowMenu' as const }] : []),
   ]);
   Menu.setApplicationMenu(menu);
 

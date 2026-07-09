@@ -1,6 +1,8 @@
 ## ⚠️ EXPERIMENTAL macOS build — testers only
 
-**Do NOT download this if you just want to use Bah.** This is an automated build for testing. It has **never been run on a real Mac** by the author (I build/develop on Windows), so it may not open, may crash, or may behave oddly. It is **unsigned** and **not notarized** by Apple.
+**Do NOT download this if you just want to use Bah.** This is an automated build for testing. The author develops on Windows and has no Mac, so it may crash or behave oddly. It is **unsigned** and **not notarized** by Apple.
+
+**Tester reports so far:** launches and chats fine on an M1 ✅ (thanks!). This build fixes the missing app menu — **Quit (Cmd+Q)**, Hide, and the standard Window menu now exist.
 
 There is **no auto-update** for this build — it's a one-off test.
 
