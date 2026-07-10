@@ -793,9 +793,11 @@ export class AIEngine {
     // flash (rápido) → deepseek-chat (rápido, conhecido) → v4-pro só em último caso absoluto.
     // (Antes o chat vinha DEPOIS do v4-pro, então com flash ausente o agente caía no modelo
     // lento e travava — corrigido.)
-    const chain = ['deepseek-v4-flash', 'deepseek-chat', 'deepseek-v4-pro'];
+    // 'deepseek-chat' saiu da cadeia: é apelido DEPRECADO do v4-flash e a DeepSeek
+    // remove o nome em 24/07/2026 — depender dele viraria 404 do nada.
+    const chain = ['deepseek-v4-flash', 'deepseek-v4-pro'];
     for (const id of chain) if (available.has(id)) return id;
-    return 'deepseek-chat';
+    return 'deepseek-v4-flash';
   }
 
   private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
@@ -832,7 +834,14 @@ export class AIEngine {
         body.reasoning_effort = 'high';
       } else {
         body.response_format = { type: 'json_object' };
+        // DESLIGA o raciocínio explicitamente: o V4 pode vir com thinking LIGADO por
+        // padrão no servidor — no flash isso comeria latência e os 4096 tokens antes
+        // do JSON terminar. O modo pensante é SÓ a escada do tier 'pro' (Maestro).
+        body.thinking = { type: 'disabled' };
       }
+    } else {
+      // Chat/pesquisa: voz rápida sempre — sem raciocínio por default do servidor.
+      body.thinking = { type: 'disabled' };
     }
     if (streaming) body.stream = true;
 
@@ -912,6 +921,19 @@ export class AIEngine {
         const logPath = require('path').join(require('electron').app.getPath('userData'), 'agent.log');
         require('fs').appendFileSync(logPath, `${new Date().toISOString()} ${errMsg}\n`);
       } catch {}
+      // Servidor rejeitou o param `thinking` (endpoint/modelo antigo)? Refaz UMA vez
+      // sem ele — rede de segurança do `thinking:{disabled}` explícito (padrão Ollama).
+      if (res.status === 400 && body.thinking && /thinking/i.test(errText)) {
+        console.warn('[DeepSeek] 400 on thinking param → retry without it');
+        delete body.thinking; delete body.reasoning_effort;
+        const retry = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+          body: JSON.stringify(body),
+        }, 45000, signal);
+        if (retry.ok) { res = retry; }
+        else throw new Error(`DeepSeek API error ${retry.status} (${model}): ${(await retry.text()).slice(0, 400)}`);
+      } else {
       // Flash failed (404/model_not_found) → mark unavailable and retry on pro
       if (useFlash && (res.status === 404 || errText.includes('model') || errText.includes('not found'))) {
         console.warn(`[DeepSeek] ${model} failed → falling back to pro`);
@@ -922,6 +944,7 @@ export class AIEngine {
         throw new Error('Invalid or missing DeepSeek API key. Open the agent settings (sidebar) and paste your key starting with "sk-".');
       }
       throw new Error(`DeepSeek API error ${res.status} (${model}): ${errText}`);
+      }
     }
 
     if (streaming) {
