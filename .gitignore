@@ -28,6 +28,7 @@ tools/_*
 
 # ── Dataset de treino gerado por destilação (grande, regenerável — não versionar) ──
 dataset/
+scripts/distill/*.jsonl
 
 # ── Mídia baixada pelo app (não faz parte do código) ──
 downloads/

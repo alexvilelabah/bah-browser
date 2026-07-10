@@ -45,7 +45,7 @@ const check = (cond, label) => { if (cond) { pass++; console.log('OK  ', label);
   enqueueJob('C', () => sleep(300), undefined, { maxPending: 2 });
   enqueueJob('C', () => sleep(300), undefined, { maxPending: 2 });
   const over = await enqueueJob('C', () => sleep(10), undefined, { maxPending: 2 }).then(() => null, e => e.message);
-  check(typeof over === 'string' && /fila/i.test(over), `maxPending rejeita excedente (got: ${over})`);
+  check(typeof over === 'string' && /too many tasks|queue/i.test(over), `maxPending rejeita excedente (got: ${over})`);
 
   // fila esvazia ao terminar
   await sleep(700);

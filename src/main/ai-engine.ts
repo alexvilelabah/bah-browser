@@ -31,19 +31,27 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
 }
 
 // Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas de texto conforme
-// chegam. Devolve o texto completo no fim. `holdbackChars` segura os últimos N chars até
-// o stream terminar (ex.: Pollinations injeta anúncio no FIM — seguramos o rabo pra ele
-// nunca aparecer na tela; o texto final vem limpo pelo caminho normal).
+// chegam. Devolve o texto completo no fim. `adGuard` (Pollinations): o tier grátis pode
+// injetar um ANÚNCIO no fim — em vez do holdback fixo de 350 chars (que impedia resposta
+// curta de streamar), seguramos só um rabinho de 32 chars (cobre um marcador chegando
+// pela metade) e paramos DE VEZ no primeiro marcador de anúncio detectado. O texto final
+// (limpo pelo strip) substitui o preview, então o rabo seguro nunca some de verdade.
 // Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
-async function readSseStream(res: Response, onDelta: (d: string) => void, holdbackChars = 0): Promise<string> {
+const AD_MARKER_RE = /(?:Support Pollinations|Powered by Pollinations|🌸\s*\**\s*Ad\b)/i;
+async function readSseStream(res: Response, onDelta: (d: string) => void, adGuard = false): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
   let buf = '';
   let full = '';
   let emitted = 0;
+  let adAt = -1;   // posição do 1º marcador de anúncio visto (nunca emitir dali em diante)
   const emitUpTo = () => {
-    const target = Math.max(0, full.length - holdbackChars);
+    let target = full.length;
+    if (adGuard) {
+      if (adAt < 0) { const m = AD_MARKER_RE.exec(full); if (m) adAt = m.index; }
+      target = adAt >= 0 ? Math.min(adAt, target) : Math.max(0, target - 32);
+    }
     if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
   };
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
@@ -742,7 +750,7 @@ export class AIEngine {
         if (streaming) {
           // Holdback de 350 chars: o anúncio do free vem no FIM — seguramos o rabo do
           // stream pra ele nunca piscar na tela; o texto final sai limpo logo abaixo.
-          content = await readSseStream(res, onDelta!, 350);
+          content = await readSseStream(res, onDelta!, true);
         } else {
           const data = await res.json();
           content = data.choices?.[0]?.message?.content ?? '';

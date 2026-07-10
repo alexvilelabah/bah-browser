@@ -258,18 +258,20 @@ export default function App() {
   useEffect(() => {
     window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiPaused ? '' : store.aiSettings.apiKey, store.aiSettings.baseUrl, store.aiSettings.model);
     window.electronAPI?.setUILanguage?.(getLang());   // i18n Fase 2: agente responde no idioma da UI
-    window.electronAPI?.onZoom?.((pct) => showZoom(pct));   // Ctrl+roda → badge de zoom na tela
+    // Listeners com unsubscribe (higiene: sem cleanup, o StrictMode do dev duplicava eventos).
+    const offs: Array<(() => void) | undefined> = [];
+    offs.push(window.electronAPI?.onZoom?.((pct) => showZoom(pct)) as any);   // Ctrl+roda → badge de zoom na tela
     // Initialize local (GPU) engine if hybrid is enabled
     if (store.localSettings.enabled) {
       window.electronAPI?.setLocalProvider?.(store.localSettings.provider, 'local', store.localSettings.baseUrl, store.localSettings.model);
     }
-    window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url));
+    offs.push(window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url)) as any);
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
-    window.electronAPI?.onSafeBrowsingBlock?.((info) => {
+    offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       setLastFooterMsg(`⚠️ Malicious site blocked: ${info.host} (${info.url})`);
-    });
-    window.electronAPI?.onDownloadEvent?.((info) => {
+    }) as any);
+    offs.push(window.electronAPI?.onDownloadEvent?.((info) => {
       downloadEventsRef.current.push(info);
       setDownloads(prev => {
         const key = info.id || info.path || info.filename;
@@ -293,12 +295,13 @@ export default function App() {
       });
       if (info.state === 'completed') setLastFooterMsg(`💾 Downloaded: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
       else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download blocked: ${info.filename} (${info.reason || 'executable'})`);
-    });
-    window.electronAPI?.onVideoProgress?.((p) => {
+    }) as any);
+    offs.push(window.electronAPI?.onVideoProgress?.((p) => {
       // Sem card de progresso no meio do site: a animação na barra de digitar já mostra o
       // trabalho. Só um aviso discreto no rodapé quando o download termina.
       if (p.state === 'completed') setLastFooterMsg(`🎬 Video saved: ${p.title ?? ''}`);
-    });
+    }) as any);
+    return () => { for (const off of offs) { try { off?.(); } catch {} } };
   }, []);
 
   // Notify main process when active tab's host changes (auto-bypass adblock for known sites)
@@ -3169,7 +3172,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onClose={() => store.setSidebarOpen(false)}
             aiSettings={store.aiSettings}
             onSettingsChange={async (settings) => {
-              store.setAISettings(settings);
+              // Aguarda a persistência REAL (cifrar + gravar): fechar o app logo após
+              // Salvar não pode perder a config nova (a gravação é encadeada no store).
+              await store.setAISettings(settings);
               await window.electronAPI?.setAIProvider(settings.provider, settings.apiPaused ? '' : settings.apiKey, settings.baseUrl, settings.model);
             }}
             localSettings={store.localSettings}

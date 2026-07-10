@@ -38,6 +38,10 @@ export interface LocalSettings {
   model: string;             // e.g. qwen3-vl:8b
 }
 
+// Encadeia as gravações do aiSettings no disco: garante ordem (o último Salvar é a
+// última escrita) e dá uma promise pra quem precisar aguardar a persistência real.
+let aiWriteChain: Promise<void> = Promise.resolve();
+
 // Home page = Google in the user's language (don't force Brazil on everyone).
 // An English OS opens Google in English; pt-BR still gets Google Brazil.
 function googleHome(): string {
@@ -172,8 +176,11 @@ export function useTabStore() {
     setSidebarOpen,
     setAISettings: (s: AISettings) => {
       setAISettings(s);   // memória = texto puro (UI/agente intactos)
-      // No disco vai CIFRADO (cofre do SO); fire-and-forget. Se falhar, grava texto puro (nunca perde a config).
-      (async () => {
+      // No disco vai CIFRADO (cofre do SO). SERIALIZADO num encadeamento (writeChain) e
+      // com a promise DEVOLVIDA: dois Salvar rápidos não terminam fora de ordem (o velho
+      // gravando por último), e quem aguardar (botão Salvar) garante o disco atualizado
+      // antes de, por exemplo, a pessoa fechar o app. Se falhar, grava texto puro.
+      const write = async () => {
         try {
           const _enc = (window as any).electronAPI?.encryptSecret;
           const copy: AISettings = { ...s };
@@ -183,7 +190,9 @@ export function useTabStore() {
           }
           localStorage.setItem('aiSettings', JSON.stringify(copy));
         } catch { try { localStorage.setItem('aiSettings', JSON.stringify(s)); } catch {} }
-      })();
+      };
+      aiWriteChain = aiWriteChain.then(write, write);
+      return aiWriteChain;
     },
     setLocalSettings: (s: LocalSettings) => {
       setLocalSettingsState(s);

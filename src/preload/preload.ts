@@ -13,7 +13,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   encryptSecret: (t: string): Promise<string> => ipcRenderer.invoke('secure:encrypt', t),
   decryptSecretSync: (t: string): string => { try { return ipcRenderer.sendSync('secure:decrypt-sync', t); } catch { return t; } },
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
-  onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
+  onZoom: (cb: (pct: number) => void) => {
+    const listener = (_e: any, pct: number) => cb(pct);
+    ipcRenderer.on('app:zoom', listener);
+    return () => ipcRenderer.removeListener('app:zoom', listener);
+  },
   aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) =>
     ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId),
   // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
@@ -44,7 +48,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ollama:pull-progress', listener);
   },
   onOpenNewTab: (cb: (url: string) => void) => {
-    ipcRenderer.on('open-new-tab', (_e, url: string) => cb(url));
+    const listener = (_e: any, url: string) => cb(url);
+    ipcRenderer.on('open-new-tab', listener);
+    return () => ipcRenderer.removeListener('open-new-tab', listener);
   },
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
@@ -67,8 +73,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
     ipcRenderer.invoke('images:search', query, minWidth, count),
-  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string }) => void) =>
-    ipcRenderer.on('agent:download-event', (_e, info) => cb(info)),
+  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string }) => void) => {
+    const listener = (_e: any, info: any) => cb(info);
+    ipcRenderer.on('agent:download-event', listener);
+    return () => ipcRenderer.removeListener('agent:download-event', listener);
+  },
   pauseDownload: (id: string) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id: string) => ipcRenderer.invoke('download:resume', id),
   cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),
@@ -124,8 +133,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Resolve o caminho real de um arquivo arrastado (File → path) no Electron 33.
   getPathForFile: (file: File) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   stockMovers: (direction: string, count?: number) => ipcRenderer.invoke('stocks:movers', direction, count),
-  onVideoProgress: (cb: (p: { state: string; percent?: number; title?: string; path?: string; error?: string; speed?: string; eta?: string }) => void) =>
-    ipcRenderer.on('agent:video-progress', (_e, p) => cb(p)),
+  onVideoProgress: (cb: (p: { state: string; percent?: number; title?: string; path?: string; error?: string; speed?: string; eta?: string }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('agent:video-progress', listener);
+    return () => ipcRenderer.removeListener('agent:video-progress', listener);
+  },
   // Adblock controls
   adblockGetState: () => ipcRenderer.invoke('adblock:get-state'),
   adblockSetEnabled: (on: boolean) => ipcRenderer.invoke('adblock:set-enabled', on),
@@ -134,8 +146,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getHwAccel: () => ipcRenderer.invoke('app:get-hw-accel'),
   setHwAccel: (on: boolean) => ipcRenderer.invoke('app:set-hw-accel', on),
   // Safe browsing notifications
-  onSafeBrowsingBlock: (cb: (info: { url: string; host: string }) => void) =>
-    ipcRenderer.on('safe-browsing-block', (_e, info) => cb(info)),
+  onSafeBrowsingBlock: (cb: (info: { url: string; host: string }) => void) => {
+    const listener = (_e: any, info: any) => cb(info);
+    ipcRenderer.on('safe-browsing-block', listener);
+    return () => ipcRenderer.removeListener('safe-browsing-block', listener);
+  },
   // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud)
   takeOcr: (wcId: number, domText: string, force?: boolean) =>
     ipcRenderer.invoke('pipeline:take-ocr', wcId, domText, force ?? false),

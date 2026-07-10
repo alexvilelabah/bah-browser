@@ -37,10 +37,11 @@ export function setupDownloadManager(deps: Deps) {
   const send = (payload: any) => {
     try { deps.getMainWindow()?.webContents.send('agent:download-event', payload); } catch {}
   };
-  // Quantos estão de fato baixando (não os segurados pela fila).
+  // Quantos estão DE FATO baixando: nem os segurados pela fila, nem os pausados
+  // pelo usuário. (Pausado contava como ativo → pausar 5 travava o 6º pra sempre.)
   const activeCount = () => {
     let n = 0;
-    for (const t of reg.values()) if (!t.queued) n++;
+    for (const t of reg.values()) { let p = false; try { p = t.item.isPaused(); } catch {} if (!t.queued && !p) n++; }
     return n;
   };
   // Quando um termina, solta o próximo da fila.
@@ -117,17 +118,25 @@ export function setupDownloadManager(deps: Deps) {
     if (t) {
       try { t.item.pause(); } catch {}
       send({ id, state: 'progress', filename: t.filename, path: t.path, bytes: t.item.getReceivedBytes(), totalBytes: t.item.getTotalBytes(), paused: true, speedBps: 0 });
+      startNextQueued();   // pausar LIBERA a vaga → um da fila pode começar agora
     }
     return { ok: !!t };
   });
   ipcMain.handle('download:resume', (_e, id: string) => {
     const t = reg.get(id);
     if (t) {
-      t.queued = false;
-      t.lastTime = Date.now();
-      t.lastBytes = t.item.getReceivedBytes();
-      try { t.item.resume(); } catch {}
-      send({ id, state: 'progress', filename: t.filename, path: t.path, bytes: t.item.getReceivedBytes(), totalBytes: t.item.getTotalBytes(), paused: false });
+      // Respeita o teto: com 5 já baixando, "continuar" entra na FILA (não fura pra 6+).
+      if (activeCount() >= MAX_CONCURRENT) {
+        t.queued = true;
+        try { t.item.pause(); } catch {}
+        send({ id, state: 'queued', filename: t.filename, path: t.path, bytes: t.item.getReceivedBytes(), totalBytes: t.item.getTotalBytes(), paused: true });
+      } else {
+        t.queued = false;
+        t.lastTime = Date.now();
+        t.lastBytes = t.item.getReceivedBytes();
+        try { t.item.resume(); } catch {}
+        send({ id, state: 'progress', filename: t.filename, path: t.path, bytes: t.item.getReceivedBytes(), totalBytes: t.item.getTotalBytes(), paused: false });
+      }
     }
     return { ok: !!t };
   });
