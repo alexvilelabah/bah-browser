@@ -780,9 +780,13 @@ function setupIPC(): void {
     // Sem chave → cai no Pollinations (grátis, keyless) em vez de quebrar: o app
     // funciona de cara pra quem nunca configurou. Com chave, usa o provedor escolhido.
     // `model` = override de modelo de nuvem (ex.: seletor da NVIDIA); 4º param (ollamaModel) é do engine local.
+    const prev = aiEngine;
     aiEngine = (apiKey?.trim() || provider === 'pollinations')
       ? new AIEngine(provider, apiKey, baseUrl, undefined, model)
       : new AIEngine('pollinations', '');
+    // Salvar as Configurações NÃO pode apagar a conversa: o engine novo herda o
+    // histórico de chat por aba do antigo (o feed na tela continua fazendo sentido).
+    aiEngine.adoptHistoriesFrom(prev);
     pageAgent = new PageAgent(aiEngine);
     warmAiConnection();
     return { success: true };
@@ -909,7 +913,7 @@ function setupIPC(): void {
     (b || 'http://localhost:11434').replace(/\/$/, '').replace(/(\/\/)localhost(\b|:)/i, '$1127.0.0.1$2');
   ipcMain.handle('ollama:list', async (_e, baseUrl?: string) => {
     try {
-      const r = await fetch(`${ollamaUrl(baseUrl)}/api/tags`);
+      const r = await fetch(`${ollamaUrl(baseUrl)}/api/tags`, { signal: AbortSignal.timeout(4000) } as any);
       if (!r.ok) return { ok: false, error: `status ${r.status}`, models: [] };
       const data = await r.json();
       const models = (data.models || []).map((m: any) => ({
@@ -923,7 +927,7 @@ function setupIPC(): void {
   });
   ipcMain.handle('ollama:delete', async (_e, model: string, baseUrl?: string) => {
     try {
-      const r = await fetch(`${ollamaUrl(baseUrl)}/api/delete`, {
+      const r = await fetch(`${ollamaUrl(baseUrl)}/api/delete`, { signal: AbortSignal.timeout(8000) as any,
         method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }),
       });
       return { ok: r.ok, error: r.ok ? undefined : `status ${r.status}` };
@@ -933,7 +937,7 @@ function setupIPC(): void {
   ipcMain.handle('ollama:status', async (_e, baseUrl?: string) => {
     const base = ollamaUrl(baseUrl);
     let running = false;
-    try { running = (await fetch(`${base}/api/tags`)).ok; } catch {}
+    try { running = (await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) } as any)).ok; } catch {}
     const localApp = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe') : '';
     const installed = running || !!(localApp && fs.existsSync(localApp));
     return { running, installed };
@@ -943,7 +947,7 @@ function setupIPC(): void {
   // na mão. Se nem o executável existir (ENOENT) → não instalado.
   ipcMain.handle('ollama:ensure-running', async (_e, baseUrl?: string) => {
     const base = ollamaUrl(baseUrl);
-    const ping = async () => { try { const r = await fetch(`${base}/api/tags`); return r.ok; } catch { return false; } };
+    const ping = async () => { try { const r = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) } as any); return r.ok; } catch { return false; } };
     if (await ping()) return { ok: true, already: true };
     // Acha o executável: caminho padrão do instalador no Windows, senão PATH.
     const localApp = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe') : '';

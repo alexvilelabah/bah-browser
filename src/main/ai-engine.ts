@@ -428,6 +428,13 @@ export class AIEngine {
   // rejeitou a chave, em vez de culpar sempre o DeepSeek).
   getProvider(): AIProvider { return this.provider; }
 
+  // Transfere o histórico de chat de um engine antigo pra este: salvar as Configurações
+  // recria o engine, e sem isto TODA conversa em andamento era esquecida em silêncio
+  // (o feed visual ficava na tela, mas o modelo não lembrava mais de nada).
+  adoptHistoriesFrom(other: AIEngine | null | undefined): void {
+    if (other?.conversationHistories?.size) this.conversationHistories = other.conversationHistories;
+  }
+
   private defaultBaseUrl(provider: AIProvider): string {
     switch (provider) {
       case 'anthropic': return 'https://api.anthropic.com';
@@ -500,16 +507,18 @@ export class AIEngine {
       return stripThink(text);
     }
 
-    // Conversa DAQUELA aba (chaveada por tabId).
+    // Conversa DAQUELA aba (chaveada por tabId). O turno do usuário vai numa CÓPIA pra
+    // chamada e só entra no histórico DEPOIS do sucesso — uma falha do provedor não pode
+    // deixar um 'user' órfão (dois 'user' seguidos quebram provedores estritos/Anthropic).
     const history = this.conversationHistories.get(tabId) ?? [];
-    history.push({ role: 'user', content: userMessage + contextNote });
+    const userTurn: Message = { role: 'user', content: userMessage + contextNote };
 
-    const text = await this.callChatLLM(history, onDelta, signal);
+    const text = await this.callChatLLM([...history, userTurn], onDelta, signal);
     // Higiene: modelos de raciocínio (qwen3 etc.) prefixam <think>…</think> na resposta.
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
     const clean = stripThink(text);
-    history.push({ role: 'assistant', content: clean || text });
+    history.push(userTurn, { role: 'assistant', content: clean || text });
     const CAP = 40;   // teto de itens por aba (evita crescer sem limite com muitas abas)
     if (history.length > CAP) history.splice(0, history.length - CAP);
     this.conversationHistories.set(tabId, history);
