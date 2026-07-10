@@ -125,6 +125,10 @@ export function setupDownloadManager(deps: Deps) {
   ipcMain.handle('download:resume', (_e, id: string) => {
     const t = reg.get(id);
     if (t) {
+      let paused = false; try { paused = t.item.isPaused(); } catch {}
+      // Já baixando (clique-duplo no ▶ antes do estado atualizar)? Não faz nada — senão o
+      // teto contaria o próprio item e mandaria de volta pra fila quem acabou de retomar.
+      if (!t.queued && !paused) return { ok: true };
       // Respeita o teto: com 5 já baixando, "continuar" entra na FILA (não fura pra 6+).
       if (activeCount() >= MAX_CONCURRENT) {
         t.queued = true;

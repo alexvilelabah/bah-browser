@@ -38,7 +38,7 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
 // (limpo pelo strip) substitui o preview, então o rabo seguro nunca some de verdade.
 // Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
 const AD_MARKER_RE = /(?:Support Pollinations|Powered by Pollinations|🌸\s*\**\s*Ad\b)/i;
-async function readSseStream(res: Response, onDelta: (d: string) => void, adGuard = false): Promise<string> {
+async function readSseStream(res: Response, onDelta: (d: string) => void, adGuard = false, signal?: AbortSignal): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
@@ -52,11 +52,19 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, adGuar
       if (adAt < 0) { const m = AD_MARKER_RE.exec(full); if (m) adAt = m.index; }
       target = adAt >= 0 ? Math.min(adAt, target) : Math.max(0, target - 32);
     }
+    // Não corta no meio de um par surrogate (emoji) — evita o "�" no rabo do preview.
+    if (target > 0 && target < full.length) { const c = full.charCodeAt(target - 1); if (c >= 0xD800 && c <= 0xDBFF) target -= 1; }
     if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
   };
+  // Cancelamento (botão Parar): o listener de abort do fetch some quando os headers
+  // chegam, então aqui, DURANTE o corpo do stream, cancelamos o reader na mão — sem isto
+  // o Stop no meio do streaming deixava o modelo gerar até o fim e gravava turno-fantasma.
+  const onAbort = () => { try { reader.cancel(); } catch {} };
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
   try {
     while (true) {
+      if (signal?.aborted) throw new Error('CANCELLED');
       // Timer limpo a CADA leitura (senão um stream longo acumula um timer de 30s por chunk).
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
         stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
@@ -86,8 +94,10 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, adGuar
     throw e;
   } finally {
     if (stallTimer) clearTimeout(stallTimer);
+    if (signal) signal.removeEventListener('abort', onAbort);
     try { reader.releaseLock?.(); } catch {}
   }
+  if (signal?.aborted) throw new Error('CANCELLED');   // reader.cancel() resolve done → garante o throw
   return full;
 }
 
@@ -96,7 +106,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, adGuar
 // readSseStream: guarda de 30s por chunk + cancel no erro. Modelos de raciocínio
 // (qwen3 etc.) podem mandar o pensamento em message.thinking — embrulhamos em
 // <think>…</think> pra o renderer exibir igual ao caso dos tags inline no content.
-async function readOllamaNdjson(res: Response, onDelta: (d: string) => void): Promise<string> {
+async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
@@ -104,9 +114,14 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void): Pr
   let full = '';
   let thinkOpen = false;
   const emit = (d: string) => { if (d) { full += d; try { onDelta(d); } catch {} } };
+  // Cancelamento (Parar): cancela o reader na mão — senão o Ollama segue gerando na GPU
+  // até o fim mesmo depois do Stop, e o turno-fantasma vai pro histórico.
+  const onAbort = () => { try { reader.cancel(); } catch {} };
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
   try {
     while (true) {
+      if (signal?.aborted) throw new Error('CANCELLED');
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
         stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
         Promise.resolve(reader.read()).then(
@@ -136,8 +151,10 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void): Pr
     throw e;
   } finally {
     if (stallTimer) clearTimeout(stallTimer);
+    if (signal) signal.removeEventListener('abort', onAbort);
     try { reader.releaseLock?.(); } catch {}
   }
+  if (signal?.aborted) throw new Error('CANCELLED');
   if (thinkOpen) emit('</think>');
   return full;
 }
@@ -522,6 +539,9 @@ export class AIEngine {
     const userTurn: Message = { role: 'user', content: userMessage + contextNote };
 
     const text = await this.callChatLLM([...history, userTurn], onDelta, signal);
+    // Cancelado no meio (Parar)? NÃO comita nada: o usuário não viu essa resposta, e gravar
+    // deixaria um turno-fantasma que sobrescreveria a memória da PRÓXIMA mensagem daquela aba.
+    if (signal?.aborted) return text;
     // Higiene: modelos de raciocínio (qwen3 etc.) prefixam <think>…</think> na resposta.
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
@@ -627,7 +647,7 @@ export class AIEngine {
       throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!);
+    if (streaming) return readSseStream(res, onDelta!, false, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -662,7 +682,7 @@ export class AIEngine {
       throw new Error(`Mistral API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!);
+    if (streaming) return readSseStream(res, onDelta!, false, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -697,7 +717,7 @@ export class AIEngine {
       throw new Error(`NVIDIA NIM API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!);
+    if (streaming) return readSseStream(res, onDelta!, false, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -750,7 +770,7 @@ export class AIEngine {
         if (streaming) {
           // Holdback de 350 chars: o anúncio do free vem no FIM — seguramos o rabo do
           // stream pra ele nunca piscar na tela; o texto final sai limpo logo abaixo.
-          content = await readSseStream(res, onDelta!, true);
+          content = await readSseStream(res, onDelta!, true, signal);
         } else {
           const data = await res.json();
           content = data.choices?.[0]?.message?.content ?? '';
@@ -903,6 +923,9 @@ export class AIEngine {
         break;
       } catch (e: any) {
         lastErr = e;
+        // Usuário cancelou (Parar): não é falha transitória — para JÁ (sem 2.4s de retries
+        // mortos e sem 3 linhas de ERRO falso no log).
+        if (signal?.aborted) throw e;
         const errMsg = `[DeepSeek] ← ERROR (attempt ${attempt}/${MAX_ATTEMPTS}) after ${Date.now() - t0}ms: ${e?.message ?? e}`;
         console.error(errMsg);
         appendLog(errMsg);
@@ -912,7 +935,7 @@ export class AIEngine {
         if (/timeout/i.test(String(e?.message)) && useThinking) {
           appendLog('[DeepSeek] thinking timed out → retry sem pensar (flash rápido)');
           console.warn('[DeepSeek] thinking timed out → retry without thinking (fast flash)');
-          return this.callDeepSeek(messages, isAgentMode, 'flash', onDelta);
+          return this.callDeepSeek(messages, isAgentMode, 'flash', onDelta, signal);
         }
         if (attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
@@ -955,7 +978,7 @@ export class AIEngine {
       if (useFlash && (res.status === 404 || errText.includes('model') || errText.includes('not found'))) {
         console.warn(`[DeepSeek] ${model} failed → falling back to pro`);
         if (this.deepseekModelsCache) this.deepseekModelsCache.delete('deepseek-v4-flash');
-        return this.callDeepSeek(messages, isAgentMode, 'pro', onDelta);
+        return this.callDeepSeek(messages, isAgentMode, 'pro', onDelta, signal);
       }
       if (res.status === 401) {
         throw new Error('Invalid or missing DeepSeek API key. Open the agent settings (sidebar) and paste your key starting with "sk-".');
@@ -965,7 +988,7 @@ export class AIEngine {
     }
 
     if (streaming) {
-      const text = await readSseStream(res, onDelta!);
+      const text = await readSseStream(res, onDelta!, false, signal);
       return { text, usage: undefined, latencyMs: Date.now() - t0, model };
     }
     let data: any = null;
@@ -1138,7 +1161,7 @@ export class AIEngine {
 
     // Chat streamado: NDJSON linha a linha (o fallback do callChatLLM refaz sem stream
     // se der erro antes do 1º delta — mesmo contrato dos provedores de nuvem).
-    if (streaming) return readOllamaNdjson(res, onDelta!);
+    if (streaming) return readOllamaNdjson(res, onDelta!, signal);
 
     const data = await res.json();
     const content = data.message?.content ?? '';

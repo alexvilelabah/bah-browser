@@ -804,7 +804,9 @@ function setupIPC(): void {
 
   // Local (GPU) model configuration
   ipcMain.handle('ai:set-local-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string, modelName?: string) => {
+    const prevLocal = localEngine;
     localEngine = new AIEngine(provider, apiKey || 'local', baseUrl, modelName);
+    localEngine.adoptHistoriesFrom(prevLocal);   // salvar Config não apaga a conversa local
     localPageAgent = new PageAgent(localEngine);
     console.log(`[HybridRouter] Local engine set: ${provider} model=${modelName || 'default'} @ ${baseUrl || 'default'}`);
     // Pré-aquece o modelo na VRAM (fire-and-forget) pra a 1ª tarefa já vir quente.

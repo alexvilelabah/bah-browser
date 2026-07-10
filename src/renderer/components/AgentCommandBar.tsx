@@ -1133,7 +1133,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <div className="showcase-sub">{t('login.subline')}</div>
           </div>
         )}
-        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />)}
+        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />)}
         {chatLoading && convoTabRef.current === activeTabId && (
           (streamText || streamThink)
             ? <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div>

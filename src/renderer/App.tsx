@@ -3318,13 +3318,11 @@ async function trySaveNamedPlaylist(wv: Electron.WebviewTag, name: string, makeP
       (criar.closest('button,[role=button]')||criar).click(); await wait(2200);
       // CONFIRMA que criou de verdade antes de dizer ok: o diálogo de criação tem que
       // ter FECHADO (rede caindo após o clique deixava o app dizer "criada" sem nada).
-      // Poll curto: dá até ~4s extras pro YouTube fechar o diálogo em rede lenta.
-      for(var w=0; w<8; w++){
-        var stillOpen=document.contains(ta) || (dlg!==document && dlg.hasAttribute && dlg.hasAttribute('opened'));
-        if(!stillOpen) break;
-        await wait(500);
-      }
-      if(document.contains(ta)) return {ok:false,step:'still-open'};
+      // "Fechado" cobre as DUAS UIs: nova (o nó da caixa é REMOVIDO) e Polymer (o diálogo
+      // só é ESCONDIDO, o nó fica → offsetParent vira null). Poll de ~4s pra rede lenta.
+      function dlgClosed(){ return !document.contains(ta) || ta.offsetParent===null; }
+      for(var w=0; w<8 && !dlgClosed(); w++){ await wait(500); }
+      if(!dlgClosed()) return {ok:false,step:'still-open'};
       return {ok:true,private:makePrivate};
     }catch(e){return {ok:false,step:'exception',err:String(e&&e.message)};}
   })(${JSON.stringify(name)}, ${makePrivate ? 'true' : 'false'})`;
@@ -3350,8 +3348,9 @@ async function tryAddToExistingPlaylist(wv: Electron.WebviewTag, name: string): 
       if(!target){ var rx=new RegExp('^'+name.replace(/[.*+?^\${}()|[\\]\\\\]/g,'\\\\$&'),'i'); target=rows.find(function(r){return rx.test(clean(r.textContent));}); }
       if(!target) return {ok:false,step:'find-row',have:rows.map(function(r){return clean(r.textContent).slice(0,20);}).slice(0,8)};
       // JÁ MARCADA? Clicar de novo DESMARCA (toggle) — removeria a música em vez de
-      // adicionar. Se a linha já está checada (vídeo repetido na lista), não clica.
-      var chk=target.querySelector('[role=checkbox],[aria-checked]');
+      // adicionar. Checa aria-checked no PRÓPRIO target (a linha costuma carregar o estado)
+      // OU num descendente. (A dedup de ids na origem é a defesa principal; isto é reforço.)
+      var chk=(target.getAttribute && target.getAttribute('aria-checked')!==null) ? target : target.querySelector('[role=checkbox],[aria-checked]');
       if(chk && (chk.getAttribute('aria-checked')==='true' || chk.checked===true)){
         var close0=document.querySelector('tp-yt-paper-dialog [aria-label*="Fechar" i],ytd-popup-container [aria-label*="Fechar" i],tp-yt-paper-dialog #close-button button');
         if(close0)close0.click(); else { try{document.body.click();}catch(e){} }
