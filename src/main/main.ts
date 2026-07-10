@@ -812,18 +812,27 @@ function setupIPC(): void {
   ipcMain.handle('ai:set-local-enabled', (_event, enabled: boolean) => { localModeOn = !!enabled; return true; });
 
   // AI chat — general conversation / page Q&A
+  // Cancelamento: o renderer manda o streamId no Parar → abortamos o fetch de verdade
+  // (socket cai; Ollama frio não segura mais o usuário por 300s sem saída).
+  const chatAborts = new Map<string, AbortController>();
+  ipcMain.handle('ai:chat-cancel', (_e, streamId: string) => {
+    try { chatAborts.get(streamId)?.abort(); } catch {}
+    return true;
+  });
   ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
+    const ac = streamId ? new AbortController() : undefined;
+    if (streamId && ac) chatAborts.set(streamId, ac);
     try {
       // Streaming: o renderer manda um streamId → os pedaços da resposta vão chegando
       // por evento e aparecem na tela conforme o modelo escreve (fallback: resposta cheia).
       const onDelta = (streamId && !stateless)
         ? (delta: string) => { try { mainWindow?.webContents.send('ai:chat-delta', { streamId, delta }); } catch {} }
         : undefined;
-      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta);
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
@@ -840,6 +849,8 @@ function setupIPC(): void {
         return { error: `${label} rejected your API key (invalid, expired or unauthorized). Check the ${label} key in settings (⚙️) — or switch to the 🆓 Free tab there (no key needed).` };
       }
       return { error: m };
+    } finally {
+      if (streamId) chatAborts.delete(streamId);
     }
   });
 

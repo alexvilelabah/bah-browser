@@ -9,19 +9,25 @@ import { pipeline, env } from '@huggingface/transformers';
 env.allowLocalModels = false;
 
 type ASR = (audio: Float32Array, opts?: any) => Promise<{ text: string } | Array<{ text: string }>>;
-let transcriber: ASR | null = null;
+// Cacheia a PROMISE (não o valor resolvido): se 'transcribe' chegar enquanto o 'load'
+// ainda baixa o modelo (~50MB no 1º uso), os dois aguardam o MESMO pipeline. Antes,
+// ambos viam null e criavam DUAS sessões ONNX (2× memória + erro de criação de sessão).
+let transcriberPromise: Promise<ASR> | null = null;
 
-async function getTranscriber(onProgress?: (p: unknown) => void): Promise<ASR> {
-  if (!transcriber) {
+function getTranscriber(onProgress?: (p: unknown) => void): Promise<ASR> {
+  if (!transcriberPromise) {
     // fp32 GLOBAL e device 'wasm' (CPU). As variantes quantizadas (q4/q8/int8/uint8) batem numa
     // REGRESSÃO do ONNX Runtime 1.25 que quebra a criação de sessão no WASM com
     // "TransposeDQWeightsForMatMulNBits Missing required scale" (onnxruntime#28306, transformers.js#1707).
     // fp32 é a única que carrega no CPU. Maior no disco, mas é o que funciona aqui.
-    transcriber = (await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+    transcriberPromise = (pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
       dtype: 'fp32', device: 'wasm', progress_callback: onProgress,
-    } as any)) as unknown as ASR;
+    } as any) as Promise<unknown>).then(p => p as ASR);
+    // Falhou (rede caiu no download)? Zera o cache pra próxima tentativa recomeçar —
+    // sem isto uma Promise rejeitada envenenaria o mic pra sempre.
+    transcriberPromise.catch(() => { transcriberPromise = null; });
   }
-  return transcriber;
+  return transcriberPromise;
 }
 
 self.onmessage = async (e: MessageEvent) => {

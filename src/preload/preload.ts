@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onZoom: (cb: (pct: number) => void) => ipcRenderer.on('app:zoom', (_e, pct) => cb(pct)),
   aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) =>
     ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId),
+  // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
+  chatCancel: (streamId: string) => ipcRenderer.invoke('ai:chat-cancel', streamId),
   // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
   onChatDelta: (cb: (p: { streamId: string; delta: string }) => void) => {
     const listener = (_e: any, p: any) => cb(p);

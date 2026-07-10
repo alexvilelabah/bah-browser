@@ -9,16 +9,24 @@ interface Message {
 // fetch com timeout via AbortController: o timeout ABORTA a request de verdade
 // (≠ Promise.race, que rejeita mas deixa o socket vivo / a request rodando). Re-lança como
 // erro de "timeout" pra o retry/fallback que já existe nos provedores reconhecerem.
-async function fetchWithTimeout(url: string, opts: any, ms: number): Promise<Response> {
+async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: AbortSignal): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
+  // Cancelamento EXTERNO (botão Parar do chat): o signal do chamador aborta o mesmo
+  // controller do timeout — qualquer um dos dois derruba o fetch de verdade (socket).
+  const onAbort = () => { try { ctrl.abort(); } catch {} };
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   try {
     return await fetch(url, { ...opts, signal: ctrl.signal });
   } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error(`Request timeout (${Math.round(ms / 1000)}s)`);
+    if (e?.name === 'AbortError') {
+      if (signal?.aborted) throw new Error('CANCELLED');
+      throw new Error(`Request timeout (${Math.round(ms / 1000)}s)`);
+    }
     throw e;
   } finally {
     clearTimeout(t);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -456,24 +464,24 @@ export class AIEngine {
 
   // Chama o LLM em modo chat com streaming quando há onDelta; se o stream falhar ANTES
   // do primeiro pedaço, refaz sem stream (fallback transparente — nunca pior que antes).
-  private async callChatLLM(messages: Message[], onDelta?: (d: string) => void): Promise<string> {
+  private async callChatLLM(messages: Message[], onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     if (!onDelta) {
-      const reply = await this.callLLM(messages, false);
+      const reply = await this.callLLM(messages, false, 'pro', undefined, signal);
       return typeof reply === 'string' ? reply : (reply?.text ?? '');
     }
     let sawDelta = false;
     const wrapped = (d: string) => { sawDelta = true; try { onDelta(d); } catch {} };
     try {
-      const reply = await this.callLLM(messages, false, 'pro', wrapped);
+      const reply = await this.callLLM(messages, false, 'pro', wrapped, signal);
       return typeof reply === 'string' ? reply : (reply?.text ?? '');
-    } catch (e) {
-      if (sawDelta) throw e;   // stream morreu no meio → erro real (o preview parcial some no final)
-      const reply = await this.callLLM(messages, false);   // fallback sem stream
+    } catch (e: any) {
+      if (sawDelta || signal?.aborted) throw e;   // stream morreu no meio OU usuário cancelou → não refaz
+      const reply = await this.callLLM(messages, false, 'pro', undefined, signal);   // fallback sem stream
       return typeof reply === 'string' ? reply : (reply?.text ?? '');
     }
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void): Promise<string> {
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     // rawContext = a self-contained block the caller already wrote (e.g. an attached
     // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
     // label — that label made weak models think there was an attachment they couldn't open.
@@ -488,7 +496,7 @@ export class AIEngine {
     // esses chamadores consomem a resposta como DADO (roteiam/parseiam por palavra),
     // então raciocínio vazado quebraria a lógica deles.
     if (stateless) {
-      const text = await this.callChatLLM([{ role: 'user', content: userMessage + contextNote }], onDelta);
+      const text = await this.callChatLLM([{ role: 'user', content: userMessage + contextNote }], onDelta, signal);
       return stripThink(text);
     }
 
@@ -496,7 +504,7 @@ export class AIEngine {
     const history = this.conversationHistories.get(tabId) ?? [];
     history.push({ role: 'user', content: userMessage + contextNote });
 
-    const text = await this.callChatLLM(history, onDelta);
+    const text = await this.callChatLLM(history, onDelta, signal);
     // Higiene: modelos de raciocínio (qwen3 etc.) prefixam <think>…</think> na resposta.
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
@@ -526,7 +534,7 @@ export class AIEngine {
     return reply;
   }
 
-  private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void): Promise<any> {
+  private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
     // Rastro do provedor: deixa claro QUAL engine respondeu cada request e se usou chave
     // (ex.: "[AI] provider=pollinations chat (no-key)"). Vai pro agent.log e pro console.
     const trace = `[AI] provider=${this.provider} ${isAgentMode ? 'agent' : 'chat'} (${this.apiKey ? 'key' : 'no-key'})`;
@@ -536,21 +544,21 @@ export class AIEngine {
     } catch {}
     console.log(trace);
     switch (this.provider) {
-      case 'anthropic': return this.callAnthropic(messages, isAgentMode);
-      case 'openai': return this.callOpenAI(messages, isAgentMode, onDelta);
+      case 'anthropic': return this.callAnthropic(messages, isAgentMode, signal);
+      case 'openai': return this.callOpenAI(messages, isAgentMode, onDelta, signal);
       // DeepSeek does NOT support image_url — strip screenshots to avoid 400 + retry waste
-      case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier, onDelta);
+      case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier, onDelta, signal);
       // Mistral is OpenAI-compatible; strip screenshots (text-first, avoids 400s)
-      case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta);
+      case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
       // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
-      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta);
-      case 'pollinations': return this.callPollinations(messages, isAgentMode, onDelta);
+      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
+      case 'pollinations': return this.callPollinations(messages, isAgentMode, onDelta, signal);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
-      case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta);
+      case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
     }
   }
 
-  private async callAnthropic(messages: Message[], isAgentMode: boolean): Promise<string> {
+  private async callAnthropic(messages: Message[], isAgentMode: boolean, signal?: AbortSignal): Promise<string> {
     const body = {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
@@ -566,7 +574,7 @@ export class AIEngine {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(body),
-    }, 45000);
+    }, 45000, signal);
 
     if (!res.ok) {
       throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
@@ -576,7 +584,7 @@ export class AIEngine {
     return data.content?.[0]?.text ?? '';
   }
 
-  private async callOpenAI(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+  private async callOpenAI(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: 'gpt-4o',
@@ -596,7 +604,7 @@ export class AIEngine {
         'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    }, 45000);
+    }, 45000, signal);
 
     if (!res.ok) {
       throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
@@ -610,7 +618,7 @@ export class AIEngine {
   // Mistral: OpenAI-compatible chat completions. Default model is the cheap one;
   // override via a custom baseUrl/model later if needed. Separate from DeepSeek's
   // model chain so neither path affects the other.
-  private async callMistral(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+  private async callMistral(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: 'mistral-small-latest',
@@ -631,7 +639,7 @@ export class AIEngine {
         'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    }, 45000);
+    }, 45000, signal);
 
     if (!res.ok) {
       throw new Error(`Mistral API error ${res.status}: ${await res.text()}`);
@@ -645,7 +653,7 @@ export class AIEngine {
   // NVIDIA NIM: OpenAI-compatible hosted endpoint (free tier). Default model is a
   // capable free one; override via custom baseUrl later if needed. Separate from the
   // other providers so nada se afeta.
-  private async callNim(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+  private async callNim(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
     const body: any = {
       model: this.cloudModel || 'meta/llama-3.3-70b-instruct',
@@ -666,7 +674,7 @@ export class AIEngine {
         'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    }, 45000);
+    }, 45000, signal);
 
     if (!res.ok) {
       throw new Error(`NVIDIA NIM API error ${res.status}: ${await res.text()}`);
@@ -677,7 +685,7 @@ export class AIEngine {
     return data.choices?.[0]?.message?.content ?? '';
   }
 
-  private async callPollinations(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+  private async callPollinations(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     const formatted = messages.map(m => {
@@ -715,7 +723,7 @@ export class AIEngine {
       let res: Response;
       try {
         // Timeout: uma request do free travada não pode congelar o passo do agente.
-        res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 45000);
+        res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 45000, signal);
       } catch {
         lastStatus = 0;   // timeout/rede → transitório; re-tenta (ou cai no erro limpo abaixo)
         continue;
@@ -790,7 +798,7 @@ export class AIEngine {
     return 'deepseek-chat';
   }
 
-  private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void): Promise<any> {
+  private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
     const streaming = !!onDelta && !isAgentMode;
     // Always tell the model TODAY's real date — its training data lives in the past
     // and it will otherwise state wrong years for "hoje"/"atual" questions.
@@ -857,7 +865,7 @@ export class AIEngine {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
           body: bodyJson,
-        }, reqTimeoutMs);
+        }, reqTimeoutMs, signal);
         // Retry server-side transient failures (429 rate-limit, 5xx) — but not 4xx like 401/404.
         if ((candidate.status === 429 || candidate.status >= 500) && attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
@@ -997,7 +1005,7 @@ export class AIEngine {
   }
   private ollamaWarmed = false;
 
-  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void): Promise<string> {
+  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Never send images to local model — it consumes too much VRAM and causes hangs
     const resolvedModel = await this.resolveOllama();
@@ -1063,7 +1071,7 @@ export class AIEngine {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, timeoutMs);
+      }, timeoutMs, signal);
     } catch (e: any) {
       throw new Error(`Ollama connection failed: ${e.message}`);
     }
@@ -1081,7 +1089,7 @@ export class AIEngine {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-        }, timeoutMs);
+        }, timeoutMs, signal);
         if (!res.ok) throw new Error(`Ollama API error ${res.status}: ${(await res.text()).slice(0, 400)}`);
       } else {
         throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 400)}`);

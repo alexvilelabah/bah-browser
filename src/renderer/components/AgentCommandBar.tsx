@@ -370,6 +370,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean }) => {
+    // Re-entrada: um agente JÁ rodando nunca pode ser atropelado por outro (o 2º
+    // sobrescreveria o abortRef e o 1º ficaria órfão, sem Stop). Duplo-Enter → ignora.
+    if (abortRef.current) return;
+    busyRef.current = true;
     convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
@@ -415,6 +419,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       // pelo botão Parar, que é intencional e já tem o próprio fluxo).
       if (!abortController.signal.aborted) push({ kind: 'error', text: String(e?.message ?? e) });
     } finally {
+      busyRef.current = false;
       abortRef.current = null;
       setLoading(false);
       setManualHelp(null);
@@ -425,6 +430,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
+    busyRef.current = true;
     convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
@@ -440,7 +446,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     };
     resetStream(); thinkSecsRef.current = null;
     try {
-      const { reply, suggestedCommand } = await onSendChat(msg, docText, sid);
+      // Cancelável: o Parar aborta o fetch no main (via streamId) E resolve esta espera
+      // na hora (race) — a UI destrava mesmo se o provedor demorar a soltar o socket.
+      const cancelled = new Promise<never>((_, rej) => {
+        chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
+      });
+      const { reply, suggestedCommand } = await Promise.race([onSendChat(msg, docText, sid), cancelled]);
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
@@ -451,17 +462,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
              thinking: clean ? thinking : undefined,
              thinkSecs: (clean && thinking && thinkSecsRef.current) ? thinkSecsRef.current : undefined });
     } catch (e: any) {
-      push({ kind: 'error', text: String(e?.message ?? e) });
+      if (String(e?.message) === 'CHAT_CANCELLED') push({ kind: 'event', event: { kind: 'status', message: '⏹ ' + t('composer.stopped') } });
+      else push({ kind: 'error', text: String(e?.message ?? e) });
     } finally {
+      chatCancelRef.current = null;
       streamIdRef.current = null;
       resetStream();
       setChatLoading(false);
+      busyRef.current = false;
     }
   };
 
   // ── Pesquisa Rápida: busca na web em segundo plano e responde NO PAINEL com fontes. ──
   const runResearch = async (msg: string, skipPush = false) => {
     if (loading || chatLoading) return;
+    busyRef.current = true;
     convoTabRef.current = activeTabId;
     setChatLoading(true);
     stickToBottomRef.current = true;
@@ -469,22 +484,37 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     push({ kind: 'event', event: { kind: 'status', message: t('feed.searchingWeb') } });
     setInput('');
     try {
-      const { answer, sources } = await onResearch(msg);
+      // Parar na pesquisa: destrava a UI na hora (o pipeline de busca termina em
+      // segundo plano e é descartado — não há socket único pra abortar aqui).
+      const cancelled = new Promise<never>((_, rej) => {
+        chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
+      });
+      const { answer, sources } = await Promise.race([onResearch(msg), cancelled]);
       pendingSuggestionRef.current = null;
       // Modelo de raciocínio local na síntese: pensamento não vaza na resposta da pesquisa.
       const { clean, thinking } = splitThink(answer);
       push({ kind: 'chat-assistant', text: clean || thinking || answer, sources, thinking: clean ? thinking : undefined });
     } catch (e: any) {
-      push({ kind: 'error', text: String(e?.message ?? e) });
+      if (String(e?.message) === 'CHAT_CANCELLED') push({ kind: 'event', event: { kind: 'status', message: '⏹ ' + t('composer.stopped') } });
+      else push({ kind: 'error', text: String(e?.message ?? e) });
     } finally {
+      chatCancelRef.current = null;
       setChatLoading(false);
+      busyRef.current = false;
     }
   };
 
   // ── Caixa unificada: decide AGIR (agente) · PESQUISAR (web→painel) · RESPONDER (chat),
   // sem o usuário escolher modo. Determinístico e 0 token na decisão. ──
   const classifyingRef = useRef(false);
+  // Trava SÍNCRONA anti-duplo-envio: os states (loading/chatLoading) só atualizam no
+  // re-render — dois Enters rápidos (ou um Enter durante os ~6s da classificação)
+  // passavam pelo guard e disparavam DUAS execuções que brigavam pelo abortRef.
+  const busyRef = useRef(false);
+  // Cancela a espera do chat/pesquisa em andamento (o Parar resolve a Promise na hora).
+  const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
+    busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
     // 1) Ações determinísticas de ALTA confiança (0 token, instantâneas) passam NA FRENTE da IA —
     //    um erro do classificador nunca pode quebrar supercut/preço/notícia/download/playlist.
     if (detectQuickAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -694,7 +724,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
-    if (loading || chatLoading) return;
+    // busyRef é a trava SÍNCRONA (state demora um render); cobre duplo-Enter e a
+    // janela da classificação — sem ela dava pra disparar duas execuções simultâneas.
+    if (loading || chatLoading || busyRef.current) return;
     if (attachedDoc) {
       // Instrução explícita: faz ATÉ um modelo fraco usar o texto fornecido em vez de
       // dizer "não consigo ver o arquivo, cole o texto".
@@ -708,6 +740,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const handleStop = () => {
+    // Chat/pesquisa em andamento: aborta o fetch no main (socket cai — Ollama frio não
+    // prende mais 300s) e resolve a espera local na hora. Agente: fluxo de sempre.
+    if (chatLoading) {
+      const sid = streamIdRef.current;
+      if (sid) { try { (window as any).electronAPI?.chatCancel?.(sid); } catch {} }
+      chatCancelRef.current?.();
+      return;
+    }
     abortRef.current?.abort();
     setManualHelp(null);
     manualContinueRef.current = null;
@@ -1188,7 +1228,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
               {t('feed.continue')}
             </button>
-          ) : loading ? (
+          ) : (loading || chatLoading) ? (
             <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title={t('composer.stopTask')}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
             </button>
