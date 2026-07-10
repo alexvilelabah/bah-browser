@@ -2289,7 +2289,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `🎵 Building the playlist — finding ${songs.length} songs on YouTube (skipping Shorts)…` });
                       const resolved = (await window.electronAPI?.resolveVideos?.(songs)) || [];
                       const ok = resolved.filter(r => r.id);
-                      ids = ok.map(r => r.id as string);
+                      // Dedup: duas buscas parecidas podem resolver pro MESMO vídeo — repetido
+                      // na lista, o passo de salvar clicaria a linha já marcada e REMOVERIA.
+                      ids = [...new Set(ok.map(r => r.id as string))];
                       if (ids.length < 2) plFail = `Only found ${ids.length} video(s) of the ${songs.length} songs — cannot build the playlist.`;
                     } else if (plArtist.length >= 2) {
                       const wantN = Math.min(Math.max(Number((action as any).count) || 10, 2), 12);
@@ -2319,7 +2321,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         const rm = await window.electronAPI?.resolveManyVideos?.(plArtist, wantN);
                         vids = (rm?.ok && rm.videos) ? rm.videos.map(v => ({ id: v.id, title: v.title || plArtist })) : [];
                       }
-                      ids = vids.map(v => v.id);
+                      ids = [...new Set(vids.map(v => v.id))];   // dedup (mesmo motivo da rota songs)
                       if (ids.length < 2) plFail = `Couldn't find enough "${plArtist}" songs on YouTube.`;
                     } else {
                       plFail = 'I need at least 2 songs to build the playlist.';
@@ -2366,7 +2368,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           await executeBrowserAction(wv, { type: 'navigate', url: plUrl } as BrowserAction);
                           await waitForWebviewSettled(wv, '');
                           await forcePlayVideo(wv);
-                          const priv = created.private ? ' (private)' : '';
+                          // HONESTIDADE sobre visibilidade: o YouTube cria como Particular por
+                          // padrão e o app NÃO mexe no toggle (frágil, removido de propósito).
+                          // Pediu "pública"? Divulga que saiu privada e onde mudar — antes o app
+                          // ficava calado e a pessoa achava que tinha saído pública.
+                          const askedPublic = /\b(p[uú]blic[ao]|public)\b/i.test(command);
+                          const priv = askedPublic
+                            ? ' (saved as Private — YouTube\'s default; make it public in the playlist settings)'
+                            : (wantPrivate ? ' (private)' : '');
                           // created.ok JÁ prova que a playlist foi criada e salva na conta →
                           // é SUCESSO (o pedido "criar" foi cumprido), mesmo que alguma faixa
                           // não tenha entrado — a mensagem diz honestamente "X of N".
@@ -3302,6 +3311,15 @@ async function trySaveNamedPlaylist(wv: Electron.WebviewTag, name: string, makeP
       var criar=Array.prototype.slice.call(dlg.querySelectorAll('button,tp-yt-paper-button,yt-button-shape,[role=button]')).find(function(b){return /^\\s*(criar|create|crear)\\s*$/i.test(norm(b.textContent));});
       if(!criar) return {ok:false,step:'criar-btn'};
       (criar.closest('button,[role=button]')||criar).click(); await wait(2200);
+      // CONFIRMA que criou de verdade antes de dizer ok: o diálogo de criação tem que
+      // ter FECHADO (rede caindo após o clique deixava o app dizer "criada" sem nada).
+      // Poll curto: dá até ~4s extras pro YouTube fechar o diálogo em rede lenta.
+      for(var w=0; w<8; w++){
+        var stillOpen=document.contains(ta) || (dlg!==document && dlg.hasAttribute && dlg.hasAttribute('opened'));
+        if(!stillOpen) break;
+        await wait(500);
+      }
+      if(document.contains(ta)) return {ok:false,step:'still-open'};
       return {ok:true,private:makePrivate};
     }catch(e){return {ok:false,step:'exception',err:String(e&&e.message)};}
   })(${JSON.stringify(name)}, ${makePrivate ? 'true' : 'false'})`;
@@ -3326,6 +3344,14 @@ async function tryAddToExistingPlaylist(wv: Electron.WebviewTag, name: string): 
       for(var i=0;i<rows.length;i++){ if(clean(rows[i].textContent).toLowerCase()===name.toLowerCase()){target=rows[i];break;} }
       if(!target){ var rx=new RegExp('^'+name.replace(/[.*+?^\${}()|[\\]\\\\]/g,'\\\\$&'),'i'); target=rows.find(function(r){return rx.test(clean(r.textContent));}); }
       if(!target) return {ok:false,step:'find-row',have:rows.map(function(r){return clean(r.textContent).slice(0,20);}).slice(0,8)};
+      // JÁ MARCADA? Clicar de novo DESMARCA (toggle) — removeria a música em vez de
+      // adicionar. Se a linha já está checada (vídeo repetido na lista), não clica.
+      var chk=target.querySelector('[role=checkbox],[aria-checked]');
+      if(chk && (chk.getAttribute('aria-checked')==='true' || chk.checked===true)){
+        var close0=document.querySelector('tp-yt-paper-dialog [aria-label*="Fechar" i],ytd-popup-container [aria-label*="Fechar" i],tp-yt-paper-dialog #close-button button');
+        if(close0)close0.click(); else { try{document.body.click();}catch(e){} }
+        return {ok:true,step:'already-in'};
+      }
       // UI nova (yt-list-item-view-model): a linha inteira é o clicável (verificado no DOM real
       // 2026-07 — não há [role=checkbox]; o wrapper é .ytListItemViewModelLayoutWrapper).
       (target.querySelector('[role=checkbox],.ytListItemViewModelLayoutWrapper,.ytListItemViewModelMainContainer,a,button')||target).click();

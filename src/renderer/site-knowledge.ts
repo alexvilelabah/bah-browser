@@ -331,6 +331,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     if (PL_NOUN.test(n) && PL_VERB.test(n)) {
       // Pergunta / abrir existente / adicionar → sempre pro modelo (nunca vira download).
       if (PL_QUESTION || PL_OPEN_EXISTING || PL_ADD_EXISTING) return null;
+      // Serviço que NÃO é YouTube ("playlist no Spotify") → o executor só sabe montar no
+      // YouTube; cede pro agente/modelo tentar no site citado. YouTube (Music) não baila.
+      if (/\b(spotify|deezer|apple\s*music|itunes|tidal|amazon\s*music|soundcloud|napster|pandora)\b/.test(n)) return null;
       // IA forte (nuvem com chave, DeepSeek): cede pro modelo curar. Fraca (local ou
       // keyless): usa o atalho — senão o gpt-oss grátis falha o JSON e não cria nada.
       if (!opts?.weakModel) return null;
@@ -365,7 +368,7 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
       const CNT_RE = new RegExp('\\b(\\d{1,3}|' + Object.keys(NUM_WORDS).join('|') + ')\\s+(musicas?|music|cancao|cancoes|cancion(?:es)?|songs?|tracks?|faixas?|temas?|videos?|clipes?|clips?|tunes?)\\b', 'gi');
       const PL_STRIP = new Set(('playlist playlists play list lista listas reproducao reproduccion cria crie criar crea crear creame cria-la arma arme armar armame monta monte montar faz faca fazer haz hazme hacer gera gere gerar junta junte juntar separa separe separar prepara prepare preparar create creates make made build building generate generating put together named called nome chamada chamado chame titulo llamada llamado ' +
         'com with con de do da dos das del la el las los the of by para pra e and y uma um una one a o as os minha meu mi my sua seu tu su nova novo new ' +
-        'essa esse esta este isso aquela aquele na no nas nos em ao aos que ' +
+        'essa esse esta este isso aquela aquele na no nas nos em ao aos que youtube ' +
         'musica musicas music cancao cancoes cancion canciones song songs track tracks faixa faixas tema temas tune tunes ' +
         'privada privado particular secreta secreto private salva salve salvar guarda guarde guardar save tocando favor').split(' '));
       const artist = rawNoName.replace(CNT_RE, ' ').split(/\s+/)
