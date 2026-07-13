@@ -112,6 +112,11 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
+      tavilySearch?: (query: string, options?: { topic?: string; maxResults?: number; timeRange?: string }) => Promise<{
+        success: boolean;
+        results?: Array<{ title: string; url: string; content: string; score: number; publishedDate?: string }>;
+        error?: string;
+      }>;
       takeOcr?: (wcId: number, domText: string, force?: boolean) => Promise<{
         ocrText: string; ocrUsed: boolean; skipped: boolean;
         confidence?: number; screenshotPath?: string; durationMs?: number; error?: string;
@@ -2530,9 +2535,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (action.type === 'google_news') {
                     // Vertical Notícias do Google (udm=12) — raspa as manchetes do DOM
                     // renderizado e monta um painel clicável. Determinístico → auto-done.
+                    // Tavily parallel path: when TAVILY_API_KEY is configured, fire a
+                    // structured news search via the Tavily API alongside the Google scrape.
                     setAgentVisual('acting');
                     const q = action.query;
-                    onProgress({ kind: 'status', message: `📰 Searching news for "${q}" on Google…` });
+                    onProgress({ kind: 'status', message: `📰 Searching news for "${q}"…` });
+
+                    // Fire Tavily search in parallel (non-blocking; resolves to null on failure/unconfigured)
+                    const tavilyPromise: Promise<Array<{ title: string; url: string; content: string; publishedDate?: string }> | null> =
+                      window.electronAPI?.tavilySearch
+                        ? window.electronAPI.tavilySearch(q, { topic: 'news', maxResults: 20 })
+                            .then(r => (r?.success && r.results && r.results.length >= 2) ? r.results : null)
+                            .catch(() => null)
+                        : Promise.resolve(null);
+
+                    // Existing Google News scrape path (runs in parallel with Tavily)
                     const newsUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=12&${googleLocaleParams()}`;
                     const beforeUrl = wv.getURL();
                     await executeBrowserAction(wv, { type: 'navigate', url: newsUrl } as BrowserAction);
@@ -2541,28 +2558,58 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     let news: Array<{ title: string; source: string; when: string; url: string }> = [];
                     try { news = await withTimeout(wv.executeJavaScript(NEWS_EXTRACTOR_JS, false), 9000, [] as any); } catch { /* hostil */ }
                     const valid = (news || []).filter(x => x && x.title && x.title.length > 12).slice(0, 30);
-                    if (valid.length >= 2) {
+
+                    // Await Tavily results (already running in parallel)
+                    const tavilyNews = await tavilyPromise;
+
+                    // Merge: prefer Tavily structured results when available; fall back to Google scrape
+                    let mergedValid = valid;
+                    let sourceLabel = 'Google News';
+                    if (tavilyNews && tavilyNews.length >= 2) {
+                      // Deduplicate: add Tavily results that are not already in Google scrape (by URL)
+                      const googleUrls = new Set(valid.map(x => x.url));
+                      const tavilyExtra = tavilyNews
+                        .filter(t => !googleUrls.has(t.url))
+                        .filter(t => t.url)
+                        .map(t => ({
+                          title: t.title,
+                          source: (() => { try { return new URL(t.url).hostname.replace(/^www\./, '') || '—'; } catch { return '—'; } })(),
+                          when: t.publishedDate || '',
+                          url: t.url,
+                        }));
+                      if (valid.length < 2 && tavilyExtra.length >= 2) {
+                        // Google scrape failed but Tavily succeeded — use Tavily only
+                        mergedValid = tavilyExtra.slice(0, 30);
+                        sourceLabel = 'Tavily News';
+                      } else {
+                        // Both available — merge, Google first, then unique Tavily results
+                        mergedValid = [...valid, ...tavilyExtra].slice(0, 30);
+                        sourceLabel = 'Google News + Tavily';
+                      }
+                    }
+
+                    if (mergedValid.length >= 2) {
                       const spec = {
                         title: `News: ${q}`,
-                        subtitle: `The ${valid.length} most recent headlines — click to open the article`,
+                        subtitle: `The ${mergedValid.length} most recent headlines — click to open the article`,
                         columns: ['Manchete', 'Fonte', 'Quando'],
-                        rows: valid.map(x => [x.title, x.source || '—', x.when || '']),
-                        links: valid.map(x => x.url || undefined),
-                        sourceNote: `Source: Google News — ${new Date().toLocaleString('pt-BR')}`,
+                        rows: mergedValid.map(x => [x.title, x.source || '—', x.when || '']),
+                        links: mergedValid.map(x => x.url || undefined),
+                        sourceNote: `Source: ${sourceLabel} — ${new Date().toLocaleString('pt-BR')}`,
                       };
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
                         const newId = store.addTab(rv.url);
                         activeTabIdRef.current = newId;
-                        const doneMsg = `${valid.length} news for "${q}". Top: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Panel opened in a tab.`;
+                        const doneMsg = `${mergedValid.length} news for "${q}". Top: ${mergedValid[0].title}${mergedValid[0].source ? ` (${mergedValid[0].source})` : ''}. Panel opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
-                        allResults.push({ action, result: { success: true, info: { count: valid.length } } });
+                        allResults.push({ action, result: { success: true, info: { count: mergedValid.length } } });
                         if (actionQueue.length === 0) {
                           setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
-                        toolResult = { success: true, info: { count: valid.length } };
+                        toolResult = { success: true, info: { count: mergedValid.length } };
                       } else {
                         toolResult = { success: false, error: rv?.error || 'Failed to build the news panel.' };
                       }

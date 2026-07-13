@@ -20,6 +20,7 @@ import { decidePopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { tavily } from '@tavily/core';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -1536,6 +1537,30 @@ function setupIPC(): void {
       return { ok: true, cleared };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  // ═══ Tavily search: structured news/web search via Tavily API (parallel to Google scrape) ═══
+  ipcMain.handle('tavily:search', async (_e, query: string, options?: { topic?: string; maxResults?: number; timeRange?: string }) => {
+    try {
+      const apiKey = process.env.TAVILY_API_KEY || '';
+      if (!apiKey) return { success: false, error: 'TAVILY_API_KEY not configured' };
+      const client = tavily({ apiKey });
+      const response = await client.search(query, {
+        topic: (options?.topic as any) || 'news',
+        maxResults: options?.maxResults || 20,
+        ...(options?.timeRange ? { timeRange: options.timeRange as any } : {}),
+      });
+      const results = (response.results || []).map((r: any) => ({
+        title: r.title || '',
+        url: r.url || '',
+        content: r.content || '',
+        score: r.score ?? 0,
+        publishedDate: r.publishedDate || '',
+      }));
+      return { success: true, results };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
     }
   });
 
