@@ -742,6 +742,19 @@ function setupIPC(): void {
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
 
+  // Tavily web search — used when the user picks Tavily as the default search engine.
+  // Returns an array of { title, url, content } results. Falls back to [] on error.
+  ipcMain.handle('tavily:search', async (_e, query: string) => {
+    try {
+      const apiKey = process.env.TAVILY_API_KEY;
+      if (!apiKey || !query) return [];
+      const { tavily } = await import('@tavily/core');
+      const client = tavily({ apiKey });
+      const res = await client.search(query, { maxResults: 6, searchDepth: 'basic' });
+      return (res.results || []).map((r: any) => ({ title: r.title, url: r.url, content: r.content }));
+    } catch { return []; }
+  });
+
   // Sugestoes da barra de endereco (Google Suggest, estilo Chrome) — fetch no MAIN pra nao
   // esbarrar em CORS. Sem chave. hl segue o idioma da UI. Offline/erro -> [] (cai so nas locais).
   ipcMain.handle('suggest:query', async (_e, q: string) => {
