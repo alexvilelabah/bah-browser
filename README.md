@@ -140,7 +140,8 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 1. Open the browser, click the **AI** button in the address bar.
 2. Gear icon → pick a provider.
 3. **Works free already (default):** nothing to set up — chat and image generation run with no key. **For the full agent / more speed:** pick **DeepSeek**, **Mistral** or **NVIDIA NIM** and paste that provider's key (DeepSeek's is very cheap). → Save.
-4. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
+4. **News search (optional):** Set the `TAVILY_API_KEY` environment variable to enable structured news results via the [Tavily API](https://app.tavily.com) alongside the default Google News scrape. Free tier gives 1,000 credits/month — no credit card needed. When configured, the `google_news` action fires both sources in parallel and merges results.
+5. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
 
 ---
 

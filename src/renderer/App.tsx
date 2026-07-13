@@ -2570,9 +2570,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const googleUrls = new Set(valid.map(x => x.url));
                       const tavilyExtra = tavilyNews
                         .filter(t => !googleUrls.has(t.url))
+                        .filter(t => t.url)
                         .map(t => ({
                           title: t.title,
-                          source: new URL(t.url).hostname.replace(/^www\./, '') || '—',
+                          source: (() => { try { return new URL(t.url).hostname.replace(/^www\./, '') || '—'; } catch { return '—'; } })(),
                           when: t.publishedDate || '',
                           url: t.url,
                         }));

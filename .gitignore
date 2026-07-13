@@ -11,6 +11,7 @@ release/
 # ── Segredos / variáveis de ambiente ──
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 secrets.*
