@@ -2086,25 +2086,52 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const ft = (action.filetype || 'pdf').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'pdf';
                     const gq = `${action.query} filetype:${ft}`;
                     onProgress({ kind: 'status', message: `📁 Looking for file (${ft.toUpperCase()}): "${action.query}"` });
-                    try { await wv.loadURL(`https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(gq)}`); } catch {}
-                    await waitForWebviewSettled(wv, '');
-                    await new Promise(r => setTimeout(r, 900));
-                    const links = await withTimeout<string[] | null>(wv.executeJavaScript(`(function(ft){
-                      const re = new RegExp('\\\\.'+ft+'($|\\\\?|#)','i');
-                      const seen = new Set();
-                      const out = [];
-                      for (const a of document.querySelectorAll('a[href]')) {
-                        let h = a.href || '';
-                        if (!/^https?:/i.test(h) || !re.test(h)) continue;
-                        try { if (/(^|\\.)google\\./i.test(new URL(h).hostname)) continue; } catch { continue; }
-                        if (seen.has(h)) continue; seen.add(h); out.push(h.slice(0,300));
+
+                    // ── Tavily path: try API search first when TAVILY_API_KEY is set ──
+                    let tavilyLinks: string[] = [];
+                    try {
+                      const tRes = await (window as any).electronAPI?.tavilySearch?.(gq, { maxResults: 10 });
+                      if (tRes?.success && Array.isArray(tRes.results)) {
+                        const re = new RegExp('\\.'+ft+'($|\\?|#)','i');
+                        for (const r of tRes.results) {
+                          const u: string = r.url || '';
+                          if (re.test(u) && /^https?:/i.test(u)) tavilyLinks.push(u.slice(0, 300));
+                        }
                       }
-                      return out.slice(0,10);
-                    })(${JSON.stringify(ft)})`), 8000, null);
-                    if (links && links.length) {
-                      history += `\n\nFILES FOUND (${ft}, direct download URLs):\n${links.map((u, i) => `[file${i}] ${u}`).join('\n')}\n`;
-                      onProgress({ kind: 'status', message: `📁 ${links.length} ${ft.toUpperCase()} file(s) found.` });
-                      toolResult = { success: true, info: { count: links.length, filetype: ft, top: links[0] } };
+                    } catch {}
+
+                    // ── Google fallback: navigate + scrape when Tavily found nothing ──
+                    let googleLinks: string[] = [];
+                    if (!tavilyLinks.length) {
+                      try { await wv.loadURL(`https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(gq)}`); } catch {}
+                      await waitForWebviewSettled(wv, '');
+                      await new Promise(r => setTimeout(r, 900));
+                      googleLinks = (await withTimeout<string[] | null>(wv.executeJavaScript(`(function(ft){
+                        const re = new RegExp('\\\\.'+ft+'($|\\\\?|#)','i');
+                        const seen = new Set();
+                        const out = [];
+                        for (const a of document.querySelectorAll('a[href]')) {
+                          let h = a.href || '';
+                          if (!/^https?:/i.test(h) || !re.test(h)) continue;
+                          try { if (/(^|\\.)google\\./i.test(new URL(h).hostname)) continue; } catch { continue; }
+                          if (seen.has(h)) continue; seen.add(h); out.push(h.slice(0,300));
+                        }
+                        return out.slice(0,10);
+                      })(${JSON.stringify(ft)})`), 8000, null)) || [];
+                    }
+
+                    // ── Merge results: Tavily first, then Google (deduped) ──
+                    const seen = new Set<string>();
+                    const links: string[] = [];
+                    for (const u of [...tavilyLinks, ...googleLinks]) {
+                      if (!seen.has(u)) { seen.add(u); links.push(u); }
+                    }
+                    const merged = links.slice(0, 10);
+
+                    if (merged.length) {
+                      history += `\n\nFILES FOUND (${ft}, direct download URLs):\n${merged.map((u, i) => `[file${i}] ${u}`).join('\n')}\n`;
+                      onProgress({ kind: 'status', message: `📁 ${merged.length} ${ft.toUpperCase()} file(s) found.` });
+                      toolResult = { success: true, info: { count: merged.length, filetype: ft, top: merged[0] } };
                     } else {
                       toolResult = { success: false, error: `No direct .${ft} file found for "${action.query}". Try another word or filetype.` };
                     }

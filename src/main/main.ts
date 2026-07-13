@@ -20,6 +20,7 @@ import { decidePopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { tavily } from '@tavily/core';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -1700,6 +1701,22 @@ function setupIPC(): void {
       .sort((a, b) => (b.width * b.height) - (a.width * a.height))
       .slice(0, want);
     return { success: images.length > 0, count: images.length, images };
+  });
+
+  // ═══ Tavily web search (requires TAVILY_API_KEY) ═══
+  ipcMain.handle('tavily:search', async (_e, query: string, opts?: { maxResults?: number; includeDomains?: string[] }) => {
+    const key = process.env.TAVILY_API_KEY;
+    if (!key) return { success: false, error: 'TAVILY_API_KEY not set' };
+    try {
+      const client = tavily({ apiKey: key });
+      const response = await client.search(query, {
+        maxResults: opts?.maxResults ?? 10,
+        ...(opts?.includeDomains?.length ? { includeDomains: opts.includeDomains } : {}),
+      });
+      return { success: true, results: response.results || [] };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
   });
 
   // ═══ Video download (yt-dlp) with streamed progress ═══
