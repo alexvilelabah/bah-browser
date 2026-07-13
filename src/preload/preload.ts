@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   googleLogin: () => ipcRenderer.invoke('google:login'),
   googleCheckLogin: () => ipcRenderer.invoke('google:check-login'),
   clearGoogleCookies: () => ipcRenderer.invoke('cookies:clear-google'),
+  tavilySearch: (query: string, options?: { topic?: string; maxResults?: number; timeRange?: string }) =>
+    ipcRenderer.invoke('tavily:search', query, options),
   preconnect: (url: string) => ipcRenderer.invoke('net:preconnect', url),
   // Cron-Agent: monitores em background
   monitorsList: () => ipcRenderer.invoke('monitors:list'),

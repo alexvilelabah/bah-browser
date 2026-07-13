@@ -1539,6 +1539,31 @@ function setupIPC(): void {
     }
   });
 
+  // ═══ Tavily search: structured news/web search via Tavily API (parallel to Google scrape) ═══
+  ipcMain.handle('tavily:search', async (_e, query: string, options?: { topic?: string; maxResults?: number; timeRange?: string }) => {
+    try {
+      const apiKey = process.env.TAVILY_API_KEY || '';
+      if (!apiKey) return { success: false, error: 'TAVILY_API_KEY not configured' };
+      const { tavily } = require('@tavily/core');
+      const client = tavily({ apiKey });
+      const response = await client.search(query, {
+        topic: (options?.topic as any) || 'news',
+        maxResults: options?.maxResults || 20,
+        ...(options?.timeRange ? { timeRange: options.timeRange as any } : {}),
+      });
+      const results = (response.results || []).map((r: any) => ({
+        title: r.title || '',
+        url: r.url || '',
+        content: r.content || '',
+        score: r.score ?? 0,
+        publishedDate: r.publishedDate || '',
+      }));
+      return { success: true, results };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
   // Preconnect preditivo (estilo Chrome): quando o autocomplete da barra completa um
   // domínio, abrimos o socket ANTES do Enter — a navegação já encontra a conexão pronta.
   ipcMain.handle('net:preconnect', (_e, url: string) => {
