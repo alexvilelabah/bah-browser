@@ -76,6 +76,15 @@ export const SITE_SHORTCUTS: SiteShortcut[] = [
     notes: ['Use Google for broad web search. The query field is usually name=q. Press Enter after filling it.'],
   },
   {
+    id: 'tavily',
+    names: ['tavily'],
+    url: 'https://tavily.com',
+    notes: [
+      'Tavily is an API-based search engine for AI workflows.',
+      'When enabled as default search engine (localStorage defaultSearchEngine=tavily), address-bar queries are routed through the Tavily API and results appear in the chat panel.',
+    ],
+  },
+  {
     id: 'youtube',
     names: ['youtube', 'you tube'],
     url: 'https://www.youtube.com',

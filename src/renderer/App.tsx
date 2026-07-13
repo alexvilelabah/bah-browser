@@ -116,6 +116,7 @@ declare global {
         ocrText: string; ocrUsed: boolean; skipped: boolean;
         confidence?: number; screenshotPath?: string; durationMs?: number; error?: string;
       }>;
+      tavilySearch?: (query: string) => Promise<Array<{ title: string; url: string; content: string }>>;
     };
   }
 }
@@ -466,11 +467,46 @@ export default function App() {
 
   const navigate = useCallback((url: string) => {
     let finalUrl = url;
+    const isSearch = !/^https?:\/\//i.test(url) && !/^file:/i.test(url)
+      && !(url.includes('.') && !url.includes(' '));
     if (!/^https?:\/\//i.test(url) && !/^file:/i.test(url)) {
-      finalUrl = url.includes('.') && !url.includes(' ')
+      finalUrl = !isSearch
         ? `https://${url}`
         : `https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(url)}`;
     }
+
+    // When Tavily is the configured default search engine, route search queries
+    // through the Tavily API and display results in the chat panel instead of
+    // navigating to Google. Falls back to Google if Tavily returns no results.
+    if (isSearch) {
+      try {
+        const engine = localStorage.getItem('defaultSearchEngine');
+        if (engine === 'tavily' && window.electronAPI?.tavilySearch) {
+          const initiatingTabId = store.activeTabId;
+          store.updateTab(initiatingTabId, { isLoading: true });
+          window.electronAPI.tavilySearch(url).then(results => {
+            store.updateTab(initiatingTabId, { isLoading: false });
+            if (results && results.length > 0) {
+              const formatted = results.map((r, i) =>
+                `**${i + 1}. [${r.title}](${r.url})**\n${r.content}`
+              ).join('\n\n');
+              window.electronAPI?.aiChat?.(
+                `Search results for "${url}":\n\n${formatted}`,
+                undefined, true
+              );
+            } else {
+              // No Tavily results — fall back to Google navigation
+              getActiveWebview()?.loadURL(finalUrl).catch(() => {});
+            }
+          }).catch(() => {
+            store.updateTab(initiatingTabId, { isLoading: false });
+            getActiveWebview()?.loadURL(finalUrl).catch(() => {});
+          });
+          return;
+        }
+      } catch {}
+    }
+
     store.updateTab(store.activeTabId, { isLoading: true });
     getActiveWebview()?.loadURL(finalUrl).catch(() => {});
   }, [store, getActiveWebview]);

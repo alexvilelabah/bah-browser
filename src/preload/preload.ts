@@ -97,6 +97,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   revealInFolder: (target: string) => ipcRenderer.invoke('shell:reveal', target),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   suggest: (q: string) => ipcRenderer.invoke('suggest:query', q),
+  tavilySearch: (query: string) => ipcRenderer.invoke('tavily:search', query),
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),
