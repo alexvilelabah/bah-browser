@@ -1702,6 +1702,23 @@ function setupIPC(): void {
     return { success: images.length > 0, count: images.length, images };
   });
 
+  // ═══ Tavily web search (requires TAVILY_API_KEY) ═══
+  ipcMain.handle('tavily:search', async (_e, query: string, opts?: { maxResults?: number; includeDomains?: string[] }) => {
+    const key = process.env.TAVILY_API_KEY;
+    if (!key) return { success: false, error: 'TAVILY_API_KEY not set' };
+    try {
+      const { tavily } = require('@tavily/core');
+      const client = tavily({ apiKey: key });
+      const response = await client.search(query, {
+        maxResults: opts?.maxResults ?? 10,
+        ...(opts?.includeDomains?.length ? { includeDomains: opts.includeDomains } : {}),
+      });
+      return { success: true, results: response.results || [] };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
   // ═══ Video download (yt-dlp) with streamed progress ═══
   ipcMain.handle('media:download-video', async (_e, url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => {
     if (!isHttpOrSearch(url)) return { success: false, error: 'Invalid URL or search.' };

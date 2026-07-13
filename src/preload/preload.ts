@@ -154,4 +154,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud)
   takeOcr: (wcId: number, domText: string, force?: boolean) =>
     ipcRenderer.invoke('pipeline:take-ocr', wcId, domText, force ?? false),
+  // Tavily web search (requires TAVILY_API_KEY in env)
+  tavilySearch: (query: string, opts?: { maxResults?: number; includeDomains?: string[] }) =>
+    ipcRenderer.invoke('tavily:search', query, opts),
 });
