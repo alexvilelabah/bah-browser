@@ -482,9 +482,10 @@ export default function App() {
       try {
         const engine = localStorage.getItem('defaultSearchEngine');
         if (engine === 'tavily' && window.electronAPI?.tavilySearch) {
-          store.updateTab(store.activeTabId, { isLoading: true });
+          const initiatingTabId = store.activeTabId;
+          store.updateTab(initiatingTabId, { isLoading: true });
           window.electronAPI.tavilySearch(url).then(results => {
-            store.updateTab(store.activeTabId, { isLoading: false });
+            store.updateTab(initiatingTabId, { isLoading: false });
             if (results && results.length > 0) {
               const formatted = results.map((r, i) =>
                 `**${i + 1}. [${r.title}](${r.url})**\n${r.content}`
@@ -498,7 +499,7 @@ export default function App() {
               getActiveWebview()?.loadURL(finalUrl).catch(() => {});
             }
           }).catch(() => {
-            store.updateTab(store.activeTabId, { isLoading: false });
+            store.updateTab(initiatingTabId, { isLoading: false });
             getActiveWebview()?.loadURL(finalUrl).catch(() => {});
           });
           return;

@@ -20,6 +20,7 @@ import { decidePopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { tavily } from '@tavily/core';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -748,7 +749,6 @@ function setupIPC(): void {
     try {
       const apiKey = process.env.TAVILY_API_KEY;
       if (!apiKey || !query) return [];
-      const { tavily } = await import('@tavily/core');
       const client = tavily({ apiKey });
       const res = await client.search(query, { maxResults: 6, searchDepth: 'basic' });
       return (res.results || []).map((r: any) => ({ title: r.title, url: r.url, content: r.content }));
