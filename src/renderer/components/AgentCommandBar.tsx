@@ -153,14 +153,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
   // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
   const pendingSuggestionRef = useRef<string | null>(null);
-  // Placeholder "vivo" (estilo Comet): frases de EXEMPLO vão sendo digitadas e apagadas,
-  // ensinando o que dá pra pedir. (Uma dica instrucional + 3 exemplos curtos.)
+  // Placeholder "vivo": 3 frases neutras vão sendo digitadas e apagadas
+  // (saudação + open source + bloqueador embutido).
   const [ph, setPh] = useState('');
   useEffect(() => {
     const phrases = [
       t('composer.phLead'),
-      t('composer.phEx1'), t('composer.phEx2'), t('composer.phEx3'), t('composer.phEx4'),
-      t('composer.phEx5'), t('composer.phEx6'), t('composer.phEx7'),
+      t('composer.phEx1'),
+      t('composer.phEx2'),
     ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -212,6 +212,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
   const convoTabRef = useRef<string>(activeTabId);
   const feed = useMemo<FeedItem[]>(() => feedsByTab[activeTabId] ?? [], [feedsByTab, activeTabId]);
+  // Chips de PROCESSO (OBSERVE/THINK/FAST PATH/engine/status) são efêmeros: aparecem,
+  // seguram ~2s e somem sozinhos (fade + o resto sobe) pra não poluir. Resultado, cards,
+  // chat e erro NÃO são status → ficam. Mira só em kind:'event' com event.kind==='status'.
+  const [expiringIds, setExpiringIds] = useState<Set<number>>(new Set());
+  const dismissDoneRef = useRef<Set<number>>(new Set());
+  const dismissTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   // Descarta as conversas de abas que foram fechadas (libera memória; não persiste).
   useEffect(() => {
     const ids = new Set(tabIds.split(',').filter(Boolean));
@@ -347,6 +353,40 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       return { ...prevMap, [tabId]: next };
     });
   };
+
+  const removeFeedItem = (id: number) => setFeedsByTab(prevMap => {
+    let changed = false;
+    const next: Record<string, FeedItem[]> = {};
+    for (const k of Object.keys(prevMap)) {
+      const arr = prevMap[k];
+      const f = arr.filter(it => it.id !== id);
+      if (f.length !== arr.length) changed = true;
+      next[k] = f;
+    }
+    return changed ? next : prevMap;
+  });
+
+  // Agenda o sumiço dos chips de processo: 2s visível → fade (.36s) → remove (o feed sobe).
+  useEffect(() => {
+    for (const tabId of Object.keys(feedsByTab)) {
+      for (const it of feedsByTab[tabId]) {
+        if (it.kind !== 'event' || it.event.kind !== 'status') continue;
+        if (dismissDoneRef.current.has(it.id)) continue;
+        dismissDoneRef.current.add(it.id);
+        const id = it.id;
+        const t1 = setTimeout(() => {
+          setExpiringIds(prev => { const n = new Set(prev); n.add(id); return n; });
+          const t2 = setTimeout(() => {
+            removeFeedItem(id);
+            setExpiringIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+          }, 360);
+          dismissTimersRef.current.add(t2);
+        }, 2000);
+        dismissTimersRef.current.add(t1);
+      }
+    }
+  }, [feedsByTab]);
+  useEffect(() => () => { dismissTimersRef.current.forEach(clearTimeout); }, []);
 
   // Stick-to-bottom: auto-scroll on new items only when the user is already near
   // the bottom (so reading history upward isn't hijacked).
@@ -1133,7 +1173,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <div className="showcase-sub">{t('login.subline')}</div>
           </div>
         )}
-        {feed.map(item => <FeedRow key={item.id} item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />)}
+        {feed.map(item => {
+          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />;
+          const transient = item.kind === 'event' && item.event.kind === 'status';
+          const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
+          return <div key={item.id} className={cls}>{row}</div>;
+        })}
         {chatLoading && convoTabRef.current === activeTabId && (
           (streamText || streamThink)
             ? <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div>

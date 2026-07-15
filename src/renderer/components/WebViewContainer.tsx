@@ -84,7 +84,7 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
             width: '100%',
             height: '100%',
             display: tab.id === activeTabId ? 'flex' : 'none',
-            backgroundColor: '#121214',
+            backgroundColor: '#262624',
           }}
           // @ts-ignore
           allowpopups="true"

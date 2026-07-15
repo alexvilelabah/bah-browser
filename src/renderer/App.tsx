@@ -5,6 +5,7 @@ import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import { classifyRisk, riskForAction, RiskInfo } from './risk';
+import { stripTrackingParams } from '../main/tracking-params';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import MonitorsPanel from './components/MonitorsPanel';
@@ -125,7 +126,6 @@ export default function App() {
   const webviewRefs = useRef<Map<string, Electron.WebviewTag>>(new Map());
   const [agentVisual, setAgentVisual] = useState<AgentVisualState>('idle');
   const [ripples, setRipples] = useState<ClickRipple[]>([]);
-  const [lastFooterMsg, setLastFooterMsg] = useState<string>('');
   const rippleId = useRef(0);
   const activeTabIdRef = useRef(store.activeTabId);
   const userTabRef = useRef(store.activeTabId);   // a aba que o USUÁRIO está vendo (sempre atualizada)
@@ -269,7 +269,7 @@ export default function App() {
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
-      setLastFooterMsg(`⚠️ Malicious site blocked: ${info.host} (${info.url})`);
+      try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
     offs.push(window.electronAPI?.onDownloadEvent?.((info) => {
       downloadEventsRef.current.push(info);
@@ -293,13 +293,6 @@ export default function App() {
         };
         return [merged, ...rest].slice(0, 50);
       });
-      if (info.state === 'completed') setLastFooterMsg(`💾 Downloaded: ${info.filename} (${Math.round((info.bytes || 0) / 1024)} KB)`);
-      else if (info.state === 'blocked') setLastFooterMsg(`🚫 Download blocked: ${info.filename} (${info.reason || 'executable'})`);
-    }) as any);
-    offs.push(window.electronAPI?.onVideoProgress?.((p) => {
-      // Sem card de progresso no meio do site: a animação na barra de digitar já mostra o
-      // trabalho. Só um aviso discreto no rodapé quando o download termina.
-      if (p.state === 'completed') setLastFooterMsg(`🎬 Video saved: ${p.title ?? ''}`);
     }) as any);
     return () => { for (const off of offs) { try { off?.(); } catch {} } };
   }, []);
@@ -352,12 +345,11 @@ export default function App() {
   // ── Favoritos (estilo Chrome) ──
   const saveFavorite = useCallback(() => {
     const t = store.activeTab;
-    if (!t?.url || !/^https?:\/\//i.test(t.url)) { setLastFooterMsg('Open a page before bookmarking.'); return; }
+    if (!t?.url || !/^https?:\/\//i.test(t.url)) { return; }
     setFavorites(prev => {
-      if (prev.some(f => f.url === t.url)) { setLastFooterMsg('⭐ This page is already bookmarked.'); return prev; }
+      if (prev.some(f => f.url === t.url)) { return prev; }
       const next = [{ url: t.url, title: (t.title || t.url).slice(0, 80) }, ...prev].slice(0, 60);
       try { localStorage.setItem('favorites.v1', JSON.stringify(next)); } catch {}
-      setLastFooterMsg('⭐ Bookmark saved.');
       return next;
     });
   }, [store.activeTab]);
@@ -448,15 +440,13 @@ export default function App() {
   useEffect(() => { checkGoogleLogin(); }, [checkGoogleLogin]);
 
   const handleGoogleLogin = useCallback(async () => {
-    setLastFooterMsg('🔑 Opening Chrome/Edge — sign in there. I detect and import it automatically (no need to close anything or click import).');
     try {
       const result = await window.electronAPI?.googleLogin?.();
-      if (!result?.ok) { setLastFooterMsg(result?.error || 'Could not import the Google login.'); return; }
-      setLastFooterMsg(`✅ Login imported from ${result.browser || 'Chrome/Edge'} (${result.copied || 0} cookies). Reloading…`);
+      if (!result?.ok) { return; }
       setGoogleLoggedIn(true);
       const wv = webviewRefs.current.get(store.activeTab?.id) as any;
       try { wv?.reload?.(); } catch {}
-    } catch { setLastFooterMsg('Could not open the Google login.'); }
+    } catch {}
   }, [store]);
 
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
@@ -472,7 +462,9 @@ export default function App() {
         : `https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(url)}`;
     }
     store.updateTab(store.activeTabId, { isLoading: true });
-    getActiveWebview()?.loadURL(finalUrl).catch(() => {});
+    // URL colada com rastreio (fbclid/gclid/…) entra já limpa — will-navigate não
+    // cobre loadURL (navegação programática), então o strip é aqui.
+    getActiveWebview()?.loadURL(stripTrackingParams(finalUrl)).catch(() => {});
   }, [store, getActiveWebview]);
 
   const goBack = useCallback(() => { getActiveWebview()?.goBack(); }, [getActiveWebview]);
@@ -950,7 +942,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
         </div>
       )}
 
-      <div className="main-content">
+      <div className={`main-content ${store.sidebarOpen ? 'ai-open' : ''}`}>
         <div className="webview-area">
           <WebViewContainer
             tabs={store.tabs}
@@ -1033,7 +1025,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try {
                   const result = await runTrashDestroyer(wv, command, onProgress, signal);
                   const rdone = result.done as { reason?: string; success?: boolean };
-                  setLastFooterMsg(rdone.reason ?? '');
                   finishAgentRun(runLog, rdone.success ? 'success' : 'failed', rdone.reason);
                   return result;
                 } finally {
@@ -1177,7 +1168,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               };
               const waitForManualHelp = async (request: ManualHelpRequest, currentUrl: string) => {
                 setAgentVisual('idle');
-                setLastFooterMsg(`Manual help: ${request.reason}`);
                 appendAgentRunStep(runLog, {
                   manualHelp: {
                     kind: request.kind,
@@ -1219,7 +1209,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   title: resumedWv?.getTitle?.(),
                   note: request.reason,
                 });
-                setLastFooterMsg('');
                 noEffectCount = 0;
                 stepsOnSameUrl = 0;
                 actionQueue = [];
@@ -1229,11 +1218,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
                 setAgentVisual('idle');
-                setLastFooterMsg(`Confirmation: ${risk.kind}`);
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
                 return new Promise<boolean>((resolve) => {
                   let done = false;
-                  const finish = (v: boolean) => { if (!done) { done = true; setLastFooterMsg(''); resolve(v); } };
+                  const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
                   if (signal) signal.addEventListener('abort', () => finish(false), { once: true });
                   onProgress({
                     kind: 'confirm',
@@ -1264,7 +1252,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const macro = loadLastMacro();
                   if (!macro) {
                     const msg = 'I have no recorded automation yet. Do the task once (e.g.: "go to site X and click Y") — I record the sequence, and then you can repeat it as many times as you want.';
-                    setLastFooterMsg(msg);
                     finishRun('failed', msg);
                     return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
                   }
@@ -1279,7 +1266,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     throwIfCancelled();
                     if (!ok) {
                       const msg = `Canceled — the automation includes a sensitive action ("${riskyStep.label}") and you did not confirm.`;
-                      setLastFooterMsg(msg);
                       finishRun('cancelled', msg);
                       return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
                     }
@@ -1305,7 +1291,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       if (!r?.success) {
                         const msg = `Automation broke on repeat ${rep + 1}, step ${j + 1} (${formatAction(a)}): ${r?.error || 'element not found'}. The site likely changed — do the task once more so I can re-record it.`;
-                        setLastFooterMsg(msg);
                         finishRun('failed', msg);
                         return { thought: msg, results: allResults, done: { type: 'done', reason: msg, success: false } as BrowserAction };
                       }
@@ -1315,7 +1300,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (rep + 1 < times) await sleepCancelable(pause);
                   }
                   const okMsg = `Automation ran ${rep} time(s) without breaking (${macro.steps.length} step(s) each, zero AI).`;
-                  setLastFooterMsg(`✅ ${okMsg}`);
                   finishRun('success', okMsg);
                   return { thought: okMsg, results: allResults, done: { type: 'done', reason: okMsg, success: true } as BrowserAction };
                 }
@@ -1359,7 +1343,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 if (initialShortcut) {
                   const wv = getActiveWebview();
-                  if (!wv) { setLastFooterMsg('No active webview'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
+                  if (!wv) { finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
                   setAgentVisual('acting');
                   onProgress({ kind: 'status', message: `Known shortcut: ${initialShortcut.reason}` });
                   console.log(`[Agent] fast path -> ${initialShortcut.reason}`);
@@ -1399,21 +1383,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
                   if (Date.now() - taskStartedAt > TASK_DEADLINE_MS) {
                     const done: BrowserAction = { type: 'done', success: false, reason: 'Task time limit reached (5 min). Stopping to avoid a loop.' };
-                    setLastFooterMsg(done.reason);
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                   }
                   // Etapa 6: prune unbounded history to keep token usage and memory in check
                   if (history.length > 8000) history = `GOAL: ${command}\n...[older steps trimmed]...\n` + history.slice(-6000);
                   const wv = getActiveWebview();
-                  if (!wv) { setLastFooterMsg('No active webview'); finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
+                  if (!wv) { finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
                   if (commandLooksLikeGoogleLogin && step >= 8) {
                     const done: BrowserAction = {
                       type: 'done',
                       success: false,
                       reason: 'Google login was not completed quickly. There may be a block, popup, captcha or account choice that needs manual intervention.',
                     };
-                    setLastFooterMsg(done.reason);
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                   }
@@ -1467,7 +1449,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: 'Gmail: draft filled automatically.' });
                       if (compose.sent) {
                         const done: BrowserAction = { type: 'done', success: true, reason: 'Email sent via Gmail.' };
-                        setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                       }
@@ -1484,7 +1465,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const commentKey = makeYouTubeCommentKey(observation.url, youtubeCommentText);
                       if (submittedYouTubeComments.has(commentKey)) {
                         const done: BrowserAction = { type: 'done', success: true, reason: `Comment already sent in this task: "${youtubeCommentText}"` };
-                        setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                       }
@@ -1494,7 +1474,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         youtubeCommentFilled = true;
                         youtubeCommentSubmitted = true;
                         const done: BrowserAction = { type: 'done', success: true, reason: `Comment sent on YouTube: "${youtubeCommentText}"` };
-                        setLastFooterMsg(done.reason);
                         finishRun('success', done.reason);
                         return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                       }
@@ -1688,7 +1667,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   if (result?.error) {
                     onProgress({ kind: 'status', message: `Error: ${result.error}` });
-                    setLastFooterMsg(result.error);
                     finishRun('failed', result.error);
                     return { error: result.error, thought: thoughts.join('\n'), results: allResults };
                   }
@@ -1729,7 +1707,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   } // end if (!fromQueue)
                   if (!action) {
-                    setLastFooterMsg('AI did not return an action.');
                     finishRun('failed', 'AI did not return an action.');
                     return { error: 'AI did not return an action.', thought: thoughts.join('\n'), results: allResults };
                   }
@@ -1767,7 +1744,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         || (stepThought || stepEvaluation || '').trim() || 'Read the page content.';
                       const done: BrowserAction = { type: 'done', success: true, reason: answer };
                       onProgress({ kind: 'status', message: `🛑 Stuck re-extracting — finished with the content already extracted.` });
-                      setLastFooterMsg(answer);
                       finishRun('success', answer);
                       return { thought: thoughts.join('\n\n') || answer, results: allResults, done };
                     }
@@ -1841,7 +1817,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         if (val && val.trim().length > 20) action.reason = val.trim().slice(0, 600);
                       }
                     }
-                    setLastFooterMsg(`✅ ${action.reason}`);
                     finishRun(action.success ? 'success' : 'failed', action.reason);
                     return { thought: thoughts.join('\n\n') || action.reason, results: allResults, done: action };
                   }
@@ -2031,7 +2006,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (wantsAnswer && val.trim().length > 60) {
                         const answer = val.trim().slice(0, 600);
                         onProgress({ kind: 'status', message: `✅ ${answer.slice(0, 120)}` });
-                        setLastFooterMsg(answer);
                         finishRun('success', answer);
                         return { thought: thoughts.join('\n\n') || answer, results: allResults, done: { type: 'done', success: true, reason: answer } as BrowserAction };
                       }
@@ -2185,7 +2159,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         // Auto-finish ONLY when nothing else is queued. A batch of named songs
                         // (actions:[download_video A, B, C]) must run them all before ending.
                         if (actionQueue.length === 0) {
-                          setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
@@ -2208,7 +2181,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                                 onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                                 allResults.push({ action, result: { success: true, info: dr.info } });
                                 if (actionQueue.length === 0) {
-                                  setLastFooterMsg(`✅ ${doneMsg}`);
                                   finishRun('success', doneMsg);
                                   return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                                 }
@@ -2243,7 +2215,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: doneMsg });
                       allResults.push({ action, result: { success: true, info: { url: curUrlOV } } });
                       if (actionQueue.length === 0) {
-                        setLastFooterMsg(doneMsg);
                         finishRun('success', doneMsg);
                         return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                       }
@@ -2260,7 +2231,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { url: v.url, title: v.title } } });
                       if (actionQueue.length === 0) {
-                        setLastFooterMsg(`✅ ${doneMsg}`);
                         finishRun('success', doneMsg);
                         return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                       }
@@ -2384,7 +2354,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           // não tenha entrado — a mensagem diz honestamente "X of N".
                           const doneMsg = `✅ Playlist "${saveName}"${priv} created in your account with ${added} of ${ids.length} songs${added < ids.length ? ' (some failed to add)' : ''}. Playing now.`;
                           onProgress({ kind: 'status', message: doneMsg });
-                          setLastFooterMsg(doneMsg);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         } else {
@@ -2396,7 +2365,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           await forcePlayVideo(wv);
                           const doneMsg = `🎶 I lined up ${ids.length} songs and they're playing, but I couldn't SAVE the playlist to your account (stopped at "${created.step}"). Sign in to YouTube (⋮ menu → Sign in with Google) and ask again to create it for real.`;
                           onProgress({ kind: 'status', message: doneMsg });
-                          setLastFooterMsg(doneMsg);
                           finishRun('failed', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: false } as BrowserAction };
                         }
@@ -2428,7 +2396,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { count: vids.length } } });
                       if (actionQueue.length === 0) {
-                        setLastFooterMsg(`✅ ${doneMsg}`);
                         finishRun('success', doneMsg);
                         return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                       }
@@ -2468,7 +2435,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                       allResults.push({ action, result: { success: true, info: { cuts: vc.cuts } } });
                       if (actionQueue.length === 0) {
-                        setLastFooterMsg(`✅ ${doneMsg}`);
                         finishRun('success', doneMsg);
                         return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                       }
@@ -2513,7 +2479,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { count: sorted.length, cheapest: c } } });
                         if (actionQueue.length === 0) {
-                          setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
@@ -2558,7 +2523,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { count: valid.length } } });
                         if (actionQueue.length === 0) {
-                          setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
@@ -2597,7 +2561,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { url: rv.url, rows: spec.rows?.length } } });
                         if (actionQueue.length === 0) {
-                          setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
@@ -2626,7 +2589,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { saved: gr.saved, dir: gr.dir } } });
                         if (actionQueue.length === 0) {
-                          setLastFooterMsg(`✅ ${doneMsg}`);
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
@@ -2690,7 +2652,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                           allResults.push({ action, result: { success: true, info: { saved: hr.saved, dir: hr.dir } } });
                           if (actionQueue.length === 0) {
-                            setLastFooterMsg(`✅ ${doneMsg}`);
                             finishRun('success', doneMsg);
                             return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                           }
@@ -2807,7 +2768,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   } else if (action.type === 'report') {
                     // Final synthesized answer to user — exits loop
-                    setLastFooterMsg('');
                     appendAgentRunStep(runLog, {
                       step: step + 1,
                       urlBefore: observation.url,
@@ -3082,7 +3042,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         continue;
                       }
                       const done: BrowserAction = { type: 'done', success: false, reason: recoveryVerdict.reason };
-                      setLastFooterMsg(`🛡️ ${recoveryVerdict.reason}`);
                       finishRun('failed', recoveryVerdict.reason);
                       return { thought: thoughts.join('\n\n') || recoveryVerdict.reason, results: allResults, done };
                     }
@@ -3099,7 +3058,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // close_popup / retry → instruction is in history, AI will act on it next step.
                   }
                 }
-                setLastFooterMsg('Step limit reached');
                 finishRun('max_steps', 'Step limit reached');
                 // Bater o limite de passos é FALHA, não conclusão: devolve error (a barra mostra
                 // como problema, sem o sino de "pronto"), em vez de um thought que parece relatório.
@@ -3107,7 +3065,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               } catch (err: any) {
                 if (err?.message === 'TASK_CANCELLED_BY_USER') {
                   const done: BrowserAction = { type: 'done', success: false, reason: 'Task canceled by the user.' };
-                  setLastFooterMsg(done.reason);
                   finishRun('cancelled', done.reason);
                   return { thought: done.reason, results: allResults, done };
                 }
@@ -3141,11 +3098,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               if (vid && window.electronAPI?.getTranscript) {
                 let tr = transcriptCacheRef.current.get(vid);
                 if (tr === undefined) {
-                  setLastFooterMsg(t('feed.readingCaption'));
                   const r = await window.electronAPI.getTranscript(store.activeTab.url).catch(() => null);
                   tr = (r && r.ok && r.text) ? r.text : '';
                   transcriptCacheRef.current.set(vid, tr);
-                  setLastFooterMsg(tr ? t('feed.captionLoaded') : t('feed.noCaption'));
                 }
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
@@ -3193,13 +3148,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
         </div>
       </div>
 
-      {lastFooterMsg && (
-        <div className="agent-footer-strip">
-          <span className="agent-footer-label">{t('footer.lastStatus')}</span>
-          <span className="agent-footer-text" title={t('footer.selectCopy')}>{lastFooterMsg}</span>
-          <button className="agent-footer-clear" onClick={() => setLastFooterMsg('')} title={t('footer.clear')}>×</button>
-        </div>
-      )}
       {historyOpen && (
         <div className="history-overlay" onClick={() => setHistoryOpen(false)}>
           <div className="history-panel" onClick={e => e.stopPropagation()}>

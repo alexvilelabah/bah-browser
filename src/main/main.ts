@@ -1,10 +1,11 @@
 import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { ElectronBlocker } from '@ghostery/adblocker-electron';
+import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 import fetch from 'cross-fetch';
 import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang } from './ai-engine';
+import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
 import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos } from './media-downloader';
@@ -545,7 +546,7 @@ function createWindow(): void {
     titleBarStyle: 'hidden',
     autoHideMenuBar: true,
     show: false,   // só mostra no ready-to-show → abre já pintada, sem flash/janela vazia
-    backgroundColor: '#0d0d12',
+    backgroundColor: '#1f1e1d',
     // Em DEV (rodando pelo .bat), seta o ícone da janela/barra de tarefas pro logo novo.
     // No app EMPACOTADO o executável já leva o ícone (electron-builder), e build/ não é
     // embarcado — por isso só no dev.
@@ -633,7 +634,7 @@ function createWindow(): void {
     wc.setUserAgent(CHROME_UA);
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
-    try { (wc as any).setBackgroundColor('#121214'); } catch {}
+    try { (wc as any).setBackgroundColor('#262624'); } catch {}
     // Inject stealth script before each navigation to mask Electron/automation signals
     wc.on('dom-ready', () => {
       if (!/accounts\.google\.com|accounts-google\.com/i.test(wc.getURL())) {
@@ -676,7 +677,7 @@ function createWindow(): void {
       }
       recent.push(now);
       popupTimes.set(wc.id, recent);
-      mainWindow?.webContents.send('open-new-tab', url);
+      mainWindow?.webContents.send('open-new-tab', stripTrackingParams(url));
       return { action: 'deny' };
     });
     wc.once('destroyed', () => popupTimes.delete(wc.id));
@@ -687,7 +688,12 @@ function createWindow(): void {
         if (maliciousHosts.has(u.hostname)) {
           e.preventDefault();
           mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
+          return;
         }
+        // Clique em link com rastreio (fbclid/gclid/…) → navega já na URL limpa.
+        // Sem loop: loadURL é programático e não re-dispara will-navigate.
+        const clean = stripTrackingParams(url);
+        if (clean !== url) { e.preventDefault(); wc.loadURL(clean).catch(() => {}); }
       } catch {}
     });
   });
@@ -2028,12 +2034,16 @@ async function setupAdblock(): Promise<void> {
     // Cache do motor em disco: boot instantâneo e adblock funcionando MESMO OFFLINE
     // (antes, cada boot baixava da CDN — sem internet a sessão ficava sem adblock).
     // Renova da rede quando o cache passa de 7 dias (listas frescas).
-    const cachePath = path.join(app.getPath('userData'), 'adblock-engine.bin');
+    // "-v2" no nome: o cache é chaveado só pelo path; ao ampliar o conjunto de listas
+    // (fullLists = base + cookie banners + annoyances) o arquivo antigo serviria as
+    // listas antigas por até 7 dias — renomear força o re-fetch com o conjunto novo.
+    const cachePath = path.join(app.getPath('userData'), 'adblock-engine-v2.bin');
+    try { fs.unlinkSync(path.join(app.getPath('userData'), 'adblock-engine.bin')); } catch {}
     try {
       const age = Date.now() - fs.statSync(cachePath).mtimeMs;
       if (age > 7 * 24 * 60 * 60 * 1000) fs.unlinkSync(cachePath);
     } catch {}
-    blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch as any, {
+    blocker = await ElectronBlocker.fromLists(fetch as any, fullLists, {}, {
       path: cachePath,
       read: fs.promises.readFile,
       write: fs.promises.writeFile,
@@ -2042,7 +2052,7 @@ async function setupAdblock(): Promise<void> {
     // Respeita a preferência salva: só liga se o usuário não tiver desligado.
     if (loadAdblockPref()) blocker.enableBlockingInSession(persistSession);
 
-    console.log('[Adblock] Engine ready (EasyList + EasyPrivacy + cosmetic filters)');
+    console.log('[Adblock] Engine ready (EasyList + EasyPrivacy + cosmetic + cookie/annoyance lists)');
   } catch (e) {
     console.error('[Adblock] Failed to initialize:', e);
   }
