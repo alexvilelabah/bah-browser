@@ -323,6 +323,16 @@ export default function App() {
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
   }, []);
+
+  // ── Limite de passos do agente (25/50/100) ──
+  // Escolhido no menu ⋮ (clique cicla 25→50→100), persiste. O teto de tempo da tarefa
+  // escala junto (o deadline era calibrado pros 25). Vale pro PRÓXIMO run.
+  const [agentMaxSteps, setAgentMaxSteps] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem('agentMaxSteps')); return v === 50 || v === 100 ? v : 25; } catch { return 25; }
+  });
+  const cycleAgentSteps = useCallback(() => {
+    setAgentMaxSteps(v => { const n = v === 25 ? 50 : v === 50 ? 100 : 25; try { localStorage.setItem('agentMaxSteps', String(n)); } catch {} return n; });
+  }, []);
   const sweepTabsRef = useRef(store.tabs); sweepTabsRef.current = store.tabs;
   const sweepActiveIdRef = useRef(store.activeTabId); sweepActiveIdRef.current = store.activeTabId;
   useEffect(() => {
@@ -884,6 +894,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.memSaver')}</span>
                   <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
                 </button>
+                <button className="menu-item" onClick={() => cycleAgentSteps()} title={t('menu.agentStepsTitle')}>
+                  <span className="menu-ic">👣</span>
+                  <span className="menu-label">{t('menu.agentSteps')}</span>
+                  <span className="menu-switch on">{agentMaxSteps}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>
                   <span className={`menu-label${googleLoggedIn ? ' connected' : ''}`}>{googleLoggedIn ? t('menu.googleConnected') : t('menu.googleLogin')}</span>
@@ -1031,7 +1046,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   setAgentVisual('idle');
                 }
               }
-              const MAX_STEPS = 25;
+              const MAX_STEPS = agentMaxSteps;   // 25/50/100 — escolha do menu ⋮
               const allResults: Array<{ action: BrowserAction; result: any }> = [];
               const thoughts: string[] = [];
               macroTraceRef.current = [];                      // nova gravação por run
@@ -1086,7 +1101,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Nuvem é rápida → 5 min basta. Modo LOCAL é inerentemente lento (modelo grande
               // parte na CPU) → deadline maior pra a tarefa TERMINAR em teste interno, mesmo
               // devagar. Gated no local: NÃO altera o comportamento com API/nuvem.
-              const TASK_DEADLINE_MS = (store.localSettings.enabled ? 20 : 5) * 60 * 1000;
+              // Deadline calibrado pros 25 passos originais → escala com a escolha (50=2x, 100=4x).
+              const TASK_DEADLINE_MS = (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000;
               const taskStartedAt = Date.now();
               const recentActionHashes: string[] = [];
               // browser-use style: track element identities to mark what's NEW after each action
@@ -1382,7 +1398,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
                   if (Date.now() - taskStartedAt > TASK_DEADLINE_MS) {
-                    const done: BrowserAction = { type: 'done', success: false, reason: 'Task time limit reached (5 min). Stopping to avoid a loop.' };
+                    const done: BrowserAction = { type: 'done', success: false, reason: `Task time limit reached (${Math.round(TASK_DEADLINE_MS / 60000)} min). Stopping to avoid a loop.` };
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                   }
