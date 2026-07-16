@@ -191,11 +191,8 @@ body {
   outline:none;transition:all 0.2s var(--ease);
   font-family:inherit;
 }
-.url-input:focus {
-  border-color:var(--border-bright);
-  box-shadow:0 0 0 3px rgba(245,240,232,0.07);  /* anel neutro, sem laranja */
-  background:rgba(255,255,255,0.06);
-}
+/* (o :focus da barra é definido UMA vez só, no bloco Omnibox mais abaixo — evita o
+   duplicado que fazia a correção "não pegar") */
 .url-input::placeholder{color:var(--text-muted);}
 .url-input:focus::placeholder{color:transparent;}   /* some ao focar, igual ao Chrome */
 
@@ -290,8 +287,10 @@ body {
 @keyframes zoomBadgeIn{ from{ opacity:0; transform:translate(-50%,-6px); } to{ opacity:1; transform:translate(-50%,0); } }
 
 /* 👋 Onboarding da IA no primeiro uso (estado vazio do painel do agente) */
+/* Card de boas-vindas: fundo/borda NEUTROS (o laranja fraco poluía). O laranja fica
+   só no botão de ação (.ai-onboard-btn), que é onde ele tem função. */
 .ai-onboard{
-  background:var(--accent-glow); border:1px solid var(--accent);
+  background:var(--bg-tertiary); border:1px solid var(--border);
   border-radius:12px; padding:14px 16px; margin-bottom:16px; text-align:left;
 }
 .ai-onboard-title{ font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:4px; }
@@ -1024,10 +1023,15 @@ body {
   border-radius:9999px;
   background:var(--bg-tertiary);
   border:1px solid rgba(255,255,255,0.10);
-  color:#faf9f5;
+  /* Texto igual ao omnibox do Chrome (dark), valores tirados do fonte do Chromium:
+     kColorOmniboxText = #E3E3E3, fonte do sistema (Segoe UI) peso normal, 14px
+     (CONTEXT_OMNIBOX_PRIMARY). O Chrome escurece o caminho da URL pra #C7C7C7, mas o
+     contraste é 1.32:1 (invisível) → cor única. */
+  color:#E3E3E3;
+  font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+  font-weight:400;
   padding:0 46px 0 18px;
-  font-size:13px;
-  font-weight:500;
+  font-size:14px;
   box-shadow:0 10px 24px rgba(0,0,0,0.18);
 }
 
@@ -1036,10 +1040,13 @@ body {
   border-color:rgba(255,255,255,0.16);
 }
 
+/* Foco estilo Chrome: a ÚNICA pista é o fundo clareando — sem anel colorido e sem
+   glow. (No Chrome o anel de foco existe mas é azul, só aparece via teclado, e some
+   no clique porque a lista de sugestões abre; o que se vê é o fundo #282828→#3C3C3C.)
+   A box-shadow do estado normal continua valendo → nada de halo. */
 .url-input:focus {
-  background:rgba(28,34,44,0.92);
-  border-color:rgba(217,119,87,0.68);
-  box-shadow:0 0 0 4px rgba(217,119,87,0.18),0 0 34px rgba(217,119,87,0.24);
+  background:var(--bg-hover);
+  border-color:rgba(255,255,255,0.16);
 }
 
 .url-input::placeholder {
@@ -1496,7 +1503,7 @@ body {
 
 .url-input {
   height:36px;
-  font-size:12.5px;
+  font-size:14px;   /* igual ao omnibox do Chrome */
 }
 
 .agent-side-panel-host {
