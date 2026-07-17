@@ -597,7 +597,8 @@ export class AIEngine {
 
   private async callAnthropic(messages: Message[], isAgentMode: boolean, signal?: AbortSignal): Promise<string> {
     const body = {
-      model: 'claude-sonnet-4-20250514',
+      // Sonnet atual (o anterior, sonnet-4, era de mai/2025 e ficou pra trás).
+      model: 'claude-sonnet-5',
       max_tokens: 4096,
       system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode),
       messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),

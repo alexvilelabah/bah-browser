@@ -1892,10 +1892,21 @@ function setupIPC(): void {
     actuallyEnabled = targetEnabled;
   }
 
+  // O bypass existe pro HUMANO (o player do YouTube quebra com adblock, e o EasyPrivacy
+  // quebra o login do Google). Mas o AGENTE lê a ESTRUTURA da página — com o bypass
+  // ligado os anúncios entram na leitura dele e ele age no anúncio em vez do conteúdo
+  // (reportado no Linux: procurou vídeo do oceano, foi num anúncio de cortador de grama).
+  // Enquanto o agente trabalha, o bypass NÃO vale: bloqueia sempre.
+  let agentBusy = false;
+  let lastHost = '';
+
   function evalAdblockForHost(host: string) {
+    const h = host || lastHost;
+    if (host) lastHost = host;
     if (!userAdblockPref) { applyAdblockState(false); return; }
-    const matches = ADBLOCK_BYPASS_HOSTS.has(host) ||
-      [...ADBLOCK_BYPASS_HOSTS].some(h => host.endsWith('.' + h));
+    if (agentBusy) { applyAdblockState(true); return; }   // agente trabalhando → sem bypass
+    const matches = ADBLOCK_BYPASS_HOSTS.has(h) ||
+      [...ADBLOCK_BYPASS_HOSTS].some(x => h.endsWith('.' + x));
     applyAdblockState(!matches);
   }
 
@@ -1923,6 +1934,13 @@ function setupIPC(): void {
   });
   ipcMain.handle('adblock:active-host-changed', (_e, host: string) => {
     if (host) evalAdblockForHost(host);
+    return { active: actuallyEnabled };
+  });
+  // O agente avisa quando começa/termina: enquanto trabalha, o bypass é suspenso pra ele
+  // não enxergar anúncio; ao acabar, reavalia o host atual e o bypass volta pro humano.
+  ipcMain.handle('adblock:set-agent-busy', (_e, busy: boolean) => {
+    agentBusy = !!busy;
+    evalAdblockForHost('');   // reavalia o host atual já com a regra nova
     return { active: actuallyEnabled };
   });
 

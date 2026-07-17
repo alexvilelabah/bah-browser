@@ -142,6 +142,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   adblockGetState: () => ipcRenderer.invoke('adblock:get-state'),
   adblockSetEnabled: (on: boolean) => ipcRenderer.invoke('adblock:set-enabled', on),
   adblockActiveHostChanged: (host: string) => ipcRenderer.invoke('adblock:active-host-changed', host),
+  adblockSetAgentBusy: (busy: boolean) => ipcRenderer.invoke('adblock:set-agent-busy', busy),
   // Hardware acceleration (GPU) on/off — fixes "white tab" on weak GPUs; applied on restart
   getHwAccel: () => ipcRenderer.invoke('app:get-hw-accel'),
   setHwAccel: (on: boolean) => ipcRenderer.invoke('app:set-hw-accel', on),

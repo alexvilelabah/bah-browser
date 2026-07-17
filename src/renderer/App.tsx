@@ -110,6 +110,7 @@ declare global {
       adblockGetState?: () => Promise<{ enabled: boolean; active: boolean; bypassedHosts: string[] }>;
       adblockSetEnabled?: (on: boolean) => Promise<{ enabled: boolean }>;
       adblockActiveHostChanged?: (host: string) => Promise<{ active: boolean }>;
+      adblockSetAgentBusy?: (busy: boolean) => Promise<{ active: boolean }>;
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
@@ -1030,6 +1031,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const runLog = startAgentRun(command);
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
               taskRunningRef.current = true;   // a partir daqui, trocas MANUAIS de aba não mexem na aba do agente
+              // Suspende o bypass do adblock enquanto o agente trabalha: senão ele lê os
+              // anúncios do YouTube/Google como se fossem conteúdo e age no anúncio errado.
+              try { await window.electronAPI?.adblockSetAgentBusy?.(true); } catch {}
               downloadEventsRef.current = [];  // downloads velhos (manuais/da tarefa anterior) não entram na história DESTA
               try {
               if (isTrashDestroyerCommand(command)) {
@@ -3094,6 +3098,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
                 activeTabIdRef.current = userTabRef.current;
+                // Devolve o bypass pro humano (player do YouTube volta a funcionar).
+                try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
               }
             }}
             onSendChat={async (msg, docText, streamId) => {

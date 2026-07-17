@@ -639,7 +639,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (p === 'deepseek') return 'DeepSeek';
     if (p === 'mistral') return 'Mistral';
     if (p === 'openai') return 'OpenAI';
-    if (p === 'anthropic') return 'Anthropic';
+    if (p === 'anthropic') return 'Claude';
     if (p === 'nvidia') {
       const names: Record<string, string> = { 'meta/llama-3.3-70b-instruct': 'Llama 3.3 70B', 'deepseek-ai/deepseek-v4-flash': 'DeepSeek V4 Flash', 'deepseek-ai/deepseek-v4-pro': 'DeepSeek V4 Pro', 'nvidia/llama-3.3-nemotron-super-49b-v1': 'Nemotron 49B', 'z-ai/glm-5.1': 'GLM 5.1', 'qwen/qwen3-next-80b-a3b-instruct': 'Qwen3 80B' };
       return aiSettings.model && names[aiSettings.model] ? `NVIDIA · ${names[aiSettings.model]}` : 'NVIDIA';
@@ -863,6 +863,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const getProviderKey = () => {
     const url = settings.provider === 'mistral' ? 'https://console.mistral.ai/api-keys'
       : settings.provider === 'nvidia' ? 'https://build.nvidia.com/'
+      : settings.provider === 'anthropic' ? 'https://console.anthropic.com/settings/keys'
       : 'https://platform.deepseek.com/api_keys';
     try { ollamaApi()?.openExternal?.(url); } catch {}
   };
@@ -1012,6 +1013,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   onChange={e => { const next = e.target.value as AISettings['provider']; setSettings(s => { const keys = { ...(s.apiKeys || {}), [s.provider]: s.apiKey }; return { ...s, provider: next, baseUrl: '', model: '', apiKey: keys[next] || '', apiKeys: keys }; }); }}
                 >
                   <option value="deepseek">DeepSeek</option>
+                  <option value="anthropic">Claude (Anthropic)</option>
                   <option value="mistral">Mistral</option>
                   <option value="nvidia">NVIDIA NIM</option>
                 </select>
