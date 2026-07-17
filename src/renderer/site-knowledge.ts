@@ -294,6 +294,60 @@ const QUALITY_RE = /\b(?:n[ao]|em|com|de|in)?\s*(?:(?:melhor|boa|alta|m[aá]xima
 // QUALITY_RE fica só pros .replace() (que precisam do /g e zeram lastIndex sozinhos).
 const QUALITY_TEST_RE = new RegExp(QUALITY_RE.source, 'i');
 
+// O pedido é sobre o documento/página que JÁ ESTÁ ABERTO ou já foi DADO ao agente ("resuma
+// o pdf aberto", "acha o capítulo X no manual que já está aberto", "resuma o pdf anexado",
+// "esse pdf está errado, tente de novo"). Buscar um arquivo NOVO no Google é o contrário do
+// que a pessoa quer — e "anexado/attached" colide de frente com a feature real de anexar
+// documento (📎): o usuário já deu o arquivo, é o modelo que tem que ler, não o Google buscar
+// outro. Cede pro agente/doc-QA, que enxergam o de verdade. Testado contra `n` (normalize já
+// tirou acento e maiúscula: "já" → "ja"). Bare esta/essa/este/esse é seguro aqui porque esta
+// checagem só roda dentro do gate de find_file (nunca nos outros atalhos).
+const REFERS_TO_OPEN_DOC = /\b(?:aberto|aberta|abierto|abierta|opened|already\s+open|is\s+open|are\s+open|ja\s+(?:esta|ta)|ya\s+(?:se\s+)?esta|est[ea]s?|ess[ea]s?|nest[ea]s?|ness[ea]s?|dest[ea]s?|dess[ea]s?|(?:n|d)a\s+tela|on\s+(?:screen|the\s+page)|current|atual|this|anex\w*|attach\w*|adjunt\w*)\b/;
+
+// Sinal de que a frase fala do item que JÁ ESTÁ na tela (não pede um NOVO, fresco, de um
+// buscador) — usado pelas famílias de busca "nova" (preço/notícia/ações/imagem/vídeo/
+// supercut). SEM 'current'/'atual' soltos: colidiria com "current events" (pedido de
+// notícia de verdade). Em vez disso usa demonstrativos + "on/na página".
+const REFERS_TO_OPEN_ITEM = /\b(?:aberto|aberta|abierto|abierta|opened|already\s+open|is\s+open|are\s+open|ja\s+(?:esta|ta)|ya\s+(?:se\s+)?esta|est[ea]s?|ess[ea]s?|nest[ea]s?|ness[ea]s?|dest[ea]s?|dess[ea]s?|these|those|this|(?:n|d)a\s+(?:tela|pagina)|en\s+la\s+pagina|on\s+(?:screen|the\s+page)|aqui|daqui)\b/;
+
+// "quem/who/quién" — pergunta sobre AUTORIA/pessoa (quem canta, quem tirou a foto, quem
+// criou), não pedido de buscar algo novo. Curiosidade sobre o que já existe na tela.
+const IS_WHO_QUESTION = /\b(quem|qui[eé]n|whose|who)\b/;
+
+// "minha/my playlist" — uma coleção EXISTENTE do usuário, não um tema pra buscar do zero.
+// O executor só sabe montar/abrir playlist NOVA no YouTube; mexer numa salva é tarefa do
+// agente (ele enxerga a aba). Sem isto "abra minha playlist do Djavan" virava uma busca
+// nova por "Djavan", e "baixe as músicas da minha playlist" um download de query-lixo.
+// "minha playlist" OU "a playlist que eu salvei" (mesma coleção existente, sem o
+// possessivo direto na frente) — ambas são uma coleção SALVA do usuário, não um tema novo.
+const REFERS_TO_MY_PLAYLIST = /\b(?:minha|meu|mi|my|sua|seu|tu|su|your)\s+(?:playlist|play\s?list|lista)\b|(?:playlist|play\s?list|lista)\b[^.!?]{0,25}\b(?:que\s+(?:eu\s+)?(?:salvei|guardei)|i\s+saved)\b/;
+
+// Verbo de PARAR/FECHAR ("feche/pausa/pare"). Sem isto, "abr\w+"/"toc\w+" casavam com o
+// PASSADO ("...que você ABRIU", "vídeo que está TOCANDO") mesmo quando o verbo de verdade
+// da frase era o OPOSTO — fechar/pausar algo que já está aberto não é abrir um novo.
+const IS_STOP_CONTROL_VERB = /\b(fecha\w*|close[ds]?|closing|pausa\w*|pause[ds]?|pausing|para\b|pare\b|parar|stop(?:ped|ping)?|tela\s+cheia|fullscreen|volume|zoom)\b/;
+
+// "não consigo ouvir"/"can't"/"won't" — reclamação de que algo NÃO funciona, não pedido
+// de abrir um vídeo novo. Sem isto "não consigo ouvir a música" abria um vídeo aleatório.
+const IS_CANNOT = /\b(nao\s+consigo|não\s+consigo|no\s+puedo|can\W?t|cannot|won\W?t|does\s?n\W?t|doesn\W?t)\b/;
+
+// Negação/correção de uma ação anterior ("não pedi pra baixar", "never said download",
+// "pare de baixar"). Sem isto, "não, eu não pedi pra baixar vídeo nenhum" tinha 'baixar'
+// e virava um NOVO download — o oposto do que a frase pede.
+const IS_NEGATING_PRIOR_ACTION = /\b(nao\s+pedi|não\s+pedi|no\s+ped[ií]|no\s+dije|nunca\s+disse|never\s+said|did\s?n[o']?t\s+(?:ask|say)|did\s+not\s+(?:ask|say)|errad[oa]|wrong|stop\s+download\w*|pare\s+de\s+baixar)\b/;
+
+// Verbo de AÇÃO sobre o documento que já EXISTE (apagar/mandar/fechar/imprimir/converter/
+// responder) — bem diferente de "pdf de biologia" (só o tema, sem verbo, que É o atalho
+// pretendido). Sem isto "mande o pdf por email"/"apague o pdf que você baixou" disparavam
+// só por citar 'pdf', mesma armadilha do OR cru que causou o bug original do ucraniano.
+const ACTS_ON_EXISTING_DOC = /\b(apag\w*|delet\w*|remov\w*|exclu\w*|mand\w*|envia\w*|send\w*|fech\w*|close\w*|imprim\w*|print\w*|convert\w*|respond\w*|reply|answer|role\w*|rol\w*|scroll\w*|zoom)\b/;
+
+// "de acordo com o pdf"/"according to the pdf" cita o documento como FONTE de uma pergunta
+// (ex.: preço) — o pdf já está com o usuário, não é o assunto da busca. Sem isto essa
+// citação escapava do guard de preço e ainda acertava o find_file (pdf mencionado, sem
+// nenhum "essa/aberto" pra barrar).
+const CITES_DOC_AS_SOURCE = /\b(de\s+acordo\s+com|according\s+to|conforme|segundo\s+o|segun\s+el)\b/;
+
 export function detectQuickAction(command: string, opts?: { forceImage?: boolean; weakModel?: boolean }): QuickAction | null {
   // MODO IMAGEM (caixinha do chat marcada): trata o texto INTEIRO como prompt de imagem,
   // sem depender de palavra-gatilho/idioma. Vem antes de tudo (até de URL) — marcou, é imagem.
@@ -306,6 +360,12 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // query-lixo no Google News. Baixar por URL não passa por aqui (a quick action de
   // download só pega "desta página", sem URL), então não quebra.
   if (commandHasExplicitUrl(command)) return null;
+  // Idioma que estes atalhos NÃO falam → cede pro modelo (que é multilíngue). Sem isto,
+  // um gatilho latino solto ("PDF", "MP3") dispara e, como nenhuma palavra da frase é
+  // reconhecida pra ser removida, a FRASE INTEIRA vira a busca. Um usuário ucraniano
+  // dizendo "você não entendeu, o manual em PDF já está aberto" virou uma busca no
+  // Google pela própria reclamação dele.
+  if (isForeignScript(command)) return null;
   let n = normalize(command);
 
   // CRIAR PLAYLIST — atalho DETERMINÍSTICO **só quando a IA é FRACA** (modo local Ollama
@@ -412,7 +472,11 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const isGen = /\b(ger[ae]\w*|gener[ae]r?|cri[ae]\w*|cre[ae]\w*|desenh\w*|dibuj\w*|imagin\w*|generate|create|draw|imagine|make)\b/.test(sp)
       && /\b(imagem|imagens|figura|figuras|desenho|foto|fotos|arte|wallpapers?|image|images?|picture|pictures?|photos?|imagen|imagenes|dibujos?|drawing|art)\b/.test(sp)
       && !/\b(baix\w*|download|downloading|salv\w*|save|saving|pega\w*|descarg\w*)\b/.test(sp)
-      && !/^\s*(como|c[oó]mo|how|o que|oque|whats?|what's|qual|quais|cu[aá]l|por que|porqu[eê]|why)\b/.test(sp);   // "como criar uma imagem?" é pergunta, não pedido de gerar
+      // "quem criou essa imagem?"/"can you draw conclusions from this image?" são perguntas
+      // sobre a imagem NA TELA (autoria/conteúdo), não pedido de gerar uma nova — 'draw' e
+      // 'create' aqui são verbos de PERGUNTA ("draw conclusions"), não de GERAR arte.
+      && !IS_WHO_QUESTION.test(sp) && !REFERS_TO_OPEN_ITEM.test(sp)
+      && !/^\s*(como|c[oó]mo|how|o que|oque|whats?|what's|qual|quais|cu[aá]l|por que|porqu[eê]|why|does|can\s+you)\b/.test(sp);   // "como criar uma imagem?" é pergunta, não pedido de gerar
     if (isGen) {
       const cm = sp.match(/\b(\d{1,2})\s+(?:imagens|imagem|figuras|fotos?|images?|pictures?|photos?|imagenes)\b/);
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 1), 4) : 1;
@@ -433,7 +497,10 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2'); // "baixe10 imagens" → "baixe 10 imagens"
     if (/\b(imagens?|imagem|imagen(?:e?s)?|fotos?|fotografias?|figuras?|wallpapers?|pap(?:el|eis)\s+de\s+parede|images?|photos?|pictures?|pics?)\b/.test(sp)
         && /\b(baix\w*|baj\w*|quero|queria|precis\w*|arranj\w*|consegue|consiga|salv\w*|pega\w*|arruma|me\s+da|junta|colhe|coleta|descarg\w*|quiero|guard\w*|download|downloading|want|need|save|saving|get|getting|grab|grabbing|fetch)\b/.test(sp)
-        && !/\b(desta|dessa|deste|desse|nesta|nessa|aqui|daqui|da\s+p[aá]gina|do\s+site|this\s+page|from\s+(this|the)\s+page|on\s+(this|the)\s+page|here|current\s+page|esta\s+p[aá]gina)\b/.test(sp)) {
+        && !/\b(desta|dessa|deste|desse|nesta|nessa|aqui|daqui|da\s+p[aá]gina|do\s+site|this\s+page|from\s+(this|the)\s+page|on\s+(this|the)\s+page|here|current\s+page|esta\s+p[aá]gina)\b/.test(sp)
+        // "quero saber se essa foto é verdadeira"/"who took this picture" são perguntas
+        // sobre a foto NA TELA, não pedido de baixar um lote novo do buscador.
+        && !IS_WHO_QUESTION.test(sp) && !REFERS_TO_OPEN_ITEM.test(sp)) {
       // quantidade: dígito ("3") OU por extenso ("tres") OU "varias/um monte". N>=2.
       const IMG_NUM: Record<string, number> = { uma: 1, duas: 2, dois: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, fifty: 50 };
       const noun = '(imagens?|imagen(?:e?s)?|fotos?|imagem|fotografias?|figuras?|wallpapers?|images?|photos?|pictures?|pics?)';
@@ -466,7 +533,18 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // NOTÍCIAS — "notícias de X", "últimas notícias sobre Y", "o que está acontecendo
   // com Z". Vai direto na aba Notícias do Google e raspa as manchetes → painel.
   {
-    if (/\b(noticias?|not[ií]cia|manchetes?|ultimas?\s+not|o\s+que\s+(?:est[aá]|ta)\s+acontecendo|aconteceu\s+(?:hoje|com)|novidades?\s+(?:sobre|de|do|da)|news|headlines?|latest|what'?s\s+happening|what\s+happened)\b/.test(n)) {
+    // !REFERS_TO_OPEN_ITEM: "resuma essa notícia"/"a notícia já está aberta" fala do artigo
+    // NA TELA — buscar manchetes novas é o oposto do pedido. Cede pro agente, que lê a aba.
+    // 'latest' sozinho é um gatilho FRACO: "download the LATEST song"/"play the LATEST
+    // video" têm palavra de mídia própria (música/vídeo) sem NENHUMA palavra de notícia —
+    // aí 'latest' descreve a MÍDIA, não pede manchete, e o pedido de verdade é das famílias
+    // de download/vídeo mais abaixo. "latest version"/"meu download" (status, não notícia)
+    // também cedem.
+    const hasNewsWord = /\b(noticias?|not[ií]cia|manchetes?|headlines?|news)\b/.test(n);
+    const stealsFromMediaFamily = !hasNewsWord && /\b(song|songs|video|videos|music|musica|musicas|track|tracks|mp3|mp4|clipe|clip)\b/.test(n);
+    const isStatusOrVersionQ = !hasNewsWord && /\b(version|meu\s+download|my\s+download|esse\s+download|this\s+download)\b/.test(n);
+    if (/\b(noticias?|not[ií]cia|manchetes?|ultimas?\s+not|o\s+que\s+(?:est[aá]|ta)\s+acontecendo|aconteceu\s+(?:hoje|com)|novidades?\s+(?:sobre|de|do|da)|news|headlines?|latest|what'?s\s+happening|what\s+happened)\b/.test(n)
+        && !REFERS_TO_OPEN_ITEM.test(n) && !stealsFromMediaFamily && !isStatusOrVersionQ) {
       const STRIP = new Set(('noticia noticias notícia notícias manchete manchetes ultima ultimas última últimas ' +
         'me da de do da dos das sobre acerca o a os as um uma sobre quero ver mostra mostrar lista quais qual ' +
         'que esta ta acontecendo aconteceu hoje agora novidade novidades por favor recentes recente do dia ' +
@@ -486,7 +564,11 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const isPrice = /\b(prec[oô]s?|precio|quanto\s+custa|cuanto\s+cuesta|quanto\s+(?:ta|esta|é)|barat[oa]s?|onde\s+(?:comprar|compro|acho)|donde\s+comprar|compar\w*\s+(?:de\s+)?prec\w*|menor\s+preco|valor\s+d[eo]|prices?|how\s+much|cheap(?:est|er)?|where\s+to\s+buy|compare\s+prices?)\b/.test(n);
     // cotação (ações/moedas/cripto) NÃO é produto — deixa pro fluxo certo
     const isQuote = /\b(acoes?|bolsa|d[oó]lar|euro|bitcoin|cripto|cota[cç][aã]o|ibovespa|stocks?|shares?|dollar|crypto)\b/.test(n);
-    if (isPrice && !isQuote) {
+    // Fala do pdf/documento anexado ("de acordo com o pdf, quanto custa") → é doc-QA, não
+    // preço de produto. E "essa página"/"this"/"aberto" → o preço já está NA TELA; buscar
+    // de novo no Shopping é o oposto do pedido — cede pro agente, que lê o preço exibido.
+    const isDocOrOpenRef = /\b(pdf|documento|anexad\w*|attach\w*|adjunt\w*)\b/.test(n) || REFERS_TO_OPEN_ITEM.test(n);
+    if (isPrice && !isQuote && !isDocOrOpenRef) {
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +
@@ -509,8 +591,13 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const sp = n.replace(/([a-z])(\d)/g, '$1 $2'); // "econtre2 videos" → "econtre 2 videos"
     const hasVideo = /\b(?:videos?|clipes?|clips?)\b/.test(sp);
     const hasCue = /\b(?:frase|palavra|expressao|falam|fala|dizem|diz|pronunci\w+|minutagem|momento\s+exato|exatamente\s+quando|phrase|word|says?|saying|pronounce\w*|exact\s+moment|exactly\s+when)\b/.test(sp);
-    const hasVerb = /\b(?:abr\w*|encontr\w*|econtr\w*|ach\w*|busc\w*|procur\w*|mostr\w*|quero|open|find|show|search|want)\b/.test(sp);
-    if (hasVideo && hasCue && hasVerb) {
+    // 'quero/want' sozinho é fraco: "quero SABER a frase" é curiosidade (pergunta), não
+    // "ache/abra a frase X" (o pedido de verdade). Só conta 'quero' se não vier com 'saber'.
+    const hasVerb = /\b(?:abr\w*|encontr\w*|econtr\w*|ach\w*|busc\w*|procur\w*|mostr\w*|open|find|show|search)\b/.test(sp)
+      || (/\b(?:quero|want)\b/.test(sp) && !/\b(?:saber|know|conhecer|conocer)\b/.test(sp));
+    // Refere-se ao vídeo que JÁ ESTÁ aberto → o agente busca dentro da aba, não o executor
+    // ytsearch+abre-nova-aba (que ignoraria o vídeo certo e traria um genérico).
+    if (hasVideo && hasCue && hasVerb && !REFERS_TO_OPEN_ITEM.test(sp)) {
       const cm = sp.match(/\b(\d{1,2}|dois|duas|tres|quatro|cinco|seis|one|two|three|four|five|six)\s+(?:videos?|clipes?|clips?)/);
       const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 4) : 4;
       // Frase: preferir o trecho entre aspas do comando ORIGINAL (mantém acentos).
@@ -532,7 +619,14 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // "quais ações mais caíram". Dado direto da fonte (BRAPI/Yahoo) + página local.
   {
     const sp2 = n.replace(/([a-z])(\d)/g, '$1 $2');
-    if (/\b(acoes|acciones|stocks?|shares?)\b/.test(sp2) && /\b(valoriz\w+|subi\w+|sobem|alta(s)?|ganha\w+|cair\w*|cairam|caem|baj\w+|cay\w+|queda(s)?|desvaloriz\w+|perde\w+|gain\w*|rose|rising|rallied|up|fell|fall\w*|dropp?\w*|down|losers?|gainers?)\b/.test(sp2)) {
+    // 'up'/'down' soltos saíram do gatilho: "scroll DOWN"/"sign UP" não têm nada a ver com
+    // bolsa — só as palavras de movimento de fato (subiram/caiu/rose/gainers…) contam.
+    // !REFERS_TO_OPEN_ITEM: "essas ações"/"dessa tabela na tela" é a TABELA JÁ ABERTA —
+    // buscar dados novos é o oposto; e "o que significa"/"por que" é pergunta, não pedido.
+    const isDefinitionalQ = /\b(o\s+que\s+significa|significa\b|what\s+does.*mean|por\s+que|porque|why|whats?)\b/.test(sp2);
+    if (/\b(acoes|acciones|stocks?|shares?)\b/.test(sp2)
+        && /\b(valoriz\w+|subi\w+|sobem|alta(s)?|ganha\w+|cair\w*|cairam|caem|baj\w+|cay\w+|queda(s)?|desvaloriz\w+|perde\w+|gain\w*|rose|rising|rallied|fell|fall\w*|dropp?\w*|losers?|gainers?)\b/.test(sp2)
+        && !REFERS_TO_OPEN_ITEM.test(sp2) && !isDefinitionalQ) {
       const direction: 'gainers' | 'losers' = /\b(cair\w*|cairam|caem|baj\w*|cay\w*|queda(s)?|desvaloriz\w+|perde\w+|baixa(s)?|fell|fall\w*|dropp?\w*|down|losers?|losing)\b/.test(sp2) ? 'losers' : 'gainers';
       const cm = sp2.match(/\b(\d{1,3})\s+(?:acoes|acciones|stocks?|shares?)\b/) || sp2.match(/\b(?:acoes?|acciones|stocks?|shares?)\D{0,12}\b(\d{1,3})\b/);
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 5), 100) : 50;
@@ -552,7 +646,11 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const mediaWord = /\b(video|videos|clipe|clipes|musica|musicas|music|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|clip|clips)\b/.test(sp);
     const cm = sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+(?:abas?|guias?|tabs?|musicas?|videos?|cancoes|canciones|faixas?|temas?|clipes?|songs?|tracks?|tunes?|clips?)\b/);
     const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : 0;
-    if (!isDl && watchVerb && mediaWord && cnt >= 2) {
+    // !IS_STOP_CONTROL_VERB: "fecha as 3 abas que voce abriu"/"pausa os 2 videos que estao
+    // tocando" casam watchVerb via 'abriu'/'tocando' (PASSADO), mas o verbo de verdade é
+    // FECHAR/PAUSAR — o oposto de abrir N vídeos novos. !REFERS_TO_MY_PLAYLIST: coleção
+    // EXISTENTE do usuário, não um tema pra buscar do zero.
+    if (!isDl && watchVerb && mediaWord && cnt >= 2 && !IS_STOP_CONTROL_VERB.test(sp) && !REFERS_TO_MY_PLAYLIST.test(sp) && !REFERS_TO_OPEN_ITEM.test(sp)) {
       const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga ponte bota botar reproduz reproduzir reproducir reproduce assistir assista ouvir ouca ouve escuta escutar escute escucha escuchar oye oir navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch listen tab tabs each one with in on the of a an song songs track tracks tune tunes video videos clip clips musica musicas music cancao cancoes cancion canciones faixa faixas tema temas clipe clipes filme').split(' '));
       const q = stripAgentMeta(command).replace(/([a-z])(\d)/gi, '$1 $2').split(/\s+/)
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^\d{1,2}$/.test(nw) && !(nw in NUM_WORDS); })
@@ -568,9 +666,17 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   {
     const isDownload = /\b(baix\w*|download|downloading|salv\w*|save|saving)\b/.test(n);
     const phraseCue = /\b(onde\s+(?:falam|dizem|aparece)|frase|supercut|trecho|where\s+(?:they\s+)?(?:say|says)|phrase)\b/.test(n);  // → open_video_cuts, não isso
-    // "veja o vídeo DESTA PÁGINA" fala da aba atual — abrir um vídeo aleatório do YouTube
-    // seria sequestro. Cede pro agente/modelo, que enxerga a página.
-    const pageCue = /\b(desta|dessa|deste|desse|da\s+pagina|do\s+site|dessa\s+aba|this\s+page|the\s+page|current\s+(?:page|tab)|on\s+screen)\b/.test(n);
+    // "veja o vídeo DESTA PÁGINA"/"o video ja esta tocando"/"esse video que voce abriu" falam
+    // do vídeo JÁ ABERTO — abrir um vídeo aleatório do YouTube seria sequestro. Cede pro
+    // agente/modelo, que enxerga a página. REFERS_TO_OPEN_ITEM cobre mais formas que o
+    // pageCue original (aberto/already/essa/this soltos, não só "desta página").
+    // 'atual/current' bare são seguros AQUI (família de vídeo não tem o risco de colisão
+    // com "current events" que a de notícias tem) — "abre o vídeo atual" fala do que já
+    // está tocando. 'quantos/how many' e "what X is playing" são perguntas de status.
+    const pageCue = /\b(desta|dessa|deste|desse|da\s+pagina|do\s+site|dessa\s+aba|this\s+page|the\s+page|current\s+(?:page|tab)|on\s+screen|atual|current)\b/.test(n)
+      || REFERS_TO_OPEN_ITEM.test(n)
+      || /\b(quantos|quantas|how\s+many)\b/.test(n)
+      || /\bwhat\s+\w+\s+is\s+playing\b|\bque\s+\w+\s+esta\s+tocando\b/.test(n);
     // toc\w+ pega "tocar/toca" mas NÃO "toque" (t-o-q-u-e); idem coloc/coloque → cobre os dois.
     const watchVerb = /\b(mostr\w+|veja|vejam|assist\w+|abr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|reprodu\w+|bota\b|botar\b|p[oõ]e\b|poem\b|pon\b|poner\b|pong\w+|ponme\b|ponte\b|ouv\w*|escu(?:t|ch)\w*|oye\b|oir\b|quero\s+ver|quiero\s+ver|ver\s+(?:un|una|um|uma)\b|watch|watching|play|playing|open|opening|show|showing|see|listen\w*|put\s+on)\b/.test(n);
     // 'show' fora: colide com "ir no show"/"comprar ingresso do show" (concerto físico).
@@ -578,7 +684,12 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const someoneDoing = /\b(mostr\w+|veja|quero\s+ver|show\s+me|i\s+want\s+to\s+see|watch)\b/.test(n)
       && /\b(alguem|gente|como|someone|somebody|people|how\s+to)\b/.test(n)
       && /\b(faz\w+|fazendo|cozinh\w+|prepar\w+|toc\w+|jog\w+|consert\w+|troc\w+|ensin\w+|dan[cç]\w+|cant\w+|pint\w+|desenh\w+|making|doing|cooking|preparing|playing|fixing|changing|teaching|dancing|singing|painting|drawing)\b/.test(n);
-    if (!isDownload && !phraseCue && !pageCue && ((watchVerb && mediaWord) || someoneDoing)) {
+    // !IS_STOP_CONTROL_VERB: "coloca em tela cheia o video"/"pause the song that is playing"
+    // casam watchVerb via 'coloc'/'toc' (do particípio "playing"), mas o pedido de verdade
+    // é CONTROLAR o que já toca, não abrir um novo. !REFERS_TO_MY_PLAYLIST: coleção salva
+    // do usuário. !IS_WHO_QUESTION: "quem é o cara que aparece no vídeo" é curiosidade.
+    if (!isDownload && !phraseCue && !pageCue && !IS_STOP_CONTROL_VERB.test(n) && !REFERS_TO_MY_PLAYLIST.test(n) && !IS_WHO_QUESTION.test(n) && !IS_CANNOT.test(n)
+        && ((watchVerb && mediaWord) || someoneDoing)) {
       const STRIP = new Set(('mostre mostra mostrar mostrem me te ver veja vejam quero queria quiero assistir assista abre abra abrir ' +
         'toca tocar toque coloca colocar coloque poe poem bota botar pon poner ponme ponga ponte reproduz reproduzir reproducir reproduce alguem gente algum alguma ' +
         'ouvir ouca ouve escuta escutar escute escucha escuchar oye oir ' +
@@ -609,18 +720,27 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
 
   // Não sequestrar perguntas / pesquisa / tutoriais ("como baixar", "qual o melhor app").
   const hasHardDl = /\b(baix\w*|baj\w*|download|downloading|salv\w*|descarg\w*|guard\w*|save|saving|grab|grabbing|fetch)\b/.test(n);
-  if (/\b(como|o que|oque|qual|quais|porque|por que|tutorial|ensina|explica|aprende|significa|diferenca|site|aplicativo|app|programa|how|what|which|why|teaches?|explains?|software|program)\b/.test(n)) return null;
+  // 'quem/who/quién' faltava aqui — "quero saber QUEM canta essa música" tinha 'quero'
+  // (hasGet) e não caía em NENHUMA outra palavra de pergunta da lista, então virava
+  // download. É pergunta igual a "o que"/"qual" — mesma regra, faltava o pronome.
+  if (/\b(como|o que|oque|qual|quais|quem|quién|quien|whose|porque|por que|tutorial|ensina|explica|aprende|significa|diferenca|site|aplicativo|app|programa|how|what|which|who|why|teaches?|explains?|software|program)\b/.test(n)) return null;
   // "melhor/best/top/recomenda" SEM verbo forte de baixar = recomendação ("quero o melhor
   // filme de 2024") → deixa pro modelo. Mas "baixe a melhor música do Queen" (tem 'baixe')
   // é download legítimo e passa. 'quero/want' sozinho não conta como verbo forte.
   if (/\b(melhor(es)?|mejor(es)?|best|top|recomend\w*|recommend\w*)\b/.test(n) && !hasHardDl) return null;
 
-  const hasGet = /\b(baix\w*|baj\w*|download|downloading|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|descarg\w*|quiero|guard\w*|save|saving|get|getting|grab|grabbing|fetch|want|need)\b/.test(n);
+  // 'quero/queria/want/need' é um desejo FRACO — só prova intenção de baixar se não vier
+  // grudado num verbo de CONTROLE/CONVERSA (pausar, saber, comentar, curtir…). Sem isto,
+  // "quero pausar a música" e "quero saber quem canta" viravam download só por causa do
+  // 'quero'. Só entra em ação quando não há verbo FORTE de baixar (hasHardDl) na frase.
+  const NOT_ACQUIRE_VERB = /\b(pausar|pause|parar|paus[ae]|stop|stopping|saber|know|knowing|conversar|comentar|comment|commenting|curtir|like|liking|dizer|say|saying|contar|tell|telling|perguntar|ask|asking)\b/;
+  const hasGet = /\b(baix\w*|baj\w*|download|downloading|salv\w*|pega\w*|quero|queria|gostaria|arruma|consegue|descarg\w*|quiero|guard\w*|save|saving|get|getting|grab|grabbing|fetch|want|need)\b/.test(n)
+    && !(!hasHardDl && NOT_ACQUIRE_VERB.test(n));
   // "quero VER o vídeo" / "quero OUVIR a música" é consumo, não download — só
   // sequestra se houver verbo explícito de baixar junto.
   const hasWatch = /\b(ver|assistir|veja|assista|olh\w*|ouvir|escut\w*|toc\w*|coloc\w*|abr\w*|watch|watching|see|seeing|view|viewing|listen|listening|play|playing|open|opening)\b/.test(n);
   const hasDl = /\b(baix\w*|baj\w*|download|downloading|salv\w*|arquiv\w*|descarg\w*|guard\w*|save|saving|file)\b/.test(n);
-  const wantsDownload = hasDl || (hasGet && !hasWatch);
+  const wantsDownload = !IS_NEGATING_PRIOR_ACTION.test(n) && (hasDl || (hasGet && !hasWatch));
   const count = parseCount(n);
   // Drop helper words, the count digit (e.g. "3"), number-words and quality words so they
   // don't pollute the search query.
@@ -632,12 +752,20 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // "baixe o vídeo daqui". Sem assunto = mídia da aba aberta → download_video sem query
   // (o handler usa a URL atual). Instantâneo, 0 tokens.
   if (wantsDownload && /\b(video|vid|audio|musica|music|mp3|mp4|clipe|filme|film|pelicula|peli|som|cancao|cancion|faixa|tema|song|track|tune|movie|clip|sound)\b/.test(n)
-      && /\b(desta|dessa|deste|desse|esta|essa|este|esse|aqui|daqui|dali|atual|da\s+pagina|do\s+site|dessa\s+aba|que\s+(esta|ta)\s+(aberto|tocando|na\s+tela)|this|here|current|the\s+(page|site|tab|video)|on\s+(?:screen|the\s+page)|playing)\b/.test(n)) {
+      && /\b(desta|dessa|deste|desse|esta|essa|este|esse|aqui|daqui|dali|atual|da\s+pagina|do\s+site|dessa\s+aba|que\s+(esta|ta)\s+(aberto|tocando|(?:n|d)a\s+tela)|aberto|aberta|abierto|abierta|already|open|opened|this|here|current|the\s+(page|site|tab|video)|on\s+(?:screen|the\s+page)|playing)\b/.test(n)) {
     return { type: 'download_video', query: '', audio_only: /\b(audio|musica|music|mp3|som|cancao|cancion|faixa|tema|song|track|tune|sound)\b/.test(n) };
   }
 
-  // ARQUIVO (pdf/doc/xls/ppt) — mais específico primeiro
-  if (/\b(pdf|docx?|xlsx?|pptx?|planilha|documento|manual|apostila|ebook|spreadsheet|document|slides?|presentation)\b/.test(n) && (hasGet || /\bpdf\b/.test(n))) {
+  // ARQUIVO (pdf/doc/xls/ppt) — mais específico primeiro.
+  // O !REFERS_TO_OPEN_DOC é essencial: sem ele "resuma o pdf aberto" virava uma busca no
+  // Google por "resuma aberto". Falar do documento que já está na tela é o OPOSTO de
+  // pedir um arquivo novo — quem lê a aba aberta é o agente (ou o 📎 anexar documento).
+  if (/\b(pdf|docx?|xlsx?|pptx?|planilha|documento|manual|apostila|ebook|spreadsheet|document|slides?|presentation)\b/.test(n)
+      && (hasGet || /\bpdf\b/.test(n))
+      && !REFERS_TO_OPEN_DOC.test(n)
+      && !IS_NEGATING_PRIOR_ACTION.test(n)
+      && !ACTS_ON_EXISTING_DOC.test(n)
+      && !CITES_DOC_AS_SOURCE.test(n)) {
     const filetype = /\b(xlsx?|planilha|spreadsheet)\b/.test(n) ? 'xlsx'
       : /\b(docx?|documento|word|document)\b/.test(n) ? 'docx'
       : /\b(pptx?|slide|apresentacao|slides?|presentation)\b/.test(n) ? 'pptx'
@@ -648,14 +776,21 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
 
   // MÚSICA (mp3 / música / áudio) — dispara com mp3 OU com intenção de download.
   // 'tema(s)' = faixa em ES; o guard de tema-UI lá em cima já barrou "mudar o tema".
-  if (/\b(mp3|musica|musicas|music|audio|audios|som|sons|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|sound)\b/.test(n) && (wantsDownload || /\bmp3\b/.test(n))) {
+  // !REFERS_TO_MY_PLAYLIST: "baixe as músicas da minha playlist" — coleção EXISTENTE do
+  // usuário, o executor só sabe buscar+baixar um tema NOVO no YouTube, não mexer na sua
+  // playlist salva; viraria download de query-lixo. O `|| /\bmp3\b/` é o MESMO padrão do
+  // bug do PDF (menção crua = gatilho, sem checar intenção) — "esse mp3 é bom?" disparava
+  // só por citar 'mp3'; agora exige que não seja pergunta/opinião sobre o que já toca.
+  if (/\b(mp3|musica|musicas|music|audio|audios|som|sons|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|sound)\b/.test(n)
+      && !REFERS_TO_MY_PLAYLIST.test(n)
+      && (wantsDownload || (/\bmp3\b/.test(n) && !REFERS_TO_OPEN_ITEM.test(n) && !IS_WHO_QUESTION.test(n) && !IS_CANNOT.test(n) && !IS_NEGATING_PRIOR_ACTION.test(n)))) {
     const q = cleanQuery();
     if (q.length >= 2) return { type: 'download_video', query: q, audio_only: true, count };
   }
 
   // VÍDEO (mp4 / vídeo / clipe / filme) — exige intenção de download (evita "veja o vídeo").
   // 'show(s)' fora: colide com "ir no show"/"assistir ao show" (concerto/programa).
-  if (/\b(mp4|video|videos|vid|clipe|clipes|clip|clips|filmes?|films?|peliculas?|peli|movie|movies|documentarios?)\b/.test(n) && wantsDownload) {
+  if (/\b(mp4|video|videos|vid|clipe|clipes|clip|clips|filmes?|films?|peliculas?|peli|movie|movies|documentarios?)\b/.test(n) && wantsDownload && !REFERS_TO_MY_PLAYLIST.test(n)) {
     const q = cleanQuery();
     if (q.length >= 2) return { type: 'download_video', query: q, count, quality };
   }
@@ -934,6 +1069,26 @@ function normalize(value: string): string {
 // e n\u00e3o cair num atalho de busca (Google News/Shopping). Quando isso acontece, os atalhos
 // determin\u00edsticos CEDEM (retornam null) e o agente navega pra URL e interage com ela.
 // Ignora e-mails: o dom\u00ednio colado num '@' n\u00e3o casa (o '@' n\u00e3o entra na fronteira inicial).
+// O roteador determinístico só fala pt/en/es: os gatilhos e a limpeza de query são
+// listas de palavras nessas três línguas. Numa quarta língua ele fica cego — reconhece
+// só o token latino solto ("PDF"/"MP3"/"HD") e não consegue remover NADA, então a frase
+// crua vira a query. Maioria das letras fora do alfabeto latino = não é língua nossa.
+// Um título estrangeiro dentro de um comando nosso continua passando ("baixe a música
+// 米津玄師": o latino é maioria). Ceder é sempre seguro — só custa tokens.
+// Sinal FORTE, sozinho: qualquer letra Han/Hiragana/Katakana/Hangul/Árabe/Cirílico/Grego/
+// Hebraico já prova que não é pt/en/es — não precisa de maioria. Sem isto, uma frase real
+// de erro ("Google Drive的PDF打不开", "Adobe Acrobat Reader не открывает PDF") tem tantas
+// letras latinas de MARCA (Google/Drive/Adobe/Chrome/PDF) que a PROPORÇÃO passava batido.
+const NON_LATIN_SCRIPT = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Arabic}|\p{Script=Cyrillic}|\p{Script=Greek}|\p{Script=Hebrew}/u;
+
+function isForeignScript(command: string): boolean {
+  if (NON_LATIN_SCRIPT.test(command || '')) return true;
+  const letters = (command || '').match(/\p{L}/gu);
+  if (!letters || letters.length < 4) return false;
+  const latin = letters.filter(c => /\p{Script=Latin}/u.test(c)).length;
+  return latin * 2 < letters.length;
+}
+
 export function commandHasExplicitUrl(command: string): boolean {
   const s = command || '';
   if (/\bhttps?:\/\/\S+/i.test(s)) return true;

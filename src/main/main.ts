@@ -2345,6 +2345,11 @@ function sweepOldScreenshots(): void {
 // da API/nuvem. Qualquer erro é silencioso (offline, sem release etc.).
 function setupAutoUpdater(): void {
   if (!app.isPackaged) return;
+  // Só o Windows tem canal de atualização: a release "Latest" carrega o latest.yml que o
+  // electron-updater procura. Linux/macOS saem como pre-release manual e experimental, e
+  // pre-release nunca é a "Latest" — lá o updater só acha 404 e despeja um stack trace a
+  // cada boot. Quem usa AppImage/dmg troca de versão na mão, de propósito.
+  if (process.platform !== 'win32') return;
   try {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
