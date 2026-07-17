@@ -635,6 +635,12 @@ function createWindow(): void {
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
+    // Indicador de som na aba (igual ao Chrome). O Chromium avisa quando a aba passa a
+    // EMITIR áudio de verdade — vídeo mudo não conta, e mutar/pausar derruba na hora.
+    // Só avisa o renderer (que acha a aba dona pelo wcId); não mexe em som/autoplay.
+    wc.on('audio-state-changed', (e) => {
+      mainWindow?.webContents.send('tab-audio', { wcId: wc.id, audible: e.audible });
+    });
     // Inject stealth script before each navigation to mask Electron/automation signals
     wc.on('dom-ready', () => {
       if (!/accounts\.google\.com|accounts-google\.com/i.test(wc.getURL())) {

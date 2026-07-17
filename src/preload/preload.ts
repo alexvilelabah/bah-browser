@@ -52,6 +52,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('open-new-tab', listener);
     return () => ipcRenderer.removeListener('open-new-tab', listener);
   },
+  // Aba emitindo som → alto-falante na aba. Só o aviso do Chromium; nada de config de som.
+  onTabAudio: (cb: (p: { wcId: number; audible: boolean }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('tab-audio', listener);
+    return () => ipcRenderer.removeListener('tab-audio', listener);
+  },
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),

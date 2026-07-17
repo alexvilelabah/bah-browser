@@ -147,6 +147,9 @@ body {
 }
 .tab-favicon{width:16px;height:16px;flex:0 0 16px;border-radius:3px;object-fit:contain;}
 .tab-favicon.fallback{display:block;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 10px var(--accent-glow);}
+/* Alto-falante da aba tocando som. flex:0 0 = nunca encolhe quando as abas apertam. */
+.tab-audio{width:13px;height:13px;flex:0 0 13px;color:var(--text-secondary);}
+.tab.active .tab-audio{color:var(--text-primary);}
 .tab-new{
   width:30px;height:30px;border:none;align-self:center;margin-left:4px;
   background:transparent;color:var(--text-secondary);

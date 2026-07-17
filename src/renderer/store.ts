@@ -13,6 +13,7 @@ export interface Tab {
   startup?: boolean;  // the tab created at boot — only it shows the panel's welcome
   discarded?: boolean;    // Memory Saver: webview unmounted (RAM freed); reloads on activation
   lastActiveAt?: number;  // when the tab was last the active one (drives the discard sweep)
+  audible?: boolean;      // sound is coming out of this tab (drives the speaker icon, Chrome-style)
 }
 
 export interface ChatMessage {

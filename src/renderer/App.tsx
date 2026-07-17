@@ -63,6 +63,7 @@ declare global {
       clearChatHistory?: (tabId?: string) => Promise<any>;
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
+      onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
@@ -267,6 +268,13 @@ export default function App() {
       window.electronAPI?.setLocalProvider?.(store.localSettings.provider, 'local', store.localSettings.baseUrl, store.localSettings.model);
     }
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url)) as any);
+    // Som na aba: o main manda o webContents que começou/parou de emitir áudio; aqui
+    // achamos a aba dona dele. getWebContentsId lança se a webview ainda não anexou.
+    offs.push(window.electronAPI?.onTabAudio?.(({ wcId, audible }) => {
+      for (const [tabId, wv] of webviewRefs.current) {
+        try { if ((wv as any).getWebContentsId?.() === wcId) { store.updateTab(tabId, { audible }); return; } } catch {}
+      }
+    }) as any);
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
@@ -347,7 +355,8 @@ export default function App() {
         if (now - (tb.lastActiveAt || now) < idleMs) continue;
         const wv = webviewRefs.current.get(tb.id) as any;
         try { if (wv?.isCurrentlyAudible?.()) continue; } catch {}   // nunca dorme aba tocando som
-        store.updateTab(tb.id, { discarded: true });
+        // audible:false junto — a webview morre sem emitir o "parou de tocar" final.
+        store.updateTab(tb.id, { discarded: true, audible: false });
       }
     }, 60000);
     return () => clearInterval(iv);
