@@ -5,13 +5,21 @@ name: Linux build + smoke test
 # e gerar um AppImage como artefato. NÃO testa download de mídia (código Windows).
 
 on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publicar o AppImage como pre-release EXPERIMENTAL (Linux x64)'
+        type: boolean
+        default: true
   push:
     branches: [ main ]
     paths-ignore:
       - 'README.md'
       - 'assets/**'
       - 'LICENSE'
-  workflow_dispatch: {}
+
+permissions:
+  contents: write   # pro passo de publicar a pre-release (só no dispatch manual)
 
 jobs:
   linux:
@@ -72,3 +80,20 @@ jobs:
           name: bah-linux-appimage
           path: release/*.AppImage
           if-no-files-found: ignore
+
+      # Publica SÓ no dispatch manual com publish=true. Tag própria (v*-linux-test) e
+      # --prerelease: nunca vira "Latest" e NÃO toca o latest.yml do auto-update do Windows.
+      - name: Publicar pre-release Linux (EXPERIMENTAL)
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VER=$(node -p "require('./package.json').version")
+          TAG="v${VER}-linux-test"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" release/*.AppImage \
+            --title "Bah ${VER} — Linux (EXPERIMENTAL · testers only)" \
+            --prerelease \
+            --notes-file .github/linux-test-notes.md
+          gh release view "$TAG" --json isPrerelease,assets --jq '{isPrerelease,assets:[.assets[].name]}'
