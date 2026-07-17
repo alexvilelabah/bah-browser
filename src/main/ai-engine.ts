@@ -625,7 +625,9 @@ export class AIEngine {
   private async callOpenAI(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
     const body: any = {
-      model: 'gpt-4o',
+      // OpenAI-compatible servers (llama.cpp, LM Studio, vLLM) usually require the exact
+      // name of the loaded model; only real OpenAI accepts 'gpt-4o'. Honor the user's model.
+      model: this.cloudModel || 'gpt-4o',
       messages: [
         { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
         ...messages,

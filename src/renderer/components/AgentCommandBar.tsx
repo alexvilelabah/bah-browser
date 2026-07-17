@@ -1009,22 +1009,23 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <label>
                 {t('set.provider')}
                 <select
-                  value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : settings.provider === 'anthropic' ? 'anthropic' : 'deepseek'}
+                  value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : settings.provider === 'anthropic' ? 'anthropic' : settings.provider === 'openai' ? 'openai' : 'deepseek'}
                   onChange={e => { const next = e.target.value as AISettings['provider']; setSettings(s => { const keys = { ...(s.apiKeys || {}), [s.provider]: s.apiKey }; return { ...s, provider: next, baseUrl: '', model: '', apiKey: keys[next] || '', apiKeys: keys }; }); }}
                 >
                   <option value="deepseek">DeepSeek</option>
                   <option value="anthropic">Claude (Anthropic)</option>
                   <option value="mistral">Mistral</option>
                   <option value="nvidia">NVIDIA NIM</option>
+                  <option value="openai">OpenAI-compatible (llama.cpp, LM Studio…)</option>
                 </select>
               </label>
               <label>
-                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : 'DeepSeek'})
+                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : settings.provider === 'openai' ? 'OpenAI' : 'DeepSeek'})
                 <input
                   type="password"
                   value={settings.apiKey}
                   onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : 'DeepSeek' })}
+                  placeholder={settings.provider === 'openai' ? t('set.apiKeyOptional') : t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : 'DeepSeek' })}
                 />
               </label>
               {settings.provider === 'nvidia' && (
@@ -1043,19 +1044,46 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                   </select>
                 </label>
               )}
-              <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
-              <details className="mm-imp">
-                <summary>{t('set.advanced')}</summary>
-                <label>
-                  {t('set.baseUrl')}
-                  <input
-                    type="text"
-                    value={settings.baseUrl}
-                    onChange={e => setSettings({ ...settings, baseUrl: e.target.value })}
-                    placeholder={t('set.baseUrlPlaceholder')}
-                  />
-                </label>
-              </details>
+              {settings.provider === 'openai' && (
+                <>
+                  <label>
+                    {t('set.baseUrl')}
+                    <input
+                      type="text"
+                      value={settings.baseUrl}
+                      onChange={e => setSettings({ ...settings, baseUrl: e.target.value })}
+                      placeholder="http://localhost:8080"
+                    />
+                  </label>
+                  <label>
+                    {t('set.model')}
+                    <input
+                      type="text"
+                      value={settings.model}
+                      onChange={e => setSettings({ ...settings, model: e.target.value })}
+                      placeholder={t('set.openaiModelPlaceholder')}
+                    />
+                  </label>
+                  <div className="mm-hint">🔌 {t('set.openaiHint')}</div>
+                </>
+              )}
+              {settings.provider !== 'openai' && (
+                <>
+                  <div className="mm-hint">☁️ {t('set.cloudHint')} <button type="button" className="mm-link" onClick={getProviderKey}>{t('set.getKey')}</button></div>
+                  <details className="mm-imp">
+                    <summary>{t('set.advanced')}</summary>
+                    <label>
+                      {t('set.baseUrl')}
+                      <input
+                        type="text"
+                        value={settings.baseUrl}
+                        onChange={e => setSettings({ ...settings, baseUrl: e.target.value })}
+                        placeholder={t('set.baseUrlPlaceholder')}
+                      />
+                    </label>
+                  </details>
+                </>
+              )}
             </>
           )}
           {view === 'local' && (

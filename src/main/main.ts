@@ -793,7 +793,11 @@ function setupIPC(): void {
     // funciona de cara pra quem nunca configurou. Com chave, usa o provedor escolhido.
     // `model` = override de modelo de nuvem (ex.: seletor da NVIDIA); 4º param (ollamaModel) é do engine local.
     const prev = aiEngine;
-    aiEngine = (apiKey?.trim() || provider === 'pollinations')
+    // Um servidor OpenAI-compatível local (llama.cpp/LM Studio) não tem chave: aceita o
+    // provedor 'openai' SEM chave desde que haja uma baseUrl (o endereço do servidor).
+    // Sem chave E sem baseUrl → segue caindo no Pollinations (a OpenAI de verdade exige chave).
+    const hasLocalOpenAI = provider === 'openai' && !!baseUrl?.trim();
+    aiEngine = (apiKey?.trim() || provider === 'pollinations' || hasLocalOpenAI)
       ? new AIEngine(provider, apiKey, baseUrl, undefined, model)
       : new AIEngine('pollinations', '');
     // Salvar as Configurações NÃO pode apagar a conversa: o engine novo herda o
