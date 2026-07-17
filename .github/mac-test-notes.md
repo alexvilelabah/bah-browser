@@ -2,7 +2,9 @@
 
 **Do NOT download this if you just want to use Bah.** This is an automated build for testing. The author develops on Windows and has no Mac, so it may crash or behave oddly. It is **unsigned** and **not notarized** by Apple.
 
-**Tester reports so far:** launches and chats fine on an M1 ✅ (thanks!). This build fixes the missing app menu — **Quit (Cmd+Q)**, Hide, and the standard Window menu now exist.
+**Nobody has tested THIS version on a Mac.** An earlier build (1.6.2) was confirmed to launch and chat on an M1, and that build also fixed the missing app menu (**Quit / Cmd+Q**, Hide, Window). Everything since then — including all of the changes below — is unverified on macOS.
+
+**What's new since the last Mac build (1.6.2):** a new warm look (rounded panel cards, restyled address bar), stronger ad/tracker blocking (cookie banners + tracking params like `fbclid` stripped from URLs), a selectable AI step limit (25/50/100), and a bundled emoji font.
 
 There is **no auto-update** for this build — it's a one-off test.
 
