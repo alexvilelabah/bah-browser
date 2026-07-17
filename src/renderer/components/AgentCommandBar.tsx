@@ -1009,7 +1009,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <label>
                 {t('set.provider')}
                 <select
-                  value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : 'deepseek'}
+                  value={settings.provider === 'mistral' ? 'mistral' : settings.provider === 'nvidia' ? 'nvidia' : settings.provider === 'anthropic' ? 'anthropic' : 'deepseek'}
                   onChange={e => { const next = e.target.value as AISettings['provider']; setSettings(s => { const keys = { ...(s.apiKeys || {}), [s.provider]: s.apiKey }; return { ...s, provider: next, baseUrl: '', model: '', apiKey: keys[next] || '', apiKeys: keys }; }); }}
                 >
                   <option value="deepseek">DeepSeek</option>
@@ -1019,12 +1019,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </select>
               </label>
               <label>
-                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek'})
+                {t('set.apiKey')} ({settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : 'DeepSeek'})
                 <input
                   type="password"
                   value={settings.apiKey}
                   onChange={e => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : 'DeepSeek' })}
+                  placeholder={t('set.apiKeyPlaceholder', { provider: settings.provider === 'mistral' ? 'Mistral' : settings.provider === 'nvidia' ? 'NVIDIA NIM' : settings.provider === 'anthropic' ? 'Claude' : 'DeepSeek' })}
                 />
               </label>
               {settings.provider === 'nvidia' && (
