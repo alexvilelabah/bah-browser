@@ -8,7 +8,11 @@ const path = require('path');
 exports.default = async function afterPack(context) {
   const { appOutDir, electronPlatformName, packager } = context;
   const ext = electronPlatformName === 'win32' ? '.exe' : (electronPlatformName === 'darwin' ? '.app' : '');
-  const exeName = packager.appInfo.productFilename; // "Bah"
+  // No Linux o binário sai em MINÚSCULO (convenção do electron-builder: "bah", não "Bah"),
+  // então productFilename não serve lá — usa o executableName real e cai pro lowercase.
+  const exeName = electronPlatformName === 'linux'
+    ? (packager.executableName || packager.appInfo.productFilename.toLowerCase())
+    : packager.appInfo.productFilename; // "Bah"
   const electronBinary = path.join(appOutDir, `${exeName}${ext}`);
   try {
     await flipFuses(electronBinary, {
