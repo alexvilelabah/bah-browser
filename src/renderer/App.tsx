@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
+import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
 import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
@@ -64,6 +65,11 @@ declare global {
       aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
+      torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
+      torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
+      torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
+      torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
+      onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
@@ -275,6 +281,24 @@ export default function App() {
         try { if ((wv as any).getWebContentsId?.() === wcId) { store.updateTab(tabId, { audible }); return; } } catch {}
       }
     }) as any);
+    // Torrent: o main manda 'open' quando intercepta magnet/.torrent → abre o card e busca
+    // a metadata; 'stats' atualiza peers/progresso ao vivo; save-done/erro atualizam a linha.
+    offs.push(window.electronAPI?.onTorrentEvent?.((info) => {
+      if (info.kind === 'open') {
+        setTorrent({ uri: info.uri, phase: 'fetching', saving: {}, saved: {} });
+        window.electronAPI?.torrentAdd?.(info.uri).then((r) => {
+          setTorrent(cur => (cur && cur.uri === info.uri)
+            ? (r?.ok ? { ...cur, id: r.id, name: r.name, files: r.files, phase: 'choosing' } : { ...cur, phase: 'error', error: r?.error })
+            : cur);
+        });
+      } else if (info.kind === 'stats') {
+        setTorrent(cur => (cur && cur.id === info.id) ? { ...cur, stats: info } : cur);
+      } else if (info.kind === 'save-done') {
+        setTorrent(cur => (cur && cur.id === info.id) ? { ...cur, saved: { ...cur.saved, [info.index]: info.dest }, saving: { ...cur.saving, [info.index]: false } } : cur);
+      } else if (info.kind === 'save-error') {
+        setTorrent(cur => (cur && cur.id === info.id) ? { ...cur, saving: { ...cur.saving, [info.index]: false } } : cur);
+      }
+    }) as any);
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
@@ -393,6 +417,7 @@ export default function App() {
   // ── Downloads (painel Ctrl+J) ──
   const [downloads, setDownloads] = useState<Array<{ id?: string; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
@@ -475,6 +500,18 @@ export default function App() {
 
 
   const navigate = useCallback((url: string) => {
+    // Magnet colado na barra → card "Salvar ou Tocar" (não navega). O will-navigate do main
+    // não cobre loadURL programático, então detectamos aqui e disparamos o mesmo fluxo.
+    if (/^magnet:/i.test(url.trim())) {
+      const uri = url.trim();
+      setTorrent({ uri, phase: 'fetching', saving: {}, saved: {} });
+      window.electronAPI?.torrentAdd?.(uri).then((r) => {
+        setTorrent(cur => (cur && cur.uri === uri)
+          ? (r?.ok ? { ...cur, id: r.id, name: r.name, files: r.files, phase: 'choosing' } : { ...cur, phase: 'error', error: r?.error })
+          : cur);
+      });
+      return;
+    }
     let finalUrl = url;
     if (!/^https?:\/\//i.test(url) && !/^file:/i.test(url)) {
       finalUrl = url.includes('.') && !url.includes(' ')
@@ -985,6 +1022,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onNewTab={store.addTab}
           />
           <AgentVisualOverlay state={agentVisual} ripples={ripples} />
+          {torrent && (
+            <TorrentSheet
+              torrent={torrent}
+              onSetSaving={(i) => setTorrent(cur => cur ? { ...cur, saving: { ...cur.saving, [i]: true } } : cur)}
+              onClose={() => { if (torrent.id) window.electronAPI?.torrentRemove?.(torrent.id, true); setTorrent(null); }}
+            />
+          )}
           {zoomBadge != null && (
             <div className="zoom-badge">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>

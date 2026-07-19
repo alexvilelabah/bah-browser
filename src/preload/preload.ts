@@ -84,6 +84,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:download-event', listener);
     return () => ipcRenderer.removeListener('agent:download-event', listener);
   },
+  // Torrent (magnet/.torrent) — card "Salvar ou Tocar". add resolve com {name, files}.
+  torrentAdd: (uri: string) => ipcRenderer.invoke('torrent:add', uri),
+  torrentPlay: (id: string, index: number) => ipcRenderer.invoke('torrent:play', id, index),
+  torrentSaveFile: (id: string, index: number) => ipcRenderer.invoke('torrent:save-file', id, index),
+  torrentRemove: (id: string, destroyStore?: boolean) => ipcRenderer.invoke('torrent:remove', id, destroyStore),
+  onTorrentEvent: (cb: (info: any) => void) => {
+    const listener = (_e: any, info: any) => cb(info);
+    ipcRenderer.on('agent:torrent-event', listener);
+    return () => ipcRenderer.removeListener('agent:torrent-event', listener);
+  },
   pauseDownload: (id: string) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id: string) => ipcRenderer.invoke('download:resume', id),
   cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),

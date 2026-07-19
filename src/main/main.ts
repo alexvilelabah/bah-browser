@@ -19,6 +19,7 @@ import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
 import { decidePopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
+import { setupTorrentManager } from './torrent-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
 
@@ -83,6 +84,7 @@ let mainWindow: BrowserWindow | null = null;
 let aiEngine: AIEngine;
 let pageAgent: PageAgent;
 let localEngine: AIEngine | null = null;
+let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
 let localPageAgent: PageAgent | null = null;
 // Espelho do modo IA Local do renderer (store.localSettings.enabled). O main precisa saber
 // pra trabalhos em BACKGROUND (monitores) respeitarem "local não vaza pra nuvem" — o chat
@@ -663,6 +665,8 @@ function createWindow(): void {
     wc.setWindowOpenHandler((details) => {
       const url = details.url;
       if (!url || url === 'about:blank') return { action: 'deny' };
+      // window.open('magnet:…') / link .torrent que abre em nova janela → card, não aba.
+      if (/^magnet:/i.test(url) || /\.torrent(\?|#|$)/i.test(url)) { torrentManager?.handleUri(url); return { action: 'deny' }; }
       // Safe browsing na popup
       try {
         const u = new URL(url);
@@ -691,6 +695,10 @@ function createWindow(): void {
     wc.on('will-navigate', (e, url) => {
       try {
         const u = new URL(url);
+        // Magnet / .torrent → abre o card "Salvar ou Tocar" (não navega). O motor de
+        // torrent fica isolado num utilityProcess; aqui só avisamos o renderer.
+        if (u.protocol === 'magnet:') { e.preventDefault(); torrentManager?.handleUri(url); return; }
+        if (/\.torrent(\?|#|$)/i.test(u.pathname)) { e.preventDefault(); torrentManager?.handleUri(url); return; }
         if (maliciousHosts.has(u.hostname)) {
           e.preventDefault();
           mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
@@ -1786,6 +1794,12 @@ function setupIPC(): void {
   });
   downloadManager.attach(session.fromPartition('persist:browser'));
   downloadManager.attach(session.defaultSession);
+  // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads + trava de exe.
+  torrentManager = setupTorrentManager({
+    getMainWindow: () => mainWindow,
+    uniqueDownloadPath,
+    blockedExtensions: BLOCKED_EXTENSIONS,
+  });
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
     try {
       if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };

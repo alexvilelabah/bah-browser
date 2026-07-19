@@ -337,6 +337,56 @@ body {
 
 /* 🔎 Barra de busca na página (Ctrl+F) — overlay no canto superior direito */
 .webview-area{ position:relative; }
+/* Card "Salvar ou Tocar" do torrent — flutua sobre a área do webview, tema quente. */
+.torrent-scrim{
+  position:absolute; inset:0; z-index:80;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(0,0,0,0.34); backdrop-filter:none;
+  animation:tsheetFade .16s var(--ease);
+}
+@keyframes tsheetFade{ from{opacity:0} to{opacity:1} }
+.torrent-sheet{
+  width:min(460px, calc(100% - 40px)); max-height:calc(100% - 48px); overflow-y:auto;
+  background:var(--bg-secondary); border:1px solid var(--border);
+  border-radius:18px; box-shadow:var(--shadow);
+  padding:16px 16px 12px; display:flex; flex-direction:column; gap:10px;
+  animation:tsheetPop .2s var(--ease);
+}
+@keyframes tsheetPop{ from{opacity:0; transform:translateY(8px) scale(.98)} to{opacity:1; transform:none} }
+.tsheet-head{ display:flex; align-items:center; gap:10px; }
+.tsheet-title{ flex:1; font-size:16px; font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tsheet-x{ width:26px; height:26px; flex:none; border:none; background:transparent; color:var(--text-muted); border-radius:8px; cursor:pointer; font-size:14px; }
+.tsheet-x:hover{ background:var(--bg-hover); color:var(--text-primary); }
+.tsheet-meta{ font-size:12px; color:var(--text-muted); margin-top:-4px; }
+.tsheet-peers{ color:var(--text-secondary); }
+.tsheet-rows{ display:flex; flex-direction:column; gap:2px; }
+.tsheet-row{ border-radius:12px; padding:2px; }
+.tsheet-row + .tsheet-row{ border-top:1px solid rgba(245,240,232,0.06); }
+.tsheet-row.playing{ background:var(--bg-elevated); }
+.tsheet-row-main{ display:flex; align-items:center; gap:10px; padding:10px 8px; min-height:36px; }
+.tsheet-fname{ flex:1; font-size:13px; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tsheet-fsize{ font-size:12px; color:var(--text-muted); flex:none; font-variant-numeric:tabular-nums; }
+.tsheet-actions{ display:flex; align-items:center; gap:6px; flex:none; }
+.tsheet-play{
+  border:none; border-radius:9999px; padding:6px 14px; cursor:pointer;
+  background:var(--accent); color:#fff; font-size:12.5px; font-weight:600; font-family:inherit;
+}
+.tsheet-play:hover{ background:var(--accent-hover); }
+.tsheet-play:disabled{ opacity:.6; cursor:default; }
+.tsheet-ghost{
+  border:1px solid var(--border); border-radius:9999px; padding:6px 12px; cursor:pointer;
+  background:transparent; color:var(--text-secondary); font-size:12.5px; font-family:inherit;
+}
+.tsheet-ghost:hover{ background:var(--bg-hover); color:var(--text-primary); }
+.tsheet-ghost:disabled{ opacity:.6; cursor:default; }
+.tsheet-blocked{ font-size:12px; color:#e0a08a; }
+.tsheet-video{ width:100%; border-radius:10px; margin:2px 0 8px; background:#000; max-height:52vh; }
+.tsheet-skel{ height:44px; border-radius:10px; background:linear-gradient(90deg,var(--bg-elevated),var(--bg-hover),var(--bg-elevated)); background-size:200% 100%; animation:tsheetShimmer 1.2s infinite; }
+.tsheet-skel.short{ width:60%; }
+@keyframes tsheetShimmer{ from{background-position:200% 0} to{background-position:-200% 0} }
+.tsheet-empty{ padding:18px 4px; text-align:center; color:var(--text-secondary); font-size:13px; }
+.tsheet-note{ font-size:10.5px; color:var(--text-muted); line-height:1.4; padding:2px 2px 0; border-top:1px solid rgba(245,240,232,0.06); padding-top:8px; }
+
 .find-bar{
   position:absolute; top:10px; right:18px; z-index:60;
   display:flex; align-items:center; gap:4px;
