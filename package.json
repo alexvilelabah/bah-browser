@@ -15,7 +15,7 @@
     "dev:main": "tsc -p tsconfig.main.json && electron .",
     "typecheck:renderer": "tsc -p tsconfig.json --noEmit",
     "build:renderer": "npm run typecheck:renderer && vite build",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "tsc -p tsconfig.main.json && node scripts/build-torrent-engine.mjs",
     "i18n:check": "node scripts/i18n-check.mjs",
     "build": "npm run i18n:check && npm run build:renderer && npm run build:main",
     "start": "npm run build && electron .",
@@ -33,7 +33,8 @@
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",
     "twemoji-colr-font": "^15.0.3",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "webtorrent": "^3.0.16"
   },
   "devDependencies": {
     "@electron/fuses": "^2.1.3",

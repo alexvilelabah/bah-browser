@@ -1,6 +1,10 @@
 appId: com.vilelalab.bah
 productName: Bah
 afterPack: build/afterPack.js
+# Os únicos módulos nativos (do webtorrent) são N-API com binários pré-compilados que já
+# carregam sob o Electron 42 (ABI-estável — provado). NÃO recompilar: evita exigir Visual
+# Studio/node-gyp no build. Seguro porque o resto das deps pesadas do Bah é WASM (sem .node).
+npmRebuild: false
 publish:
   provider: github
   owner: alexvilelabah
@@ -19,6 +23,14 @@ extraResources:
 # Desempacota o WASM (motor de voz local) — o onnxruntime nao carrega WASM de dentro do asar.
 asarUnpack:
   - "**/*.wasm"
+  # Motor de torrent: ESM forkado num utilityProcess + módulos NATIVOS (.node) do webtorrent.
+  # ESM/.node não carregam de dentro do asar → têm que ficar em app.asar.unpacked.
+  - "dist/main/torrent/engine.mjs"
+  - "node_modules/node-datachannel/**"
+  - "node_modules/utp-native/**"
+  - "node_modules/bufferutil/**"
+  - "node_modules/utf-8-validate/**"
+  - "node_modules/fs-native-extensions/**"
 win:
   target:
     - nsis
