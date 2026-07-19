@@ -69,6 +69,7 @@ declare global {
       torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
       torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
+      torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -301,6 +302,7 @@ export default function App() {
     }) as any);
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
+    try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
@@ -355,6 +357,11 @@ export default function App() {
   const [memSaverOn, setMemSaverOn] = useState<boolean>(() => { try { return localStorage.getItem('memSaver') !== '0'; } catch { return true; } });
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
+  }, []);
+  // Compartilhar (seed) do torrent — padrão DESLIGADO (baixa/streama sem subir nada).
+  const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
+  const toggleTorrentSeed = useCallback(() => {
+    setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
   }, []);
 
   // ── Limite de passos do agente (25/50/100) ──
@@ -945,6 +952,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">👣</span>
                   <span className="menu-label">{t('menu.agentSteps')}</span>
                   <span className="menu-switch on">{agentMaxSteps}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleTorrentSeed()} title={t('menu.torrentSeedTitle')}>
+                  <span className="menu-ic">🌱</span>
+                  <span className="menu-label">{t('menu.torrentSeed')}</span>
+                  <span className={`menu-switch ${torrentSeed ? 'on' : ''}`}>{torrentSeed ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>

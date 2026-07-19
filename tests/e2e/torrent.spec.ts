@@ -42,7 +42,44 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
     expect(String(stream.url)).toContain('127.0.0.1');
     expect(String(stream.url)).toContain('/webtorrent/');
 
+    // (3) Toggle de seed: a fiação do IPC devolve o estado certo.
+    const off: any = await page.evaluate(() => (window as any).electronAPI.torrentSetSeed(false));
+    expect(off).toMatchObject({ ok: true, seed: false });
+    const on: any = await page.evaluate(() => (window as any).electronAPI.torrentSetSeed(true));
+    expect(on).toMatchObject({ ok: true, seed: true });
+
     await page.evaluate((args: any) => (window as any).electronAPI.torrentRemove(args.id, true), { id: added.id });
+  } finally {
+    await app.close();
+  }
+});
+
+// Toggle de seed na UI: padrão DESLIGADO, clica → LIGADO, persiste no localStorage.
+// Não precisa de rede (só a UI + o IPC de preferência) → roda sempre.
+test('seed toggle: OFF by default, flips ON and persists', async () => {
+  const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
+  const app = await electron.launch({
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
+    args: [path.resolve(__dirname, '../..')],
+    env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
+  });
+  const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
+  try {
+    // Isolamento: o userData dos testes persiste o localStorage entre execuções — garante
+    // o estado inicial "sem preferência" (= padrão OFF) independente de rodadas anteriores.
+    await page.evaluate(() => localStorage.removeItem('torrentSeed'));
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await page.locator('.menu-btn').nth(1).click();   // [0]=downloads, [1]=menu ⋮
+    const item = page.locator('.menu-item', { hasText: 'seed' });
+    await expect(item).toBeVisible();
+    await expect(item.locator('.menu-switch')).toHaveText('OFF');   // padrão desligado
+
+    await item.click();
+    await expect(item.locator('.menu-switch')).toHaveText('ON');
+    const saved = await page.evaluate(() => localStorage.getItem('torrentSeed'));
+    expect(saved).toBe('1');
   } finally {
     await app.close();
   }

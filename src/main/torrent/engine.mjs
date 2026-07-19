@@ -22,11 +22,13 @@ const post = (m) => { try { port.postMessage(m); } catch {} };
 let client = null;
 let httpPort = 0;
 let tmpDir = null;
+let seedOn = false;   // padrão: NÃO seeda (uploadLimit 0 = só baixa/streama). Toggle no menu ⋮.
 const torrents = new Map();   // id -> { torrent, saving: Map<index, {ws, dest, timer}> }
 
 function ensureClient() {
   if (client) return;
-  client = new WebTorrent();
+  // uploadLimit 0 = envio estrangulado a ZERO (leech). -1 = seed normal (ilimitado).
+  client = new WebTorrent({ uploadLimit: seedOn ? -1 : 0 });
   client.on('error', (e) => post({ t: 'log', msg: 'client error: ' + (e && e.message) }));
   const server = client.createServer();
   server.listen(0, '127.0.0.1', () => {
@@ -61,7 +63,14 @@ function handle(m) {
   switch (m.t) {
     case 'init':
       tmpDir = m.tmp;
+      seedOn = !!m.seed;
       ensureClient();
+      break;
+
+    case 'set-seed':
+      // Liga/desliga o seed ao vivo (vale até pra torrent já em andamento).
+      seedOn = !!m.on;
+      try { if (client) client.throttleUpload(seedOn ? -1 : 0); } catch {}
       break;
 
     case 'add': {

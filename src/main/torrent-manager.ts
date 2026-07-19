@@ -26,6 +26,7 @@ export function setupTorrentManager(deps: Deps) {
   let child: UtilityProcess | null = null;
   let ready = false;
   let seq = 0;
+  let seedOn = false;   // padrão DESLIGADO (escolha do usuário): baixa/streama sem seedar.
   const reg = new Map<string, TorrentRec>();
   const pendingAdd = new Map<string, (v: any) => void>();
   const pendingStream = new Map<string, (v: any) => void>();
@@ -44,7 +45,7 @@ export function setupTorrentManager(deps: Deps) {
     child = utilityProcess.fork(enginePath, [], { serviceName: 'bah-torrent' });
     child.on('message', onEngineMessage);
     child.on('exit', () => { child = null; ready = false; });
-    child.postMessage({ t: 'init', tmp: path.join(os.tmpdir(), 'bah-torrents') });
+    child.postMessage({ t: 'init', tmp: path.join(os.tmpdir(), 'bah-torrents'), seed: seedOn });
   }
 
   function onEngineMessage(m: any) {
@@ -166,6 +167,14 @@ export function setupTorrentManager(deps: Deps) {
   });
 
   ipcMain.handle('torrent:list', () => Array.from(reg.values()));
+
+  // Liga/desliga o seed (compartilhar). Guarda a preferência (aplica em motores futuros)
+  // e, se o motor já está de pé, muda ao vivo.
+  ipcMain.handle('torrent:set-seed', (_e, on: boolean) => {
+    seedOn = !!on;
+    if (child) child.postMessage({ t: 'set-seed', on: seedOn });
+    return { ok: true, seed: seedOn };
+  });
 
   return {
     // Chamado pelo main quando intercepta um magnet:/.torrent (navegação/popup/omnibox).
