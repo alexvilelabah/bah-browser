@@ -3,6 +3,7 @@ import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalSettings } from '../store';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl } from '../site-knowledge';
+import { speak, stopSpeaking } from '../tts';
 
 export interface StepRecord {
   step: number;
@@ -198,6 +199,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // Ler resposta da IA em voz alta (TTS grátis/offline). Guarda o id da mensagem que
+  // está falando agora → o botão dela vira ⏹ e as outras continuam 🔊.
+  const [speakingId, setSpeakingId] = useState<number | null>(null);
+  const toggleSpeak = (id: number, text: string) => {
+    if (speakingId === id) { stopSpeaking(); setSpeakingId(null); return; }
+    const ok = speak(text, () => setSpeakingId(cur => (cur === id ? null : cur)));
+    setSpeakingId(ok ? id : null);
+  };
   // Menu "+" do compositor (Anexar / Gerar imagem), estilo Claude. Fecha ao clicar fora.
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const plusWrapRef = useRef<HTMLDivElement>(null);
@@ -755,10 +764,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     else startListening();
   };
 
-  // Limpa o worker e solta o microfone ao desmontar.
+  // Limpa o worker e solta o microfone ao desmontar. Também para qualquer leitura em voz alta.
   useEffect(() => () => {
     try { voiceWorkerRef.current?.terminate(); } catch {}
     try { mediaStreamRef.current?.getTracks().forEach(tr => tr.stop()); } catch {}
+    try { stopSpeaking(); } catch {}
   }, []);
 
   const handleSubmit = () => {
@@ -1204,7 +1214,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           </div>
         )}
         {feed.map(item => {
-          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} />;
+          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
           const transient = item.kind === 'event' && item.event.kind === 'status';
           const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
           return <div key={item.id} className={cls}>{row}</div>;
@@ -1351,7 +1361,7 @@ function notifyDone(message: string) {
   } catch {}
 }
 
-function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void }) {
+function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud, onToggleSpeak, speakingId }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void; onToggleSpeak: (id: number, text: string) => void; speakingId: number | null }) {
   switch (item.kind) {
     case 'task':
       return <div className="chat-msg user"><div className="msg-content">⚡ {item.text}</div></div>;
@@ -1367,6 +1377,20 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
             </details>
           )}
           <div className="msg-content">{item.text}</div>
+          {item.text.trim() && (
+            <button
+              className={`chat-tts-btn${speakingId === item.id ? ' speaking' : ''}`}
+              onClick={() => onToggleSpeak(item.id, item.text)}
+              title={speakingId === item.id ? t('feed.stopAudio') : t('feed.readAloud')}
+              aria-label={speakingId === item.id ? t('feed.stopAudio') : t('feed.readAloud')}
+            >
+              {speakingId === item.id ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5" /></svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none" /><path d="M15.6 8.4a5 5 0 0 1 0 7.2" /></svg>
+              )}
+            </button>
+          )}
           {item.sources && item.sources.length > 0 && (
             <div className="chat-sources">
               <span className="chat-sources-label">{t('feed.sources')}</span>

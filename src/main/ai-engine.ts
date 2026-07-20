@@ -791,7 +791,7 @@ export class AIEngine {
       if (res.status >= 500 || res.status === 429) continue;   // transitório → re-tenta
       break;   // 4xx definitivo → para
     }
-    throw new Error(`Pollinations (free) is busy right now (${lastStatus || 'no response'}). Try again in a moment — or add a DeepSeek key in settings for reliability.`);
+    throw new Error(`The browser's free AI is temporarily unavailable — use an API key or local AI, or wait a few minutes.`);
   }
 
   private deepseekModelsCache: Set<string> | null = null;

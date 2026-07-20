@@ -1754,6 +1754,16 @@ body {
   transition:background .15s var(--ease), border-color .15s var(--ease), transform .12s var(--ease);
 }
 .chat-action-btn:hover { background:var(--accent); border-color:var(--accent); color:#fff; transform:translateY(-1px); }
+/* Ler em voz alta (TTS) — símbolo monocromático discreto sob a resposta, no tom do
+   navegador (sem círculo/fundo). Acende no tom de destaque só enquanto está falando. */
+.chat-tts-btn {
+  margin-top:6px; display:inline-flex; align-items:center; justify-content:center;
+  width:20px; height:20px; padding:0; border:none; background:none; cursor:pointer;
+  color:var(--text-muted); opacity:.75; line-height:1;
+  transition:color .12s var(--ease), opacity .12s var(--ease);
+}
+.chat-tts-btn:hover { opacity:1; color:var(--text-primary); }
+.chat-tts-btn.speaking { opacity:1; color:var(--accent); }
 /* Fontes da Pesquisa Rápida (estilo Perplexity) — chips clicáveis sob a resposta. */
 .chat-sources { margin-top:8px; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .chat-sources-label { font-size:11px; font-weight:600; color:var(--text-muted); }

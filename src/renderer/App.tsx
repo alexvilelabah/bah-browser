@@ -7,6 +7,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import { classifyRisk, riskForAction, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
+import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import MonitorsPanel from './components/MonitorsPanel';
@@ -364,6 +365,11 @@ export default function App() {
     setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
   }, []);
 
+  // Ler em voz alta (TTS) — vozes nativas do SO, grátis/offline. Estado só de UI (não
+  // persiste): reflete se a PÁGINA está sendo lida agora, pro rótulo do menu virar "Parar".
+  // O handler toggleReadPage é definido abaixo, após getActiveWebview.
+  const [pageSpeaking, setPageSpeaking] = useState(false);
+
   // ── Limite de passos do agente (25/50/100) ──
   // Escolhido no menu ⋮ (clique cicla 25→50→100), persiste. O teto de tempo da tarefa
   // escala junto (o deadline era calibrado pros 25). Vale pro PRÓXIMO run.
@@ -504,6 +510,24 @@ export default function App() {
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
     return webviewRefs.current.get(activeTabIdRef.current) ?? null;
   }, []);
+
+  // "Ler esta página em voz alta" (menu ⋮). Toggle: fala → clica de novo → para. Raspa o
+  // texto do artigo/página atual e manda pro TTS grátis (voz segue o idioma da interface).
+  const toggleReadPage = useCallback(async () => {
+    if (isSpeaking()) { stopSpeaking(); setPageSpeaking(false); return; }
+    const wv = getActiveWebview();
+    if (!wv) return;
+    let text = '';
+    try {
+      text = await wv.executeJavaScript(`(function(){
+        const main = document.querySelector('main, article, [role=main]') || document.body;
+        return (main.innerText || '').replace(/\\s+/g,' ').trim().slice(0, 4000);
+      })()`);
+    } catch {}
+    if (!text) return;
+    const ok = speak(text, () => setPageSpeaking(false));
+    setPageSpeaking(ok);
+  }, [getActiveWebview]);
 
 
   const navigate = useCallback((url: string) => {
@@ -957,6 +981,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🌱</span>
                   <span className="menu-label">{t('menu.torrentSeed')}</span>
                   <span className={`menu-switch ${torrentSeed ? 'on' : ''}`}>{torrentSeed ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
+                  <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
+                  <span className="menu-label">{pageSpeaking ? t('menu.readPageStop') : t('menu.readPage')}</span>
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>
@@ -2179,19 +2207,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (!speakText) {
                       toolResult = { success: false, error: 'Nothing to read on the page.' };
                     } else {
-                      try {
-                        window.speechSynthesis.cancel();
-                        const u = new SpeechSynthesisUtterance(speakText.slice(0, 4000));
-                        const voices = window.speechSynthesis.getVoices();
-                        const pt = voices.find(v => /pt[-_]?BR/i.test(v.lang)) || voices.find(v => /^pt/i.test(v.lang));
-                        if (pt) u.voice = pt;
-                        u.lang = pt?.lang || 'pt-BR';
-                        u.rate = 1.0;
-                        window.speechSynthesis.speak(u);
+                      // Shared TTS helper (voice follows the UI language; long text kept alive).
+                      const ok = speak(speakText, () => setPageSpeaking(false));
+                      if (ok) {
+                        setPageSpeaking(true);
                         onProgress({ kind: 'status', message: `🔊 Reading aloud (${speakText.length} chars)…` });
-                        toolResult = { success: true, info: { chars: speakText.length, voice: u.voice?.name } };
-                      } catch (e: any) {
-                        toolResult = { success: false, error: `TTS unavailable: ${String(e?.message ?? e)}` };
+                        toolResult = { success: true, info: { chars: speakText.length } };
+                      } else {
+                        toolResult = { success: false, error: 'TTS unavailable on this system.' };
                       }
                     }
                   } else if (action.type === 'download_video') {
