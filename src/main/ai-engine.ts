@@ -791,6 +791,13 @@ export class AIEngine {
       if (res.status >= 500 || res.status === 429) continue;   // transitório → re-tenta
       break;   // 4xx definitivo → para
     }
+    // 402 = teto do tier anônimo do Pollinations (medido em 2026-07-21): pedido minúsculo
+    // ("oi") passa, mas qualquer chamada real — que sempre carrega o prompt de sistema —
+    // estoura. É determinístico, NÃO é queda: mandar esperar seria mentira. (A geração de
+    // imagem usa outro endpoint e continua grátis de verdade.)
+    if (lastStatus === 402) {
+      throw new Error(`The browser's free AI no longer accepts requests this size — add an API key (DeepSeek, Mistral, NVIDIA) or run a local model with Ollama. Free image generation still works.`);
+    }
     throw new Error(`The browser's free AI is temporarily unavailable — use an API key or local AI, or wait a few minutes.`);
   }
 

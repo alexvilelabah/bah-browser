@@ -124,6 +124,18 @@ export function useTabStore() {
     return tab.id;
   }, []);
 
+  // Aba de RESULTADO (tabela de preço/notícia, render_view) — aparece na barra de abas,
+  // clicável, mas NÃO rouba o foco. Sem isso, a aba nova virava a ativa e o painel da IA
+  // (que mostra o feed DA ABA ATIVA) ficava em branco — a resposta ficava presa na aba
+  // de origem da conversa, fora de vista, parecendo que a tarefa "sumiu" mesmo tendo dado
+  // certo. Diferente do addHiddenTab (Pesquisa Rápida): aqui a aba é visível de propósito,
+  // só não some com o foco de quem estava conversando.
+  const addBackgroundTab = useCallback((url?: string): string => {
+    const tab = createTab(url);
+    setTabs(prev => [...prev, tab]);
+    return tab.id;
+  }, []);
+
   // HIDDEN tab (Quick Search): mounts the webview and loads the URL, but does NOT become
   // the active tab nor appear in the tab bar — the search runs "behind the scenes". It's
   // removed with closeTab when done. The TabBar ignores tabs with hidden=true.
@@ -173,7 +185,7 @@ export function useTabStore() {
   return {
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
-    setActiveTabId: activateTab, addTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
+    setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
     setSidebarOpen,
     setAISettings: (s: AISettings) => {
       setAISettings(s);   // memória = texto puro (UI/agente intactos)

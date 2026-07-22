@@ -5,7 +5,7 @@ import { useTabStore } from './store';
 import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
-import { classifyRisk, riskForAction, RiskInfo } from './risk';
+import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
@@ -25,6 +25,7 @@ import {
   buildKnownSitesBlock,
   detectQuickAction,
   getInitialShortcutAction,
+  pointsAtOpenScreen,
   rememberActionForSite,
   rememberObservedSite,
   type QuickAction,
@@ -71,6 +72,7 @@ declare global {
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
       torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
+      setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -304,6 +306,7 @@ export default function App() {
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
+    try { window.electronAPI?.setYoutubeSkipAds?.(localStorage.getItem('ytSkipAds') !== '0'); } catch {}   // aplica a pref de pular anúncio salva
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
@@ -363,6 +366,21 @@ export default function App() {
   const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
   const toggleTorrentSeed = useCallback(() => {
     setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
+  }, []);
+  // Pular anúncio do YouTube sozinho, fantasma — clica em "Pular" assim que aparece, sem
+  // highlight nem aviso nosso na tela. Padrão LIGADO (mesmo espírito do adblock).
+  const [ytSkipAds, setYtSkipAds] = useState<boolean>(() => { try { return localStorage.getItem('ytSkipAds') !== '0'; } catch { return true; } });
+  const toggleYtSkipAds = useCallback(() => {
+    setYtSkipAds(v => { const n = !v; try { localStorage.setItem('ytSkipAds', n ? '1' : '0'); } catch {} window.electronAPI?.setYoutubeSkipAds?.(n); return n; });
+  }, []);
+  // "Deixar a IA dirigir" (modo Comet): DESLIGA os atalhos determinísticos e todo comando
+  // vira tarefa do agente — a IA observa a página e decide CADA passo. Padrão OFF (os
+  // atalhos são mais rápidos/grátis); melhor com chave de API (grátis/local é lento).
+  const [agentDrive, setAgentDrive] = useState<boolean>(() => { try { return localStorage.getItem('agentDrive') === '1'; } catch { return false; } });
+  const agentDriveRef = useRef(agentDrive);
+  agentDriveRef.current = agentDrive;
+  const toggleAgentDrive = useCallback(() => {
+    setAgentDrive(v => { const n = !v; try { localStorage.setItem('agentDrive', n ? '1' : '0'); } catch {} return n; });
   }, []);
 
   // Ler em voz alta (TTS) — vozes nativas do SO, grátis/offline. Estado só de UI (não
@@ -717,10 +735,22 @@ export default function App() {
           // Pergunta sobre o próprio assistente → chat (a identidade da engine responde).
           if (/\b(voc[êe]|vc|you|tu|usted)\b/.test(m)) return 'chat';
           const aboutPage = /\b(ess[ae]|est[ae]|dess[ae]|dest[ae]|ness[ae]|nest[ae]) (p[áa]gina|aba|site|v[íi]deo|texto|artigo)|this (page|tab|site|video|article)|esta (p[áa]gina|pesta[ñn]a|web|video)|\bresum[air]|\bsummar|traduz|translate|traduce/.test(m);
-          return aboutPage ? 'page' : 'web';
+          // Demonstrativo apontando pra tela ("esse produto é bom?", "vale a pena?") COM uma
+          // página real aberta → é sobre a página (anexa o conteúdo), não busca web. Preço tem
+          // fluxo próprio (não sequestrar). Determinístico → não depende do round-trip lento.
+          const url = store.activeTab?.url || '';
+          const realPage = /^https?:\/\//.test(url) && !isGoogleHome(url);
+          const priceish = /\b(quanto\s+custa|pre[çc]o|how\s+much|\bcost\b|barat)/i.test(m);
+          if (aboutPage || (realPage && !priceish && pointsAtOpenScreen(m))) return 'page';
+          return 'web';
         }
       }
     } catch {}
+    // MODO LOCAL: o classificador da IA (stage B) rodaria no gpt-oss lento — até 6s de espera
+    // (trava: "nem se mecheu") e ainda é mau classificador. Pula direto pro roteador
+    // determinístico (0 token, instantâneo) → o local fica rápido e previsível. A nuvem
+    // (classificador esperto e rápido) segue usando o stage B abaixo. Não toca o caminho nuvem.
+    if (store.localSettings.enabled) return null;
     try {
       const url = store.activeTab?.url || '';
       const title = (store.activeTab as any)?.title || '';
@@ -772,9 +802,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   // aba em SEGUNDO PLANO no Google (Bing de fallback), raspa os snippets dos
   // resultados, manda pro modelo sintetizar e devolve a resposta + fontes pro
   // PAINEL onde o usuário digita. A aba dele não muda; ele não "lê a página".
-  const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }> }> => {
+  const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
     const q = (query || '').trim();
-    if (!q) return { answer: 'Empty question.', sources: [] };
+    if (!q) return { answer: 'Empty question.', sources: [], isError: true };
     // Aba OCULTA: carrega e raspa "por baixo dos panos" — nunca aparece na barra de
     // abas nem rouba o foco do usuário (ele continua exatamente onde estava).
     const bgId = store.addHiddenTab(`https://www.google.com/search?q=${encodeURIComponent(q)}&${googleLocaleParams()}`);
@@ -789,18 +819,43 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
       let waited = 0;
       let bgWv = webviewRefs.current.get(bgId) as Electron.WebviewTag | undefined;
       while (waited < 6000 && !bgWv) { await new Promise(r => setTimeout(r, 150)); waited += 150; bgWv = webviewRefs.current.get(bgId) as any; }
-      if (!bgWv) return { answer: 'Could not open the search right now.', sources: [] };
+      if (!bgWv) return { answer: 'Could not open the search right now.', sources: [], isError: true };
+      // Buscador pediu verificação (anti-robô)? É a causa MAIS comum de zero resultados —
+      // dizer só "não achei nada" esconde isso e a pessoa fica sem saída. Tem que checar a
+      // página ATUAL, ANTES de trocar pro Bing (senão olharíamos a página errada).
+      const looksBlocked = async () => {
+        try {
+          return await raceTimeout(bgWv!.executeJavaScript(
+            `/sorry\\/|unusual traffic|tr[aá]fego incomum|not a robot|n[aã]o sou um rob[oô]|captcha/i.test(location.href + ' ' + (document.body ? document.body.innerText.slice(0,2000) : ''))`,
+            false,
+          ), 3000, false);
+        } catch { return false; }
+      };
       let results = await scrape(bgWv);
-      if (results.length < 2) {   // Google não rendeu → tenta Bing na mesma aba de fundo
+      let blocked = false;
+      if (results.length < 2) {   // Google não rendeu → checa bloqueio e tenta Bing
+        blocked = await looksBlocked();
         try { await bgWv.loadURL(`https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=${bingLocale()}`); } catch {}
         results = await scrape(bgWv);
+        if (results.length === 0 && !blocked) blocked = await looksBlocked();
       }
-      if (results.length === 0) return { answer: 'I did not find useful results for this search right now. Could you rephrase?', sources: [] };
+      if (results.length === 0) {
+        return {
+          answer: blocked
+            ? 'The search engine asked for a "confirm you are human" check, so I could not read the results. Open a normal search tab, solve it once, and try again.'
+            : 'I did not find useful results for this search right now. Could you rephrase?',
+          sources: [],
+          isError: true,
+        };
+      }
       const snippetsBlock = results.map((x, i) => `[${i + 1}] ${x.title}\n${x.snippet || ''}\n(${x.url})`).join('\n\n');
       const prompt = `Pergunta do usuário: "${q}"\n\nResultados de busca da web (de HOJE):\n${snippetsBlock}\n\nResponda à pergunta de forma DIRETA e útil em ${uiLangName()}, usando SOMENTE estes resultados. Cite as fontes pelo nome do site entre parênteses (ex.: (Wikipedia)). Seja conciso: no máximo ~6 linhas ou uma lista curta. Se os resultados não responderem com clareza, diga o que dá pra concluir. NÃO escreva nenhuma linha [[ACTION:]].`;
       const r = await window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled);   // stateless: não polui o histórico
-      const answer = (r?.response || '').trim() || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
-      return { answer, sources: results.map(x => ({ title: x.title, url: x.url })) };
+      const ok = (r?.response || '').trim();
+      // Falha da IA na síntese NÃO pode se disfarçar de resposta: vira aviso vermelho com
+      // dica (era o caso em que a pessoa via o status ciclando e nunca um resultado claro).
+      const answer = ok || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
+      return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !ok };
     } finally {
       try { store.closeTab(bgId); } catch {}   // remove a aba oculta (nunca foi vista)
     }
@@ -882,6 +937,46 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
           getSuggestions={getSuggestions}
         />
+        {/* Cérebro minimalista: APAGADO = atalhos ligados (o navegador resolve o óbvio sozinho);
+            ACESO = a IA está decidindo cada passo. O estado é a própria cor — sem risco no
+            meio, sem ícone espalhafatoso. */}
+        <button
+          className={`menu-btn${agentDrive ? ' noshort-on' : ''}`}
+          onClick={() => toggleAgentDrive()}
+          title={agentDrive ? t('bar.noShortcutsOn') : t('bar.noShortcutsOff')}
+          aria-label={t('bar.noShortcuts')}
+          aria-pressed={agentDrive}
+        >
+          {/* Faíscas (símbolo universal de IA hoje): APAGADO = atalhos resolvem o óbvio;
+              ACESO = a IA pensando cada passo. PREENCHIDO de propósito — o chip anterior
+              usava traço fino e sumia ao lado das pegadas (que são sólidas). */}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12.4 3.2a.5.5 0 0 0-.95 0l-1.2 3.66a3.4 3.4 0 0 1-2.15 2.15l-3.66 1.2a.5.5 0 0 0 0 .95l3.66 1.2a3.4 3.4 0 0 1 2.15 2.15l1.2 3.66a.5.5 0 0 0 .95 0l1.2-3.66a3.4 3.4 0 0 1 2.15-2.15l3.66-1.2a.5.5 0 0 0 0-.95l-3.66-1.2a3.4 3.4 0 0 1-2.15-2.15z" />
+            <path d="M18.6 16.1a.35.35 0 0 0-.66 0l-.5 1.5a1.7 1.7 0 0 1-1.07 1.08l-1.5.5a.35.35 0 0 0 0 .66l1.5.5a1.7 1.7 0 0 1 1.07 1.07l.5 1.5a.35.35 0 0 0 .66 0l.5-1.5a1.7 1.7 0 0 1 1.08-1.07l1.5-.5a.35.35 0 0 0 0-.66l-1.5-.5a1.7 1.7 0 0 1-1.08-1.08z" />
+          </svg>
+        </button>
+        {/* Passos da IA (25→50→100): fica COLADO no botão de atalhos porque os dois afinam
+            COMO a IA trabalha — e o limite de passos pesa justamente quando ela dirige. */}
+        <button
+          className="menu-btn steps-btn"
+          onClick={() => cycleAgentSteps()}
+          title={t('bar.agentSteps').replace('{n}', String(agentMaxSteps))}
+          aria-label={t('bar.agentSteps').replace('{n}', String(agentMaxSteps))}
+        >
+          {/* Duas pegadas de sapato (sola + calcanhar), levemente giradas e em diagonal —
+              lê como "passos". Antes eram dois bonequinhos, que não comunicavam nada. */}
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+            <g transform="rotate(-12 7 8)">
+              <ellipse cx="7" cy="6.8" rx="3" ry="4.2" />
+              <ellipse cx="7" cy="12.6" rx="2.5" ry="1.8" />
+            </g>
+            <g transform="rotate(-12 17 15)">
+              <ellipse cx="17" cy="13" rx="3" ry="4.2" />
+              <ellipse cx="17" cy="18.8" rx="2.5" ry="1.8" />
+            </g>
+          </svg>
+          <span className="steps-num">{agentMaxSteps}</span>
+        </button>
         <div className="menu-wrap">
           <button
             className={`menu-btn${downloads.some(d => d.state === 'started' || d.state === 'progress') ? ' dl-active' : ''}`}
@@ -972,15 +1067,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.memSaver')}</span>
                   <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
                 </button>
-                <button className="menu-item" onClick={() => cycleAgentSteps()} title={t('menu.agentStepsTitle')}>
-                  <span className="menu-ic">👣</span>
-                  <span className="menu-label">{t('menu.agentSteps')}</span>
-                  <span className="menu-switch on">{agentMaxSteps}</span>
-                </button>
                 <button className="menu-item" onClick={() => toggleTorrentSeed()} title={t('menu.torrentSeedTitle')}>
                   <span className="menu-ic">🌱</span>
                   <span className="menu-label">{t('menu.torrentSeed')}</span>
                   <span className={`menu-switch ${torrentSeed ? 'on' : ''}`}>{torrentSeed ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleYtSkipAds()} title={t('menu.ytSkipAdsTitle')}>
+                  <span className="menu-ic">👻</span>
+                  <span className="menu-label">{t('menu.ytSkipAds')}</span>
+                  <span className={`menu-switch ${ytSkipAds ? 'on' : ''}`}>{ytSkipAds ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
@@ -1120,6 +1215,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           <AgentCommandBar
             activeTabId={store.activeTabId}
             tabIds={store.tabs.map(t => t.id).join(',')}
+            pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isGoogleHome(store.activeTab?.url)}
+            agentDrive={agentDrive}
+            panelOpen={store.sidebarOpen}
             onExecute={async (command, onProgress, signal, opts) => {
               const runLog = startAgentRun(command);
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
@@ -1147,6 +1245,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const allResults: Array<{ action: BrowserAction; result: any }> = [];
               const thoughts: string[] = [];
               macroTraceRef.current = [];                      // nova gravação por run
+              // Modo "Deixar a IA dirigir": desliga TODOS os desvios determinísticos deste run
+              // (macro-replay, quick actions, atalho inicial, assistentes de Gmail/YouTube) —
+              // a IA observa e decide cada passo. Lido no início do run (toggle vale pro próximo).
+              const aiDrive = agentDriveRef.current;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
@@ -1239,8 +1341,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 o.interactive_elements.length === 0 && !o.text_sample;
               const finishRun = (
                 status: 'success' | 'failed' | 'cancelled' | 'max_steps',
-                reason?: string,
+                rawReason?: string,
               ) => {
+                // NUNCA terminar sem explicação: um motivo vazio virava "falhou" mudo na tela
+                // (e no histórico), sem o usuário saber o que houve. Se veio vazio/undefined,
+                // usa um texto honesto conforme o desfecho.
+                const reason = String(rawReason || '').trim() || (
+                  status === 'success' ? 'Done.'
+                  : status === 'cancelled' ? 'Task canceled by the user.'
+                  : status === 'max_steps' ? 'Step limit reached.'
+                  : "The task stopped before finishing and the model gave no reason. Try rephrasing it."
+                );
                 // Memória curta da conversa: o próximo pedido pode ser um follow-up.
                 const tabRuns = recentRunsRef.current.get(taskTabId) ?? [];
                 tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}` });
@@ -1360,8 +1471,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 throwIfCancelled();
                 // ── REPLAY DE MACRO: "repete", "repete 1000 vezes", "a cada 5 min" ──
                 // Reexecuta a última sequência gravada de forma 100% determinística:
-                // zero chamadas de IA, não importa quantas repetições.
-                if (repeatIntent) {
+                // zero chamadas de IA, não importa quantas repetições. (aiDrive pula: IA decide.)
+                if (repeatIntent && !aiDrive) {
                   const macro = loadLastMacro();
                   if (!macro) {
                     const msg = 'I have no recorded automation yet. Do the task once (e.g.: "go to site X and click Y") — I record the sequence, and then you can repeat it as many times as you want.';
@@ -1428,10 +1539,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const strongCloud = !store.localSettings.enabled && !s.apiPaused
                   && !!s.apiKey?.trim() && s.provider !== 'pollinations';
                 const weakModel = !strongCloud;
-                let quickAction = detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
+                let quickAction = aiDrive ? null : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
-                if (!quickAction && lastQuickActionRef.current) {
+                if (!aiDrive && !quickAction && lastQuickActionRef.current) {
                   const fu = command.trim().match(
                     /^(?:e|agora)[\s,]+(?:(?:com|pra|para|usando|de)\s+(?:a\s+|o\s+)?(?:palavra|frase|m[uú]sica|v[ií]deo)?|(?:a\s+)?(?:palavra|frase))\s*[:"'“”]?\s*(.{2,80}?)[\s"'“”?!.]*$/i,
                   );
@@ -1447,7 +1558,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                 }
                 if (quickAction) lastQuickActionRef.current = quickAction;
-                const initialShortcut = quickAction ? null : getInitialShortcutAction(command);
+                const initialShortcut = (aiDrive || quickAction) ? null : getInitialShortcutAction(command);
                 if (quickAction) {
                   actionQueue.push({ action: quickAction as BrowserAction });
                   usedInitialShortcut = true;
@@ -1554,7 +1665,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
-                  if (commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
+                  if (!aiDrive && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
                     gmailComposeAttempted = true;
                     const compose = await tryComposeGmailDraft(wv, parsedEmailDraft);
                     if (compose.success) {
@@ -1571,7 +1682,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `Gmail: draft assistant could not fill it (${compose.reason || 'no detail'}).` });
                     }
                   }
-                  if (commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
+                  if (!aiDrive && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
                     const assist = await tryRevealYouTubeCommentBox(wv);
                     if (assist.success) {
                       onProgress({ kind: 'status', message: 'YouTube: comment box located/activated.' });
@@ -1932,6 +2043,28 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                     finishRun(action.success ? 'success' : 'failed', action.reason);
                     return { thought: thoughts.join('\n\n') || action.reason, results: allResults, done: action };
+                  }
+                  // ── 2ª CAMADA DE SEGURANÇA (LEVE): ação SOCIAL só com pedido explícito ──
+                  // Curtir/descurtir/compartilhar/inscrever/publicar/comentar mexem na CONTA
+                  // REAL da pessoa, mas não são destrutivas como pagar/excluir — um diálogo a
+                  // cada uma seria irritante. Regra: se o usuário NÃO pediu, simplesmente não
+                  // clica; avisa o modelo e segue a tarefa de verdade. Aqui (antes de TODO o
+                  // despacho) cobre click_ref, click_text e click_at de uma vez só.
+                  // Motivo real: mandado "abra um vídeo sobre gatos", o modelo local clicou em
+                  // CURTIR no vídeo, na conta logada do usuário.
+                  {
+                    const socEl = (action as any).ref != null
+                      ? observation.interactive_elements.find(e => e.id === (action as any).ref)
+                      : undefined;
+                    const blocked = socialActionToBlock(action as any, socEl, command);
+                    if (blocked) {
+                      const msg = `Skipped "${blocked}" — you didn't ask for it, so I won't touch your account.`;
+                      onProgress({ kind: 'status', message: `🛡️ ${msg}` });
+                      history += `\nBLOCKED: refused to click a "${blocked}" control — the user did NOT ask for it. NEVER click like/dislike/share/subscribe/publish/comment unless explicitly requested. Continue the ACTUAL task.`;
+                      allResults.push({ action, result: { success: false, error: msg } });
+                      noEffectCount = Math.max(noEffectCount, 1);
+                      continue;
+                    }
                   }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;
@@ -2581,7 +2714,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
                         const c = sorted[0];
-                        const newId = store.addTab(rv.url);
+                        // addBackgroundTab (NÃO addTab): a tabela abre na barra de abas, mas
+                        // sem roubar o foco — senão o painel da IA (que segue a aba ATIVA)
+                        // ficava em branco, escondendo esta própria resposta.
+                        const newId = store.addBackgroundTab(rv.url);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${sorted.length} offers for "${q}". Cheapest: ${c.title} — R$ ${fmt(c.price)}${c.store ? ` (${c.store})` : ''}. Comparison table opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -2625,7 +2761,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       };
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
-                        const newId = store.addTab(rv.url);
+                        // addBackgroundTab: mesma razão do compare_prices acima.
+                        const newId = store.addBackgroundTab(rv.url);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${valid.length} news for "${q}". Top: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Panel opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -2663,7 +2800,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (spec) {
                       const rv = await window.electronAPI?.renderView?.(spec);
                       if (rv?.success && rv.url) {
-                        const newId = store.addTab(rv.url);
+                        // addBackgroundTab: mesma razão do compare_prices acima.
+                        const newId = store.addBackgroundTab(rv.url);
                         activeTabIdRef.current = newId;
                         const doneMsg = `Done: "${spec.title}" opened in a new tab (${spec.rows?.length ?? 0} rows, sortable table + chart).`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -2875,21 +3013,43 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: String(e?.message || e) };
                     }
                   } else if (action.type === 'report') {
-                    // Final synthesized answer to user — exits loop
+                    // Final synthesized answer to user — exits loop.
+                    // Modelo fraco às vezes manda report com summary VAZIO ("qual a capital
+                    // da Austrália?" terminava em SUCESSO mudo, sem texto nenhum na tela).
+                    // Cai no melhor conteúdo que já temos; sem nada, é falha honesta — nunca
+                    // "sucesso" em branco.
+                    const reported = String(action.summary || '').trim()
+                      || (lastExtractedText || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+                      || String(stepThought || stepEvaluation || '').trim();
+                    if (!reported) {
+                      const msg = "I finished, but the model didn't write an answer. Try rephrasing the question.";
+                      appendAgentRunStep(runLog, {
+                        step: step + 1,
+                        urlBefore: observation.url,
+                        urlAfter: observation.url,
+                        titleAfter: observation.title,
+                        ...summarizeAction(action),
+                        result: { reported: '' },
+                        success: false,
+                        note: 'empty report',
+                      });
+                      finishRun('failed', msg);
+                      return { error: msg, thought: thoughts.join('\n\n'), results: allResults };
+                    }
                     appendAgentRunStep(runLog, {
                       step: step + 1,
                       urlBefore: observation.url,
                       urlAfter: observation.url,
                       titleAfter: observation.title,
                       ...summarizeAction(action),
-                      result: { reported: action.summary },
+                      result: { reported },
                       success: true,
                     });
-                    finishRun('success', action.summary);
+                    finishRun('success', reported);
                     return {
                       thought: thoughts.join('\n\n'),
-                      results: [...allResults, { action, result: { reported: action.summary } }],
-                      done: { type: 'done', reason: action.summary, success: true } as any,
+                      results: [...allResults, { action, result: { reported } }],
+                      done: { type: 'done', reason: reported, success: true } as any,
                     };
                   } else if (action.type === 'switch_tab') {
                     const target = tabsRef.current[action.tab];
@@ -3176,7 +3336,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   finishRun('cancelled', done.reason);
                   return { thought: done.reason, results: allResults, done };
                 }
-                finishRun('failed', err?.message ?? String(err));
+                // `??` NÃO pega string vazia: um Error com message '' virava falha muda.
+                finishRun('failed', String(err?.message || err || '').trim() || 'Unexpected error while running the task.');
                 throw err;
               } finally {
                 setAgentVisual('idle');
@@ -3199,7 +3360,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // stays in THIS tab's history → follow-up questions still work after the chip clears.
                 const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
-                return { reply };
+                return { reply, isError: !!r?.error };
               }
               let pageContent = await getPageContent();
               // Se a aba é um vídeo do YouTube, anexa a TRANSCRIÇÃO (legenda) ao contexto pra
@@ -3225,7 +3386,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const m = answerOnly.match(/\[\[\s*ACTION\s*:\s*([^\]]+?)\s*\]\]/i);
               const suggestedCommand = m ? m[1].trim() : undefined;
               const reply = raw.replace(/\[\[\s*ACTION\s*:[^\]]*\]\]/ig, '').trim() || raw.trim();
-              return { reply, suggestedCommand };
+              return { reply, suggestedCommand, isError: !!result?.error };
             }}
             onResearch={runWebResearch}
             onClassify={classifyIntent}

@@ -90,6 +90,10 @@ let localPageAgent: PageAgent | null = null;
 // pra trabalhos em BACKGROUND (monitores) respeitarem "local não vaza pra nuvem" — o chat
 // normal roteia por chamada, mas os monitores rodam sem o renderer decidir.
 let localModeOn = false;
+// Pular anúncio do YouTube sozinho (fantasma) — padrão LIGADO, como o adblock. Lido no
+// dom-ready de cada webview (ver YT_SKIP_AD_SCRIPT); não persiste em disco no main, quem
+// reaplica no boot é o renderer via localStorage (mesmo molde do torrentSeed).
+let ytSkipAdsOn = true;
 // Cron-Agent (monitores em background) + bandeja do sistema.
 let monitorManager: MonitorManager | null = null;
 let tray: Tray | null = null;
@@ -650,7 +654,21 @@ function createWindow(): void {
       }
       // Segue "Você quis dizer X?" sozinho em qualquer busca (Google/YouTube/Bing/DuckDuckGo).
       wc.executeJavaScript(AUTOCORRECT_SCRIPT).catch(() => {});
+      // Pula anúncio do YouTube sozinho, fantasma (sem highlight/aviso nosso). Padrão LIGADO.
+      // Toda navegação nova começa "sem anúncio" — desliga qualquer poller que tenha sobrevivido
+      // (ex.: usuário saiu do vídeo com o anúncio ainda tocando, sem dar tempo do 'YTAD:0' sair).
+      stopYtSkipPolling(wc.id);
+      if (ytSkipAdsOn) wc.executeJavaScript(YT_SKIP_AD_SCRIPT).catch(() => {});
     });
+    // Sinal do YT_SKIP_AD_SCRIPT: liga/desliga o poller pesado só enquanto o anúncio dura.
+    // Registrado 1x aqui (não dentro do dom-ready, que refire a cada navegação — senão
+    // empilharia um listener novo por navegação e cada 'YTAD:1' disparava N vezes).
+    wc.on('console-message', (event: any) => {
+      const message: string = event?.message ?? '';
+      if (message === 'YTAD:1') { console.log('[YTSkip] ad ON, poller started'); if (ytSkipAdsOn) startYtSkipPolling(wc); }
+      else if (message === 'YTAD:0') { console.log('[YTSkip] ad OFF, poller stopped'); stopYtSkipPolling(wc.id); }
+    });
+    wc.once('destroyed', () => stopYtSkipPolling(wc.id));
     attachContextMenu(wc);
     // Ctrl + roda do mouse = zoom (igual ao Chrome). O Chromium dispara 'zoom-changed'
     // com a direção quando o mouse está sobre a página; aplicamos no próprio webContents
@@ -872,7 +890,11 @@ function setupIPC(): void {
         // chave Mistral inválida lia "DeepSeek precisa de chave" e não entendia nada).
         const prov = engine.getProvider();
         if (prov === 'pollinations') {
-          return { error: 'The free AI refused the request right now. Try again in a moment — or add a cloud API key in settings (⚙️).' };
+          // A engine já monta a mensagem certa pro grátis (teto de tamanho, que é definitivo,
+          // vs. queda real, onde esperar ajuda) — repassar em vez de sobrescrever. O texto
+          // genérico daqui dizia "tente daqui a pouco" e, pior, era pescado por ESTE mesmo
+          // filtro só porque a mensagem honesta cita "API key".
+          return { error: m };
         }
         const label = prov === 'mistral' ? 'Mistral' : prov === 'nvidia' ? 'NVIDIA NIM'
           : prov === 'openai' ? 'OpenAI' : prov === 'anthropic' ? 'Anthropic' : 'DeepSeek';
@@ -1956,6 +1978,10 @@ function setupIPC(): void {
     applyAdblockState(userAdblockPref);
     return { enabled: userAdblockPref };
   });
+  ipcMain.handle('youtube:set-skip-ads', (_e, on: boolean) => {
+    ytSkipAdsOn = !!on;
+    return { ok: true, enabled: ytSkipAdsOn };
+  });
   ipcMain.handle('adblock:active-host-changed', (_e, host: string) => {
     if (host) evalAdblockForHost(host);
     return { active: actuallyEnabled };
@@ -2155,6 +2181,103 @@ const AUTOCORRECT_SCRIPT = `
   } catch (e) {}
 })();
 `;
+
+// Pular anúncio do YouTube sozinho, feito fantasma — LIGA só durante o anúncio, não fica
+// varrendo a página o tempo todo (custaria CPU à toa numa página tão viva quanto o YouTube).
+// Dois pedaços, cada um o mais barato possível no que faz:
+//   1. YT_SKIP_AD_SCRIPT (injetado 1x por navegação): não procura botão nenhum — só vigia a
+//      classe CSS do PRÓPRIO player (#movie_player), 1 elemento só, sem subtree/childList na
+//      árvore inteira. Quando o YouTube marca "ad-showing"/"ad-interrupting", avisa o processo
+//      principal com console.log('YTAD:1'/'YTAD:0') — mesmo truque já usado pra encaminhar log
+//      do renderer principal (ver o listener 'console-message' original, mais abaixo), só que
+//      agora pendurado no wc de cada aba: não precisa contextBridge/ipcRenderer/nodeIntegration
+//      na página hóspede, o evento é interceptado pelo protocolo DevTools do Chromium.
+//   2. O main só liga o poller pesado (achar o botão + clicar) quando recebe 'YTAD:1', e
+//      desliga no 'YTAD:0' — e o clique em si é CONFIÁVEL via wc.sendInputEvent (input
+//      real do Chromium, isTrusted:true; um click() de JS da página pode ser ignorado pelo
+//      player, e o YouTube mantém vários botões de skip no DOM — ids skip-button:0/1/2).
+const YT_SKIP_AD_SCRIPT = `
+(function(){
+  try {
+    if (window.__ytSkipAdOn) return;
+    var h = location.hostname || '';
+    if (h.indexOf('youtube.com') < 0) return;
+    window.__ytSkipAdOn = true;
+    var active = false;
+    var attachedTo = null;
+    function checkAdState(){
+      try {
+        var p = attachedTo;
+        if (!p) return;
+        var on = p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting');
+        if (on === active) return;
+        active = on;
+        console.log(active ? 'YTAD:1' : 'YTAD:0');
+      } catch (e) {}
+    }
+    function ensureObserver(){
+      try {
+        var p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (!p || p === attachedTo) return;
+        attachedTo = p;
+        try { new MutationObserver(checkAdState).observe(p, { attributes: true, attributeFilter: ['class'] }); } catch (e) {}
+        checkAdState();
+      } catch (e) {}
+    }
+    ensureObserver();
+    setInterval(ensureObserver, 1500);
+  } catch (e) {}
+})();
+`;
+
+// Acha o CENTRO do botão "Pular" visível (viewport coords) — só chamado pelo main ENQUANTO
+// o anúncio está ativo (sinalizado pelo script acima), nunca em loop constante.
+const YT_FIND_SKIP_RECT = `
+(function(){
+  try {
+    var list = document.querySelectorAll('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .videoAdUiSkipButton, button[id^="skip-button"]');
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i];
+      if (b.disabled) continue;
+      var r = b.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) continue;
+      var top = document.elementFromPoint(cx, cy);
+      if (top !== b && !b.contains(top)) continue;
+      return { x: cx, y: cy };
+    }
+    return null;
+  } catch (e) { return null; }
+})();
+`;
+
+// Liga/desliga por webview, disparado pelo 'YTAD:1'/'YTAD:0' (ver did-attach-webview) — não
+// por tempo/navegação. Idle o resto do vídeo: sem anúncio, não existe nenhum timer rodando.
+const ytSkipTimers = new Map<number, ReturnType<typeof setInterval>>();
+function startYtSkipPolling(wc: Electron.WebContents) {
+  if (ytSkipTimers.has(wc.id)) return;
+  const iv = setInterval(async () => {
+    if (!ytSkipAdsOn) return;
+    if (wc.isDestroyed()) { stopYtSkipPolling(wc.id); return; }
+    try {
+      const pt = await wc.executeJavaScript(YT_FIND_SKIP_RECT);
+      if (pt && typeof pt.x === 'number' && typeof pt.y === 'number') {
+        const z = wc.getZoomFactor?.() || 1;
+        const x = Math.round(pt.x * z), y = Math.round(pt.y * z);
+        wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+        wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+        console.log('[YTSkip] trusted click at', x, y, wc.getURL().slice(0, 80));
+      }
+    } catch {}
+  }, 300);
+  ytSkipTimers.set(wc.id, iv);
+}
+function stopYtSkipPolling(wcId: number) {
+  const t = ytSkipTimers.get(wcId);
+  if (t) clearInterval(t);
+  ytSkipTimers.delete(wcId);
+}
 
 // Stealth script — masks automation signals so Google/etc don't flag us
 const STEALTH_SCRIPT = `

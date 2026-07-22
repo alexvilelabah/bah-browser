@@ -263,11 +263,117 @@ function parseCount(n: string): number {
 // "…dentro do q(ue) vc pode fazer", "…se você puder", "…do jeito que der", "…por favor".
 // Mantém o termo de verdade (ex.: "iphone se" sobrevive — exige um verbo-meta depois).
 function stripAgentMeta(s: string): string {
-  return (s || '')
+  let out = (s || '')
     .replace(/[\s,]+(?:dentro\s+d[oa]\s+q(?:ue)?|no\s+q(?:ue)?|d[oa]\s+jeito\s+q(?:ue)?|o\s+q(?:ue)?|se|caso|contanto\s+q(?:ue)?)\s+(?:voc[eê]s?|vc)?\s*(?:pode|puder|poder|consegue|conseguir|der|quiser|achar|encontrar|fizer|fazer|consiga|poss[ií]vel)\b.*$/i, '')
-    .replace(/[\s,]+(?:por\s+favor|pfv|pf)\b.*$/i, '')
+    .replace(/[\s,]+(?:por\s+favor|pfv|pf)\b.*$/i, '');
+  // Cortesia no COMEÇO ("oi", "por favor,", "vc pode me ajudar a…", "can you help me…",
+  // "puedes ayudarme a…"): tira o enquadramento educado e deixa só o pedido real.
+  // Sem isso, "vc pode me ajudar a encontrar um rtx 5070ti com preço barato ?" virava a
+  // busca "vc pode ajudar rtx 5070ti com ?" no Shopping. Até 3 passadas (empilhadas:
+  // "oi, por favor, você poderia me ajudar a…"). A DETECÇÃO de intenção roda no comando
+  // cru — isto só limpa a QUERY extraída.
+  for (let i = 0; i < 3; i++) {
+    const before = out;
+    out = out
+      .replace(/^\s*(?:oi|ol[aá]|opa|hey|hi|hello|hola|buenas)\s*[,!.]*\s+/i, '')
+      .replace(/^\s*(?:por\s+favor|pfv|pf|porfa(?:vor)?|please)\s*[,!.]*\s*/i, '')
+      .replace(/^\s*(?:(?:vc|voc[eê]|tu|amigo|mano|cara)\s+)?(?:pode(?:ria)?[sm]?|consegue(?:ria)?[sm]?|sabe(?:ria)?[sm]?|d[aá]\s+pra|can\s+you|could\s+you|would\s+you|will\s+you|puedes?|podr[ií]as?)\s+(?:me\s+|nos\s+)?(?:ajudar?|help|ayudar(?:me|nos)?)?\s*(?:a\s+|to\s+|com\s+|con\s+)?/i, '')
+      .replace(/^\s*(?:me\s+)?(?:ajud[ae]m?|help|ay[uú]da(?:me)?)\s+(?:me\s+)?(?:a\s+|to\s+|com\s+|con\s+)?/i, '');
+    if (out === before) break;
+  }
+  // "pra mim" / "para mim" / "pra min": nunca faz parte do que se busca. Sem isto,
+  // "cria pra mim uma foto de uma cachoeira" virava a busca "mim cachoeira".
+  out = out.replace(/\s*\b(?:pra|para|pro)\s+(?:mim|min|nos|n[óo]s)\b/gi, ' ');
+  // VERBO IMPERATIVO no COMEÇO. Estrutural (não é lista nova de palavras): o comando
+  // começa com o verbo, e o verbo NUNCA é o produto/assunto — então cai fora. Sem isto,
+  // "acha um fone de ouvido bluetooth" virava a busca "acha fone ouvido bluetooth".
+  // Ancorado em ^ e SÓ a primeira palavra: um produto tipo "achocolatado" não é afetado
+  // (não casa `ach[ae]` inteiro, e mesmo que casasse só cairia se fosse o 1º token).
+  out = out.replace(
+    /^\s*(?:me\s+|nos\s+)?(?:procur\w*|busc\w*|pesquis\w*|ach[ae]\w*|encontr\w*|encuentr\w*|localiz\w*|baix\w*|descarg\w*|toc[ae]\w*|reproduc\w*|pon\b|abr[ae]\w*|ger[ae]\w*|gener\w*|cri[ae]\w*|cre[ae]\w*|dibuj\w*|mont[ae]\w*|arm[ae]\w*|mostr[ae]\w*|muestr\w*|compar[ae]\w*|haz\b|find|search|look\s+up|open|play|download|generate|create|make|show)\s+/i,
+    '',
+  );
+  return out
+    .replace(/[\s?!¿¡.…]+$/, '')   // pontuação final ("…barato ?", "apple?") não vira query
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+// "Aponta pra tela": a mensagem usa um DEMONSTRATIVO (esse/essa/isso/aquele/this/that) ou
+// um "vale a pena / worth it" BARE (sem assunto próprio depois) — sinal de que é sobre o
+// que está ABERTO agora, não uma busca nova. O chamador combina isto com "tem página real
+// aberta" pra mandar o conteúdo da página pro modelo em vez de cair na busca web. Estrutural:
+// UMA regra pega "esse produto", "essa placa", "esse celular", "isso aqui" sem listar cada
+// substantivo. NÃO usa "est[ae]" de propósito — colidiria com o verbo "está"/"esta" (sem
+// acento) e daria falso positivo em "o que está acontecendo?".
+// "vale a pena" só conta como referência à TELA quando vem SOZINHO (nada de assunto próprio
+// depois, só pontuação) — "vale a pena?" (sobre o que está aberto) sim; "vale a pena
+// COMPRAR UM CARRO ELÉTRICO?" não (tem assunto explícito próprio — vira pergunta de
+// pesquisa normal, não referência à página que por acaso está aberta).
+const SCREEN_POINTER_RE = /\b(?:ess[ae]s?|dess[ae]s?|ness[ae]s?|aquel[ae]s?|daquel[ae]s?|naquel[ae]s?|iss[o]|isto|diss[o]|niss[o]|dist[o]|nist[o]|these|those|this|that)\b|\bvale\s+a\s+pena\s*[?!.…]*$|\bworth\s+it\s*[?!.…]*$/i;
+// "crie uma playlist com duas músicas" — pedido de playlist SEM tema nenhum. O navegador
+// não tem como adivinhar QUAIS músicas; só a IA poderia inventar uma lista (e se a IA
+// grátis estiver fora, vira um erro técnico inútil pro usuário). Melhor ENSINAR: pedir o
+// artista/estilo/época resolve na hora, com ZERO IA — e ainda dá um resultado melhor.
+// Reusa a extração real do detectQuickAction (não duplica a lógica de tema, que tem uma
+// matriz grande de casos por trás): se nem com weakModel ele acha tema/lista, falta tema.
+export function playlistNeedsTheme(command: string): boolean {
+  const n = normalize(command || '');
+  const isPlaylistRequest = /\bplay\s?list\b/.test(n)
+    && /\b(cri[ae]\w*|criar|cre[ae]\w*|crear|mont[ae]\w*|montar|fa[cz]\w*|fazer|haz|hacer|ger[ae]\w*|gerar|gener\w*|junt[ae]\w*|prepar\w*|arm[ae]\w*|creat\w*|make|made|build|generat\w*|put\s+together)\b/.test(n);
+  if (!isPlaylistRequest) return false;
+  return detectQuickAction(command, { weakModel: true }) == null;
+}
+
+// ── PEDIDO VAGO: ação conhecida, mas faltou dizer O QUÊ ──────────────────────
+// "baixe uma música", "toca uma música", "gere uma imagem", "quanto custa" — o navegador
+// sabe a AÇÃO mas não o ASSUNTO. Hoje isso cai na IA e, com a IA fora, vira aviso vermelho
+// inútil. Melhor ENSINAR: perguntar o que falta resolve na hora, com ZERO IA, e o resultado
+// sai melhor. Mesma ideia do playlistNeedsTheme, generalizada pras outras famílias.
+// `verb` = a ação; `generic` = substantivos genéricos que NÃO contam como assunto
+// ("música", "vídeo", "imagem"...). Se depois de tirar verbo + genéricos + palavrinhas
+// não sobrar nada, o pedido é vago.
+const VAGUE_FILLER = /\b(uma?|uns|umas|o|a|os|as|de|do|da|dos|das|me|meu|minha|pra|para|por|favor|ai|aí|algum|alguma|qualquer|ae|e|em|no|na|com|que|quero|queria|gostaria|manda|pode|poderia|vc|voce|você|tu|una|unos|unas|un|el|la|los|las|del|al|mi|algo|alguna|cualquier|puedes|dame|please|some|any|an|the|for|my|of|to)\b/g;
+const VAGUE_FAMILIES: Array<{ kind: string; verb: RegExp; generic: RegExp }> = [
+  { kind: 'download', verb: /\b(baix\w+|download\w*|descarg\w+)\b/,
+    generic: /\b(musica|musicas|music|song|songs|video|videos|som|sons|audio|audios|cancao|cancoes|cancion|canciones|clipe|clipes|filme|filmes|movie|pelicula|peliculas|arquivo|archivo|mp3|mp4|coisa|algo|cosa)\b/ },
+  { kind: 'play',     verb: /\b(toc[ae]\w*|tocar|reproduz\w+|reproduc\w+|assist\w+|play|abr[ae]\w*|abrir|open|pon|poner)\b/,
+    generic: /\b(musica|musicas|music|song|songs|cancion|canciones|video|videos|clipe|clipes|filme|filmes|movie|pelicula|peliculas|som|coisa|algo|cosa)\b/ },
+  { kind: 'image',    verb: /\b(ger[ae]\w*|gerar|gener\w+|desenh\w+|dibuj\w+|generat\w*|draw|cri[ae]\w*|criar|cre[ae]\w*|crear|creat\w*|haz|hacer)\b/,
+    generic: /\b(imagem|imagens|imagen|imagenes|foto|fotos|image|images|picture|pictures|desenho|desenhos|dibujo|dibujos|arte)\b/ },
+  { kind: 'price',    verb: /\b(quanto\s+custa|cuanto\s+cuesta|pre[cç]os?|precios?|compar\w+\s+pre[cç]\w+|compar\w+\s+precios?|how\s+much|prices?)\b/,
+    generic: /\b(pre[cç]os?|precios?|produto|produtos|producto|productos|item|itens|coisa|algo|cosa|price|prices|product)\b/ },
+  { kind: 'search',   verb: /\b(pesquis\w+|busc\w+|procur\w+|encuentr\w+|search|find|look\s+up)\b/,
+    generic: /\b(coisa|coisas|algo|isso|cosa|cosas|something|anything|stuff)\b/ },
+];
+
+/**
+ * Devolve a família do pedido vago ('download'|'play'|'image'|'price'|'search'|'playlist')
+ * ou null se o pedido tem assunto (ou nem é uma dessas ações). Pura → testável.
+ */
+export function vagueRequestKind(command: string): string | null {
+  const raw = (command || '').trim();
+  if (!raw || raw.length > 90) return null;             // frase longa sempre tem assunto
+  if (playlistNeedsTheme(raw)) return 'playlist';
+  // "baixa ESSE vídeo" / "toca ISSO" se refere à tela aberta — tem assunto, não é vago.
+  if (pointsAtOpenScreen(raw)) return null;
+  const n = normalize(raw);
+  for (const f of VAGUE_FAMILIES) {
+    if (!f.verb.test(n)) continue;
+    const leftover = n
+      .replace(f.verb, ' ')
+      .replace(f.generic, ' ')
+      .replace(VAGUE_FILLER, ' ')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (leftover.length < 2) return f.kind;             // não sobrou assunto nenhum
+  }
+  return null;
+}
+
+export function pointsAtOpenScreen(message: string): boolean {
+  return SCREEN_POINTER_RE.test(normalize(message || ''));
 }
 
 const QUICK_STRIP = new Set(
@@ -482,6 +588,8 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
       const count = cm ? Math.min(Math.max(parseInt(cm[1], 10), 1), 4) : 1;
       const STRIP = new Set(('gere gera gerar crie cria criar desenhe desenha desenhar faca faça facam imagine imagina ' +
         'uma um de do da dos das uns umas imagem imagens figura figuras desenho arte wallpaper wallpapers foto fotos por favor me pra ' +
+        'genera generar crea crear dibuja dibujar haz hacer imagen imagenes imágenes dibujo fotografia fotografias ' +
+        'un una unos unas el la los las del al mi por favor ' +
         'generate create draw make imagine an a the of image images picture pictures drawing art please').split(' '));
       const prompt = stripAgentMeta(command).replace(/([a-z])(\d)/gi, '$1 $2').split(/\s+/)
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^\d{1,2}$/.test(nw); })
@@ -548,9 +656,14 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
       const STRIP = new Set(('noticia noticias notícia notícias manchete manchetes ultima ultimas última últimas ' +
         'me da de do da dos das sobre acerca o a os as um uma sobre quero ver mostra mostrar lista quais qual ' +
         'que esta ta acontecendo aconteceu hoje agora novidade novidades por favor recentes recente do dia ' +
+        'muestrame muestra dame ensename enseñame quiero ver ultimas últimas titulares actualidad ' +
+        'el la los las un una unos unas del al mi hoy ahora sobre acerca que pasa pasando por favor ' +
         'news headlines headline latest about on of the a an what whats happening happened today now show me give').split(' '));
+      // "resume/resuma as notícias de hoje": o verbo de resumir não é assunto — sem o
+      // prefixo, "resume" sobrava como se fosse o tema da busca (buscava literalmente
+      // "resume" no Google News em vez de manchetes gerais).
       const q = stripAgentMeta(command).split(/\s+/)
-        .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw); })
+        .filter(w => { const nw = normalize(w); return w && /[a-z0-9]/.test(nw) && !STRIP.has(nw) && !/^resum/.test(nw); })
         .join(' ').trim();
       // sem assunto = "notícias do dia" (manchetes gerais)
       return { type: 'google_news', query: q.length >= 2 ? q : 'top news today' };
@@ -572,12 +685,19 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +
+        'el la los las un una unos unas ' +
         'price prices how much cheap cheapest cheaper where to buy compare of the a an for find show best value cost precio cuanto cuesta donde').split(' '));
+      // /[a-z0-9]/: token precisa ter letra/número — "?" e "!" soltos não viram busca.
       const toks = stripAgentMeta(command).split(/\s+/)
-        .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^procur/.test(nw) && !/^compar/.test(nw) && !/^barat/.test(nw) && !/^localiz/.test(nw) && !(nw in NUM_WORDS); });
+        .filter(w => { const nw = normalize(w); return w && /[a-z0-9]/.test(nw) && !STRIP.has(nw) && !/^procur/.test(nw) && !/^compar/.test(nw) && !/^barat/.test(nw) && !/^localiz/.test(nw) && !(nw in NUM_WORDS); });
       // Tira um número de CONTAGEM no início ("3 raspberry" → "raspberry"), mas mantém
       // specs/modelos no meio (iPhone 15, RTX 5070, raspberry 8gb).
       if (toks.length > 1 && /^\d{1,2}$/.test(toks[0])) toks.shift();
+      // Conector órfão na BORDA ("rtx 5070ti com" ← sobrou do "com preço barato") cai;
+      // no MEIO fica ("notebook com 16gb ram" segue inteiro).
+      const EDGE = new Set(['com', 'con', 'with', 'for', 'and', 'e', 'y', 'pra', 'para']);
+      while (toks.length && EDGE.has(normalize(toks[0]))) toks.shift();
+      while (toks.length && EDGE.has(normalize(toks[toks.length - 1]))) toks.pop();
       const q = toks.join(' ').trim();
       if (q.length >= 2) return { type: 'compare_prices', query: q };
     }

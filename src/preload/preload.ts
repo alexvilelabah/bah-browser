@@ -90,6 +90,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSaveFile: (id: string, index: number) => ipcRenderer.invoke('torrent:save-file', id, index),
   torrentRemove: (id: string, destroyStore?: boolean) => ipcRenderer.invoke('torrent:remove', id, destroyStore),
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
+  setYoutubeSkipAds: (on: boolean) => ipcRenderer.invoke('youtube:set-skip-ads', on),
   onTorrentEvent: (cb: (info: any) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:torrent-event', listener);

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalSettings } from '../store';
-import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl } from '../site-knowledge';
+import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 
 export interface StepRecord {
@@ -96,7 +96,7 @@ function isAffirmative(msg: string): boolean {
 // Verbo de AÇÃO na web (busca/abrir/baixar/comprar/preencher/comparar…). Backup do
 // roteador determinístico (detectQuickAction/atalhos). NÃO inclui "resuma/explique/o
 // que/qual" — essas são perguntas, respondidas pelo chat com o conteúdo da página.
-const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching)\b/i;
+const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching)\b/i;
 function isImperativeAction(msg: string): boolean {
   return ACTION_VERB_RE.test(msg);
 }
@@ -111,7 +111,7 @@ function isQuestion(msg: string): boolean {
 }
 
 // Pedido INFORMACIONAL / de pesquisa → resposta no painel (web-grounded, estilo Perplexity).
-const INFO_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|me\s+(diga|fala|fale|conta|explica|explique|mostra|mostre)|quero\s+saber|descub\w+|descobrir|o\s+que\b|oque\b|qual\b|quais\b|quanto\w*\b|quem\b|quando\b|onde\b|por\s*que\b|porque\b|melhor(es)?\b|vale\s+a\s+pena|compar\w+|signific\w+|diferen[cç]a|not[ií]cia\w*|ultimas?\b|search\b|find\b|look\s+up|tell\s+me|want\s+to\s+know|find\s+out|what\b|which\b|how\s+(?:much|many|long|to)|who\b|when\b|where\b|why\b|best\b|compare\b|means\b|difference|news\b|latest\b)\b/i;
+const INFO_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|me\s+(diga|fala|fale|conta|explica|explique|mostra|mostre)|ensin\w+|quero\s+saber|descub\w+|descobrir|o\s+que\b|oque\b|qual\b|quais\b|quanto\w*\b|quem\b|quando\b|onde\b|por\s*que\b|porque\b|melhor(es)?\b|vale\s+a\s+pena|compar\w+|signific\w+|diferen[cç]a|not[ií]cia\w*|ultimas?\b|search\b|find\b|look\s+up|tell\s+me|want\s+to\s+know|find\s+out|teach\s+me|how\s+to\b|what\b|which\b|how\s+(?:much|many|long|to)|who\b|when\b|where\b|why\b|best\b|compare\b|means\b|difference|news\b|latest\b)\b/i;
 function isInfoRequest(msg: string): boolean { return INFO_RE.test(msg) || isQuestion(msg); }
 
 // Verbo que OPERA numa página (faz algo, não só lê/pergunta) → agente.
@@ -122,14 +122,32 @@ function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
 const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta|a|nessa|nesta|minha)\s+aba|(?:este|esse)\s+(artigo|texto|v[ií]deo|site)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text|video|site)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
 function isAboutCurrentPage(msg: string): boolean { return CUR_PAGE_RE.test(msg); }
 
+// Dica acionável pro aviso vermelho, escolhida pelo TIPO do erro. Devolve null quando não
+// há nada útil a acrescentar (não poluir com conselho genérico onde ele não ajuda).
+function hintForError(text: string): string | null {
+  const s = (text || '').toLowerCase();
+  if (/confirm you are human|are human|captcha|rob[oô]|verifica/.test(s)) return t('hint.captcha');
+  if (/ollama|local ai|ia local/.test(s)) return t('hint.ollama');
+  if (/temporarily unavailable|free ai|indispon[ií]vel|402|busy/.test(s)) return t('hint.noAi');
+  if (/valid structured json|invalid response|did not return an action|json/.test(s)) return t('hint.modelFailed');
+  if (/step limit|limite de passos|time limit|gave no reason|stopped before finishing/.test(s)) return t('hint.tooLong');
+  if (/timed out|timeout|unresponsive/.test(s)) return t('hint.timeout');
+  if (/did not find useful results|n[aã]o encontrei|rephrase|could not open the search/.test(s)) return t('hint.noResults');
+  return null;
+}
+
 function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url.slice(0, 24); }
 }
 
 interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
-  onSendChat: (message: string, docText?: string, streamId?: string) => Promise<{ reply: string; suggestedCommand?: string }>;
-  onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }> }>;
+  /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
+   *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
+  onSendChat: (message: string, docText?: string, streamId?: string) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
+  /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
+   *  COM dica, e não uma "resposta" que disfarça a falha. */
+  onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
   onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
@@ -137,6 +155,9 @@ interface Props {
   onGoogleLogin?: () => void;
   googleLoggedIn?: boolean;
   isStartupTab?: boolean;   // só a aba inicial mostra as boas-vindas do painel
+  pageOpen?: boolean;   // há uma página real aberta (não Google home/aba nova) → gate do "sobre a tela"
+  agentDrive?: boolean;   // modo "Deixar a IA dirigir": tudo vira tarefa do agente, sem atalhos
+  panelOpen?: boolean;   // painel visível? fechado é só display:none (segue montado) → pausa o que é enfeite
   onClose: () => void;
   activeTabId: string;
   tabIds: string;   // ids das abas existentes (csv) — descarta conversas de abas fechadas
@@ -148,7 +169,7 @@ interface Props {
   onSwitchToCloud: () => void;
 }
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
@@ -157,11 +178,24 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Placeholder "vivo": 3 frases neutras vão sendo digitadas e apagadas
   // (saudação + open source + bloqueador embutido).
   const [ph, setPh] = useState('');
+  // Janela escondida (minimizada / mandada pra bandeja)? O Chromium estrangula timers de página
+  // escondida, mas NÃO quando a janela está só sem foco — e este componente segue montado mesmo
+  // com o painel fechado ('collapsed' é só display:none, pra tarefa em andamento sobreviver).
+  // Sem os dois gates abaixo o laço de digitação se re-agendava a cada ~26-95ms para sempre.
+  const [winVisible, setWinVisible] = useState(() => document.visibilityState !== 'hidden');
   useEffect(() => {
+    const onVis = () => setWinVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+  const phRunning = (panelOpen ?? true) && winVisible;
+  useEffect(() => {
+    if (!phRunning) { setPh(''); return; }   // ninguém pode ver → não anima (recomeça limpo ao voltar)
     const phrases = [
       t('composer.phLead'),
       t('composer.phEx1'),
       t('composer.phEx2'),
+      t('composer.phEx3'),
     ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -175,7 +209,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     };
     timer = setTimeout(tick, 500);
     return () => clearTimeout(timer);
-  }, [getLang()]);
+  }, [getLang(), phRunning]);
   // Auto-crescer a caixa de texto conforme digita (até um teto), estilo Comet.
   useEffect(() => {
     const el = inputRef.current;
@@ -500,7 +534,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { reply, suggestedCommand } = await Promise.race([onSendChat(msg, docText, sid), cancelled]);
+      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid), cancelled]);
+      // Erro (IA fora, chave inválida…) NÃO é resposta: vira aviso vermelho COM dica
+      // acionável. Antes se disfarçava de bolha normal da IA e a pessoa ficava sem saída.
+      if (isError) { push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
@@ -538,7 +575,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { answer, sources } = await Promise.race([onResearch(msg), cancelled]);
+      const { answer, sources, isError } = await Promise.race([onResearch(msg), cancelled]);
+      // Falha (captcha do buscador, IA fora) vira aviso vermelho COM dica — antes se
+      // disfarçava de resposta e a pessoa só via o status ciclando sem resultado claro.
+      if (isError) { push({ kind: 'error', text: String(answer).replace(/^Error(\s+summarizing)?:\s*/i, '') }); return; }
       pendingSuggestionRef.current = null;
       // Modelo de raciocínio local na síntese: pensamento não vaza na resposta da pesquisa.
       const { clean, thinking } = splitThink(answer);
@@ -564,6 +604,23 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
     busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
+    // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
+    // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
+    if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // PEDIDO VAGO ("baixe uma música", "toca uma música", "gere uma imagem", "quanto custa",
+    // "crie uma playlist com duas músicas"): sabemos a AÇÃO mas falta o ASSUNTO. Em vez de
+    // mandar pra IA (que pode estar fora e devolve erro técnico inútil), ENSINA a pedir
+    // direito — instantâneo, 0 token, e o resultado sai melhor.
+    const vagueKind = vagueRequestKind(msg);
+    if (vagueKind) {
+      pendingSuggestionRef.current = null;
+      convoTabRef.current = activeTabId;
+      stickToBottomRef.current = true;
+      push({ kind: 'chat-user', text: msg });
+      push({ kind: 'chat-assistant', text: t(`vague.${vagueKind}`) });
+      busyRef.current = false;
+      return;
+    }
     // 1) Ações determinísticas de ALTA confiança (0 token, instantâneas) passam NA FRENTE da IA —
     //    um erro do classificador nunca pode quebrar supercut/preço/notícia/download/playlist.
     if (detectQuickAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -594,7 +651,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Fallback determinístico (o roteamento de antes da IA): usado quando a classificação por IA
   // falha/demora/está indisponível (API caiu, modo local travado). 0 token, nunca deixa a caixa morta.
   const routeDeterministic = (msg: string, skipPush = false) => {
-    if (isAboutCurrentPage(msg)) { runChat(msg, undefined, undefined, skipPush); return; }
+    // Demonstrativo apontando pra tela ("esse produto é bom?") COM página real aberta → chat
+    // com o conteúdo da página (o onSendChat anexa). Preço segue no fluxo próprio.
+    const pointsAtScreen = pageOpen && isQuestion(msg)
+      && !/\b(quanto\s+custa|pre[çc]o|how\s+much|cost|barat)/i.test(msg) && pointsAtOpenScreen(msg);
+    if (isAboutCurrentPage(msg) || pointsAtScreen) { runChat(msg, undefined, undefined, skipPush); return; }
     if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
     if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
@@ -1010,6 +1071,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           </div>
           {view === 'free' && (
             <div className="free-box">
+              {/* Aviso primeiro e em vermelho: quem abre esta aba precisa entender NA HORA que
+                  o texto grátis não responde hoje, em vez de tentar e achar que quebrou. */}
+              <div className="mm-hint down">⚠️ {t('set.freeDown')}</div>
               <div className="mm-hint">🆓 {t('set.freeHint')}</div>
               {settings.apiKey?.trim() && <div className="mm-hint">🔑 {t('set.freeKeyKept')}</div>}
             </div>
@@ -1415,8 +1479,18 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
       );
     case 'report':
       return <div className="result-report">{item.text}</div>;
-    case 'error':
-      return <div className="result-error">{item.text}</div>;
+    case 'error': {
+      // 2ª camada: todo aviso vermelho ganha uma DICA acionável, escolhida pelo TIPO do erro
+      // (IA fora ≠ Ollama desligado ≠ modelo confuso). Ponto único: qualquer erro do app passa
+      // por aqui, então nenhuma origem precisa saber disso.
+      const hint = hintForError(item.text);
+      return (
+        <div className="result-error">
+          {item.text}
+          {hint && <div className="result-error-hint">💡 {hint}</div>}
+        </div>
+      );
+    }
     case 'help':
       return (
         <div className="feed-help-card">

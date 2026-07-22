@@ -255,6 +255,18 @@ body {
 
 /* ⬇️ Painel de downloads (Ctrl+J) */
 .menu-btn.dl-active{ color:var(--accent); }
+/* "Sem atalhos": APAGADO = cinza (herda o padrão do .menu-btn); LIGADO = branco.
+   Sem laranja e sem fundo colorido — o destaque é só o contraste, no tom do navegador. */
+.menu-btn.noshort-on{ color:var(--text-primary); }
+/* Só o desenho pulsa entre cinza e laranja quando ligado — o botão (fundo/hover) fica igual. */
+.menu-btn.noshort-on svg{ animation: noshortGlow 1.8s ease-in-out infinite; }
+@keyframes noshortGlow{
+  0%, 100% { color:var(--text-secondary); }
+  50% { color:var(--accent); }
+}
+/* Passos da IA: ícone + número juntos (o número sozinho não diria nada). */
+.menu-btn.steps-btn{ gap:3px; width:auto; padding:0 7px; }
+.steps-num{ font-size:11px; font-weight:700; line-height:1; letter-spacing:-0.2px; }
 .downloads-panel{ min-width:320px; max-width:380px; }
 .dl-head{ display:flex; align-items:center; justify-content:space-between; padding:4px 8px 8px; font-size:13px; font-weight:600; color:var(--text-primary); }
 .dl-list{ list-style:none; margin:0; padding:0; max-height:340px; overflow-y:auto; }
@@ -770,6 +782,8 @@ body {
   max-height:220px;overflow-y:auto;font-size:12px;animation:msgIn 0.2s ease;
 }
 .result-error{color:var(--danger);padding:6px 0;user-select:text;cursor:text;}
+/* Dica acionável sob o erro: discreta (não compete com o aviso), mas legível. */
+.result-error-hint{color:var(--text-secondary);font-size:12px;line-height:1.5;margin-top:5px;}
 .result-thought{color:var(--text-muted);padding:4px 0;font-style:italic;user-select:text;cursor:text;line-height:1.5;}
 .result-action{
   display:flex;flex-direction:column;gap:2px;padding:5px 0;
@@ -1816,6 +1830,8 @@ body {
 .mm-hint { font-size:10.5px; color:var(--text-muted); line-height:1.45; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; padding:6px 9px; }
 .mm-hint b { color:var(--text-secondary); font-weight:700; }
 .mm-hint.unsaved { color:#e0b567; border-color:rgba(224,181,103,0.4); background:rgba(224,181,103,0.08); font-weight:600; }
+/* Serviço fora do ar (hoje: IA grátis) — precisa ser impossível de confundir com dica normal. */
+.mm-hint.down { color:var(--danger); border-color:color-mix(in srgb, var(--danger) 45%, transparent); background:color-mix(in srgb, var(--danger) 10%, transparent); font-weight:700; font-size:11.5px; }
 .mode-switch { display:flex; gap:4px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:11px; padding:3px; }
 .ai-pause-btn { align-self:flex-start; padding:5px 11px; border:1px solid var(--border); border-radius:8px; background:var(--bg-tertiary); color:var(--text-secondary); cursor:pointer; font-size:11.5px; font-weight:700; transition:background .12s,color .12s,border-color .12s; }
 .ai-pause-btn:hover { background:var(--bg-hover); color:var(--text-primary); }

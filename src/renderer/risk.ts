@@ -34,6 +34,65 @@ export function classifyRisk(
   return null;
 }
 
+// ─── SEGUNDA CAMADA (LEVE): ações SOCIAIS só com pedido explícito ─────────────
+// Curtir/compartilhar/publicar/inscrever mexem na CONTA REAL da pessoa, mas não são
+// destrutivas como pagar/excluir — um diálogo de confirmação a cada uma seria irritante.
+// Regra certa (pedido do dono): se o usuário NÃO pediu, simplesmente NÃO clica — sem
+// perguntar nada; o agente é avisado e segue a tarefa de verdade.
+// Motivação real: numa bateria de diagnóstico o modelo local, mandado "abra um vídeo sobre
+// gatos", acabou clicando em CURTIR no vídeo (3x) na conta logada do usuário.
+//
+// Cada família junta: (a) como o BOTÃO se chama na página, (b) como o usuário PEDIRIA.
+const SOCIAL: Array<{ kind: string; button: RegExp; asked: RegExp }> = [
+  // dislike ANTES de like: "Não gostei" contém "gostei" — o padrão mais específico
+  // precisa ganhar, senão o rótulo sai errado (bloqueia igual, mas avisa a coisa errada).
+  { kind: 'dislike',   button: /\b(dislike|descurtir|nao\s*gostei|downvote|thumbs?\s*down)\b/,
+                       asked:  /\b(dislike|descurt\w+|nao\s*gostei|downvote|thumbs?\s*down)\b/ },
+  { kind: 'like',      button: /\b(like|curtir|curti|gostei|joinha|upvote|thumbs?\s*up)\b/,
+                       asked:  /\b(like|likea\w*|curt[ae]\w*|curtir|gostei|joinha|upvote|thumbs?\s*up|deixa\w*\s+um\s+like|dar\s+like)\b/ },
+  { kind: 'share',     button: /\b(share|compartilhar|encaminhar|forward)\b/,
+                       asked:  /\b(compartilh\w+|share|encaminh\w+|forward)\b/ },
+  { kind: 'subscribe', button: /\b(subscribe|inscrever|inscreva|inscrever-se|seguir|follow)\b/,
+                       asked:  /\b(inscrev\w+|subscrib\w+|segu[ei]\w*|follow)\b/ },
+  { kind: 'publish',   button: /\b(publicar|postar|publish|post|tweet|enviar\s+coment\w+)\b/,
+                       asked:  /\b(public\w+|post\w+|tweet\w*|coment\w+|comment)\b/ },
+  { kind: 'comment',   button: /\b(comentar|comment)\b/,
+                       asked:  /\b(coment\w+|comment)\b/ },
+];
+
+/**
+ * Devolve o "kind" da ação social a BLOQUEAR, ou null se pode seguir.
+ * Bloqueia quando: é um clique num CONTROLE (botão, não link) cujo rótulo é uma ação
+ * social E o comando do usuário não pediu aquilo.
+ * Pura → testável.
+ */
+export function socialActionToBlock(
+  action: { type: string; text?: string },
+  el: { text?: string; aria?: string; tag?: string; role?: string; href?: string } | undefined,
+  command: string,
+): string | null {
+  if (action.type !== 'click_ref' && action.type !== 'click_text' && action.type !== 'click_at') return null;
+  const norm = (s?: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  // Link com href = navegação (ex.: vídeo cujo TÍTULO contém "like"), não o botão de curtir.
+  // Só controles (button/role=button, sem href) contam como ação social.
+  if (el?.href) return null;
+  const tag = norm(el?.tag);
+  const role = norm(el?.role);
+  if (el && tag === 'a') return null;
+  if (el && tag && tag !== 'button' && role !== 'button' && role !== 'checkbox' && role !== 'switch') return null;
+  // Rótulo do controle: curto por natureza. Título longo = provavelmente não é botão.
+  const label = norm(el?.text ?? action.text);
+  const aria = norm(el?.aria);
+  const hay = `${label} ${aria}`.trim();
+  if (!hay) return null;
+  if (label.length > 40 && !aria) return null;
+  const asked = norm(command);
+  for (const s of SOCIAL) {
+    if (s.button.test(hay) && !s.asked.test(asked)) return s.kind;
+  }
+  return null;
+}
+
 // UNIFIED brake: classifies the risk of ANY action, regardless of the path
 // (click by ref/text/coordinate, fill, Enter, macro, shortcut). This way
 // payment/deletion/card ask for confirmation on every path, not only the
