@@ -15,13 +15,17 @@ If it refuses to start, try `--no-sandbox`. On some distros you may need `libsec
 
 ### What should work
 
-The whole core is cross-platform: the AI agent, ad/tracker blocking, the keyless free AI (Pollinations), local AI via Ollama, cloud API keys, document Q&A, background monitors, voice input.
+The whole core is cross-platform: the AI agent, ad/tracker blocking, YouTube ad skipping, local AI via Ollama, cloud API keys, document Q&A, background monitors, voice input.
 
 ### What does NOT work on Linux
 
-**Media downloading.** It fetches a Windows build of ffmpeg/yt-dlp, so that feature is skipped on Linux. It degrades — it does not crash.
+**Anything that plays or downloads media** — "play a song", "open a video about X", "download this music", "make a playlist". All of it resolves the video through yt-dlp, and the app fetches the Windows build of yt-dlp/ffmpeg, which cannot run here. It degrades with an error — it does not crash. Playing audio inside a page you opened yourself (YouTube in a tab) is normal Chromium and is unaffected.
 
 Also: auto-update is Windows-only. To update, download a newer AppImage.
+
+### Not a Linux problem, but worth knowing
+
+**The built-in free AI (Pollinations) is currently down on every platform.** Its provider now refuses requests the size this browser sends, with no ETA. To actually exercise the AI, use a cloud key (DeepSeek, Mistral, NVIDIA) or a local model with Ollama. Image generation still works for free.
 
 ### What I'd love to know
 
