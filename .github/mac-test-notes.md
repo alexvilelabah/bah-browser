@@ -20,9 +20,9 @@ This build is for **Apple Silicon (M1 / M2 / M3 / M4)**. It will **not** run on 
    Then open Bah normally (or right-click the app → **Open**).
 
 ### What to test (and what probably won't work)
-- ✅ **AI chat / talking about a page** — please test with a **DeepSeek** API key, and also with the built-in **🆓 Free** tab (no key, no signup). Tell me if each one answers.
+- ✅ **AI chat / talking about a page** — needs an API key now (DeepSeek is cheap and recommended) or a local Ollama model; there's no free no-key mode anymore. Tell me if it answers once configured.
 - ✅ Browsing, tabs, the assistant panel — should work.
 - ❌ **Downloading videos/music** will most likely **fail** on macOS in this build (the download helpers are Windows-only for now). Images may still work.
 
 ### Please report back
-Does it open? Does DeepSeek answer? Does the Free tab answer? Any crashes or weird behavior? Every bit helps — thank you for testing. 🙏
+Does it open? Does the AI answer once you add a key? Any crashes or weird behavior? Every bit helps — thank you for testing. 🙏
