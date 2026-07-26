@@ -26,8 +26,14 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
   return voices.find(v => re.test(v.lang));
 }
 
+// Não basta a API existir (ela existe no Linux também) — sem NENHUMA voz de sistema
+// registrada (Chromium no Linux depende de speech-dispatcher, que a maioria das
+// instalações/AppImage não tem), speechSynthesis.speak() não emite som nenhum e ainda
+// assim "funciona" silenciosamente. Exigir voz de verdade evita esse falso sucesso.
 export function ttsSupported(): boolean {
-  return typeof window !== 'undefined' && 'speechSynthesis' in window;
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
+  if (!cachedVoices.length) refreshVoices();
+  return cachedVoices.length > 0;
 }
 
 export function isSpeaking(): boolean {

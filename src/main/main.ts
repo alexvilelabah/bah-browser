@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 import fetch from 'cross-fetch';
@@ -815,17 +815,12 @@ function setupIPC(): void {
 
   // AI configuration
   ipcMain.handle('ai:set-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string, model?: string) => {
-    // Sem chave → cai no Pollinations (grátis, keyless) em vez de quebrar: o app
-    // funciona de cara pra quem nunca configurou. Com chave, usa o provedor escolhido.
+    // Constrói SEMPRE o provedor escolhido — sem fallback automático pra nada mais.
+    // Chave vazia num provedor que exige chave só aparece quando a pessoa tenta usar
+    // (erro claro no chat/agente); servidor OpenAI-compatible local segue sem exigir chave.
     // `model` = override de modelo de nuvem (ex.: seletor da NVIDIA); 4º param (ollamaModel) é do engine local.
     const prev = aiEngine;
-    // Um servidor OpenAI-compatível local (llama.cpp/LM Studio) não tem chave: aceita o
-    // provedor 'openai' SEM chave desde que haja uma baseUrl (o endereço do servidor).
-    // Sem chave E sem baseUrl → segue caindo no Pollinations (a OpenAI de verdade exige chave).
-    const hasLocalOpenAI = provider === 'openai' && !!baseUrl?.trim();
-    aiEngine = (apiKey?.trim() || provider === 'pollinations' || hasLocalOpenAI)
-      ? new AIEngine(provider, apiKey, baseUrl, undefined, model)
-      : new AIEngine('pollinations', '');
+    aiEngine = new AIEngine(provider, apiKey, baseUrl, undefined, model);
     // Salvar as Configurações NÃO pode apagar a conversa: o engine novo herda o
     // histórico de chat por aba do antigo (o feed na tela continua fazendo sentido).
     aiEngine.adoptHistoriesFrom(prev);
@@ -889,16 +884,16 @@ function setupIPC(): void {
         // Diz QUAL provedor rejeitou (antes culpava sempre o DeepSeek — um usuário com
         // chave Mistral inválida lia "DeepSeek precisa de chave" e não entendia nada).
         const prov = engine.getProvider();
-        if (prov === 'pollinations') {
-          // A engine já monta a mensagem certa pro grátis (teto de tamanho, que é definitivo,
-          // vs. queda real, onde esperar ajuda) — repassar em vez de sobrescrever. O texto
-          // genérico daqui dizia "tente daqui a pouco" e, pior, era pescado por ESTE mesmo
-          // filtro só porque a mensagem honesta cita "API key".
-          return { error: m };
-        }
         const label = prov === 'mistral' ? 'Mistral' : prov === 'nvidia' ? 'NVIDIA NIM'
           : prov === 'openai' ? 'OpenAI' : prov === 'anthropic' ? 'Anthropic' : 'DeepSeek';
-        return { error: `${label} rejected your API key (invalid, expired or unauthorized). Check the ${label} key in settings (⚙️) — or switch to the 🆓 Free tab there (no key needed).` };
+        // Sem chave nenhuma (nunca configurou) é um caso DIFERENTE de "configurou e foi
+        // rejeitada" — não existe mais fallback grátis pra disfarçar a diferença, então a
+        // mensagem tem que dizer qual dos dois é (o hint.noAi do renderer reconhece "not
+        // configured" e manda pras Configurações).
+        if (!engine.hasApiKey()) {
+          return { error: `AI not configured — add an API key (DeepSeek, Mistral, NVIDIA) in settings (⚙️), or run a local model with Ollama.` };
+        }
+        return { error: `${label} rejected your API key (invalid, expired or unauthorized). Check the ${label} key in settings (⚙️).` };
       }
       return { error: m };
     } finally {
@@ -934,7 +929,7 @@ function setupIPC(): void {
         return { ...result, _engine: 'local' };
       } catch (err: any) {
         // PRIVACIDADE: em modo local a falha do Ollama NÃO vaza pra nuvem. Em vez de mandar
-        // o conteúdo da página pro DeepSeek/Pollinations sem avisar, devolve um erro claro —
+        // o conteúdo da página pro provedor de nuvem sem avisar, devolve um erro claro —
         // o modo local fica offline de verdade. (Trocar de provedor é escolha explícita do usuário.)
         const msg = err?.message ?? String(err);
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
@@ -1921,6 +1916,10 @@ function setupIPC(): void {
   const ADBLOCK_BYPASS_HOSTS = new Set([
     'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be',
     'twitch.tv', 'www.twitch.tv',
+    // Netflix: o player é servido por vários domínios (nflxvideo/nflximg) e o EasyPrivacy
+    // derruba parte do fluxo → erro NSES-UHX antes mesmo de chegar no vídeo. Site pago,
+    // sem anúncio pra bloquear: não há o que ganhar filtrando aqui.
+    'netflix.com', 'www.netflix.com', 'nflxvideo.net', 'nflximg.net', 'nflxext.com',
     // Google: o filtro de privacidade (EasyPrivacy) quebra o fluxo de cookie do login/Gmail
     // ("Detectamos um problema com as configurações dos seus cookies"). Não bloquear o
     // Google no próprio Google vale a confiabilidade do login. (evalAdblockForHost casa subdomínio.)
@@ -2515,7 +2514,24 @@ function setupAutoUpdater(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
+  // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork
+  // castLabs (mesma versão, +wvcus). O CDM vem por component updater: baixa na PRIMEIRA
+  // execução e fica em cache. Nunca deixar isso derrubar o boot — se o download falhar,
+  // o navegador abre igual e só o vídeo protegido é que não toca.
+  // O try/catch sozinho NÃO basta: numa rede que engole o pedido (ou num Linux onde o
+  // serviço de componentes não responde) o whenReady() não rejeita, ele PENDURA — e a
+  // janela só nasce depois dele. Por isso a corrida com timeout: 20s e segue a vida.
+  try {
+    await Promise.race([
+      components.whenReady(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout de 20s')), 20000)),
+    ]);
+    console.log('[Widevine] pronto:', JSON.stringify(components.status()));
+  } catch (e) {
+    console.warn('[Widevine] indisponível (só afeta vídeo protegido: Netflix/Prime/Disney+):', e);
+  }
   // Identidade própria no Windows → a barra de tarefas usa o ícone certo, não o do electron.
   // No DEV usa um ID separado (com.vilelalab.bah.dev) pra NÃO herdar o ícone em cache do
   // app já INSTALADO (o "b" roxo do build antigo); aí o Windows usa o ícone da janela (estrela).
@@ -2527,6 +2543,12 @@ app.whenReady().then(() => {
   session.defaultSession.setUserAgent(CHROME_UA);
   const persistSession = session.fromPartition('persist:browser');
   persistSession.setUserAgent(CHROME_UA);
+  // NOTA sobre DRM: NÃO é preciso handler de 'protectedMediaIdentifier' aqui. Medido com
+  // uma página de teste de EME: pedir `distinctiveIdentifier: required` falha com
+  // NotSupportedError — mas falha IGUAL no Chrome de verdade (onde a Netflix funciona),
+  // porque no desktop isso é recurso de ChromeOS/Android. Streaming usa sessão temporária,
+  // que passa. Não adicionar handler aqui: assumir as permissões desta sessão obrigaria a
+  // decidir TODAS elas, e negar 'media' quebraria videochamada nos sites.
   // Write stealth script to disk for diagnostics, but keep Google login free of
   // session preloads. Regular webviews inject this script later on dom-ready.
   try {
@@ -2618,14 +2640,14 @@ app.whenReady().then(() => {
   startCookieFlushInterval();
   setupAutoUpdater();
 
-  // Default cloud engine: Pollinations (free, keyless) so the app works out of the box.
-  // The user can switch to DeepSeek/Mistral/NVIDIA with a key in settings for full power.
-  aiEngine = new AIEngine('pollinations', '');
+  // Placeholder até o renderer montar e mandar a config real salva (App.tsx chama
+  // ai:set-provider no boot, poucos ms depois) — sem chave, então sem uso até lá.
+  aiEngine = new AIEngine('deepseek', '');
   pageAgent = new PageAgent(aiEngine);
   warmAiConnection();   // 1ª mensagem sem TLS frio (o set-provider do renderer re-aquece se trocar)
 
   // Cron-Agent: carrega os monitores salvos e re-agenda. Usa o motor de nuvem ativo
-  // (Pollinations keyless por padrão) pra avaliar a condição. A bandeja é opcional (flag).
+  // pra avaliar a condição. A bandeja é opcional (flag).
   try {
     minimizeToTray = fs.readFileSync(path.join(app.getPath('userData'), 'tray.flag'), 'utf8').trim() === '1';
   } catch { minimizeToTray = false; }

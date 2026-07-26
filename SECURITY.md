@@ -30,8 +30,8 @@ the entire boundary between the web/UI side and the privileged side (see below).
 ## What leaves your machine
 
 - **Cloud AI mode (default for the agent):** the page text and a screenshot of the current
-  page are sent to the **AI provider you chose** (DeepSeek / Mistral / NVIDIA NIM /
-  Pollinations) over HTTPS, so the model can "see" the page and decide the next action. Your
+  page are sent to the **AI provider you chose** (DeepSeek / Mistral / NVIDIA NIM)
+  over HTTPS, so the model can "see" the page and decide the next action. Your
   API key (if any) goes only to that provider. Nothing goes anywhere else. See
   [`src/main/ai-engine.ts`](src/main/ai-engine.ts).
 - **Local AI mode (Ollama):** nothing leaves your machine. If the local model fails, Bah
@@ -75,7 +75,7 @@ end in a couple of hops.
 | OCR / screenshots stay local | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract on-device; image never sent to a cloud |
 | Adblock | `main.ts` (`@ghostery/adblocker-electron`, `ADBLOCK_BYPASS_HOSTS`) | EasyList/EasyPrivacy; the small bypass list (e.g. Google login) is explicit and inspectable |
 | Opt-in training-data collector | `main.ts` (`dataset:append-run`) + [`agent-run-logger.ts`](src/renderer/agent-run-logger.ts) | writes **only** to local disk, **only** when enabled; never uploaded |
-| Where your data can go (AI) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM / Pollinations (cloud) or Ollama (local) — and nothing else |
+| Where your data can go (AI) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM (cloud) or Ollama (local) — and nothing else |
 
 ---
 

@@ -268,7 +268,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiPaused ? '' : store.aiSettings.apiKey, store.aiSettings.baseUrl, store.aiSettings.model);
+    window.electronAPI?.setAIProvider(store.aiSettings.provider, store.aiSettings.apiKey, store.aiSettings.baseUrl, store.aiSettings.model);
     window.electronAPI?.setUILanguage?.(getLang());   // i18n Fase 2: agente responde no idioma da UI
     // Listeners com unsubscribe (higiene: sem cleanup, o StrictMode do dev duplicava eventos).
     const offs: Array<(() => void) | undefined> = [];
@@ -1530,14 +1530,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // QUICK INTENT: layperson media/file requests ("mp3 musica X", "baixe o
                 // pdf de Y") → execute the right action at step 0 WITHOUT calling the AI.
                 // weakModel: o atalho determinístico de PLAYLIST só entra quando a IA ativa é
-                // FRACA. A IA é FORTE só quando há uma chave de nuvem de verdade EM USO — não
-                // local, NÃO pausada, com chave, e não-Pollinations (que é sempre gpt-oss fraco,
-                // com chave ou sem). Espelha activeAiLabel(). Senão (local Ollama, API pausada,
-                // sem chave, ou Pollinations) é FRACA → precisa do atalho. O bug antes: só olhava
-                // !apiKey e ignorava apiPaused (chave DeepSeek salva + API pausada = keyless fraco).
+                // FRACA. A IA é FORTE só quando há uma chave de nuvem de verdade configurada
+                // (e não está no modo local). Espelha activeAiLabel(). Senão (local Ollama, ou
+                // sem chave nenhuma) é FRACA → precisa do atalho.
                 const s = store.aiSettings;
-                const strongCloud = !store.localSettings.enabled && !s.apiPaused
-                  && !!s.apiKey?.trim() && s.provider !== 'pollinations';
+                const strongCloud = !store.localSettings.enabled && !!s.apiKey?.trim();
                 const weakModel = !strongCloud;
                 let quickAction = aiDrive ? null : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
@@ -2511,8 +2508,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const wantN = Math.min(Math.max(Number((action as any).count) || 10, 2), 12);
                       // CURADORIA sem depender do JSON de acao (que o gpt-oss erra): peco pro
                       // modelo so LISTAR os titulos — tarefa de texto simples, confiavel ate no
-                      // modelo fraco (keyless Pollinations ou gpt-oss local, que sao o mesmo
-                      // modelo). Depois a "mao" resolve cada um no YouTube. Se a lista vier
+                      // modelo fraco (gpt-oss local, por exemplo). Depois a "mao" resolve cada
+                      // um no YouTube. Se a lista vier
                       // vazia/ruim, FALLBACK = busca top-N do artista (sempre funciona).
                       onProgress({ kind: 'status', message: `🎵 Picking ${wantN} "${plArtist}" songs…` });
                       let vids: Array<{ id: string; title: string }> = [];
@@ -3401,7 +3398,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Aguarda a persistência REAL (cifrar + gravar): fechar o app logo após
               // Salvar não pode perder a config nova (a gravação é encadeada no store).
               await store.setAISettings(settings);
-              await window.electronAPI?.setAIProvider(settings.provider, settings.apiPaused ? '' : settings.apiKey, settings.baseUrl, settings.model);
+              await window.electronAPI?.setAIProvider(settings.provider, settings.apiKey, settings.baseUrl, settings.model);
             }}
             localSettings={store.localSettings}
             onLocalSettingsChange={async (ls) => {
@@ -3411,8 +3408,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               }
             }}
             onSwitchToCloud={() => {
-              // Saída de 1 clique de um modo IA Local travado (Ollama off) → nuvem grátis.
-              // O motor de nuvem já foi configurado no boot; aiChat roteia pela flag por chamada.
+              // Saída de 1 clique de um modo IA Local travado (Ollama off) → volta pra nuvem
+              // (o provedor configurado nas Configurações). aiChat roteia pela flag por chamada.
               store.setLocalSettings({ ...store.localSettings, enabled: false });
             }}
           />

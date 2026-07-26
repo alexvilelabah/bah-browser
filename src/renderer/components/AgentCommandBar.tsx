@@ -126,9 +126,12 @@ function isAboutCurrentPage(msg: string): boolean { return CUR_PAGE_RE.test(msg)
 // há nada útil a acrescentar (não poluir com conselho genérico onde ele não ajuda).
 function hintForError(text: string): string | null {
   const s = (text || '').toLowerCase();
+  // Checado ANTES do padrão "ollama" abaixo de propósito: a mensagem de "IA não
+  // configurada" cita Ollama como UMA das opções (não é falha do Ollama em si) — sem essa
+  // ordem, o texto "...or run a local model with Ollama" seria pescado pelo hint errado.
+  if (/not configured|não configurada|no configurada|rejected your api key|temporarily unavailable|busy/.test(s)) return t('hint.noAi');
   if (/confirm you are human|are human|captcha|rob[oô]|verifica/.test(s)) return t('hint.captcha');
-  if (/ollama|local ai|ia local/.test(s)) return t('hint.ollama');
-  if (/temporarily unavailable|free ai|indispon[ií]vel|402|busy/.test(s)) return t('hint.noAi');
+  if (/local ai failed|\bollama\b|local ai|ia local/.test(s)) return t('hint.ollama');
   if (/valid structured json|invalid response|did not return an action|json/.test(s)) return t('hint.modelFailed');
   if (/step limit|limite de passos|time limit|gave no reason|stopped before finishing/.test(s)) return t('hint.tooLong');
   if (/timed out|timeout|unresponsive/.test(s)) return t('hint.timeout');
@@ -168,6 +171,7 @@ interface Props {
   /** Sai do modo IA Local travado (Ollama off) → volta pra nuvem grátis. Escolha explícita, não auto-fallback. */
   onSwitchToCloud: () => void;
 }
+
 
 export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
@@ -276,13 +280,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(aiSettings);
   const [localCfg, setLocalCfg] = useState(localSettings);
-  // Qual aba de config está aberta (nuvem/grátis/local) — SEPARADO de "qual IA está ativa".
-  // Abrir a aba local só mostra os modelos; o local liga ao escolher um modelo. A aba Grátis
-  // dá um caminho EXPLÍCITO pro Pollinations keyless (antes era invisível: só pausando a API,
-  // e o botão de pausar nem aparecia sem chave — ninguém achava).
-  const viewFor = (ai: typeof aiSettings, ls: typeof localSettings): 'cloud' | 'free' | 'local' =>
-    ls.enabled ? 'local' : (ai.apiPaused || !ai.apiKey?.trim()) ? 'free' : 'cloud';
-  const [view, setView] = useState<'cloud' | 'free' | 'local'>(viewFor(aiSettings, localSettings));
+  // Qual aba de config está aberta (nuvem/local) — SEPARADO de "qual IA está ativa".
+  // Abrir a aba local só mostra os modelos; o local liga ao escolher um modelo.
+  const viewFor = (ls: typeof localSettings): 'cloud' | 'local' => ls.enabled ? 'local' : 'cloud';
+  const [view, setView] = useState<'cloud' | 'local'>(viewFor(localSettings));
   const [savedFlash, setSavedFlash] = useState(false);   // "✓ Salvo!" por 1.8s após salvar
   const [thinkIdx, setThinkIdx] = useState(0);   // frase de "pensando" que cicla no loading do chat
   // Streaming do chat: a resposta vai aparecendo palavra por palavra (estilo ChatGPT).
@@ -352,7 +353,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (!showSettings) return;
     setSettings(aiSettings);
     setLocalCfg(localSettings);
-    setView(viewFor(aiSettings, localSettings));
+    setView(viewFor(localSettings));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings]);
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
@@ -701,11 +702,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   // Selo da IA ativa (o provedor/modelo que a pessoa selecionou). SÓ lê o estado — não pesa,
-  // sem chamada nenhuma. Sem chave (e não-Pollinations) = cai no Pollinations grátis (keyless).
+  // sem chamada nenhuma. Sem chave (e sem local) = ainda não configurou nada.
   const activeAiLabel = (): string => {
     if (localSettings.enabled) return `Ollama · ${localSettings.model || 'local'}`;
     const p = aiSettings.provider;
-    if (aiSettings.apiPaused || (p !== 'pollinations' && !aiSettings.apiKey?.trim())) return 'Pollinations';
+    if (!aiSettings.apiKey?.trim()) return t('set.notConfigured');
     if (p === 'deepseek') return 'DeepSeek';
     if (p === 'mistral') return 'Mistral';
     if (p === 'openai') return 'OpenAI';
@@ -714,7 +715,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const names: Record<string, string> = { 'meta/llama-3.3-70b-instruct': 'Llama 3.3 70B', 'deepseek-ai/deepseek-v4-flash': 'DeepSeek V4 Flash', 'deepseek-ai/deepseek-v4-pro': 'DeepSeek V4 Pro', 'nvidia/llama-3.3-nemotron-super-49b-v1': 'Nemotron 49B', 'z-ai/glm-5.1': 'GLM 5.1', 'qwen/qwen3-next-80b-a3b-instruct': 'Qwen3 80B' };
       return aiSettings.model && names[aiSettings.model] ? `NVIDIA · ${names[aiSettings.model]}` : 'NVIDIA';
     }
-    return 'Pollinations';
+    return 'DeepSeek';
   };
 
   // Rascunho das Configurações difere do salvo? (liga o aviso ⚠️ + o pulso do Salvar)
@@ -1056,28 +1057,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button
               type="button"
               className={`mode-opt ${view === 'cloud' ? 'on' : ''}`}
-              onClick={() => { setView('cloud'); setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, apiPaused: false })); }}
+              onClick={() => { setView('cloud'); setLocalCfg(p => ({ ...p, enabled: false })); }}
             >☁️ {t('set.cloudMode')}<small>{t('set.cloudSmall')}</small></button>
-            <button
-              type="button"
-              className={`mode-opt ${view === 'free' ? 'on' : ''}`}
-              onClick={() => { setView('free'); setLocalCfg(p => ({ ...p, enabled: false })); setSettings(s => ({ ...s, apiPaused: true })); }}
-            >🆓 {t('set.freeMode')}<small>{t('set.freeSmall')}</small></button>
             <button
               type="button"
               className={`mode-opt ${view === 'local' ? 'on' : ''}`}
               onClick={() => setView('local')}
             >🏠 {t('set.localMode')}<small>{t('set.localSmall')}</small></button>
           </div>
-          {view === 'free' && (
-            <div className="free-box">
-              {/* Aviso primeiro e em vermelho: quem abre esta aba precisa entender NA HORA que
-                  o texto grátis não responde hoje, em vez de tentar e achar que quebrou. */}
-              <div className="mm-hint down">⚠️ {t('set.freeDown')}</div>
-              <div className="mm-hint">🆓 {t('set.freeHint')}</div>
-              {settings.apiKey?.trim() && <div className="mm-hint">🔑 {t('set.freeKeyKept')}</div>}
-            </div>
-          )}
           {view === 'cloud' && (
             <>
               <label>

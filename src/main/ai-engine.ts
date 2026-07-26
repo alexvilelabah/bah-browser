@@ -1,4 +1,4 @@
-export type AIProvider = 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
+export type AIProvider = 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'ollama';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -31,27 +31,17 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
 }
 
 // Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas de texto conforme
-// chegam. Devolve o texto completo no fim. `adGuard` (Pollinations): o tier grátis pode
-// injetar um ANÚNCIO no fim — em vez do holdback fixo de 350 chars (que impedia resposta
-// curta de streamar), seguramos só um rabinho de 32 chars (cobre um marcador chegando
-// pela metade) e paramos DE VEZ no primeiro marcador de anúncio detectado. O texto final
-// (limpo pelo strip) substitui o preview, então o rabo seguro nunca some de verdade.
+// chegam. Devolve o texto completo no fim.
 // Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
-const AD_MARKER_RE = /(?:Support Pollinations|Powered by Pollinations|🌸\s*\**\s*Ad\b)/i;
-async function readSseStream(res: Response, onDelta: (d: string) => void, adGuard = false, signal?: AbortSignal): Promise<string> {
+async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
   let buf = '';
   let full = '';
   let emitted = 0;
-  let adAt = -1;   // posição do 1º marcador de anúncio visto (nunca emitir dali em diante)
   const emitUpTo = () => {
     let target = full.length;
-    if (adGuard) {
-      if (adAt < 0) { const m = AD_MARKER_RE.exec(full); if (m) adAt = m.index; }
-      target = adAt >= 0 ? Math.min(adAt, target) : Math.max(0, target - 32);
-    }
     // Não corta no meio de um par surrogate (emoji) — evita o "�" no rabo do preview.
     if (target > 0 && target < full.length) { const c = full.charCodeAt(target - 1); if (c >= 0xD800 && c <= 0xDBFF) target -= 1; }
     if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
@@ -453,6 +443,11 @@ export class AIEngine {
   // rejeitou a chave, em vez de culpar sempre o DeepSeek).
   getProvider(): AIProvider { return this.provider; }
 
+  // Distingue "nunca configurou chave nenhuma" de "configurou e foi rejeitada" — sem chave
+  // não existe mais fallback automático (o keyless morreu), então o main precisa saber
+  // qual das duas mensagens mostrar.
+  hasApiKey(): boolean { return !!this.apiKey; }
+
   // Transfere o histórico de chat de um engine antigo pra este: salvar as Configurações
   // recria o engine, e sem isto TODA conversa em andamento era esquecida em silêncio
   // (o feed visual ficava na tela, mas o modelo não lembrava mais de nada).
@@ -467,21 +462,18 @@ export class AIEngine {
       case 'deepseek': return 'https://api.deepseek.com';
       case 'mistral': return 'https://api.mistral.ai';
       case 'nvidia': return 'https://integrate.api.nvidia.com';
-      case 'pollinations': return 'https://text.pollinations.ai';
       case 'ollama': return 'http://localhost:11434';
     }
   }
 
   // Identidade REAL da engine ativa, injetada no prompt do chat → a IA responde honestamente
-  // "quem é você" (Pollinations grátis / DeepSeek / IA local no seu PC / etc.). Só no modo chat.
+  // "quem é você" (DeepSeek / IA local no seu PC / etc.). Só no modo chat.
   private engineIdentity(isAgentMode: boolean): string {
     if (isAgentMode) return '';
     const p = this.provider;
     let who: string;
     if (p === 'ollama') {
       who = `a LOCAL AI running on the user's OWN computer via Ollama (model "${this.resolvedOllamaModel || this.ollamaModel}") — fully offline, no cloud`;
-    } else if (p === 'pollinations') {
-      who = `the browser's FREE built-in AI (powered by Pollinations) — the free, lighter/weaker option (good for quick chat; for heavier tasks a stronger API like DeepSeek works better)`;
     } else {
       const name = p === 'deepseek' ? 'DeepSeek' : p === 'mistral' ? 'Mistral' : p === 'nvidia' ? `NVIDIA NIM${this.cloudModel ? ` (model ${this.cloudModel})` : ''}` : p === 'openai' ? 'OpenAI' : p === 'anthropic' ? 'Anthropic' : String(p);
       who = `${name}, via its cloud API (the user's own key)`;
@@ -573,7 +565,7 @@ export class AIEngine {
 
   private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
     // Rastro do provedor: deixa claro QUAL engine respondeu cada request e se usou chave
-    // (ex.: "[AI] provider=pollinations chat (no-key)"). Vai pro agent.log e pro console.
+    // (ex.: "[AI] provider=deepseek chat (no-key)"). Vai pro agent.log e pro console.
     const trace = `[AI] provider=${this.provider} ${isAgentMode ? 'agent' : 'chat'} (${this.apiKey ? 'key' : 'no-key'})`;
     try {
       const logPath = require('path').join(require('electron').app.getPath('userData'), 'agent.log');
@@ -589,7 +581,6 @@ export class AIEngine {
       case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
       // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
       case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
-      case 'pollinations': return this.callPollinations(messages, isAgentMode, onDelta, signal);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
       case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
     }
@@ -650,7 +641,7 @@ export class AIEngine {
       throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!, false, signal);
+    if (streaming) return readSseStream(res, onDelta!, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -671,7 +662,7 @@ export class AIEngine {
     if (isAgentMode) body.response_format = { type: 'json_object' };
     if (streaming) body.stream = true;
 
-    // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do DeepSeek/Pollinations
+    // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do resto do arquivo
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -685,7 +676,7 @@ export class AIEngine {
       throw new Error(`Mistral API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!, false, signal);
+    if (streaming) return readSseStream(res, onDelta!, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
   }
@@ -706,7 +697,7 @@ export class AIEngine {
     if (isAgentMode) body.response_format = { type: 'json_object' };
     if (streaming) body.stream = true;
 
-    // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do DeepSeek/Pollinations
+    // timeout abortável (≠ pendurar pra sempre numa rede ruim) — mesmo padrão do resto do arquivo
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -720,85 +711,9 @@ export class AIEngine {
       throw new Error(`NVIDIA NIM API error ${res.status}: ${await res.text()}`);
     }
 
-    if (streaming) return readSseStream(res, onDelta!, false, signal);
+    if (streaming) return readSseStream(res, onDelta!, signal);
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
-  }
-
-  private async callPollinations(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
-    const streaming = !!onDelta && !isAgentMode;
-    const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
-    const formatted = messages.map(m => {
-      if (m.image) {
-        return {
-          role: m.role,
-          content: [
-            { type: 'text', text: m.content },
-            { type: 'image_url', image_url: { url: m.image } },
-          ],
-        };
-      }
-      return { role: m.role, content: m.content };
-    });
-
-    const body: any = {
-      model: 'openai-fast', // free tier on Pollinations (keyless) with vision
-      messages: [{ role: 'system', content: systemMsg }, ...formatted],
-      max_tokens: 4096,
-    };
-    if (isAgentMode) body.response_format = { type: 'json_object' };
-    if (streaming) body.stream = true;
-
-    // Endpoint OpenAI-compatible SEM chave. (O gen.pollinations.ai virou 401; este é o vivo.)
-    // O free é flaky (502/503/Cloudflare) → re-tenta em 5xx/429 e devolve erro LIMPO,
-    // sem despejar o HTML do Cloudflare na tela do usuário.
-    const url = `${this.baseUrl}/openai`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
-    };
-    let lastStatus = 0;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));
-      let res: Response;
-      try {
-        // Timeout: uma request do free travada não pode congelar o passo do agente.
-        res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 45000, signal);
-      } catch {
-        lastStatus = 0;   // timeout/rede → transitório; re-tenta (ou cai no erro limpo abaixo)
-        continue;
-      }
-      if (res.ok) {
-        let content: string;
-        if (streaming) {
-          // Holdback de 350 chars: o anúncio do free vem no FIM — seguramos o rabo do
-          // stream pra ele nunca piscar na tela; o texto final sai limpo logo abaixo.
-          content = await readSseStream(res, onDelta!, true, signal);
-        } else {
-          const data = await res.json();
-          content = data.choices?.[0]?.message?.content ?? '';
-        }
-        // Tira o anuncio que o Pollinations injeta nas respostas do tier gratis
-        // ("Support Pollinations / Powered by Pollinations / 🌸 Ad 🌸 ..."): o usuario NAO deve ver isso.
-        content = content
-          .replace(/\n+[-*_\s]*\n*\*{0,2}\s*(?:Support Pollinations|Powered by Pollinations|🌸\s*\**\s*Ad\b)[\s\S]*$/i, '')
-          .replace(/\[[^\]]*\]\(https?:\/\/[^)]*pollinations\.ai\/redirect[^)]*\)/gi, '')
-          .trimEnd();
-        return content;
-      }
-      lastStatus = res.status;
-      try { await res.text(); } catch {}   // drena o corpo (não mostramos o HTML do erro)
-      if (res.status >= 500 || res.status === 429) continue;   // transitório → re-tenta
-      break;   // 4xx definitivo → para
-    }
-    // 402 = teto do tier anônimo do Pollinations (medido em 2026-07-21): pedido minúsculo
-    // ("oi") passa, mas qualquer chamada real — que sempre carrega o prompt de sistema —
-    // estoura. É determinístico, NÃO é queda: mandar esperar seria mentira. (A geração de
-    // imagem usa outro endpoint e continua grátis de verdade.)
-    if (lastStatus === 402) {
-      throw new Error(`The browser's free AI no longer accepts requests this size — add an API key (DeepSeek, Mistral, NVIDIA) or run a local model with Ollama. Free image generation still works.`);
-    }
-    throw new Error(`The browser's free AI is temporarily unavailable — use an API key or local AI, or wait a few minutes.`);
   }
 
   private deepseekModelsCache: Set<string> | null = null;
@@ -998,7 +913,7 @@ export class AIEngine {
     }
 
     if (streaming) {
-      const text = await readSseStream(res, onDelta!, false, signal);
+      const text = await readSseStream(res, onDelta!, signal);
       return { text, usage: undefined, latencyMs: Date.now() - t0, model };
     }
     let data: any = null;

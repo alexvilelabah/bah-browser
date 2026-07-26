@@ -21,11 +21,13 @@ The whole core is cross-platform: the AI agent, ad/tracker blocking, YouTube ad 
 
 **Anything that plays or downloads media** — "play a song", "open a video about X", "download this music", "make a playlist". All of it resolves the video through yt-dlp, and the app fetches the Windows build of yt-dlp/ffmpeg, which cannot run here. It degrades with an error — it does not crash. Playing audio inside a page you opened yourself (YouTube in a tab) is normal Chromium and is unaffected.
 
+**Read-aloud (the 🔊 button and "read this page")** — uses the OS's built-in text-to-speech voices. Windows always ships one; most Linux installs (and the AppImage sandbox) don't have `speech-dispatcher` set up, so there's no voice to speak with. As of this build the button just does nothing instead of pretending to read — if you install `speech-dispatcher` + a voice (e.g. `espeak-ng`) it should start working with no app update needed.
+
 Also: auto-update is Windows-only. To update, download a newer AppImage.
 
 ### Not a Linux problem, but worth knowing
 
-**The built-in free AI (Pollinations) is currently down on every platform.** Its provider now refuses requests the size this browser sends, with no ETA. To actually exercise the AI, use a cloud key (DeepSeek, Mistral, NVIDIA) or a local model with Ollama. Image generation still works for free.
+**There's no built-in free AI chat anymore.** The old no-key fallback (Pollinations) never worked reliably enough to keep, so it was removed. To actually exercise the AI, use a cloud key (DeepSeek, Mistral, NVIDIA) or a local model with Ollama. Image generation still works for free, no key needed.
 
 ### What I'd love to know
 

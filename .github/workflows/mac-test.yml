@@ -34,6 +34,12 @@ jobs:
         with:
           node-version: 20
 
+      # O Electron aqui é o fork da castLabs (Widevine/DRM), que vem do GitHub, e o
+      # package-lock grava a URL como git+ssh://. O runner não tem chave SSH pro GitHub,
+      # então sem esta reescrita o npm ci morre em "Permission denied (publickey)".
+      - name: Buscar dependências de git via HTTPS (não SSH)
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
       - name: Instalar dependências do projeto
         run: npm ci || npm install
 

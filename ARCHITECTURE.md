@@ -50,7 +50,7 @@ sites behave exactly as they would for a human.
 | File | Responsibility |
 |---|---|
 | `main.ts` | App bootstrap, window, `<webview>` session, **all IPC handlers**, real input (`sendInputEvent`), adblock, downloads wiring, safe-browsing, hardware-accel toggle |
-| `ai-engine.ts` | Every cloud/local AI call (DeepSeek / Mistral / NVIDIA NIM / Pollinations / Ollama) + the system prompt and tool list |
+| `ai-engine.ts` | Every cloud/local AI call (DeepSeek / Mistral / NVIDIA NIM / Ollama) + the system prompt and tool list |
 | `site-locale.ts` | **Single source** for the language sites receive (Accept-Language / navigator.languages / --lang follow the UI choice) |
 | `page-agent.ts` | Cloud-side reasoning helpers for the agent |
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |

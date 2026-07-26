@@ -1,6 +1,13 @@
 appId: com.vilelalab.bah
 productName: Bah
 afterPack: build/afterPack.js
+# Assinatura VMP (Widevine/Netflix) roda AQUI, não no afterPack: o electron-builder edita
+# o .exe (ícone/versão) depois do afterPack, e isso invalidava a assinatura.
+afterSign: build/afterSign.js
+# Usa o Electron que o npm JÁ baixou em node_modules, em vez de buscar no GitHub oficial.
+# Obrigatório porque rodamos o fork da castLabs (42.5.2+wvcus, com Widevine pra Netflix):
+# essa versão não existe em github.com/electron/electron, e sem isto o build morre em 404.
+electronDist: node_modules/electron/dist
 # Os únicos módulos nativos (do webtorrent) são N-API com binários pré-compilados que já
 # carregam sob o Electron 42 (ABI-estável — provado). NÃO recompilar: evita exigir Visual
 # Studio/node-gyp no build. Seguro porque o resto das deps pesadas do Bah é WASM (sem .node).

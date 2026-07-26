@@ -1961,8 +1961,6 @@ body {
   background:var(--bg-tertiary);
 }
 .set-active-ai b { color:var(--text-primary); font-weight:700; }
-/* Aba Grátis (Pollinations explícito — antes era invisível) */
-.free-box { display:flex; flex-direction:column; gap:8px; }
 /* Salvar com mudança pendente: pulso sutil pra ninguém mais "não achar" o botão. */
 .save-settings.dirty {
   box-shadow:0 0 0 1px var(--accent), 0 0 12px 1px var(--accent-glow);

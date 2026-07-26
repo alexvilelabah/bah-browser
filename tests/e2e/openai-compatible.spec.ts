@@ -76,8 +76,8 @@ test('routes chat to a keyless OpenAI-compatible server with the chosen model', 
     expect(seenPath).toContain('/v1/chat/completions');
     expect(seenModel).toBe('my-test-model');         // o modelo do usuario chegou (fix do gpt-4o fixo)
     // Sem chave: o header nao carrega segredo nenhum (Node corta o espaco final do "Bearer ").
-    // Chegar aqui ja prova o fix do guard: sem ele, o engine cairia no Pollinations e o
-    // servidor falso nunca teria sido chamado.
+    // Chegar aqui ja prova que 'ai:set-provider' respeita o provider/baseUrl escolhidos sem
+    // nenhum fallback automatico por baixo — o servidor falso e o unico jeito da resposta chegar.
     expect((seenAuth || '').replace(/^Bearer\s*/, '')).toBe('');
   } finally {
     await app.close();

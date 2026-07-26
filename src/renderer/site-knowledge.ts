@@ -475,8 +475,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   let n = normalize(command);
 
   // CRIAR PLAYLIST — atalho DETERMINÍSTICO **só quando a IA é FRACA** (modo local Ollama
-  // OU nuvem keyless/Pollinations — o gpt-oss grátis falha em criar playlist e devolve JSON
-  // inválido → a "mão" resolve top-N e monta). Com CHAVE de nuvem forte (DeepSeek) NÃO
+  // OU nuvem sem chave configurada — o gpt-oss grátis falha em criar playlist e devolve JSON
+  // inválido, e sem chave nenhuma não tem IA pra tentar → a "mão" resolve top-N e monta,
+  // funciona mesmo com IA zero configurada). Com CHAVE de nuvem forte (DeepSeek) NÃO
   // intercepta: o modelo cura as músicas de verdade — respeita [[local-nao-mexer-na-api]].
   // Em AMBOS os casos, um comando de criar playlist NUNCA cai no detector de download
   // (retorna null → modelo). No TOPO: "crie uma playlist e SALVE 10 MÚSICAS" tem 'salve'.

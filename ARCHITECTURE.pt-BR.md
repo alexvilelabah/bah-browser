@@ -48,7 +48,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | Arquivo | Responsabilidade |
 |---|---|
 | `main.ts` | Bootstrap do app, janela, sessão do `<webview>`, **todos os handlers IPC**, input real (`sendInputEvent`), adblock, downloads, safe-browsing, toggle de aceleração |
-| `ai-engine.ts` | Toda chamada de IA nuvem/local (DeepSeek / Mistral / NVIDIA NIM / Pollinations / Ollama) + o system prompt e a lista de ferramentas |
+| `ai-engine.ts` | Toda chamada de IA nuvem/local (DeepSeek / Mistral / NVIDIA NIM / Ollama) + o system prompt e a lista de ferramentas |
 | `site-locale.ts` | **Fonte única** do idioma que os sites recebem (Accept-Language / navigator.languages / --lang seguem a escolha da UI) |
 | `page-agent.ts` | Helpers de raciocínio do agente (lado nuvem) |
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |

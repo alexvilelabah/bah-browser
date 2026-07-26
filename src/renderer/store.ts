@@ -24,12 +24,11 @@ export interface ChatMessage {
 }
 
 export interface AISettings {
-  provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'pollinations' | 'ollama';
+  provider: 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'ollama';
   apiKey: string;
   baseUrl: string;
   model?: string;                      // cloud model override (e.g. pick an NVIDIA model); empty = provider default
-  apiKeys?: Record<string, string>;   // key PER provider — the DeepSeek one never leaks into the Pollinations field
-  apiPaused?: boolean;                 // chave salva, mas "pausada" → roda a IA grátis (Pollinations) sem perder a chave
+  apiKeys?: Record<string, string>;   // key PER provider — trocar de provedor não perde a chave dos outros
 }
 
 export interface LocalSettings {
@@ -80,12 +79,13 @@ export function useTabStore() {
           if (typeof s.apiKey === 'string') s.apiKey = _dec(s.apiKey);
           if (s.apiKeys) for (const _k of Object.keys(s.apiKeys)) s.apiKeys[_k] = _dec(s.apiKeys[_k]);
         }
-        // Pollinations is no longer a SELECTABLE provider (just the keyless fallback +
-        // image generator). Anyone who had it saved migrates to DeepSeek; with no key the
-        // engine falls back to Pollinations on its own — same behavior, consistent UI.
-        if (s && s.provider === 'pollinations') {
+        // Pollinations de texto deixou de existir (2026-07-26): o keyless não aguenta o
+        // navegador de verdade e o grátis-com-chave testado não é confiável o bastante pra
+        // ficar embutido. Quem tinha isso salvo (de qualquer versão anterior) migra pra
+        // DeepSeek — sem chave, precisa configurar (não há mais fallback automático).
+        if (s && (s.provider as string) === 'pollinations') {
           s.provider = 'deepseek';
-          s.apiKey = (s.apiKeys && s.apiKeys.deepseek) || '';   // nao mandar a chave do Pollinations pro DeepSeek; sem chave cai no Pollinations
+          s.apiKey = (s.apiKeys && s.apiKeys.deepseek) || '';
           s.baseUrl = '';
         }
         return s;
