@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components } from 'electron';
+import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 import fetch from 'cross-fetch';
@@ -263,6 +263,25 @@ function findSystemBrowser(): { name: string; exe: string } | null {
   return candidates.find(c => c.exe && fs.existsSync(c.exe)) || null;
 }
 
+// Tamanho compacto e centralizado (mesma proporção do popup OAuth do próprio Google) —
+// sem isso a janela abre no tamanho padrão/último-usado do Chrome, grande demais pra um
+// formulário de login. Centraliza no monitor onde o Bah está (cai pro monitor principal
+// se a janela do Bah não existir/estiver fechada).
+function loginWindowGeometryArgs(): string[] {
+  const W = 500, H = 640;
+  try {
+    const display = mainWindow && !mainWindow.isDestroyed()
+      ? screen.getDisplayMatching(mainWindow.getBounds())
+      : screen.getPrimaryDisplay();
+    const { x: ax, y: ay, width: aw, height: ah } = display.workArea;
+    const x = ax + Math.round((aw - W) / 2);
+    const y = ay + Math.round((ah - H) / 2);
+    return [`--window-size=${W},${H}`, `--window-position=${x},${y}`];
+  } catch {
+    return [`--window-size=${W},${H}`];
+  }
+}
+
 function getFreeLocalPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const net = require('net');
@@ -409,6 +428,7 @@ async function importGoogleCookiesFromBrowserProfile(
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    ...loginWindowGeometryArgs(),
     'about:blank',
   ];
 
@@ -492,6 +512,7 @@ async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number;
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    ...loginWindowGeometryArgs(),
     loginUrl,
   ], { detached: false, stdio: 'ignore', windowsHide: false });
 
