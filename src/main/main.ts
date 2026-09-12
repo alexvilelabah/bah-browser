@@ -729,7 +729,13 @@ function createWindow(): void {
     // Em DEV (rodando pelo .bat), seta o ícone da janela/barra de tarefas pro logo novo.
     // No app EMPACOTADO o executável já leva o ícone (electron-builder), e build/ não é
     // embarcado — por isso só no dev.
-    ...(app.isPackaged ? {} : { icon: path.join(__dirname, '..', '..', 'build', 'icon.png') }),
+    // .ico e NÃO .png: no Windows o ícone de janela/barra de tarefas precisa do formato
+    // nativo (multi-resolução). Com .png o Windows costuma ignorar e mostrar o ícone do
+    // próprio electron.exe — era por isso que o atalho tinha o logo certo e a janela não.
+    // Fora do Windows o .png segue valendo (lá o .ico não serve).
+    ...(app.isPackaged
+      ? {}
+      : { icon: path.join(__dirname, '..', '..', 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png') }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
