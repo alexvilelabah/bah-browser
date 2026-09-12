@@ -4,6 +4,7 @@ import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalSettings } from '../store';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
+import { parseRepeatIntent } from '../macros';
 
 export interface StepRecord {
   step: number;
@@ -77,12 +78,19 @@ function splitThink(raw: string): { clean: string; thinking?: string } {
 // Sugestões de modelos por HARDWARE — do PC comum ao Mac de memória unificada e
 // servidores. Cada um é um nome real do Ollama (`ollama pull <nome>`). Quem tem
 // placa/memória maior pega modelos melhores; o usuário clica e baixa.
-const MODEL_SUGGESTIONS: Array<{ tier: string; models: string[] }> = [
-  { tier: '~16GB', models: ['qwen3:14b', 'gpt-oss:20b', 'gemma3:12b'] },
-  { tier: '24–32GB', models: ['qwen3:32b', 'gemma3:27b', 'deepseek-r1:32b'] },
-  { tier: '64GB+', models: ['llama3.3:70b', 'deepseek-r1:70b'] },
-  { tier: '128GB+', models: ['gpt-oss:120b', 'qwen3:235b'] },
-  { tier: '~250GB', models: ['llama3.1:405b'] },
+// `label` existe pro nome real ser longo demais pra um chip (caso dos modelos do
+// HuggingFace): mostramos o apelido, mas baixamos/instalamos por `name` — que é o que o
+// `ollama pull` entende. `rec` marca a escolha recomendada da faixa.
+const MODEL_SUGGESTIONS: Array<{ tier: string; models: Array<{ name: string; label?: string; rec?: boolean }> }> = [
+  { tier: '~16GB', models: [
+    { name: 'hf.co/Chungulus/Qwen3.8-27B-Q3_K_S-GGUF', label: 'Qwen3.8 27B · visão', rec: true },
+    { name: 'qwen3:14b' },
+    { name: 'gpt-oss:20b' },
+  ] },
+  { tier: '24–32GB', models: [{ name: 'qwen3:32b' }, { name: 'gemma3:27b' }, { name: 'deepseek-r1:32b' }] },
+  { tier: '64GB+', models: [{ name: 'llama3.3:70b' }, { name: 'deepseek-r1:70b' }] },
+  { tier: '128GB+', models: [{ name: 'gpt-oss:120b' }, { name: 'qwen3:235b' }] },
+  { tier: '~250GB', models: [{ name: 'llama3.1:405b' }] },
 ];
 
 // "sim/pode/faça/manda/bora…" — confirmação curta a uma proposta de ação do chat.
@@ -147,7 +155,7 @@ interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
   /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
    *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
-  onSendChat: (message: string, docText?: string, streamId?: string) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
+  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
   /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
@@ -159,6 +167,15 @@ interface Props {
   googleLoggedIn?: boolean;
   isStartupTab?: boolean;   // só a aba inicial mostra as boas-vindas do painel
   pageOpen?: boolean;   // há uma página real aberta (não Google home/aba nova) → gate do "sobre a tela"
+  activeTabTitle?: string;   // título da aba atual — mostrado no chip "lendo esta página"
+  activeTabUrl?: string;     // URL da aba atual — usada pra buscar o favicon do site no chip
+  agentMaxSteps?: number;    // teto de passos do agente (0 = ∞) — freio de CUSTO na nuvem
+  onAgentStepsChange?: (n: number) => void;
+  agentTimeLimitMin?: number;   // trava de tempo por tarefa em minutos (0 = desligada)
+  onAgentTimeLimitChange?: (n: number) => void;
+  onToggleAgentDrive?: () => void;   // liga/desliga a ajuda de script (só faz efeito no modo local)
+  /** Gera 2–3 perguntas curtas SOBRE a página aberta (painel vazio). Stateless, não entra na conversa. */
+  onSuggestQuestions?: () => Promise<string[]>;
   agentDrive?: boolean;   // modo "Deixar a IA dirigir": tudo vira tarefa do agente, sem atalhos
   panelOpen?: boolean;   // painel visível? fechado é só display:none (segue montado) → pausa o que é enfeite
   onClose: () => void;
@@ -173,8 +190,29 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
+  // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
+  // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
+  // sabia que podia perguntar "resuma isto" e nem pensava em tentar. O chip torna o
+  // contexto explícito (igual ao "Compartilhando …" do Claude no Chrome) e dá o controle
+  // de desligar — porque às vezes a pergunta não é sobre a página, e mandar a página
+  // junto só confunde a resposta (e gasta token à toa).
+  const [pageShared, setPageShared] = useState(true);
+  // Trocou de aba → volta a compartilhar (o "não" do usuário valia pra AQUELA página).
+  useEffect(() => { setPageShared(true); }, [activeTabId]);
+  // O CHIP usa um gate próprio, mais largo que o `pageOpen`: basta ser http(s). O `pageOpen`
+  // exclui a home do Google de propósito (não faz sentido SUGERIR perguntas sobre ela), mas a
+  // IA lê aquela página do mesmo jeito — esconder o chip ali seria desonesto e desperdiçaria
+  // justamente o primeiro momento em que o usuário abre o navegador e vê o painel.
+  const chipPageOpen = /^https?:\/\//i.test(activeTabUrl || '');
+  const pageFavicon = useMemo(() => {
+    try {
+      const p = new URL(activeTabUrl || '');
+      return (p.protocol === 'http:' || p.protocol === 'https:') ? `${p.origin}/favicon.ico` : '';
+    } catch { return ''; }
+  }, [activeTabUrl]);
+
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
   // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
@@ -254,11 +292,82 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [plusMenuOpen]);
+  // Menus dos dois freios no compositor — mesmo comportamento do "+" (fecha ao clicar fora).
+  const [limitMenuOpen, setLimitMenuOpen] = useState(false);
+  const limitWrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!limitMenuOpen) return;
+    const onDoc = (e: MouseEvent) => { if (limitWrapRef.current && !limitWrapRef.current.contains(e.target as Node)) setLimitMenuOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [limitMenuOpen]);
+  const [stepsMenuOpen, setStepsMenuOpen] = useState(false);
+  const stepsWrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!stepsMenuOpen) return;
+    const onDoc = (e: MouseEvent) => { if (stepsWrapRef.current && !stepsWrapRef.current.contains(e.target as Node)) setStepsMenuOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [stepsMenuOpen]);
+  // Rótulo curto do limite: "∞" quando desligado, senão "30min" / "8h" — precisa caber num
+  // botão pequeno ao lado do "+", então nada de texto longo.
+  const limitLabel = (min: number): string => {
+    if (!min || min <= 0) return '∞';
+    if (min < 60) return `${min}min`;
+    const h = min / 60;
+    return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+  };
+
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
   const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
   const convoTabRef = useRef<string>(activeTabId);
-  const feed = useMemo<FeedItem[]>(() => feedsByTab[activeTabId] ?? [], [feedsByTab, activeTabId]);
+  // ── CONVERSA PRESA NA ABA DE ORIGEM ──────────────────────────────────────────────
+  // As mensagens já iam pra aba onde a tarefa COMEÇOU (convoTabRef), mas o painel exibia a
+  // aba ATIVA. Quando o agente dava switch_tab/new_tab no meio (ex.: "compare as 2 abas", ou
+  // abrir a tabela de resultado), a tela pulava pra uma conversa VAZIA e a resposta ficava
+  // órfã — o usuário perguntava, o agente acertava, e nada aparecia.
+  // Agora: ao iniciar uma tarefa o painel PRENDE na conversa de origem; a troca de aba feita
+  // pelo AGENTE (que só acontece com tarefa rodando) não solta. Um clique do USUÁRIO numa aba
+  // — que por definição ocorre sem tarefa rodando — solta e volta ao normal.
+  // Regra SEM ESTADO (de propósito): enquanto uma tarefa roda, o painel mostra a conversa
+  // da aba ONDE ELA COMEÇOU — assim um switch_tab do agente no meio não faz a resposta
+  // "sumir" numa aba vazia. Parada a tarefa, o painel volta a seguir a aba ativa, sempre.
+  // A versão anterior guardava a aba numa trava (stickyTabId) que às vezes NÃO soltava e
+  // vazava a conversa de uma aba pra outra — pior que o problema que resolvia, porque
+  // abas precisam ser independentes. Sem estado, não há o que ficar preso.
+  const viewTabId = (loading || chatLoading) ? (convoTabRef.current || activeTabId) : activeTabId;
+  const feed = useMemo<FeedItem[]>(() => feedsByTab[viewTabId] ?? [], [feedsByTab, viewTabId]);
+
+  // ── PERGUNTAS SUGERIDAS SOBRE A PÁGINA ──────────────────────────────────────────
+  // Painel abrindo vazio num site = tela morta, e ninguém descobre que pode perguntar
+  // sobre a aba. Geramos 3 perguntas CURTAS sobre a página: além de preencher o vazio,
+  // ENSINAM o recurso pelo exemplo. Cache por aba+título e disparo único — a chamada é
+  // pequena e stateless, mas não pode repetir a cada abrir/fechar do painel (custo à toa).
+  const [pageSuggestions, setPageSuggestions] = useState<string[]>([]);
+  const suggCacheRef = useRef<Map<string, string[]>>(new Map());
+  const suggForRef = useRef<string>('');
+  const aiReady = !!aiSettings.apiKey || !!localSettings.enabled;
+  useEffect(() => {
+    const key = activeTabId + '|' + (activeTabTitle || '');
+    if (!panelOpen || !pageOpen || !aiReady || feed.length > 0 || !onSuggestQuestions) { setPageSuggestions([]); return; }
+    const cached = suggCacheRef.current.get(key);
+    if (cached) { setPageSuggestions(cached); return; }
+    if (suggForRef.current === key) return;   // já pedimos pra esta página
+    suggForRef.current = key;
+    let alive = true;
+    // Atraso curto: evita disparar enquanto a página ainda troca de título ao carregar.
+    const timer = setTimeout(async () => {
+      try {
+        const qs = (await onSuggestQuestions()) || [];
+        if (!alive) return;
+        const clean = qs.map(q => String(q).trim()).filter(q => q.length >= 8 && q.length <= 90).slice(0, 3);
+        suggCacheRef.current.set(key, clean);
+        setPageSuggestions(clean);
+      } catch { /* sugestão é enfeite: falhou, não mostra nada */ }
+    }, 900);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [panelOpen, pageOpen, aiReady, activeTabId, activeTabTitle, feed.length, onSuggestQuestions]);
   // Chips de PROCESSO (OBSERVE/THINK/FAST PATH/engine/status) são efêmeros: aparecem,
   // seguram ~2s e somem sozinhos (fade + o resto sobe) pra não poluir. Resultado, cards,
   // chat e erro NÃO são status → ficam. Mira só em kind:'event' com event.kind==='status'.
@@ -359,6 +468,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
   const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string }>>([]);
   const [pullName, setPullName] = useState('');
+  // Faixa de hardware aberta no acordeão de sugestões (uma por vez). Abre na ~16GB: é a
+  // placa mais comum e onde fica o modelo recomendado.
+  const [openTier, setOpenTier] = useState<string | null>('~16GB');
   const [pullMsg, setPullMsg] = useState('');
   const [pulling, setPulling] = useState(false);
   const [ggufPath, setGgufPath] = useState('');
@@ -535,7 +647,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid), cancelled]);
+      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared), cancelled]);
       // Erro (IA fora, chave inválida…) NÃO é resposta: vira aviso vermelho COM dica
       // acionável. Antes se disfarçava de bolha normal da IA e a pessoa ficava sem saída.
       if (isError) { push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
@@ -608,6 +720,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
     // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
     if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // "repete" / "repete 100 vezes" / "a cada 5 min" é ORDEM de replay de macro (0 token),
+    // nunca conversa. Vai direto pro agente, que é onde o replay determinístico vive. Sem
+    // isto o classificador mandava pra chat e a IA respondia repetindo o TEXTO ("1. repete
+    // 3 vezes / 2. repete 3 vezes"), matando o recurso que sustenta automação a noite toda.
+    if (parseRepeatIntent(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
     // PEDIDO VAGO ("baixe uma música", "toca uma música", "gere uma imagem", "quanto custa",
     // "crie uma playlist com duas músicas"): sabemos a AÇÃO mas falta o ASSUNTO. Em vez de
     // mandar pra IA (que pode estar fora e devolve erro técnico inútil), ENSINA a pedir
@@ -620,6 +737,16 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       push({ kind: 'chat-user', text: msg });
       push({ kind: 'chat-assistant', text: t(`vague.${vagueKind}`) });
       busyRef.current = false;
+      return;
+    }
+    // 0) PERGUNTA SOBRE O QUE ESTÁ NA TELA — a mais alta confiança de todas. Demonstrativo
+    //    ("quanto custa ESSE tênis?", "ESSE produto é bom?") + página real aberta = a resposta
+    //    está à vista. Precisa vir ANTES do classificador: ele mandava isso pra busca na web,
+    //    que ignora a página aberta, demora e às vezes responde sobre OUTRO produto.
+    //    Medido no mesmo clique: 42s (agente indo ao Google Shopping) → 2s (lendo a página).
+    if (pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
+      pendingSuggestionRef.current = null;
+      runChat(msg);
       return;
     }
     // 1) Ações determinísticas de ALTA confiança (0 token, instantâneas) passam NA FRENTE da IA —
@@ -652,10 +779,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Fallback determinístico (o roteamento de antes da IA): usado quando a classificação por IA
   // falha/demora/está indisponível (API caiu, modo local travado). 0 token, nunca deixa a caixa morta.
   const routeDeterministic = (msg: string, skipPush = false) => {
-    // Demonstrativo apontando pra tela ("esse produto é bom?") COM página real aberta → chat
-    // com o conteúdo da página (o onSendChat anexa). Preço segue no fluxo próprio.
-    const pointsAtScreen = pageOpen && isQuestion(msg)
-      && !/\b(quanto\s+custa|pre[çc]o|how\s+much|cost|barat)/i.test(msg) && pointsAtOpenScreen(msg);
+    // Demonstrativo apontando pra tela ("esse produto é bom?", "quanto custa esse tênis?")
+    // COM página real aberta → chat com o conteúdo da página (o onSendChat anexa).
+    // PREÇO ENTRA AQUI TAMBÉM: o detectQuickAction já devolve null quando há demonstrativo
+    // (site-knowledge.ts), então excluir preço não protegia o fluxo de comparação — só
+    // empurrava "quanto custa ESSE tênis?" pra busca na web, ignorando a página na tela.
+    const pointsAtScreen = pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg);
     if (isAboutCurrentPage(msg) || pointsAtScreen) { runChat(msg, undefined, undefined, skipPush); return; }
     if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
@@ -676,6 +805,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     setInput('');
     routeCommand(msg);
   };
+
 
   // MODO IMAGEM (one-shot): gera UMA imagem do texto digitado e desmarca a caixinha.
   const runImage = (prompt: string) => {
@@ -951,8 +1081,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     return typeof off === 'function' ? off : undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings, view, localCfg.baseUrl]);
-  const handlePull = async () => {
-    const m = pullName.trim(); if (!m || pulling) return;
+  const handlePull = async (modelArg?: string) => {
+    const m = (modelArg ?? pullName).trim(); if (!m || pulling) return;
     setPulling(true); setPullMsg('Preparing Ollama…');
     // Garante o Ollama rodando — sobe ele sozinho se estiver instalado mas fechado
     // (sem o usuário precisar abrir o app na mão).
@@ -963,6 +1093,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       if (ens?.started) setPullMsg('Ollama started ✓');
       if (!ens?.ok && ens?.notInstalled) {
         setOllamaUp(false);
+        setOllamaInstalled(false);   // faz aparecer o botão "Instalar Ollama" no status acima
         setPullMsg('Ollama is not installed. Click "Install Ollama" above, install it, open it, and try again.');
         setPulling(false); return;
       }
@@ -1035,7 +1166,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
             </svg>
           </button>
-          <button onClick={() => { setFeedsByTab(m => ({ ...m, [activeTabId]: [] })); window.electronAPI?.clearChatHistory?.(activeTabId); }} title={t('assist.clear')}>
+          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewTabId]: [] })); window.electronAPI?.clearChatHistory?.(viewTabId); }} title={t('assist.clear')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
           <button onClick={onClose} title={t('assist.close')}>
@@ -1201,21 +1332,37 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       placeholder={t('mm.pullPlaceholder')} />
                     {pulling
                       ? <button className="mm-cancel" onClick={handleCancelPull} title={t('mm.stopTitle')}>{t('mm.stop')}</button>
-                      : <button onClick={handlePull} disabled={!pullName.trim()}>{t('mm.download')}</button>}
+                      : <button onClick={() => handlePull()} disabled={!pullName.trim()}>{t('mm.download')}</button>}
                   </div>
                   {(pullMsg || startMsg) && <div className="mm-prog">{pullMsg || startMsg}</div>}
                   <div className="mm-sugg">
                     <div className="mm-sugg-cap">{t('mm.suggestions')}</div>
-                    {MODEL_SUGGESTIONS.map(g => (
-                      <div key={g.tier} className="mm-sugg-row">
-                        <span className="mm-tier">{g.tier}</span>
-                        <span className="mm-chips">
-                          {g.models.map(s => (
-                            <button key={s} className="mm-chip" onClick={() => setPullName(s)}>{s}</button>
-                          ))}
-                        </span>
-                      </div>
-                    ))}
+                    {MODEL_SUGGESTIONS.map(g => {
+                      const open = openTier === g.tier;
+                      return (
+                        <div key={g.tier} className={`mm-tier-group${open ? ' open' : ''}`}>
+                          <button type="button" className="mm-tier-btn"
+                            onClick={() => setOpenTier(open ? null : g.tier)}
+                            aria-expanded={open}>
+                            <span className="mm-tier-arrow">{open ? '▾' : '▸'}</span>
+                            <span className="mm-tier-name">{g.tier}</span>
+                            <span className="mm-tier-count">{g.models.length}</span>
+                          </button>
+                          {open && (
+                            <div className="mm-chips">
+                              {g.models.map(s => (
+                                <button key={s.name} className={`mm-chip${s.rec ? ' rec' : ''}`}
+                                  onClick={() => { setPullName(s.name); handlePull(s.name); }}
+                                  disabled={pulling}
+                                  title={s.name}>
+                                  {s.rec ? '★ ' : ''}{s.label || s.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                   <details className="mm-imp mm-imp-open" open>
                     <summary>{t('mm.importGguf')}</summary>
@@ -1246,6 +1393,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
       {/* ── Unified activity feed (infinite scroll, persists across tasks) ── */}
       <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll}>
+        {/* Página aberta e conversa vazia: em vez de um painel morto, mostra perguntas
+            SOBRE esta página. Ancorado embaixo (perto do compositor), como um convite. */}
+        {feed.length === 0 && pageOpen && pageSuggestions.length > 0 && (
+          <div className="page-sugg">
+            <div className="page-sugg-cap">{t('sugg.about').replace('{page}', activeTabTitle || '')}</div>
+            {pageSuggestions.map((q, i) => (
+              <button
+                key={i}
+                type="button"
+                className="page-sugg-chip"
+                // runChat, NÃO runUnified: estas perguntas foram GERADAS a partir do texto
+                // desta página — são conversa sobre ela, por construção. Passando pelo
+                // roteador, "qual o preço de X" batia no atalho de preço e virava tarefa de
+                // agente: 42s, saía do site e respondia com outro produto do Google Shopping.
+                onClick={() => { if (!loading && !chatLoading && !busyRef.current) runChat(q); }}
+              >{q}</button>
+            ))}
+          </div>
+        )}
         {feed.length === 0 && isStartupTab && (
           <div className="feed-empty">
             {!aiSettings.apiKey && !localSettings.enabled && (
@@ -1270,7 +1436,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
           return <div key={item.id} className={cls}>{row}</div>;
         })}
-        {chatLoading && convoTabRef.current === activeTabId && (
+        {chatLoading && convoTabRef.current === viewTabId && (
           (streamText || streamThink)
             ? <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div>
                 {/* Pensando AGORA: uma linha só, com as frases CRUAS do raciocínio passando
@@ -1288,12 +1454,35 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               </div>
             : <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content thinking-line">{thinkPhrases[thinkIdx % thinkPhrases.length] || '…'}</div></div>
         )}
-        {loading && convoTabRef.current === activeTabId && (
+        {loading && convoTabRef.current === viewTabId && (
           <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
         )}
       </div>
 
       {/* ── Composer: um bloco ÚNICO, limpo e generoso (estilo Comet) ── */}
+      {/* Contexto da aba aberta — FORA da caixa, como uma linha solta logo acima dela (é o
+          layout do Comet). Dentro da caixa ele competia visualmente com o que se digita;
+          aqui lê como legenda: "é sobre esta página que estamos falando". Só aparece com
+          página real e sem documento anexado (o doc manda no contexto e tem chip próprio). */}
+      {chipPageOpen && !attachedDoc && (
+        <div className={`composer-page-line${pageShared ? '' : ' off'}`}>
+          {/* Favicon do site em vez de emoji genérico: reconhecimento de relance.
+              Cai pro emoji se o site não servir ícone. */}
+          {pageShared && pageFavicon
+            ? <img className="composer-page-fav" src={pageFavicon} alt="" draggable={false}
+                   onError={e => { e.currentTarget.style.display = 'none'; }} />
+            : <span className="composer-page-ic">{pageShared ? '🌐' : '🚫'}</span>}
+          <span className="composer-page-name" title={activeTabTitle || ''}>
+            {pageShared ? (activeTabTitle || '—') : t('composer.pageOff')}
+          </span>
+          <button
+            type="button"
+            className="composer-page-x"
+            onClick={() => setPageShared(v => !v)}
+            title={pageShared ? t('composer.pageOffTitle') : t('composer.pageOnTitle')}
+          >{pageShared ? '✕' : '↩'}</button>
+        </div>
+      )}
       <div className="composer">
         {attachedDoc && (
           <div className="composer-attach">
@@ -1343,6 +1532,102 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               </div>
             )}
           </div>
+          {/* TRAVA DE TEMPO, no compositor e não escondida nas Configurações: é AQUI que a
+              tarefa é disparada, então é aqui que se decide "até onde ela pode ir". Mostra o
+              estado atual (∞ ou o tempo), então dá pra conferir de relance antes de mandar
+              algo longo — sem abrir engrenagem nenhuma. */}
+          {onAgentTimeLimitChange && (
+            <div className="composer-limit-wrap" ref={limitWrapRef}>
+              <button
+                type="button"
+                className={`composer-limit${limitMenuOpen ? ' open' : ''}${(agentTimeLimitMin ?? 0) > 0 ? ' on' : ''}`}
+                onClick={() => setLimitMenuOpen(v => !v)}
+                title={`${t('settings.timeLimit')}: ${limitLabel(agentTimeLimitMin ?? 0)}`}
+                aria-label={t('settings.timeLimit')}
+                aria-expanded={limitMenuOpen}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2" /><path d="M9 2h6" />
+                </svg>
+                <span className="composer-limit-val">{limitLabel(agentTimeLimitMin ?? 0)}</span>
+              </button>
+              {limitMenuOpen && (
+                <div className="composer-plus-menu composer-limit-menu" role="menu">
+                  {[0, 10, 30, 60, 120, 240, 480, 720, 1440].map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      role="menuitem"
+                      className={(agentTimeLimitMin ?? 0) === v ? 'on' : ''}
+                      onClick={() => { setLimitMenuOpen(false); onAgentTimeLimitChange(v); }}
+                    >
+                      {v === 0 ? t('settings.timeLimitOff') : limitLabel(v)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {/* TETO DE PASSOS, colado na trava de tempo: os dois respondem "até onde essa tarefa
+              pode ir", então ficam juntos e à vista no momento de disparar. Ambos nascem
+              desligados (∞) — freio é escolha, não precaução. */}
+          {onAgentStepsChange && (
+            <div className="composer-limit-wrap" ref={stepsWrapRef}>
+              <button
+                type="button"
+                className={`composer-limit${stepsMenuOpen ? ' open' : ''}${(agentMaxSteps ?? 0) > 0 ? ' on' : ''}`}
+                onClick={() => setStepsMenuOpen(v => !v)}
+                title={`${t('settings.steps')}: ${(agentMaxSteps ?? 0) > 0 ? agentMaxSteps : '∞'}`}
+                aria-label={t('settings.steps')}
+                aria-expanded={stepsMenuOpen}
+              >
+                {/* Pegadas = "passos" (mesmo ícone que estava na barra de cima). */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <g transform="rotate(-12 7 8)"><ellipse cx="7" cy="6.8" rx="3" ry="4.2" /><ellipse cx="7" cy="12.6" rx="2.5" ry="1.8" /></g>
+                  <g transform="rotate(-12 17 15)"><ellipse cx="17" cy="13" rx="3" ry="4.2" /><ellipse cx="17" cy="18.8" rx="2.5" ry="1.8" /></g>
+                </svg>
+                <span className="composer-limit-val">{(agentMaxSteps ?? 0) > 0 ? agentMaxSteps : '∞'}</span>
+              </button>
+              {stepsMenuOpen && (
+                <div className="composer-plus-menu composer-limit-menu" role="menu">
+                  {[0, 25, 50, 100].map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      role="menuitem"
+                      className={(agentMaxSteps ?? 0) === v ? 'on' : ''}
+                      onClick={() => { setStepsMenuOpen(false); onAgentStepsChange(v); }}
+                    >
+                      {v === 0 ? `∞ ${t('settings.stepsUnlimited')}` : String(v)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {/* AJUDA DE SCRIPT (atalhos determinísticos). Só no modo LOCAL: na nuvem a IA sempre
+              decide e o controle seria inerte. Nasce DESLIGADA — os atalhos chegavam a picar a
+              frase do usuário; quem quiser a velocidade deles (útil com modelo fraco) liga aqui. */}
+          {localSettings.enabled && onToggleAgentDrive && (
+            <button
+              type="button"
+              className={`composer-limit composer-shortcuts${!agentDrive ? ' on' : ''}`}
+              onClick={() => onToggleAgentDrive()}
+              title={agentDrive ? t('bar.shortcutsOffTitle') : t('bar.shortcutsOnTitle')}
+              aria-label={t('bar.shortcuts')}
+              aria-pressed={!agentDrive}
+              style={{ marginLeft: 6 }}
+            >
+              {/* RAIO, não faísca: a faísca (✦) é o símbolo universal de IA e fazia todo mundo
+                  ler este botão como "a IA" — quando ele liga/desliga ATALHOS de script, que
+                  são código determinístico, sem IA nenhuma. O nome e o ícone mentiam juntos. */}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M13 2L4.5 13.5H11l-1 8.5 8.5-11.5H12z" />
+              </svg>
+              <span className="composer-limit-val">{t('bar.shortcuts')}</span>
+              <span className="composer-onoff">{agentDrive ? t('bar.off') : t('bar.on')}</span>
+            </button>
+          )}
           {imageMode && (
             <button type="button" className="composer-mode-chip" onClick={() => setImageMode(false)} title={t('composer.removeAttach')}>
               {t('composer.imageMode')} <span aria-hidden="true">✕</span>
@@ -1452,9 +1737,20 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
               ))}
             </div>
           )}
+          {/* O comando aparece SEMPRE (truncado com "…" quando longo). Antes só era mostrado
+              se coubesse em 48 caracteres — acima disso sobrava um "Do this" pelado, que não
+              diz o que vai acontecer. Botão que dispara uma tarefa no navegador precisa dizer
+              QUAL tarefa, ainda mais se a interface está num idioma e a resposta noutro.
+              O título (hover) leva o comando inteiro. */}
           {item.suggestedCommand && (
-            <button className="chat-action-btn" onClick={() => onRunSuggestion(item.suggestedCommand!)} title={t('feed.runTaskTitle')}>
-              ⚡ {t('feed.doThis')}{item.suggestedCommand.length <= 48 ? `: ${item.suggestedCommand}` : ''}
+            <button
+              className="chat-action-btn"
+              onClick={() => onRunSuggestion(item.suggestedCommand!)}
+              title={`${t('feed.runTaskTitle')}\n\n${item.suggestedCommand}`}
+            >
+              ⚡ {t('feed.doThis')}: {item.suggestedCommand.length <= 48
+                ? item.suggestedCommand
+                : item.suggestedCommand.slice(0, 46).trimEnd() + '…'}
             </button>
           )}
           {item.localFailed && (

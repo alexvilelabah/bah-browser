@@ -1730,6 +1730,30 @@ body {
   background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px;
   box-shadow:0 12px 32px rgba(0,0,0,0.45);
 }
+/* Trava de tempo no compositor: cápsula discreta ao lado do "+", mostrando o estado atual
+   (∞ / 30min / 8h). Apagada quando desligada; acesa quando há um limite valendo — o estado
+   é a própria cor, sem precisar abrir nada pra conferir antes de disparar algo longo. */
+.agent-side-panel-host .composer-limit-wrap { position:relative; flex:0 0 auto; display:inline-flex; margin-left:6px; }
+.agent-side-panel-host .composer-limit {
+  display:inline-flex; align-items:center; gap:4px; height:28px; padding:0 9px;
+  border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-muted);
+  cursor:pointer; border-radius:999px; font-family:inherit;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.agent-side-panel-host .composer-limit:hover { background:var(--bg-hover); color:var(--text-primary); }
+.agent-side-panel-host .composer-limit.open { background:var(--bg-hover); color:var(--text-primary); }
+.agent-side-panel-host .composer-limit.on { color:var(--text-primary); border-color:var(--text-secondary); }
+.agent-side-panel-host .composer-limit-val { font-size:11px; font-variant-numeric:tabular-nums; }
+/* Selo ON/OFF do botão de atalhos: o estado precisa ser LEGÍVEL, não adivinhado pela cor.
+   Cor sozinha não diz nada — quem chega no produto não sabe se aceso é ligado ou desligado. */
+.agent-side-panel-host .composer-onoff {
+  font-size:9px; font-weight:700; letter-spacing:.04em;
+  padding:1px 5px; border-radius:999px;
+  background:var(--bg-hover); color:var(--text-muted);
+}
+.agent-side-panel-host .composer-shortcuts.on .composer-onoff { background:var(--accent,#c96442); color:#fff; }
+.agent-side-panel-host .composer-limit-menu { min-width:150px; }
+.agent-side-panel-host .composer-limit-menu button.on { background:var(--bg-hover); color:var(--text-primary); font-weight:600; }
 .agent-side-panel-host .composer-plus-menu button {
   display:flex; align-items:center; gap:10px; width:100%; text-align:left;
   padding:9px 11px; border:none; background:transparent; cursor:pointer; border-radius:8px;
@@ -1758,6 +1782,39 @@ body {
   cursor:pointer; font-size:13px; padding:2px 6px; border-radius:6px;
 }
 .agent-side-panel-host .composer-attach-x:hover { background:var(--bg-hover); color:var(--text-primary); }
+/* Perguntas sugeridas sobre a página (painel vazio). Ancoradas EMBAIXO via margin-top:auto
+   — perto do compositor, como convite, em vez de boiando no meio do vazio. */
+.agent-side-panel-host .page-sugg { margin-top:auto; display:flex; flex-direction:column; gap:6px; padding:10px 2px 4px; }
+.agent-side-panel-host .page-sugg-cap { font-size:11.5px; color:var(--text-muted); margin-bottom:2px; }
+.agent-side-panel-host .page-sugg-chip {
+  text-align:left; border:1px solid var(--border); background:var(--bg-secondary); color:var(--text-primary);
+  border-radius:12px; padding:9px 12px; font-size:12.5px; font-family:inherit; cursor:pointer; line-height:1.35;
+  transition:background .12s, border-color .12s, transform .12s;
+}
+.agent-side-panel-host .page-sugg-chip:hover { background:var(--bg-hover); border-color:var(--text-secondary); transform:translateY(-1px); }
+/* Contexto da página: LINHA SOLTA acima da caixa (layout do Comet), sem moldura nem fundo.
+   Dentro da caixa ele competia visualmente com o que se digita; aqui lê como legenda do que
+   está em foco. O ✕ só aparece no hover — o normal é não mexer nisso, então não pede atenção. */
+.agent-side-panel-host .composer-page-line {
+  display:flex; align-items:center; gap:7px;
+  margin:0 20px -2px; padding:2px 0;
+  font-size:11.5px; color:var(--text-muted); min-width:0;
+}
+.agent-side-panel-host .composer-page-line.off { opacity:.6; }
+.agent-side-panel-host .composer-page-fav { width:14px; height:14px; border-radius:3px; object-fit:contain; flex:0 0 auto; }
+.agent-side-panel-host .composer-page-ic { font-size:12px; flex:0 0 auto; line-height:1; }
+.agent-side-panel-host .composer-page-name {
+  flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.agent-side-panel-host .composer-page-line.off .composer-page-name { text-decoration:line-through; }
+.agent-side-panel-host .composer-page-x {
+  flex:0 0 auto; border:none; background:none; color:var(--text-muted);
+  cursor:pointer; font-size:11px; line-height:1; padding:2px 4px; border-radius:5px;
+  opacity:0; transition:opacity .12s, background .12s, color .12s;
+}
+.agent-side-panel-host .composer-page-line:hover .composer-page-x { opacity:1; }
+.agent-side-panel-host .composer-page-x:hover { background:var(--bg-hover); color:var(--text-primary); }
+.agent-side-panel-host .composer-page-line.off .composer-page-x { opacity:1; }
 /* Botão "⚡ Fazer isso" sob uma resposta que propôs uma ação → dispara o agente. */
 .chat-action-btn {
   margin-top:8px; display:inline-flex; align-items:center; gap:5px;
@@ -1815,11 +1872,21 @@ body {
 .mm-prog { font-size:11px; color:var(--accent); font-family:ui-monospace,monospace; }
 .mm-sugg { display:flex; flex-direction:column; gap:5px; }
 .mm-sugg-cap { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; }
-.mm-sugg-row { display:flex; align-items:flex-start; gap:6px; }
-.mm-tier { flex:0 0 auto; min-width:118px; font-size:10px; color:var(--text-muted); padding-top:3px; font-family:ui-monospace,monospace; }
 .mm-chips { display:flex; flex-wrap:wrap; gap:4px; }
 .mm-chip { border:none; background:none; color:var(--text-secondary); cursor:pointer; font-size:11px; padding:1px 3px; font-family:inherit; text-decoration:underline; text-decoration-color:rgba(255,255,255,0.18); text-underline-offset:3px; transition:color .12s; }
 .mm-chip:hover { color:var(--text-primary); text-decoration-color:var(--text-secondary); }
+.mm-chip:disabled { opacity:.45; cursor:default; }
+/* Acordeão de sugestões por faixa de hardware: clica na faixa → abre os modelos dela.
+   Só uma faixa aberta por vez; o recuo crescente dá o aspecto de "escada". */
+.mm-tier-group { display:flex; flex-direction:column; }
+.mm-tier-btn { display:flex; align-items:center; gap:6px; width:100%; border:none; background:none; cursor:pointer; padding:3px 2px; font-family:inherit; color:var(--text-muted); text-align:left; border-radius:5px; transition:background .12s, color .12s; }
+.mm-tier-btn:hover { background:rgba(255,255,255,0.05); color:var(--text-secondary); }
+.mm-tier-group.open .mm-tier-btn { color:var(--text-primary); }
+.mm-tier-arrow { flex:0 0 auto; font-size:9px; width:9px; opacity:.75; }
+.mm-tier-name { font-size:10.5px; font-family:ui-monospace,monospace; letter-spacing:.02em; }
+.mm-tier-count { margin-left:auto; font-size:9px; opacity:.5; font-variant-numeric:tabular-nums; }
+.mm-tier-group .mm-chips { padding:2px 0 6px 21px; }
+.mm-chip.rec { color:var(--text-primary); text-decoration-color:var(--accent,rgba(120,170,255,.55)); }
 .mm-imp { font-size:12px; color:var(--text-secondary); }
 .mm-imp summary { cursor:pointer; padding:4px 0; color:var(--text-secondary); font-weight:600; font-size:12px; }
 .mm-imp summary:hover { color:var(--text-primary); }

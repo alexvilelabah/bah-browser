@@ -238,7 +238,10 @@ export class PageAgent {
           : Array.isArray(action.queries) ? action.queries : [];
         return {
           type: 'create_playlist',
-          songs: songs.map((s: any) => String(s)).filter(Boolean).slice(0, 25),
+          // Sem teto artificial de 25: a playlist é montada música-a-música (e para no Stop),
+          // então deixamos passar a lista inteira que a IA nomear. 100 é só rede de segurança
+          // contra alucinação de lista gigante — nenhum artista real passa disso.
+          songs: songs.map((s: any) => String(s)).filter(Boolean).slice(0, 400),
           name: action.name ? String(action.name) : (action.title ? String(action.title) : undefined),
           private: action.private === true || /priv|particular/i.test(String(action.privacy ?? action.visibility ?? '')),
         };

@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   encryptSecret: (t: string): Promise<string> => ipcRenderer.invoke('secure:encrypt', t),
   decryptSecretSync: (t: string): string => { try { return ipcRenderer.sendSync('secure:decrypt-sync', t); } catch { return t; } },
   setUILanguage: (lang: string) => ipcRenderer.invoke('ai:set-lang', lang),
+  // Valor ESTÁTICO, resolvido no carregamento do preload: o i18n do renderer roda de forma
+  // síncrona no import e não pode esperar um invoke assíncrono.
+  systemLocale: (() => { try { return String(ipcRenderer.sendSync('app:get-system-locale') || ''); } catch { return ''; } })(),
   onZoom: (cb: (pct: number) => void) => {
     const listener = (_e: any, pct: number) => cb(pct);
     ipcRenderer.on('app:zoom', listener);
@@ -118,6 +121,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),
+  googleSwitchAccount: () => ipcRenderer.invoke('google:switch-account'),
+  siteLogin: (url: string) => ipcRenderer.invoke('site:login', url),
   googleCheckLogin: () => ipcRenderer.invoke('google:check-login'),
   clearGoogleCookies: () => ipcRenderer.invoke('cookies:clear-google'),
   preconnect: (url: string) => ipcRenderer.invoke('net:preconnect', url),

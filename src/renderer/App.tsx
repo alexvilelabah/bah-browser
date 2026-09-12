@@ -101,6 +101,8 @@ declare global {
       generateImage?: (prompt: string, count?: number) => Promise<{ success: boolean; saved: number; dir?: string; paths?: string[]; error?: string }>;
       revealInFolder?: (target: string) => Promise<{ success: boolean; error?: string }>;
       googleLogin?: () => Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }>;
+      googleSwitchAccount?: () => Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }>;
+      siteLogin?: (url: string) => Promise<{ ok: boolean; copied?: number; domain?: string; browser?: string; error?: string }>;
       googleCheckLogin?: () => Promise<{ loggedIn: boolean }>;
       clearGoogleCookies?: () => Promise<{ ok: boolean; cleared?: number; error?: string }>;
       monitorsList?: () => Promise<any[]>;
@@ -376,7 +378,21 @@ export default function App() {
   // "Deixar a IA dirigir" (modo Comet): DESLIGA os atalhos determinísticos e todo comando
   // vira tarefa do agente — a IA observa a página e decide CADA passo. Padrão OFF (os
   // atalhos são mais rápidos/grátis); melhor com chave de API (grátis/local é lento).
-  const [agentDrive, setAgentDrive] = useState<boolean>(() => { try { return localStorage.getItem('agentDrive') === '1'; } catch { return false; } });
+  // PADRÃO DEPENDE DO MODO — a mesma muleta que atrapalha um cérebro grande socorre um pequeno:
+  //   NUVEM: IA no comando (agentDrive=true, atalhos desligados). O modelo é esperto o bastante
+  //          pra dispensar, e a heurística chegava a picar a frase do usuário.
+  //   LOCAL: atalhos LIGADOS (agentDrive=false). Modelo fraco erra o roteamento e é lento;
+  //          o atalho acerta o óbvio de graça. Continua desligável no botão do compositor.
+  // Escolha explícita já salva manda sempre — o padrão só vale pra quem nunca mexeu.
+  const [agentDrive, setAgentDrive] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem('agentDrive');
+      if (raw !== null) return raw === '1';
+      const ls = localStorage.getItem('localSettings');
+      const localOn = ls ? !!JSON.parse(ls).enabled : false;
+      return !localOn;   // local → atalhos ligados; nuvem → IA decide
+    } catch { return true; }
+  });
   const agentDriveRef = useRef(agentDrive);
   agentDriveRef.current = agentDrive;
   const toggleAgentDrive = useCallback(() => {
@@ -388,15 +404,35 @@ export default function App() {
   // O handler toggleReadPage é definido abaixo, após getActiveWebview.
   const [pageSpeaking, setPageSpeaking] = useState(false);
 
-  // ── Limite de passos do agente (25/50/100) ──
-  // Escolhido no menu ⋮ (clique cicla 25→50→100), persiste. O teto de tempo da tarefa
-  // escala junto (o deadline era calibrado pros 25). Vale pro PRÓXIMO run.
+  // ── Limite de passos do agente (25/50/100/∞) ──
+  // Clique cicla 25→50→100→∞, persiste. O teto de TEMPO escala junto; em ∞ não há teto de
+  // passos NEM de tempo — é o modo "trabalha a noite toda" (pensado pra quem usa API, onde
+  // o limite virava o estorvo). Só o Stop encerra. Vale pro PRÓXIMO run.
+  // 0 = ilimitado (guardado assim); getItem(null)→25 é tratado explicitamente, senão
+  // Number(null)===0 ligaria o ∞ sozinho em quem nunca mexeu na opção.
   const [agentMaxSteps, setAgentMaxSteps] = useState<number>(() => {
-    try { const v = Number(localStorage.getItem('agentMaxSteps')); return v === 50 || v === 100 ? v : 25; } catch { return 25; }
+    try {
+      const raw = localStorage.getItem('agentMaxSteps');
+      if (raw !== null) {
+        const v = Number(raw);
+        return (v === 25 || v === 50 || v === 100 || v === 0) ? v : 0;
+      }
+      // PADRÃO: ∞ (sem teto), inclusive no modo local. Nenhum freio nasce ligado — limite é
+      // escolha explícita, não precaução. Os dois freios ficam a um clique no compositor.
+      return 0;
+    } catch { return 0; }
   });
-  const cycleAgentSteps = useCallback(() => {
-    setAgentMaxSteps(v => { const n = v === 25 ? 50 : v === 50 ? 100 : 25; try { localStorage.setItem('agentMaxSteps', String(n)); } catch {} return n; });
-  }, []);
+  // ── TRAVA DE TEMPO (opcional) ───────────────────────────────────────────────────
+  // Freio pensado pra tarefa longa sem ninguém olhando: "no máximo 8h" é mais intuitivo
+  // que contar passos, e é o único freio que age quando o usuário foi dormir (o botão
+  // Parar exige alguém na frente da tela). 0 = desligada, que é o padrão — coerente com
+  // o resto: nada limita por precaução, só por escolha explícita.
+  const [agentTimeLimitMin, setAgentTimeLimitMin] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem('agentTimeLimitMin'));
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch { return 0; }
+  });
   const sweepTabsRef = useRef(store.tabs); sweepTabsRef.current = store.tabs;
   const sweepActiveIdRef = useRef(store.activeTabId); sweepActiveIdRef.current = store.activeTabId;
   useEffect(() => {
@@ -524,6 +560,40 @@ export default function App() {
       try { wv?.reload?.(); } catch {}
     } catch {}
   }, [store]);
+
+  // "Trocar de conta": zera o perfil de login persistente e abre uma tela de login limpa.
+  const handleGoogleSwitch = useCallback(async () => {
+    try {
+      const result = await window.electronAPI?.googleSwitchAccount?.();
+      if (!result?.ok) { return; }
+      setGoogleLoggedIn(true);
+      const wv = webviewRefs.current.get(store.activeTab?.id) as any;
+      try { wv?.reload?.(); } catch {}
+    } catch {}
+  }, [store]);
+
+  // "Entrar neste site pelo navegador": abre o site atual no navegador do sistema pro usuário
+  // logar uma vez, e importa a sessão daquele domínio pro Bah.
+  const handleSiteLogin = useCallback(async () => {
+    const url = store.activeTab?.url || '';
+    let host = '';
+    try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+    if (!/^https?:\/\//i.test(url) || !host) { window.alert(t('menu.siteLoginNoSite')); return; }
+    if (!window.confirm(t('menu.siteLoginConfirm').replace('{site}', host))) return;
+    try {
+      const result = await window.electronAPI?.siteLogin?.(url);
+      if (result?.ok) {
+        window.alert(t('menu.siteLoginDone').replace('{n}', String(result.copied ?? 0)).replace('{site}', result.domain ?? host));
+        const wv = webviewRefs.current.get(store.activeTab?.id) as any;
+        try { wv?.reload?.(); } catch {}
+        checkGoogleLogin();
+      } else {
+        window.alert(t('menu.siteLoginFail').replace('{error}', result?.error ?? '—'));
+      }
+    } catch (e: any) {
+      window.alert(t('menu.siteLoginFail').replace('{error}', String(e?.message || e)));
+    }
+  }, [store, checkGoogleLogin]);
 
   const getActiveWebview = useCallback((): Electron.WebviewTag | null => {
     return webviewRefs.current.get(activeTabIdRef.current) ?? null;
@@ -937,46 +1007,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
           getSuggestions={getSuggestions}
         />
-        {/* Cérebro minimalista: APAGADO = atalhos ligados (o navegador resolve o óbvio sozinho);
-            ACESO = a IA está decidindo cada passo. O estado é a própria cor — sem risco no
-            meio, sem ícone espalhafatoso. */}
-        <button
-          className={`menu-btn${agentDrive ? ' noshort-on' : ''}`}
-          onClick={() => toggleAgentDrive()}
-          title={agentDrive ? t('bar.noShortcutsOn') : t('bar.noShortcutsOff')}
-          aria-label={t('bar.noShortcuts')}
-          aria-pressed={agentDrive}
-        >
-          {/* Faíscas (símbolo universal de IA hoje): APAGADO = atalhos resolvem o óbvio;
-              ACESO = a IA pensando cada passo. PREENCHIDO de propósito — o chip anterior
-              usava traço fino e sumia ao lado das pegadas (que são sólidas). */}
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12.4 3.2a.5.5 0 0 0-.95 0l-1.2 3.66a3.4 3.4 0 0 1-2.15 2.15l-3.66 1.2a.5.5 0 0 0 0 .95l3.66 1.2a3.4 3.4 0 0 1 2.15 2.15l1.2 3.66a.5.5 0 0 0 .95 0l1.2-3.66a3.4 3.4 0 0 1 2.15-2.15l3.66-1.2a.5.5 0 0 0 0-.95l-3.66-1.2a3.4 3.4 0 0 1-2.15-2.15z" />
-            <path d="M18.6 16.1a.35.35 0 0 0-.66 0l-.5 1.5a1.7 1.7 0 0 1-1.07 1.08l-1.5.5a.35.35 0 0 0 0 .66l1.5.5a1.7 1.7 0 0 1 1.07 1.07l.5 1.5a.35.35 0 0 0 .66 0l.5-1.5a1.7 1.7 0 0 1 1.08-1.07l1.5-.5a.35.35 0 0 0 0-.66l-1.5-.5a1.7 1.7 0 0 1-1.08-1.08z" />
-          </svg>
-        </button>
-        {/* Passos da IA (25→50→100): fica COLADO no botão de atalhos porque os dois afinam
-            COMO a IA trabalha — e o limite de passos pesa justamente quando ela dirige. */}
-        <button
-          className="menu-btn steps-btn"
-          onClick={() => cycleAgentSteps()}
-          title={t('bar.agentSteps').replace('{n}', String(agentMaxSteps))}
-          aria-label={t('bar.agentSteps').replace('{n}', String(agentMaxSteps))}
-        >
-          {/* Duas pegadas de sapato (sola + calcanhar), levemente giradas e em diagonal —
-              lê como "passos". Antes eram dois bonequinhos, que não comunicavam nada. */}
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-            <g transform="rotate(-12 7 8)">
-              <ellipse cx="7" cy="6.8" rx="3" ry="4.2" />
-              <ellipse cx="7" cy="12.6" rx="2.5" ry="1.8" />
-            </g>
-            <g transform="rotate(-12 17 15)">
-              <ellipse cx="17" cy="13" rx="3" ry="4.2" />
-              <ellipse cx="17" cy="18.8" rx="2.5" ry="1.8" />
-            </g>
-          </svg>
-          <span className="steps-num">{agentMaxSteps}</span>
-        </button>
         <div className="menu-wrap">
           <button
             className={`menu-btn${downloads.some(d => d.state === 'started' || d.state === 'progress') ? ' dl-active' : ''}`}
@@ -1084,6 +1114,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>
                   <span className={`menu-label${googleLoggedIn ? ' connected' : ''}`}>{googleLoggedIn ? t('menu.googleConnected') : t('menu.googleLogin')}</span>
+                </button>
+                {googleLoggedIn && (
+                  <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleSwitch(); }} title={t('menu.googleSwitchTitle')}>
+                    <span className="menu-ic">🔄</span>
+                    <span className="menu-label">{t('menu.googleSwitch')}</span>
+                  </button>
+                )}
+                <button className="menu-item" onClick={() => { setMenuOpen(false); handleSiteLogin(); }} title={t('menu.siteLoginTitle')}>
+                  <span className="menu-ic">🔓</span>
+                  <span className="menu-label">{t('menu.siteLogin')}</span>
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setMonitorsOpen(true); }} title={t('mon.menuTitle')}>
                   <span className="menu-ic">🛰️</span>
@@ -1216,6 +1256,50 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             activeTabId={store.activeTabId}
             tabIds={store.tabs.map(t => t.id).join(',')}
             pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isGoogleHome(store.activeTab?.url)}
+            activeTabTitle={store.activeTab?.title}
+            activeTabUrl={store.activeTab?.url}
+            agentMaxSteps={agentMaxSteps}
+            onAgentStepsChange={(n) => {
+              setAgentMaxSteps(n);
+              try { localStorage.setItem('agentMaxSteps', String(n)); } catch {}
+            }}
+            onToggleAgentDrive={toggleAgentDrive}
+            agentTimeLimitMin={agentTimeLimitMin}
+            onAgentTimeLimitChange={(n) => {
+              setAgentTimeLimitMin(n);
+              try { localStorage.setItem('agentTimeLimitMin', String(n)); } catch {}
+            }}
+            onSuggestQuestions={async () => {
+              // Perguntas de exemplo SOBRE a aba aberta (painel vazio). Stateless de propósito:
+              // é enfeite/descoberta, não pode entrar no histórico da conversa nem influenciar
+              // a próxima resposta. Conteúdo cortado curto — 3 perguntas não precisam da página
+              // inteira, e isso mantém a chamada barata.
+              try {
+                const content = (await getPageContent()) || '';
+                if (content.trim().length < 80) return [];
+                const prompt = [
+                  'Below is the content of a web page the user is looking at.',
+                  'Write exactly 3 SHORT questions (max 10 words each) that this user would plausibly ask ABOUT THIS PAGE.',
+                  'They must be answerable from the page. Be specific to its actual content — no generic questions.',
+                  `Write them in ${getLang() === 'pt' ? 'Portuguese' : getLang() === 'es' ? 'Spanish' : 'English'}.`,
+                  'Output ONLY the 3 questions, one per line, with no numbering, quotes or extra text.',
+                  '',
+                  '=== PAGE ===',
+                  content.slice(0, 4000),
+                ].join('\n');
+                const r = await raceTimeout(
+                  window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled) ?? Promise.resolve(undefined),
+                  12000,
+                  undefined,
+                );
+                const raw = (r?.response || '').replace(/<think>[\s\S]*?<\/think>/g, '');
+                return raw
+                  .split('\n')
+                  .map(l => l.replace(/^\s*(?:\d+[.)]\s*|[-*•]\s*)/, '').replace(/^["'“”]|["'“”]$/g, '').trim())
+                  .filter(Boolean)
+                  .slice(0, 3);
+              } catch { return []; }
+            }}
             agentDrive={agentDrive}
             panelOpen={store.sidebarOpen}
             onExecute={async (command, onProgress, signal, opts) => {
@@ -1241,14 +1325,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   setAgentVisual('idle');
                 }
               }
-              const MAX_STEPS = agentMaxSteps;   // 25/50/100 — escolha do menu ⋮
+              const MAX_STEPS = agentMaxSteps > 0 ? agentMaxSteps : Infinity;   // 0 = ∞ (menu ⋮)
               const allResults: Array<{ action: BrowserAction; result: any }> = [];
               const thoughts: string[] = [];
               macroTraceRef.current = [];                      // nova gravação por run
               // Modo "Deixar a IA dirigir": desliga TODOS os desvios determinísticos deste run
               // (macro-replay, quick actions, atalho inicial, assistentes de Gmail/YouTube) —
               // a IA observa e decide cada passo. Lido no início do run (toggle vale pro próximo).
-              const aiDrive = agentDriveRef.current;
+              // Atalhos determinísticos são MULETA DE MODELO FRACO: existem pra poupar token e
+              // acertar o óbvio quando o cérebro é limitado (modo local). Com API na nuvem o
+              // modelo raciocina melhor que qualquer heurística — e a heurística de recortar
+              // palavras chegava a PICAR a frase ("abra o site do g1 e me diga as 3 principais
+              // notícias de hoje" virava a busca "site g1 e diga 3 principais", trazendo lixo).
+              // Então o padrão inverte por modo: NUVEM = a IA decide; LOCAL = o botão decide.
+              const aiDrive = agentDriveRef.current || !store.localSettings.enabled;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
@@ -1258,6 +1348,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
               let previousStateKey = '';
               let noEffectCount = 0;
+              // DISJUNTOR: em ∞ não há teto de passos nem relógio, então uma IA teimosa
+              // poderia repetir a mesma ação pra sempre (= fatura de API infinita rodando a
+              // noite toda). O detector de loop abaixo só AVISA; isto aqui conta as
+              // reincidências e ENCERRA. Zera a cada ação produtiva, então só dispara em
+              // travamento real, não em uma repetição ocasional.
+              let loopStrikes = 0;
+              const MAX_LOOP_STRIKES = 6;
               let consecutiveExtracts = 0;   // freio anti-coleta (modelo fraco re-extrai sem reportar)
               let lastExtractedText = '';    // último texto extraído (fallback de resposta se travar)
               // Structured agent state — visible to AI on every step
@@ -1301,7 +1398,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // parte na CPU) → deadline maior pra a tarefa TERMINAR em teste interno, mesmo
               // devagar. Gated no local: NÃO altera o comportamento com API/nuvem.
               // Deadline calibrado pros 25 passos originais → escala com a escolha (50=2x, 100=4x).
-              const TASK_DEADLINE_MS = (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000;
+              // Em ∞ o relógio também sai: tarefa longa (a noite toda) não pode morrer por
+              // deadline. Só o Stop encerra. Nos demais, escala igual a antes.
+              // A trava de tempo EXPLÍCITA (Configurações) manda sobre tudo. Desligada (0),
+              // mantém o comportamento derivado dos passos — ∞ quando os passos são ∞.
+              const TASK_DEADLINE_MS = agentTimeLimitMin > 0
+                ? agentTimeLimitMin * 60 * 1000
+                : (MAX_STEPS === Infinity
+                    ? Infinity
+                    : (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000);
               const taskStartedAt = Date.now();
               const recentActionHashes: string[] = [];
               // browser-use style: track element identities to mark what's NEW after each action
@@ -1471,8 +1576,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 throwIfCancelled();
                 // ── REPLAY DE MACRO: "repete", "repete 1000 vezes", "a cada 5 min" ──
                 // Reexecuta a última sequência gravada de forma 100% determinística:
-                // zero chamadas de IA, não importa quantas repetições. (aiDrive pula: IA decide.)
-                if (repeatIntent && !aiDrive) {
+                // zero chamadas de IA, não importa quantas repetições.
+                // NÃO é gated por aiDrive: isto não é muleta de modelo fraco, é uma ORDEM
+                // EXPLÍCITA do usuário ("repete 100 vezes") — e vale MAIS na nuvem, onde cada
+                // repetição pela IA custaria dinheiro. Ficou desligado na nuvem por um tempo
+                // (efeito colateral de fazer aiDrive=true com API), matando justamente o
+                // recurso que sustenta "deixar rodando a noite toda" de graça.
+                if (repeatIntent) {
                   const macro = loadLastMacro();
                   if (!macro) {
                     const msg = 'I have no recorded automation yet. Do the task once (e.g.: "go to site X and click Y") — I record the sequence, and then you can repeat it as many times as you want.';
@@ -1536,7 +1646,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const s = store.aiSettings;
                 const strongCloud = !store.localSettings.enabled && !!s.apiKey?.trim();
                 const weakModel = !strongCloud;
-                let quickAction = aiDrive ? null : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
+                // MODO IMAGEM passa MESMO com a IA no comando: marcar a caixinha é ORDEM
+                // EXPLÍCITA do usuário, não palpite de heurística. Sem esta exceção, marcar
+                // "gerar imagem" e escrever "gato" virava uma busca na web — o pedido sumia.
+                // (Mesmo caso do "repete N vezes": ordem explícita nunca é muleta de atalho.)
+                let quickAction = (aiDrive && !opts?.forceImage)
+                  ? null
+                  : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
                 if (!aiDrive && !quickAction && lastQuickActionRef.current) {
@@ -1856,7 +1972,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     isHungObservation(observation) && ocrText ? 'PAGE UNRESPONSIVE: This page\'s scripts are hung — interactive elements, extract_text and scroll will NOT work here, and RELOADING THIS SAME URL WILL NOT FIX IT. The OCR TEXT below is a reliable snapshot of what is visible. If it contains what you need, answer now with report/done. Otherwise navigate to a DIFFERENT website (e.g. another source for the same information).' : '',
                     stuckOnUrl ? `STUCK: You have spent ${stepsOnSameUrl} steps on ${observation.url} without finishing. ABANDON this source NOW. Either: (a) navigate to a different site (Wikipedia, NotebookCheck, Wccftech), (b) use the data you already have in MEMORY and call report. Do NOT scroll or extract again on this page.` : '',
                     replanRequested && step >= 20 ? 'REPLAN: You have used 20+ steps. If you have ANY useful data in MEMORY, call report() with what you have. Better partial answer than no answer.' : '',
-                    `[STEP ${step + 1}/${MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
+                    `[STEP ${step + 1}/${MAX_STEPS === Infinity ? '∞' : MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
                   ].filter(Boolean).join('\n');
                   // ── Tier routing ──────────────────────────────────────────────
                   // Screenshots are NEVER sent to the model — OCR text replaces visual context.
@@ -1945,8 +2061,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     history += `\nLOOP DETECTED: You proposed "${actionHash}" ${priorRepeats + 1} times without progress. Do NOT repeat it — pick a different element, scroll, or change strategy entirely.`;
                     onProgress({ kind: 'status', message: `Loop detected: ${actionHash} repeated. Changing strategy.` });
                     noEffectCount = Math.max(noEffectCount, 2); // forces cloud 'pro' on next call
+                    // Disjuntor: avisar não bastou por MAX_LOOP_STRIKES vezes → encerra em vez
+                    // de girar pra sempre (essencial agora que ∞ não tem teto de passos/tempo).
+                    if (++loopStrikes >= MAX_LOOP_STRIKES) {
+                      const done: BrowserAction = {
+                        type: 'done',
+                        success: false,
+                        reason: `Stopped: the AI kept repeating "${actionHash}" and could not make progress (${loopStrikes} attempts). Try rephrasing the task, or open the page manually and ask again.`,
+                      };
+                      finishRun('failed', done.reason);
+                      return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
+                    }
                     continue;
                   }
+                  loopStrikes = 0;   // ação nova/produtiva → zera o disjuntor
                   // ── FREIO ANTI-COLETA (crucial pro modelo LOCAL) ──────────────────
                   // extract_text é isento do loop-detector acima (re-extrair é "inofensivo").
                   // Mas modelo fraco (qwen local) re-extrai o mesmo texto várias vezes sem
@@ -2492,7 +2620,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Depois: CRIA a playlist de verdade na conta (salva) e toca; se não conseguir
                     // salvar (ex.: não logado), o fallback só toca a fila temporária (watch_videos).
                     setAgentVisual('acting');
-                    const songs = (action.songs || []).map(s => String(s).trim()).filter(Boolean).slice(0, 25);
+                    // Sem teto de 25 — o loop de salvar adiciona uma a uma e para no Stop; 100 é só
+                    // salvaguarda contra lista alucinada. Na prática vai "até a IA acabar as músicas".
+                    const songs = (action.songs || []).map(s => String(s).trim()).filter(Boolean).slice(0, 400);
                     const plArtist = String((action as any).artist || '').trim();
                     let ids: string[] = [];
                     let plFail = '';
@@ -2505,7 +2635,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       ids = [...new Set(ok.map(r => r.id as string))];
                       if (ids.length < 2) plFail = `Only found ${ids.length} video(s) of the ${songs.length} songs — cannot build the playlist.`;
                     } else if (plArtist.length >= 2) {
-                      const wantN = Math.min(Math.max(Number((action as any).count) || 10, 2), 12);
+                      const wantN = Math.min(Math.max(Number((action as any).count) || 10, 2), 50);
                       // CURADORIA sem depender do JSON de acao (que o gpt-oss erra): peco pro
                       // modelo so LISTAR os titulos — tarefa de texto simples, confiavel ate no
                       // modelo fraco (gpt-oss local, por exemplo). Depois a "mao" resolve cada
@@ -2541,7 +2671,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (plFail) {
                       toolResult = { success: false, error: plFail };
                     } else {
-                        const plUrl = `https://www.youtube.com/watch_videos?video_ids=${ids.join(',')}`;
+                        // A URL watch_videos só serve pra TOCAR no fim (o YouTube limita ~50 ids nela).
+                        // A playlist SALVA recebe todas as músicas (adicionadas uma a uma abaixo) —
+                        // então capar aqui só afeta a reprodução de confirmação, não o que foi salvo.
+                        const plUrl = `https://www.youtube.com/watch_videos?video_ids=${ids.slice(0, 50).join(',')}`;
                         const beforeUrl = wv.getURL();
                         // Nome + privacidade: da action (detector/modelo já extraiu limpo) ou do
                         // comando cru. Lookahead PARA em com/with/e/and/que — senão o nome viraria
@@ -2695,7 +2828,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     await waitForSettle(wv, { maxMs: 4000, minMs: 300 });   // espera o Shopping ASSENTAR (não tempo fixo)
                     let items: Array<{ title: string; price: number; store: string; url: string }> = [];
                     try { items = await withTimeout(wv.executeJavaScript(PRICE_EXTRACTOR_JS, false), 9000, [] as any); } catch { /* página hostil */ }
-                    const valid = (items || []).filter(x => x && x.price > 0 && x.title);
+                    const rawValid = (items || []).filter(x => x && x.price > 0 && x.title);
+                    // ── FILTRO DE PLAUSIBILIDADE ────────────────────────────────────────────
+                    // O extrator pega o 1º "R$" do bloco, que nem sempre é o preço do produto:
+                    // cashback, desconto, frete e parcela solta viram "ofertas" ridículas — e,
+                    // como a lista é ordenada do mais barato, o LIXO virava a manchete
+                    // ("iPhone 16 por R$ 3,21"). Descartamos o que está absurdamente abaixo da
+                    // MEDIANA (< 25%): num comparativo do MESMO produto, esses valores nunca
+                    // são o preço real. Mediana (não média) pra um único outlier não puxar o corte.
+                    const priceList = rawValid.map(x => x.price).sort((a, b) => a - b);
+                    const median = priceList.length
+                      ? priceList[Math.floor(priceList.length / 2)]
+                      : 0;
+                    const floor = median * 0.25;
+                    const valid = median > 0 ? rawValid.filter(x => x.price >= floor) : rawValid;
+                    const dropped = rawValid.length - valid.length;
+                    if (dropped > 0) console.warn(`[ComparePrices] ${dropped} oferta(s) descartada(s) abaixo de R$ ${floor.toFixed(2)} (provável parcela/cashback/frete).`);
                     if (valid.length >= 2) {
                       const sorted = valid.sort((a, b) => a.price - b.price).slice(0, 30);
                       const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2990,6 +3138,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       } }
                       var md = out.join('\\n\\n').replace(/\\n{3,}/g,'\\n\\n').trim();
                       if (md.length < 200){ md = clean(document.body.innerText); }  // fallback duro
+                      // ── RESGATE DE DADOS NÃO-PROSA ────────────────────────────────────
+                      // A poda acima é feita pra ARTIGO: só h1-h6/p/li/blockquote entram, e
+                      // botões/formulários/aside são removidos. Em página de PRODUTO o preço
+                      // mora em span/div dentro desses blocos removidos → sumia por completo.
+                      // O agente então "não achava o preço", re-extraía, rolava a página e
+                      // acabava indo buscar no Google Shopping (42s e o produto errado),
+                      // enquanto o valor estava ali na tela o tempo todo.
+                      // Se o corpo tem valores em dinheiro que o texto extraído perdeu,
+                      // anexamos os visíveis — barato, e devolve a visão que faltava.
+                      var body = clean(document.body.innerText);
+                      var money = body.match(/(?:R\\$|US\\$|\\$|€|£)\\s?\\d[\\d.,]*/g) || [];
+                      if (money.length && !/(?:R\\$|US\\$|€|£)/.test(md)) {
+                        var uniq = [], seenM = {};
+                        for (var m=0; m<money.length && uniq.length<15; m++){
+                          var v = clean(money[m]);
+                          if (!seenM[v]) { seenM[v] = 1; uniq.push(v); }
+                        }
+                        if (uniq.length) md += '\\n\\nVALORES VISÍVEIS NA PÁGINA (na ordem em que aparecem): ' + uniq.join(' · ');
+                      }
                       return md.slice(0, ${max});
                     })()`;
                     try {
@@ -3348,7 +3515,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
               }
             }}
-            onSendChat={async (msg, docText, streamId) => {
+            onSendChat={async (msg, docText, streamId, skipPageContext) => {
               const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
@@ -3359,10 +3526,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 return { reply, isError: !!r?.error };
               }
-              let pageContent = await getPageContent();
+              // Usuário desligou o chip "lendo esta página" → pergunta genérica, sem a aba
+              // junto (evita a página sequestrar a resposta e não gasta token com ela).
+              let pageContent = skipPageContext ? '' : await getPageContent();
               // Se a aba é um vídeo do YouTube, anexa a TRANSCRIÇÃO (legenda) ao contexto pra
               // a IA conversar sobre o que é DITO, não só título/descrição. Cache por vídeo.
-              const vid = youtubeWatchId(store.activeTab.url);
+              const vid = skipPageContext ? null : youtubeWatchId(store.activeTab.url);
               if (vid && window.electronAPI?.getTranscript) {
                 let tr = transcriptCacheRef.current.get(vid);
                 if (tr === undefined) {
@@ -3844,7 +4013,27 @@ async function resizeDataUrl(dataUrl: string, maxWidth: number): Promise<string>
 const PRICE_EXTRACTOR_JS = `(function(){
   try {
     var priceRe = /R\\$\\s?\\d{1,3}(?:[.\\s]\\d{3})*(?:,\\d{2})?/;
-    var toNum = function(s){ var m = s.match(/R\\$\\s?([\\d.\\s]+(?:,\\d{2})?)/); if(!m) return null; var n = m[1].replace(/[.\\s]/g,'').replace(',','.'); var f = parseFloat(n); return isFinite(f)?f:null; };
+    // Parser de preço AGNÓSTICO DE LOCALE. O Google renderiza conforme o hl= da busca: em
+    // pt-BR vem "R$ 3.219,00" (ponto=milhar) e em en vem "R$ 3,219.00" (vírgula=milhar).
+    // O parser antigo só entendia pt-BR, então no modo en ele lia "3,21" de "3,219.00" —
+    // TODOS os preços saíam divididos por mil e a tabela inteira ficava errada.
+    // Regra robusta: o ÚLTIMO separador é o decimal, salvo quando tem exatamente 3 dígitos
+    // depois dele e nenhum outro separador — aí é milhar ("3.219" e "3,219" = 3219).
+    var toNum = function(s){
+      var m = s.match(/R\\$\\s?([\\d.,\\s]+)/); if(!m) return null;
+      var raw = m[1].replace(/\\s/g,'').replace(/[.,]+$/,'');
+      if(!raw || !/\\d/.test(raw)) return null;
+      var lastDot = raw.lastIndexOf('.'), lastCom = raw.lastIndexOf(',');
+      var dec = Math.max(lastDot, lastCom), n;
+      if (dec === -1) { n = raw; }
+      else {
+        var tail = raw.length - dec - 1;
+        var other = (dec === lastDot) ? lastCom : lastDot;
+        if (tail === 3 && other === -1) { n = raw.replace(/[.,]/g,''); }
+        else { n = raw.slice(0, dec).replace(/[.,]/g,'') + '.' + raw.slice(dec + 1); }
+      }
+      var f = parseFloat(n); return isFinite(f) ? f : null;
+    };
     var STORE = /(Mercado\\s*Livre|Amazon|Magazine\\s*Luiza|Magalu|Americanas|Kabum|Casas\\s*Bahia|Ponto(?:frio)?|Shoptime|Pichau|Terabyte|Carrefour|AliExpress|Shopee|Fast\\s*Shop|Extra|Submarino|Girafa|Dell|Kalunga)/i;
     var nodes = Array.prototype.slice.call(document.querySelectorAll('div, li, a'));
     var out = [], seen = {};
@@ -3854,7 +4043,15 @@ const PRICE_EXTRACTOR_JS = `(function(){
       if (txt.length < 8 || txt.length > 280) continue;
       var pm = txt.match(/R\\$/g); if (!pm || pm.length > 2) continue;
       if (!priceRe.test(txt)) continue;
-      var price = toNum(txt); if (!price || price < 3) continue;
+      // Preço do produto = o MAIOR quando o bloco tem parcelamento ("12x R$ 399,91"): a
+      // parcela é sempre fração do total, e pegar o 1º "R$" fazia a parcela virar "o preço".
+      // Sem marca de parcela, mantém o 1º (evita cair no "de R$ X por R$ Y" riscado).
+      var price = toNum(txt);
+      if (/\\d+\\s*x\\s*(de\\s*)?R\\$/i.test(txt)) {
+        var all = txt.match(new RegExp(priceRe.source, 'g')) || [];
+        for (var k = 0; k < all.length; k++) { var pv = toNum(all[k]); if (pv && (!price || pv > price)) price = pv; }
+      }
+      if (!price || price < 3) continue;
       var lines = txt.split('\\n').map(function(s){return s.trim();}).filter(Boolean);
       var titles = lines.filter(function(l){ return l.indexOf('R$') === -1 && !/^\\d+([.,]\\d+)?$/.test(l) && l.length >= 8 && !/avalia|estrela|frete|parcel|cupom|patrocinad|an[úu]ncio|promo[çc][aã]o|melhor pre|^\\d+\\s*(un|gb|tb)\\b/i.test(l); });
       titles.sort(function(a,b){ return b.length - a.length; });

@@ -488,18 +488,170 @@ async function importGoogleCookiesFromBrowserProfile(
   }
 }
 
-async function loginWithSystemBrowser(): Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }> {
+// ═══ "Entrar em qualquer site pelo navegador do sistema" (import de sessão por site) ═══
+// A importação em MASSA do perfil do Chrome não é viável: o App-Bound Encryption (Chrome 127+)
+// amarra a descriptografia dos cookies ao caminho ORIGINAL do perfil, então ler de uma cópia
+// devolve 0 cookies. Em vez de brigar com isso, generalizamos o login do Google: abre o
+// navegador do sistema NO site pedido (perfil dedicado e persistente, com debug port), o
+// usuário loga UMA vez, e o Bah importa só os cookies daquele domínio via CDP — cookie
+// recém-criado numa sessão de debug, sem tocar no cofre criptografado do perfil real.
+
+// Grava um cookie CDP na sessão-alvo (best-effort). Extraído pra ser reusado pela importação
+// por site (sem o filtro de Google que o copyCdpGoogleCookies aplica).
+async function setCdpCookieInto(cookie: any, target: Electron.Session): Promise<boolean> {
+  const bareDomain = String(cookie?.domain || '').replace(/^\./, '');
+  const name = String(cookie?.name || '');
+  if (!bareDomain || !name) return false;
+
+  // Prefixos de segurança impõem regras: __Host- = secure + path "/" + HOST-ONLY (sem domain);
+  // __Secure- = secure. Sem respeitar isso, o Electron REJEITA o cookie (era o motivo de o
+  // login não "pegar" no Bah — justo os cookies de sessão usam esses prefixos).
+  const isHostPrefix = name.startsWith('__Host-');
+  const isSecurePrefix = name.startsWith('__Secure-');
+  const secure = !!cookie.secure || isHostPrefix || isSecurePrefix;
+  const hostOnly = !!cookie.hostOnly || isHostPrefix;
+  const cookiePath = isHostPrefix ? '/' : (cookie.path || '/');
+  const url = `${secure ? 'https' : 'http'}://${bareDomain}${cookiePath}`;
+
+  const details: Electron.CookiesSetDetails = {
+    url,
+    name,
+    value: String(cookie.value || ''),
+    path: cookiePath,
+    secure,
+    httpOnly: !!cookie.httpOnly,
+  };
+  // Cookie host-only NÃO leva domain (o Electron o amarra ao host da url). __Host- idem.
+  if (!hostOnly) details.domain = cookie.domain;
+  if (!cookie.session && Number.isFinite(cookie.expires) && cookie.expires > 0) details.expirationDate = cookie.expires;
+
+  let sameSite = mapCdpSameSite(cookie.sameSite);
+  // SameSite=None só é aceito com Secure; se não for seguro, cai pra 'lax' pra não ser rejeitado.
+  if (sameSite === 'no_restriction' && !secure) sameSite = 'lax';
+  if (sameSite) details.sameSite = sameSite;
+
+  try { await target.cookies.set(details); return true; } catch { return false; }
+}
+
+// Importa TODOS os cookies (sem sobrescrever em bloco — set por (nome,domínio,path)).
+async function copyAllCdpCookies(cdpCookies: any[], target: Electron.Session): Promise<number> {
+  let copied = 0;
+  for (const c of cdpCookies) {
+    if (await setCdpCookieInto(c, target)) copied++;
+  }
+  try { await target.cookies.flushStore(); } catch {}
+  try { await (target as any).flushStorageData?.(); } catch {}
+  return copied;
+}
+
+// Casa cookies de um domínio-alvo: o próprio host, o registrable domain aproximado (eTLD+1
+// pelos 2 últimos rótulos) e seus subdomínios. Aproximação boa o bastante pra sites comuns.
+function makeDomainMatcher(host: string): (cookieDomain: string) => boolean {
+  const h = host.replace(/^www\./, '').toLowerCase();
+  const base = h.split('.').slice(-2).join('.');
+  return (cookieDomain: string) => {
+    const d = String(cookieDomain || '').replace(/^\./, '').toLowerCase();
+    return !!d && (d === h || d === base || d.endsWith('.' + base));
+  };
+}
+
+// Abre o navegador do sistema NO site pedido, o usuário loga, e o Bah importa os cookies
+// daquele domínio. Perfil PERSISTENTE (system-login-profile) → logins acumulam entre sites e
+// re-login fica instantâneo. Detecta o fim do login por cookie httpOnly novo no domínio OU
+// pelo usuário fechar a janela; importa e fecha sozinho.
+async function loginToSiteWithSystemBrowser(rawUrl: string): Promise<{ ok: boolean; copied?: number; domain?: string; browser?: string; error?: string }> {
+  const browser = findSystemBrowser();
+  if (!browser) return { ok: false, error: 'Could not find Chrome, Edge or Brave installed.' };
+
+  let target: URL;
+  try { target = new URL(rawUrl); } catch { return { ok: false, error: 'Invalid URL.' }; }
+  if (!/^https?:$/.test(target.protocol)) return { ok: false, error: 'Open a normal website first (http/https).' };
+  const host = target.hostname.replace(/^www\./, '');
+  const base = host.split('.').slice(-2).join('.');
+  const domainMatches = makeDomainMatcher(host);
+
+  const profileDir = path.join(app.getPath('userData'), 'system-login-profile');
+  fs.mkdirSync(profileDir, { recursive: true });
+
+  const port = await getFreeLocalPort();
+  const child = require('child_process').spawn(browser.exe, [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profileDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    ...loginWindowGeometryArgs(),
+    target.toString(),
+  ], { detached: false, stdio: 'ignore', windowsHide: false });
+
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+  child.once('error', (err: Error) => { console.warn('[SiteLogin] launch failed:', err); });
+
+  const closeBrowser = async () => {
+    try {
+      const v = await fetchJson(`http://127.0.0.1:${port}/json/version`, 1000);
+      if (v?.webSocketDebuggerUrl) { await cdpCommand(v.webSocketDebuggerUrl, 'Browser.close', {}, 1500); return; }
+    } catch {}
+    try { child.kill(); } catch {}
+  };
+
+  const importCookies = async (list: any[]): Promise<number> => {
+    const copied = await copyAllCdpCookies(list, session.fromPartition(BROWSER_PARTITION));
+    await flushBrowserState();
+    return copied;
+  };
+
+  // 1) Espera a porta de debug subir.
+  const readyBy = Date.now() + 20_000;
+  let ready = false;
+  while (Date.now() < readyBy && !exited) {
+    try { await fetchJson(`http://127.0.0.1:${port}/json/version`, 1200); ready = true; break; }
+    catch { await sleepMs(400); }
+  }
+  if (!ready) {
+    await closeBrowser();
+    return { ok: false, browser: browser.name, error: `Couldn't open ${browser.name} for the login.` };
+  }
+
+  // 2) Enquanto a janela vive, relê os cookies do domínio a cada ciclo e guarda o último
+  //    retrato "vivo". O debug port morre junto com a janela, então NÃO dá pra ler depois de
+  //    fechar — por isso guardamos o snapshot em vez de tentar ler no fechamento.
+  let lastMine: any[] = [];
+  const deadline = Date.now() + 8 * 60_000;
+  while (Date.now() < deadline && !exited) {
+    try {
+      const mine = (await getChromeDebugCookies(port)).filter(c => domainMatches(c.domain));
+      if (mine.length) lastMine = mine;
+    } catch {}
+    await sleepMs(2000);
+  }
+
+  // 3) Usuário fechou a janela (ou timeout): importa o último retrato. Sinal previsível —
+  //    sem auto-fechar cedo demais (era o que arriscava importar antes do login terminar).
+  const copied = await importCookies(lastMine);
+  if (!exited) await closeBrowser();
+  return {
+    ok: copied > 0, copied, domain: base, browser: browser.name,
+    error: copied > 0 ? undefined : 'No login cookies captured — did the sign-in finish before you closed the window?',
+  };
+}
+
+async function loginWithSystemBrowser(opts?: { fresh?: boolean }): Promise<{ ok: boolean; copied?: number; browser?: string; error?: string }> {
   const browser = findSystemBrowser();
   if (!browser) {
     return { ok: false, error: 'Could not find Chrome, Edge or Brave installed.' };
   }
 
   const profileDir = path.join(app.getPath('userData'), 'google-system-login-profile');
-  // Perfil de login é DESCARTÁVEL: limpa antes de abrir pra cair numa tela de login
-  // FRESCA toda vez. Sem isso, o login anterior fica salvo neste perfil → o Chrome reabre
-  // já logado, o app detecta o cookie SID nos primeiros 2,5s e fecha a janela na hora
-  // ("abre e fecha rapidinho"), sem deixar o usuário logar de novo / trocar de conta.
-  try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+  // O perfil de login agora é PERSISTENTE: depois de logar uma vez pelo Bah, os próximos
+  // cliques em "Entrar no Google" reabrem o Chrome JÁ logado, o app detecta o cookie SID em
+  // ~2,5s e reimporta a sessão na hora — sem digitar e-mail/senha/2FA de novo. Esse "abre e
+  // fecha rapidinho" agora é o caminho FELIZ (re-sync instantâneo), não um bug.
+  // Só apagamos o perfil sob demanda, via "Trocar de conta" (opts.fresh), pra cair numa tela
+  // de login limpa quando o usuário realmente quiser trocar de conta.
+  if (opts?.fresh) {
+    try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+  }
   fs.mkdirSync(profileDir, { recursive: true });
 
   // Abre o navegador real JÁ com a porta de debug ligada, direto na tela de login.
@@ -1018,7 +1170,9 @@ function setupIPC(): void {
     const exe = (localApp && fs.existsSync(localApp)) ? localApp : 'ollama';
     let spawnErr = '';
     try {
-      const child = require('child_process').spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true });
+      // CREATE_NO_WINDOW (0x08000000): no Windows, `detached:true` num .exe de console abre
+      // uma janela de CMD mesmo com windowsHide — esta flag suprime de vez (era o "piscar").
+      const child = require('child_process').spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true, creationFlags: 0x08000000 });
       child.on('error', (er: any) => { spawnErr = String(er?.message ?? er); });
       child.unref();
     } catch (er: any) { spawnErr = String(er?.message ?? er); }
@@ -1568,7 +1722,20 @@ function setupIPC(): void {
 
   // Google blocks sign-in inside Electron/embedded browsers. Use a real installed
   // Chrome/Edge profile for the login, then import the Google cookies into Bah.
+  // Locale do SISTEMA OPERACIONAL, síncrono (o renderer precisa dele ANTES de pintar, pra
+  // escolher o idioma da interface). Não dá pra usar navigator.language: num Windows em
+  // português o Chromium ainda reporta "en-US" como principal — medido.
+  ipcMain.on('app:get-system-locale', (e) => {
+    try { e.returnValue = app.getSystemLocale() || app.getLocale() || ''; }
+    catch { e.returnValue = ''; }
+  });
   ipcMain.handle('google:login', async () => loginWithSystemBrowser());
+  // "Trocar de conta": zera o perfil de login persistente pra forçar uma tela de login limpa
+  // (escolher/adicionar outra conta) em vez de reimportar a sessão que já estava salva.
+  ipcMain.handle('google:switch-account', async () => loginWithSystemBrowser({ fresh: true }));
+  // "Entrar neste site pelo navegador": abre o site no navegador do sistema, o usuário loga,
+  // e o Bah importa os cookies daquele domínio.
+  ipcMain.handle('site:login', async (_e, url: string) => loginToSiteWithSystemBrowser(url));
 
   // Checa se já existe sessão do Google no partition do navegador (cookie de auth presente)
   // → o renderer usa isso pra trocar o botão "Entrar no Google" por "Conectado ao Google".
@@ -1802,7 +1969,7 @@ function setupIPC(): void {
   // Resolve VÁRIAS músicas → ids (pro "create_playlist" montar a playlist por URL).
   ipcMain.handle('media:resolve-videos', async (_e, queries: string[]) => {
     try {
-      return await resolveTopVideos(Array.isArray(queries) ? queries.slice(0, 25) : []);
+      return await resolveTopVideos(Array.isArray(queries) ? queries.slice(0, 400) : []);
     } catch (e: any) {
       return [];
     }
@@ -2534,6 +2701,7 @@ function setupAutoUpdater(): void {
     console.warn('[update] setup falhou:', e);
   }
 }
+
 
 app.whenReady().then(async () => {
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo

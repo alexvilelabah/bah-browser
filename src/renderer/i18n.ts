@@ -8,7 +8,11 @@ export type Lang = 'en' | 'pt' | 'es';
 
 export const LANGS: Array<{ code: Lang; label: string }> = [
   { code: 'en', label: 'English' },
-  { code: 'pt', label: 'Português' },
+  // Rótulo diz "(Brasil)" de propósito: esta opção é pt-BR E força a região BR nas buscas
+  // (hl=pt-BR&gl=BR). Rotulada só como "Português", quem está em Portugal escolhia sem saber
+  // que ia receber preços em real e lojas brasileiras. A lógica está certa pro público do
+  // projeto — o que faltava era dizer qual português é.
+  { code: 'pt', label: 'Português (Brasil)' },
   { code: 'es', label: 'Español' },
 ];
 
@@ -61,6 +65,13 @@ const dict: Record<Lang, Record<string, string>> = {
     'menu.adblock': 'Ad blocker',
     'menu.googleLogin': 'Sign in to Google',
     'menu.googleConnected': '✓ Connected to Google',
+    'menu.googleSwitch': 'Switch Google account',
+    'menu.siteLogin': 'Sign in to this site via your browser',
+    'menu.siteLoginTitle': 'Open the current site in your system browser, sign in once, and Bah keeps that session',
+    'menu.siteLoginConfirm': 'Bah will open {site} in your system browser (Chrome/Edge/Brave). Sign in there once, then close that window — Bah imports the session for that site. Continue?',
+    'menu.siteLoginDone': 'Signed in — imported {n} cookies for {site}. Reloading the tab.',
+    'menu.siteLoginFail': 'Sign-in did not complete: {error}',
+    'menu.siteLoginNoSite': 'Open a website first (a normal http/https page), then use this.',
     'menu.favorites': 'Favorites',
     'menu.save': '+ Save',
     'menu.noFavorites': 'No favorites yet.',
@@ -168,6 +179,15 @@ const dict: Record<Lang, Record<string, string>> = {
     'composer.searchImages': 'Download images',
     'composer.searchImagesPrefix': 'download 10 photos of ',
     'composer.removeAttach': 'Remove',
+    'composer.readingPage': 'Reading this page: {page}',
+    'sugg.about': 'You can ask me about this page — for example:',
+    'settings.steps': 'AI steps per task',
+    'settings.stepsUnlimited': '(no limit)',
+    'settings.timeLimit': 'Safety time limit per task',
+    'settings.timeLimitOff': 'Off (no limit)',
+    'composer.pageOff': 'Not using this page',
+    'composer.pageOffTitle': 'Answer without this page (ask something general)',
+    'composer.pageOnTitle': 'Use this page as context again',
     'composer.phFile': 'Ask about the file…',
     'composer.phImage': 'Describe the image to create…',
     'feed.working': 'working…',
@@ -219,12 +239,18 @@ const dict: Record<Lang, Record<string, string>> = {
     'vague.image': 'What should the image show? Describe the scene — the more detail, the better.\n\nFor example:\n• "generate an image of an astronaut cat"\n• "create a picture of a beach at sunset"',
     'vague.price': 'The price of what? Tell me the product and I compare the offers right away.\n\nFor example:\n• "how much is an air fryer"\n• "compare prices of mechanical keyboards"',
     'vague.search': 'Search for what? Tell me the topic and I look it up and answer with sources.\n\nFor example:\n• "how many bones are in the human body"\n• "find a good cheap mechanical keyboard"',
-    'bar.agentSteps': 'AI steps: up to {n} per task. Click to change: 25 → 50 → 100.',
+    'bar.agentSteps': 'AI steps: up to {n} per task. Click to change: 25 → 50 → 100 → ∞. On ∞ there is no step or time limit — it runs until it finishes or you hit Stop (best with a cloud API key).',
+    'bar.shortcuts': 'Shortcuts',
+    'bar.on': 'ON',
+    'bar.off': 'OFF',
+    'bar.shortcutsOnTitle': 'Shortcuts are ON — the browser answers obvious requests itself (open a site, download a video), instantly and without spending AI. Click to turn them OFF and let the AI decide every step.',
+    'bar.shortcutsOffTitle': 'Shortcuts are OFF — the AI decides every step. Click to turn them ON: the browser handles the obvious right away, without spending AI (useful with a weaker local model).',
     'bar.noShortcuts': 'AI in charge',
     'bar.noShortcutsOn': 'AI in charge — it decides every step. More natural, slower. Click to go back.',
-    'bar.noShortcutsOff': 'AI only when needed — the browser handles the obvious on its own. Click to put the AI in charge.',
+    'bar.noShortcutsOff': 'AI only when needed — the browser handles the obvious on its own (shortcuts). This helps a LOCAL model; with a cloud API key the AI always drives anyway. Click to put the AI in charge.',
     'tab.sleeping': 'Tab asleep to save memory — click to reload',
     'menu.googleLoginTitle': 'Sign in to Google via the real Chrome/Edge and import the session into Bah',
+    'menu.googleSwitchTitle': 'Wipe the saved login and open a clean Google sign-in to pick another account',
     'fav.remove': 'Remove from favorites',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Close tab',
@@ -293,6 +319,13 @@ const dict: Record<Lang, Record<string, string>> = {
     'menu.adblock': 'Bloqueador de anúncios',
     'menu.googleLogin': 'Entrar no Google',
     'menu.googleConnected': '✓ Conectado ao Google',
+    'menu.googleSwitch': 'Trocar de conta Google',
+    'menu.siteLogin': 'Entrar neste site pelo navegador',
+    'menu.siteLoginTitle': 'Abre o site atual no navegador do sistema, você loga uma vez, e o Bah guarda aquela sessão',
+    'menu.siteLoginConfirm': 'O Bah vai abrir {site} no seu navegador (Chrome/Edge/Brave). Loga lá uma vez e feche a janela — o Bah importa a sessão daquele site. Continuar?',
+    'menu.siteLoginDone': 'Logado — importei {n} cookies de {site}. Recarregando a aba.',
+    'menu.siteLoginFail': 'O login não foi concluído: {error}',
+    'menu.siteLoginNoSite': 'Abra um site primeiro (uma página http/https normal) e use isto.',
     'menu.favorites': 'Favoritos',
     'menu.save': '+ Salvar',
     'menu.noFavorites': 'Nenhum favorito ainda.',
@@ -399,6 +432,15 @@ const dict: Record<Lang, Record<string, string>> = {
     'composer.searchImages': 'Baixar imagens',
     'composer.searchImagesPrefix': 'baixar 10 fotos de ',
     'composer.removeAttach': 'Remover',
+    'composer.readingPage': 'Lendo esta página: {page}',
+    'sugg.about': 'Pode me perguntar sobre esta página — por exemplo:',
+    'settings.steps': 'Passos da IA por tarefa',
+    'settings.stepsUnlimited': '(sem limite)',
+    'settings.timeLimit': 'Trava de segurança por tarefa',
+    'settings.timeLimitOff': 'Desligada (sem limite)',
+    'composer.pageOff': 'Sem usar esta página',
+    'composer.pageOffTitle': 'Responder sem esta página (pergunta geral)',
+    'composer.pageOnTitle': 'Voltar a usar esta página como contexto',
     'composer.phFile': 'Pergunte sobre o arquivo…',
     'composer.phImage': 'Descreva a imagem que quer criar…',
     'feed.working': 'trabalhando…',
@@ -450,12 +492,18 @@ const dict: Record<Lang, Record<string, string>> = {
     'vague.image': 'O que você quer na imagem? Descreva a cena — quanto mais detalhe, melhor.\n\nPor exemplo:\n• "gere uma imagem de um gato astronauta"\n• "crie uma foto de uma praia ao pôr do sol"',
     'vague.price': 'Preço de quê? Diga o produto que eu comparo as ofertas na hora.\n\nPor exemplo:\n• "quanto custa um air fryer"\n• "compare preços de teclado mecânico"',
     'vague.search': 'Pesquisar o quê? Diga o assunto que eu busco e te respondo com as fontes.\n\nPor exemplo:\n• "quantos ossos tem o corpo humano"\n• "procura um teclado mecânico bom e barato"',
-    'bar.agentSteps': 'Passos da IA: até {n} por tarefa. Clique para mudar: 25 → 50 → 100.',
+    'bar.agentSteps': 'Passos da IA: até {n} por tarefa. Clique para mudar: 25 → 50 → 100 → ∞. No ∞ não há limite de passos nem de tempo — vai até terminar ou você clicar em Parar (ideal com chave de API na nuvem).',
+    'bar.shortcuts': 'Atalhos',
+    'bar.on': 'LIG',
+    'bar.off': 'DESL',
+    'bar.shortcutsOnTitle': 'Atalhos LIGADOS — o navegador resolve sozinho os pedidos óbvios (abrir um site, baixar um vídeo), na hora e sem gastar IA. Clique para DESLIGAR e deixar a IA decidir cada passo.',
+    'bar.shortcutsOffTitle': 'Atalhos DESLIGADOS — a IA decide cada passo. Clique para LIGAR: o navegador resolve o óbvio na hora, sem gastar IA (útil com modelo local mais fraco).',
     'bar.noShortcuts': 'IA no comando',
     'bar.noShortcutsOn': 'IA no comando — ela decide cada passo. Mais natural, mais lento. Clique para voltar.',
-    'bar.noShortcutsOff': 'IA só quando precisa — o navegador resolve o óbvio sozinho. Clique para deixar a IA no comando.',
+    'bar.noShortcutsOff': 'IA só quando precisa — o navegador resolve o óbvio sozinho (atalhos). Isso ajuda um modelo LOCAL; com chave de API na nuvem a IA já comanda sempre. Clique para deixar a IA no comando.',
     'tab.sleeping': 'Aba dormindo pra economizar memória — clique pra recarregar',
     'menu.googleLoginTitle': 'Faz login no Google pelo Chrome/Edge real e importa a sessão para o Bah',
+    'menu.googleSwitchTitle': 'Apaga o login salvo e abre uma tela de login limpa pra escolher outra conta',
     'fav.remove': 'Remover dos favoritos',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Fechar aba',
@@ -524,6 +572,13 @@ const dict: Record<Lang, Record<string, string>> = {
     'menu.adblock': 'Bloqueador de anuncios',
     'menu.googleLogin': 'Iniciar sesión en Google',
     'menu.googleConnected': '✓ Conectado a Google',
+    'menu.googleSwitch': 'Cambiar de cuenta de Google',
+    'menu.siteLogin': 'Iniciar sesión en este sitio con tu navegador',
+    'menu.siteLoginTitle': 'Abre el sitio actual en tu navegador del sistema, inicias sesión una vez y Bah guarda esa sesión',
+    'menu.siteLoginConfirm': 'Bah abrirá {site} en tu navegador (Chrome/Edge/Brave). Inicia sesión ahí una vez y cierra la ventana — Bah importa la sesión de ese sitio. ¿Continuar?',
+    'menu.siteLoginDone': 'Sesión iniciada — importé {n} cookies de {site}. Recargando la pestaña.',
+    'menu.siteLoginFail': 'El inicio de sesión no se completó: {error}',
+    'menu.siteLoginNoSite': 'Abre un sitio primero (una página http/https normal) y usa esto.',
     'menu.favorites': 'Favoritos',
     'menu.save': '+ Guardar',
     'menu.noFavorites': 'Aún no hay favoritos.',
@@ -630,6 +685,15 @@ const dict: Record<Lang, Record<string, string>> = {
     'composer.searchImages': 'Descargar imágenes',
     'composer.searchImagesPrefix': 'descargar 10 fotos de ',
     'composer.removeAttach': 'Quitar',
+    'composer.readingPage': 'Leyendo esta página: {page}',
+    'sugg.about': 'Puedes preguntarme sobre esta página — por ejemplo:',
+    'settings.steps': 'Pasos de la IA por tarea',
+    'settings.stepsUnlimited': '(sin límite)',
+    'settings.timeLimit': 'Límite de seguridad por tarea',
+    'settings.timeLimitOff': 'Desactivado (sin límite)',
+    'composer.pageOff': 'Sin usar esta página',
+    'composer.pageOffTitle': 'Responder sin esta página (pregunta general)',
+    'composer.pageOnTitle': 'Volver a usar esta página como contexto',
     'composer.phFile': 'Pregunta sobre el archivo…',
     'composer.phImage': 'Describe la imagen que quieres crear…',
     'feed.working': 'trabajando…',
@@ -681,12 +745,18 @@ const dict: Record<Lang, Record<string, string>> = {
     'vague.image': '¿Qué quieres en la imagen? Describe la escena — cuanto más detalle, mejor.\n\nPor ejemplo:\n• "genera una imagen de un gato astronauta"\n• "crea una foto de una playa al atardecer"',
     'vague.price': '¿El precio de qué? Dime el producto y comparo las ofertas al instante.\n\nPor ejemplo:\n• "cuánto cuesta una freidora de aire"\n• "compara precios de teclado mecánico"',
     'vague.search': '¿Buscar qué? Dime el tema y lo busco y te respondo con las fuentes.\n\nPor ejemplo:\n• "cuántos huesos tiene el cuerpo humano"\n• "busca un teclado mecánico bueno y barato"',
-    'bar.agentSteps': 'Pasos de la IA: hasta {n} por tarea. Haz clic para cambiar: 25 → 50 → 100.',
+    'bar.agentSteps': 'Pasos de la IA: hasta {n} por tarea. Haz clic para cambiar: 25 → 50 → 100 → ∞. En ∞ no hay límite de pasos ni de tiempo — va hasta terminar o hasta que pulses Parar (ideal con clave de API en la nube).',
+    'bar.shortcuts': 'Atajos',
+    'bar.on': 'ACT',
+    'bar.off': 'DESACT',
+    'bar.shortcutsOnTitle': 'Atajos ACTIVADOS — el navegador resuelve solo las peticiones obvias (abrir un sitio, descargar un vídeo), al instante y sin gastar IA. Haz clic para DESACTIVARLOS y dejar que la IA decida cada paso.',
+    'bar.shortcutsOffTitle': 'Atajos DESACTIVADOS — la IA decide cada paso. Haz clic para ACTIVARLOS: el navegador resuelve lo obvio al instante, sin gastar IA (útil con un modelo local más débil).',
     'bar.noShortcuts': 'IA al mando',
     'bar.noShortcutsOn': 'IA al mando — ella decide cada paso. Más natural, más lento. Haz clic para volver.',
-    'bar.noShortcutsOff': 'IA solo cuando hace falta — el navegador resuelve lo obvio solo. Haz clic para dejar la IA al mando.',
+    'bar.noShortcutsOff': 'IA solo cuando hace falta — el navegador resuelve lo obvio solo (atajos). Esto ayuda a un modelo LOCAL; con clave de API en la nube la IA ya manda siempre. Haz clic para dejar la IA al mando.',
     'tab.sleeping': 'Pestaña dormida para ahorrar memoria — clic para recargar',
     'menu.googleLoginTitle': 'Inicia sesión en Google con el Chrome/Edge real e importa la sesión a Bah',
+    'menu.googleSwitchTitle': 'Borra el inicio de sesión guardado y abre un login limpio para elegir otra cuenta',
     'fav.remove': 'Quitar de favoritos',
     'zoom.level': 'Zoom: {pct}%',
     'tab.close': 'Cerrar pestaña',
@@ -718,8 +788,21 @@ export function detectLang(): Lang {
     const saved = localStorage.getItem('uiLang');
     if (saved === 'en' || saved === 'pt' || saved === 'es') return saved;
   } catch {}
-  // Inglês é o PADRÃO. Não auto-detectamos mais o idioma do SO: pt-BR e es são
-  // secundários, escolhidos nas Configurações (e salvos em localStorage.uiLang acima).
+  // Sem escolha explícita → segue o idioma do SISTEMA. A IA já responde no idioma da
+  // pessoa; deixar a interface em inglês criava o pior dos mundos: resposta em português
+  // com botão "Do this" embaixo — que ninguém entende (e um botão que DISPARA uma tarefa
+  // no navegador não pode ser indecifrável). Escolha feita nas Configurações continua
+  // mandando: só caímos aqui quando o usuário nunca escolheu.
+  try {
+    // Locale do SO via Electron. navigator.language NÃO serve: num Windows em português o
+    // Chromium reporta "en-US" como principal (medido), então a detecção erraria justamente
+    // pra quem ela existe. navigator fica só como rede de segurança.
+    const sys = String(
+      (window as any).electronAPI?.systemLocale || navigator.language || '',
+    ).toLowerCase();
+    if (sys.startsWith('pt')) return 'pt';
+    if (sys.startsWith('es')) return 'es';
+  } catch {}
   return 'en';
 }
 
