@@ -1064,6 +1064,14 @@ export class AIEngine {
         body: JSON.stringify(body),
       }, timeoutMs, signal);
     } catch (e: any) {
+      // Estouro de tempo NÃO é falha de conexão. O Ollama respondeu — devagar demais, quase
+      // sempre porque o modelo não cabe na VRAM e parte dele roda na CPU (medido: 27B Q6_K =
+      // 24 GB numa placa de 16 GB → 10,7 GB na CPU, e a chamada com a página inteira estourava).
+      // Embrulhar os dois casos na mesma frase mandava o usuário ligar um Ollama já ligado.
+      if (e?.message === 'CANCELLED') throw e;   // Parar do usuário: repassa intacto
+      if (/^Request timeout/.test(e?.message || '')) {
+        throw new Error(`Ollama too slow: ${e.message}`);
+      }
       throw new Error(`Ollama connection failed: ${e.message}`);
     }
     this.ollamaWarmed = true;  // a partir daqui o modelo está na VRAM → timeout curto

@@ -139,6 +139,9 @@ function hintForError(text: string): string | null {
   // ordem, o texto "...or run a local model with Ollama" seria pescado pelo hint errado.
   if (/not configured|não configurada|no configurada|rejected your api key|temporarily unavailable|busy/.test(s)) return t('hint.noAi');
   if (/confirm you are human|are human|captcha|rob[oô]|verifica/.test(s)) return t('hint.captcha');
+  // ANTES do padrão "ollama" genérico: modelo lento e Ollama desligado são problemas
+  // opostos com conselhos opostos, e a ordem antiga pescava os dois na mesma dica.
+  if (/too slow|request timeout/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
   if (/local ai failed|\bollama\b|local ai|ia local/.test(s)) return t('hint.ollama');
   if (/valid structured json|invalid response|did not return an action|json/.test(s)) return t('hint.modelFailed');
   if (/step limit|limite de passos|time limit|gave no reason|stopped before finishing/.test(s)) return t('hint.tooLong');

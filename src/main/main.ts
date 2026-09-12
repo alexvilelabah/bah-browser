@@ -1112,7 +1112,12 @@ function setupIPC(): void {
         // o modo local fica offline de verdade. (Trocar de provedor é escolha explícita do usuário.)
         const msg = err?.message ?? String(err);
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
-        return { error: `Local AI (Ollama) failed: ${msg}. Local mode stays offline — start Ollama or switch to a cloud provider in settings.` };
+        // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
+        // devagar) manda consertar o que não está quebrado — e esconde o que está.
+        const tail = /too slow|timeout/i.test(msg)
+          ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
+          : 'Local mode stays offline — start Ollama or switch to a cloud provider in settings.';
+        return { error: `Local AI (Ollama) failed: ${msg}. ${tail}` };
       }
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };
