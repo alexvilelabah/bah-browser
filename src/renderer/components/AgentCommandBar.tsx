@@ -143,8 +143,12 @@ function hintForError(text: string): string | null {
   // ANTES do padrão "ollama" genérico: modelo lento e Ollama desligado são problemas
   // opostos com conselhos opostos, e a ordem antiga pescava os dois na mesma dica.
   if (/too slow|request timeout/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
-  if (/local ai failed|\bollama\b|local ai|ia local/.test(s)) return t('hint.ollama');
+  // JSON inválido vem ANTES do padrão "ollama": TODA falha local carrega o prefixo
+  // "Local AI (Ollama) failed: …", então deixar o /ollama/ decidir fazia "o modelo não
+  // devolveu JSON válido" virar "abra o app do Ollama" — mandando ligar o que já estava
+  // ligado. Medido num teste real: o Ollama respondeu 29 passos e só então errou o formato.
   if (/valid structured json|invalid response|did not return an action|json/.test(s)) return t('hint.modelFailed');
+  if (/local ai failed|\bollama\b|local ai|ia local/.test(s)) return t('hint.ollama');
   if (/step limit|limite de passos|time limit|gave no reason|stopped before finishing/.test(s)) return t('hint.tooLong');
   if (/timed out|timeout|unresponsive/.test(s)) return t('hint.timeout');
   if (/did not find useful results|n[aã]o encontrei|rephrase|could not open the search/.test(s)) return t('hint.noResults');
