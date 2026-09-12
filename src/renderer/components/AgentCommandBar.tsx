@@ -5,6 +5,7 @@ import { AISettings, LocalSettings } from '../store';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
+import { fmtUsd } from '../pricing';
 
 export interface StepRecord {
   step: number;
@@ -186,6 +187,8 @@ interface Props {
   tabIds: string;   // ids das abas existentes (csv) — descarta conversas de abas fechadas
   aiSettings: AISettings;
   onSettingsChange: (settings: AISettings) => Promise<void>;
+  /** Gasto estimado desde que o app abriu (ver pricing.ts). usd=0 → nada é mostrado. */
+  sessionCost: { usd: number; calls: number; est: boolean };
   localSettings: LocalSettings;
   onLocalSettingsChange: (settings: LocalSettings) => Promise<void>;
   /** Sai do modo IA Local travado (Ollama off) → volta pra nuvem grátis. Escolha explícita, não auto-fallback. */
@@ -193,7 +196,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -1162,6 +1165,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         <div className="sidebar-title-wrap">
           <h3>{t('assist.title')}</h3>
           <span className="sidebar-active-ai" title={activeAiLabel()}>{activeAiLabel()}</span>
+          {/* Contador de gasto: só acende quando houve custo real (modo local nunca acende).
+              Fica aqui, e não no feed, porque os chips de status somem sozinhos em 2s. */}
+          {sessionCost.usd > 0 && (
+            <span
+              className="sidebar-cost"
+              title={t('cost.tooltip')
+                .replace('{n}', String(sessionCost.calls))
+                .replace('{v}', fmtUsd(sessionCost.usd, sessionCost.est))}
+            >
+              {fmtUsd(sessionCost.usd, sessionCost.est)}
+            </span>
+          )}
         </div>
         <div className="sidebar-actions">
           <button onClick={() => setShowSettings(!showSettings)} title={t('assist.settings')}>

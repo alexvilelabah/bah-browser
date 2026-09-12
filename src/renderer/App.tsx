@@ -31,6 +31,7 @@ import {
   type QuickAction,
 } from './site-knowledge';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
+import { costOf, fmtUsd } from './pricing';
 import {
   AgentRecoveryManager,
   recoveryInstruction,
@@ -433,6 +434,15 @@ export default function App() {
       return Number.isFinite(v) && v > 0 ? v : 0;
     } catch { return 0; }
   });
+  // Gasto acumulado desde que o navegador abriu. Vive no cabeçalho do painel (e não no feed)
+  // porque os chips de status somem em 2s — e o número que interessa é justamente o que
+  // continua lá quando você volta de manhã. Zera ao fechar o app: é um contador de sessão,
+  // não uma fatura; a verdade sobre cobrança é sempre a do provedor.
+  const [sessionCost, setSessionCost] = useState<{ usd: number; calls: number; est: boolean }>({ usd: 0, calls: 0, est: false });
+  const bumpSessionCost = useCallback((usd: number, est: boolean) => {
+    if (!(usd > 0)) return;   // local/Ollama é zero: não conta chamada nem acende o contador
+    setSessionCost(p => ({ usd: p.usd + usd, calls: p.calls + 1, est: p.est || est }));
+  }, []);
   const sweepTabsRef = useRef(store.tabs); sweepTabsRef.current = store.tabs;
   const sweepActiveIdRef = useRef(store.activeTabId); sweepActiveIdRef.current = store.activeTabId;
   useEffect(() => {
@@ -2027,7 +2037,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const outT = u.completion_tokens ?? u.output_tokens ?? '?';
                     const cached = u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
                     const sec = (m.latencyMs / 1000).toFixed(1);
-                    onProgress({ kind: 'status', message: `📊 ${m.model} • ${inT} in / ${outT} out / ${cached} cached • ${sec}s` });
+                    // Os tokens já estavam nesta linha; só nunca viravam dinheiro. O chip 📊 é
+                    // efêmero (some em ~2s), então o acumulado vai pro cabeçalho do painel —
+                    // lá ele fica, que é o que importa pra quem deixou rodando a noite toda.
+                    const c = costOf(m.model, u);
+                    if (c) bumpSessionCost(c.usd, c.est);
+                    const money = c && c.usd > 0 ? ` • ${fmtUsd(c.usd, c.est)}` : '';
+                    onProgress({ kind: 'status', message: `📊 ${m.model} • ${inT} in / ${outT} out / ${cached} cached • ${sec}s${money}` });
                   }
                   action = result?.action as BrowserAction | undefined;
                   // FAST MODE: enqueue the remaining batched actions (if any), capturing each
@@ -3569,6 +3585,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               await store.setAISettings(settings);
               await window.electronAPI?.setAIProvider(settings.provider, settings.apiKey, settings.baseUrl, settings.model);
             }}
+            sessionCost={sessionCost}
             localSettings={store.localSettings}
             onLocalSettingsChange={async (ls) => {
               store.setLocalSettings(ls);
