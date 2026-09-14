@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
-import { AISettings, LocalSettings } from '../store';
+import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
@@ -476,7 +476,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings]);
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
-  const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string }>>([]);
+  const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string; loaded?: boolean }>>([]);
+  // Backend local escolhido nas Configurações (rascunho): 'ollama' (nativo /api/tags) ou
+  // 'openai-compatible' (llama.cpp/LM Studio/vLLM, via /v1/models).
+  const isLocalCompat = () => localCfg.provider === 'openai-compatible';
   const [pullName, setPullName] = useState('');
   // Faixa de hardware aberta no acordeão de sugestões (uma por vez). Abre na ~16GB: é a
   // placa mais comum e onde fica o modelo recomendado.
@@ -487,6 +490,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [ggufName, setGgufName] = useState('');
   // null = ainda não checado; true = Ollama respondeu; false = não detectado (não instalado/desligado).
   const [ollamaUp, setOllamaUp] = useState<boolean | null>(null);
+  const [compatUp, setCompatUp] = useState<boolean | null>(null);   // servidor OpenAI-compatible respondendo?
   const [ollamaInstalled, setOllamaInstalled] = useState<boolean | null>(null);   // null = ainda não checado
   const [starting, setStarting] = useState(false);
   const [notInstalled, setNotInstalled] = useState(false);
@@ -844,7 +848,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Selo da IA ativa (o provedor/modelo que a pessoa selecionou). SÓ lê o estado — não pesa,
   // sem chamada nenhuma. Sem chave (e sem local) = ainda não configurou nada.
   const activeAiLabel = (): string => {
-    if (localSettings.enabled) return `Ollama · ${localSettings.model || 'local'}`;
+    if (localSettings.enabled) {
+      const model = localSettings.model || 'local';
+      return localSettings.provider === 'openai-compatible' ? `llama.cpp · ${model}` : `Ollama · ${model}`;
+    }
     const p = aiSettings.provider;
     if (!aiSettings.apiKey?.trim()) return t('set.notConfigured');
     if (p === 'deepseek') return 'DeepSeek';
@@ -1029,21 +1036,34 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // ── Gerenciador de modelos Ollama ──
   const ollamaApi = () => (window as any).electronAPI;
   const refreshModels = async () => {
+    const compat = localCfg.provider === 'openai-compatible';
     try {
-      const st = await ollamaApi()?.ollamaStatus?.(localCfg.baseUrl);   // { running, installed }
-      if (st) setOllamaInstalled(!!st.installed);
-      const r = await ollamaApi()?.ollamaList?.(localCfg.baseUrl);
+      // Backend OpenAI-compatible usa descoberta genérica (llm:list/llm:status); Ollama usa o
+      // gerenciador nativo. Dois caminhos, mesma intenção: mostrar o que está lá + rodando?
+      const st = compat
+        ? await window.electronAPI?.llmStatus?.(localCfg.baseUrl, localCfg.authKey)
+        : await ollamaApi()?.ollamaStatus?.(localCfg.baseUrl);
+      if (st) {
+        if (compat) setCompatUp(!!st.running);
+        else setOllamaInstalled(!!st.installed);
+      }
+      const r = compat
+        ? await window.electronAPI?.llmList?.(localCfg.baseUrl, 'openai-compatible', localCfg.authKey)
+        : await ollamaApi()?.ollamaList?.(localCfg.baseUrl);
       const running = st ? !!st.running : !!r?.ok;
-      setOllamaUp(running);
+      if (compat) setCompatUp(running);
+      else setOllamaUp(running);
       const list = r?.ok ? (r.models || []) : [];
       setModels(list);
-      // Se o local está ATIVO num modelo que não existe mais (Ollama rodando + lista sem ele),
+      // Se o local está ATIVO num modelo que não existe mais (servidor rodando + lista sem ele),
       // desliga o local — o "IA ativa" para de mostrar um modelo fantasma e volta pra nuvem/grátis.
       if (running && localSettings.enabled && localSettings.model && !list.some((m: any) => m.name === localSettings.model)) {
         setLocalCfg(p => ({ ...p, enabled: false }));
         onLocalSettingsChange({ ...localSettings, enabled: false });
       }
-    } catch { setOllamaUp(false); }
+    } catch {
+      if (compat) setCompatUp(false); else setOllamaUp(false);
+    }
   };
   // Botão único "Ligar o Ollama": tenta SUBIR o Ollama (ensure-running sobe o `ollama serve`
   // se estiver instalado mas desligado), depois lista os modelos. Dá retorno na tela. Se nem
@@ -1090,7 +1110,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     });
     return typeof off === 'function' ? off : undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showSettings, view, localCfg.baseUrl]);
+  }, [showSettings, view, localCfg.baseUrl, localCfg.provider, localCfg.authKey]);
   const handlePull = async (modelArg?: string) => {
     const m = (modelArg ?? pullName).trim(); if (!m || pulling) return;
     setPulling(true); setPullMsg('Preparing Ollama…');
@@ -1308,90 +1328,142 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </button>
               )}
                 <label>
+                  {t('set.provider')}
+                  <select value={localCfg.provider}
+                    onChange={e => {
+                      const next = e.target.value as LocalProvider;
+                      setLocalCfg(p => ({
+                        ...p, provider: next,
+                        // Se ainda está no default do backend atual, troca pro default do novo
+                        // backend (Ollama :11434 ↔ llama.cpp :8080); URL personalizada é mantida.
+                        baseUrl: (p.baseUrl || '').replace(/\/+$/, '') === (next === 'openai-compatible' ? 'http://localhost:11434' : 'http://localhost:8080')
+                          ? (next === 'openai-compatible' ? 'http://localhost:8080' : 'http://localhost:11434')
+                          : p.baseUrl,
+                      }));
+                    }}>
+                    <option value="ollama">Ollama</option>
+                    <option value="openai-compatible">llama.cpp / OpenAI-compatible</option>
+                  </select>
+                  <small className="mm-hint">{isLocalCompat() ? t('set.compatHint') : t('set.localSmall')}</small>
+                </label>
+                {isLocalCompat() && (
+                  <label>
+                    {t('set.localAuthKey')}
+                    <input type="password" value={localCfg.authKey || ''} autoComplete="off"
+                      onChange={e => setLocalCfg(p => ({ ...p, authKey: e.target.value }))}
+                      placeholder={t('set.apiKeyOptional')} />
+                  </label>
+                )}
+                <label>
                   {t('set.ollamaUrl')}
                   <input type="text" value={localCfg.baseUrl}
                     onChange={e => setLocalCfg(p => ({ ...p, baseUrl: e.target.value }))}
-                    placeholder="http://localhost:11434" />
+                    placeholder={isLocalCompat() ? 'http://localhost:8080' : 'http://localhost:11434'} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input type="checkbox" checked={!!localCfg.warmup}
+                    onChange={e => setLocalCfg(p => ({ ...p, warmup: e.target.checked }))} />
+                  <span>{t('set.warmupLocal')}<small className="mm-hint"> — {t('set.warmupHint')}</small></span>
                 </label>
                 <div className="model-mgr">
-                  <div className={`mm-status ${ollamaUp === true ? 'ok' : ollamaInstalled === false ? 'none' : ollamaUp === false ? 'off' : ''}`}>
-                    <span>{ollamaUp === null ? t('mm.checking')
-                      : ollamaUp === true ? `✓ ${t('mm.statusOn')}`
-                      : ollamaInstalled === false ? t('mm.statusNone')
-                      : t('mm.statusOff')}</span>
-                    {ollamaUp === false && ollamaInstalled !== false && (
-                      <button className="mm-recheck" onClick={startOllama} disabled={starting}>{starting ? t('mm.starting') : t('mm.startOllama')}</button>
-                    )}
-                    {ollamaUp === false && ollamaInstalled === false && (
-                      <button className="mm-install" onClick={installOllama}>{t('mm.install')}</button>
-                    )}
-                  </div>
+                  {isLocalCompat() ? (
+                    <div className={`mm-status ${compatUp === true ? 'ok' : compatUp === false ? 'off' : ''}`}>
+                      <span>{compatUp === null ? t('mm.checking')
+                        : compatUp === true ? `✓ ${t('set.compatRunning')}`
+                        : t('set.compatOff')}</span>
+                      {compatUp === false && (
+                        <button className="mm-recheck" onClick={refreshModels}>{t('mm.recheck')}</button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className={`mm-status ${ollamaUp === true ? 'ok' : ollamaInstalled === false ? 'none' : ollamaUp === false ? 'off' : ''}`}>
+                      <span>{ollamaUp === null ? t('mm.checking')
+                        : ollamaUp === true ? `✓ ${t('mm.statusOn')}`
+                        : ollamaInstalled === false ? t('mm.statusNone')
+                        : t('mm.statusOff')}</span>
+                      {ollamaUp === false && ollamaInstalled !== false && (
+                        <button className="mm-recheck" onClick={startOllama} disabled={starting}>{starting ? t('mm.starting') : t('mm.startOllama')}</button>
+                      )}
+                      {ollamaUp === false && ollamaInstalled === false && (
+                        <button className="mm-install" onClick={installOllama}>{t('mm.install')}</button>
+                      )}
+                    </div>
+                  )}
                   <div className="mm-head">
-                    <span>{t('mm.installed')}</span>
-                    {ollamaUp === true && <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>}
+                    <span>{isLocalCompat() ? t('set.compatModels') : t('mm.installed')}</span>
+                    {(isLocalCompat() ? compatUp === true : ollamaUp === true) && <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>}
                   </div>
                   {models.length === 0 ? (
-                    <div className="mm-empty">{ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
+                    <div className="mm-empty">{!isLocalCompat() && ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
                   ) : (
                     <div className="mm-list">
                       {models.map(m => (
                         <div key={m.name} className={`mm-item ${localCfg.enabled && m.name === localCfg.model ? 'on' : ''}`}>
                           <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name, enabled: true }))} title={t('mm.use')}>
                             <span className="mm-name">{localCfg.enabled && m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
-                            <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : ''].filter(Boolean).join(' · ')}</span>
+                            <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : '', isLocalCompat() ? (m.loaded !== false ? t('set.modelLoaded') : t('set.modelAvailable')) : ''].filter(Boolean).join(' · ')}</span>
                           </button>
-                          <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title={t('mm.delete')}>
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                          </button>
+                          {!isLocalCompat() && (
+                            <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title={t('mm.delete')}>
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
                   )}
-                  <div className="mm-pull">
-                    <input value={pullName} onChange={e => setPullName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handlePull(); }}
-                      disabled={pulling}
-                      placeholder={t('mm.pullPlaceholder')} />
-                    {pulling
-                      ? <button className="mm-cancel" onClick={handleCancelPull} title={t('mm.stopTitle')}>{t('mm.stop')}</button>
-                      : <button onClick={() => handlePull()} disabled={!pullName.trim()}>{t('mm.download')}</button>}
-                  </div>
-                  {(pullMsg || startMsg) && <div className="mm-prog">{pullMsg || startMsg}</div>}
-                  <div className="mm-sugg">
-                    <div className="mm-sugg-cap">{t('mm.suggestions')}</div>
-                    {MODEL_SUGGESTIONS.map(g => {
-                      const open = openTier === g.tier;
-                      return (
-                        <div key={g.tier} className={`mm-tier-group${open ? ' open' : ''}`}>
-                          <button type="button" className="mm-tier-btn"
-                            onClick={() => setOpenTier(open ? null : g.tier)}
-                            aria-expanded={open}>
-                            <span className="mm-tier-arrow">{open ? '▾' : '▸'}</span>
-                            <span className="mm-tier-name">{g.tier}</span>
-                            <span className="mm-tier-count">{g.models.length}</span>
-                          </button>
-                          {open && (
-                            <div className="mm-chips">
-                              {g.models.map(s => (
-                                <button key={s.name} className={`mm-chip${s.rec ? ' rec' : ''}`}
-                                  onClick={() => { setPullName(s.name); handlePull(s.name); }}
-                                  disabled={pulling}
-                                  title={s.name}>
-                                  {s.rec ? '★ ' : ''}{s.label || s.name}
-                                </button>
-                              ))}
+                  {/* Baixar/remover modelo, sugestões e importar GGUF são do OLLAMA (nativo). Pra
+                      backend OpenAI-compatible (llama.cpp), os modelos já estão no servidor — a
+                      UI só lista/usa, não baixa nem deleta. */}
+                  {!isLocalCompat() && (
+                    <>
+                      <div className="mm-pull">
+                        <input value={pullName} onChange={e => setPullName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') handlePull(); }}
+                          disabled={pulling}
+                          placeholder={t('mm.pullPlaceholder')} />
+                        {pulling
+                          ? <button className="mm-cancel" onClick={handleCancelPull} title={t('mm.stopTitle')}>{t('mm.stop')}</button>
+                          : <button onClick={() => handlePull()} disabled={!pullName.trim()}>{t('mm.download')}</button>}
+                      </div>
+                      {(pullMsg || startMsg) && <div className="mm-prog">{pullMsg || startMsg}</div>}
+                      <div className="mm-sugg">
+                        <div className="mm-sugg-cap">{t('mm.suggestions')}</div>
+                        {MODEL_SUGGESTIONS.map(g => {
+                          const open = openTier === g.tier;
+                          return (
+                            <div key={g.tier} className={`mm-tier-group${open ? ' open' : ''}`}>
+                              <button type="button" className="mm-tier-btn"
+                                onClick={() => setOpenTier(open ? null : g.tier)}
+                                aria-expanded={open}>
+                                <span className="mm-tier-arrow">{open ? '▾' : '▸'}</span>
+                                <span className="mm-tier-name">{g.tier}</span>
+                                <span className="mm-tier-count">{g.models.length}</span>
+                              </button>
+                              {open && (
+                                <div className="mm-chips">
+                                  {g.models.map(s => (
+                                    <button key={s.name} className={`mm-chip${s.rec ? ' rec' : ''}`}
+                                      onClick={() => { setPullName(s.name); handlePull(s.name); }}
+                                      disabled={pulling}
+                                      title={s.name}>
+                                      {s.rec ? '★ ' : ''}{s.label || s.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <details className="mm-imp mm-imp-open" open>
-                    <summary>{t('mm.importGguf')}</summary>
-                    <input value={ggufPath} onChange={e => setGgufPath(e.target.value)} placeholder={t('mm.ggufPath')} />
-                    <input value={ggufName} onChange={e => setGgufName(e.target.value)} placeholder={t('mm.ggufName')} />
-                    <button onClick={handleImportGguf} disabled={!ggufPath.trim() || pulling}>{t('mm.import')}</button>
-                  </details>
+                          );
+                        })}
+                      </div>
+                      <details className="mm-imp mm-imp-open" open>
+                        <summary>{t('mm.importGguf')}</summary>
+                        <input value={ggufPath} onChange={e => setGgufPath(e.target.value)} placeholder={t('mm.ggufPath')} />
+                        <input value={ggufName} onChange={e => setGgufName(e.target.value)} placeholder={t('mm.ggufName')} />
+                        <button onClick={handleImportGguf} disabled={!ggufPath.trim() || pulling}>{t('mm.import')}</button>
+                      </details>
+                    </>
+                  )}
                 </div>
             </div>
           )}

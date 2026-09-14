@@ -90,6 +90,12 @@ let localPageAgent: PageAgent | null = null;
 // pra trabalhos em BACKGROUND (monitores) respeitarem "local não vaza pra nuvem" — o chat
 // normal roteia por chamada, mas os monitores rodam sem o renderer decidir.
 let localModeOn = false;
+// Pré-aquecimento do modelo local é OPT-IN (o llama.cpp gerencia a VRAM; nunca descarregamos
+// nada). O renderer liga via IPC quando o usuário escolhe; o engine só aquece com a flag ligada.
+let localWarmupOn = false;
+// Rótulo amigável do backend local (Ollama nativo vs OpenAI-compatible) pros erros de IA
+// falarem a linguagem certa — não adianta mandar "start Ollama" pra quem usa llama.cpp.
+const localBackendIsCompat = () => localEngine?.getProvider() === 'openai';
 // Pular anúncio do YouTube sozinho (fantasma) — padrão LIGADO, como o adblock. Lido no
 // dom-ready de cada webview (ver YT_SKIP_AD_SCRIPT); não persiste em disco no main, quem
 // reaplica no boot é o renderer via localStorage (mesmo molde do torrentSeed).
@@ -1018,16 +1024,31 @@ function setupIPC(): void {
     return { success: true };
   });
 
-  // Local (GPU) model configuration
-  ipcMain.handle('ai:set-local-provider', async (_event, provider: AIProvider, apiKey: string, baseUrl?: string, modelName?: string) => {
+  // Local (GPU) model configuration — backend local = Ollama (nativo) OU OpenAI-compatible
+  // (llama.cpp/LM Studio/vLLM). isLocal=true explicita o modo local: a apiKey vira auth
+  // OPCIONAL, e NUNCA um marcador fabricado ('local') que virava um 'Bearer local' na chamada.
+  ipcMain.handle('ai:set-local-provider', async (_event, providerIn: string, apiKey: string, baseUrl?: string, modelName?: string) => {
+    // A UI usa LocalProvider ('ollama' | 'openai-compatible'); o engine fala AIProvider
+    // ('openai'). Normaliza aqui (ponto único) pra um 'openai-compatible' nunca vazar pro
+    // switch do AIEngine (que não tem esse case). isLocal=true faz 'openai' virar o backend
+    // local compatível, não a api.openai.com.
+    const provider: AIProvider = providerIn === 'openai-compatible' ? 'openai' : (providerIn as AIProvider);
     const prevLocal = localEngine;
-    localEngine = new AIEngine(provider, apiKey || 'local', baseUrl, modelName);
+    localEngine = new AIEngine(provider, apiKey || '', baseUrl, modelName, undefined, true);
     localEngine.adoptHistoriesFrom(prevLocal);   // salvar Config não apaga a conversa local
     localPageAgent = new PageAgent(localEngine);
-    console.log(`[HybridRouter] Local engine set: ${provider} model=${modelName || 'default'} @ ${baseUrl || 'default'}`);
-    // Pré-aquece o modelo na VRAM (fire-and-forget) pra a 1ª tarefa já vir quente.
-    localEngine.warmupOllama().catch(() => {});
+    console.log(`[HybridRouter] Local engine set: ${provider} (${providerIn}) model=${modelName || 'default'} @ ${localEngine.getBaseUrl()}`);
+    // Pré-aquece o modelo é OPCIONAL (opt-in): llama.cpp gerencia a VRAM sozinho e nunca
+    // auto-carregamos/descarregamos. Com a flag ligada, aquece só o modelo selecionado.
+    localEngine.setLocalWarmup(localWarmupOn);
+    localEngine.warmupLocal().catch(() => {});
     return { success: true };
+  });
+  // Liga/desliga o pré-aquecimento (opt-in) do modelo local.
+  ipcMain.handle('ai:set-local-warmup', (_event, on: boolean) => {
+    localWarmupOn = !!on;
+    try { localEngine?.setLocalWarmup(localWarmupOn); } catch {}
+    return !!on;
   });
 
   // Espelha o liga/desliga do modo IA Local (pros trabalhos em background respeitarem).
@@ -1058,7 +1079,12 @@ function setupIPC(): void {
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
-      if (local) return { error: `Local AI failed: ${m}. Make sure Ollama is open and a model is downloaded and selected.` };
+      if (local) {
+        const start = localBackendIsCompat()
+          ? 'Make sure your OpenAI-compatible server (llama.cpp/LM Studio/vLLM) is running and a model is loaded and selected.'
+          : 'Make sure Ollama is open and a model is downloaded and selected.';
+        return { error: `Local AI failed: ${m}. ${start}` };
+      }
       if (/401|403|api.?key|unauthorized|invalid.*key|\bsk-/i.test(m)) {
         // Diz QUAL provedor rejeitou (antes culpava sempre o DeepSeek — um usuário com
         // chave Mistral inválida lia "DeepSeek precisa de chave" e não entendia nada).
@@ -1114,10 +1140,13 @@ function setupIPC(): void {
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
         // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
         // devagar) manda consertar o que não está quebrado — e esconde o que está.
+        const start = localBackendIsCompat()
+          ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
+          : 'start Ollama and select a model in settings.';
         const tail = /too slow|timeout/i.test(msg)
           ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
-          : 'Local mode stays offline — start Ollama or switch to a cloud provider in settings.';
-        return { error: `Local AI (Ollama) failed: ${msg}. ${tail}` };
+          : `Local mode stays offline — ${start}`;
+        return { error: `Local AI failed: ${msg}. ${tail}` };
       }
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };
@@ -1298,6 +1327,69 @@ function setupIPC(): void {
         setTimeout(() => { try { child.kill(); } catch {} resolve({ ok: false, error: 'timeout' }); }, 600000);
       });
     } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+  });
+
+  // ═══ Descoberta de backend local (Ollama OU OpenAI-compatible: llama.cpp/LM Studio/vLLM) ═══
+  // Um endpoint pode ser Ollama (responde /api/tags) OU OpenAI-compatible (responde
+  // /v1/models). Detectamos AMBOS e preferimos o Ollama nativo quando os dois falam (o
+  // Ollama também expõe /v1/models). Separamos 'available' (no catálogo) de 'loaded' (na
+  // VRAM) e EXCLUÍMOS modelos de embedding (não servem pro agente/chat). Sempre resolvemos
+  // por ID/alias EXATO, nunca 'primeiro da lista' (poderia carregar DeepSeek ou um embedder).
+  const normalizeBase = (b?: string) => (b || '').trim().replace(/\/+$/, '');
+  const compatV1 = (base: string) => base.replace(/\/v1$/i, '') + '/v1';
+  const ollamaRoot = (base: string) => base.replace(/\/v1$/i, '');
+  // Só nomes que claramente são embedders — nomic/jina também têm chat; substring solta pegava eles.
+  const isEmbedder = (name: string) => /embed/i.test(name);
+  const authHeaders = (key?: string): Record<string, string> | undefined =>
+    (key && key.trim()) ? { Authorization: `Bearer ${key.trim()}` } : undefined;
+  ipcMain.handle('llm:list', async (_e, baseUrl?: string, provider?: string, authKey?: string) => {
+    const base = normalizeBase(baseUrl);
+    const hdrs = authHeaders(authKey);
+    const wantOllama = !provider || provider === 'ollama';
+    const wantCompat = !provider || provider === 'openai-compatible';
+    let ollama: { ok: boolean; models: any[]; error?: string } = { ok: false, models: [], error: 'n/a' };
+    if (wantOllama) {
+      try {
+        const r = await fetch(`${ollamaRoot(base)}/api/tags`, { signal: AbortSignal.timeout(4000), headers: hdrs } as any);
+        if (r.ok) {
+          const data = await r.json();
+          const models = (data.models || [])
+            .filter((m: any) => !isEmbedder(String(m.name)))
+            .map((m: any) => ({ name: m.name, sizeGB: m.size ? +(m.size / 1e9).toFixed(1) : 0, params: m.details?.parameter_size || '', quant: m.details?.quantization_level || '' }));
+          ollama = { ok: true, models };
+        } else ollama.error = `status ${r.status}`;
+      } catch (e: any) { ollama.error = String(e?.message ?? e); }
+    }
+    let compat: { ok: boolean; models: any[]; error?: string } = { ok: false, models: [], error: 'n/a' };
+    if (wantCompat) {
+      try {
+        const r = await fetch(`${compatV1(base)}/models`, { signal: AbortSignal.timeout(4000), headers: hdrs } as any);
+        if (r.ok) {
+          const data = await r.json();
+          const arr = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
+          const models = arr
+            .filter((m: any) => !isEmbedder(String(m.id || m.name || '')))
+            .map((m: any) => {
+              const name = String(m.id || m.name || '');
+              const status = m.status ?? m.state ?? {};
+              const loaded = status?.value === 'loaded' || status?.loaded === true || m.loaded === true;
+              return { name, loaded, params: String(status?.n_params || m.params || ''), quant: String(status?.ftype || m.quantization_level || '') };
+            });
+          compat = { ok: true, models };
+        } else compat.error = `status ${r.status}`;
+      } catch (e: any) { compat.error = String(e?.message ?? e); }
+    }
+    // Prefere Ollama quando o usuário pediu Ollama E ele respondeu; senão o compatível.
+    const backend = (wantOllama && ollama.ok) ? 'ollama' : compat.ok ? 'openai-compatible' : 'none';
+    const models = backend === 'ollama' ? ollama.models : compat.models;
+    return { ok: backend !== 'none', backend, models, available: models, loaded: models.filter((m: any) => m.loaded !== false), ollama, compat };
+  });
+  // Estado do servidor compatível pra UI: está respondendo?
+  ipcMain.handle('llm:status', async (_e, baseUrl?: string, authKey?: string) => {
+    const base = normalizeBase(baseUrl);
+    let running = false;
+    try { running = (await fetch(`${compatV1(base)}/models`, { signal: AbortSignal.timeout(4000), headers: authHeaders(authKey) } as any)).ok; } catch {}
+    return { running, installed: running, backend: running ? 'openai-compatible' : 'unknown' };
   });
 
   // Execute JS directly (from agent or user)
@@ -2871,9 +2963,10 @@ app.whenReady().then(async () => {
   if (minimizeToTray) ensureTray();
 
 
-  // Default local engine (Ollama on localhost — user configures model in settings)
+  // Default local engine (Ollama on localhost — user configures model in settings).
+  // isLocal=true (último arg): apiKey vira auth OPCIONAL, não marcador de modo.
   try {
-    localEngine = new AIEngine('ollama', 'local', 'http://localhost:11434', 'qwen3-vl:8b');
+    localEngine = new AIEngine('ollama', '', 'http://localhost:11434', 'qwen3-vl:8b', undefined, true);
     localPageAgent = new PageAgent(localEngine);
     console.log('[HybridRouter] Local engine (Ollama) initialized at http://localhost:11434');
   } catch (e) {

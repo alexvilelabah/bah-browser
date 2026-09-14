@@ -62,6 +62,9 @@ declare global {
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
       setLocalEnabled?: (enabled: boolean) => Promise<boolean>;
+      setLocalWarmup?: (on: boolean) => Promise<boolean>;
+      llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
+      llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => Promise<{ response?: string; error?: string }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
@@ -276,9 +279,11 @@ export default function App() {
     // Listeners com unsubscribe (higiene: sem cleanup, o StrictMode do dev duplicava eventos).
     const offs: Array<(() => void) | undefined> = [];
     offs.push(window.electronAPI?.onZoom?.((pct) => showZoom(pct)) as any);   // Ctrl+roda → badge de zoom na tela
-    // Initialize local (GPU) engine if hybrid is enabled
+    // Initialize local (GPU) engine if hybrid is enabled. authKey é OPCIONAL (não o marcador
+    // 'local' — o roteamento local é explícito no main, e um 'Bearer local' fabricado confundia).
     if (store.localSettings.enabled) {
-      window.electronAPI?.setLocalProvider?.(store.localSettings.provider, 'local', store.localSettings.baseUrl, store.localSettings.model);
+      window.electronAPI?.setLocalWarmup?.(!!store.localSettings.warmup);
+      window.electronAPI?.setLocalProvider?.(store.localSettings.provider, store.localSettings.authKey ?? '', store.localSettings.baseUrl, store.localSettings.model);
     }
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url)) as any);
     // Som na aba: o main manda o webContents que começou/parou de emitir áudio; aqui
@@ -3588,9 +3593,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             sessionCost={sessionCost}
             localSettings={store.localSettings}
             onLocalSettingsChange={async (ls) => {
-              store.setLocalSettings(ls);
+              await store.setLocalSettings(ls);
+              await window.electronAPI?.setLocalWarmup?.(!!ls.warmup);
               if (ls.enabled) {
-                await window.electronAPI?.setLocalProvider?.(ls.provider, 'local', ls.baseUrl, ls.model);
+                await window.electronAPI?.setLocalProvider?.(ls.provider, ls.authKey ?? '', ls.baseUrl, ls.model);
               }
             }}
             onSwitchToCloud={() => {
