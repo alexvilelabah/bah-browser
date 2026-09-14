@@ -30,8 +30,12 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
   }
 }
 
-// Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas de texto conforme
-// chegam. Devolve o texto completo no fim.
+// Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas conforme chegam.
+// Devolve o texto COMPLETO no fim.
+// Modelos de raciocínio (DeepSeek-V4, Fara…) mandam o pensamento num canal SEPARADO
+// (delta.reasoning_content). Embrulhamos em <think>…</think> pro renderer exibir o
+// chip 💭 — o MESMO padrão do reader NDJSON do Ollama. O retorno (histórico) fica
+// LIMPO: só o content, sem o raciocínio vazado (a UI já mostrou os chips via onDelta).
 // Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
 async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
@@ -39,10 +43,18 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
   const decoder = new TextDecoder();
   let buf = '';
   let full = '';
+  let thinkOpen = false;
+  const flushThink = () => { try { onDelta('</think>'); } catch {} thinkOpen = false; };
+  const emitThink = (d: string) => {
+    if (!d) return;
+    if (!thinkOpen) { try { onDelta('<think>'); } catch {} thinkOpen = true; }
+    try { onDelta(d); } catch {}
+  };
   let emitted = 0;
+  // Emite o content acumulado, sem cortar no meio de um par surrogate (emoji) — evita o
+  // "�" no rabo do preview.
   const emitUpTo = () => {
     let target = full.length;
-    // Não corta no meio de um par surrogate (emoji) — evita o "�" no rabo do preview.
     if (target > 0 && target < full.length) { const c = full.charCodeAt(target - 1); if (c >= 0xD800 && c <= 0xDBFF) target -= 1; }
     if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
   };
@@ -71,11 +83,17 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
         buf = buf.slice(nl + 1);
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload === '[DONE]') return full;
+        if (payload === '[DONE]') { if (thinkOpen) flushThink(); return full; }
         try {
           const j = JSON.parse(payload);
-          const d = j.choices?.[0]?.delta?.content ?? '';
-          if (d) { full += d; emitUpTo(); }
+          const dl = j.choices?.[0]?.delta;
+          const rc = dl?.reasoning_content ?? '';
+          const d = dl?.content ?? '';
+          if (rc) emitThink(rc);
+          if (d) {
+            if (thinkOpen) flushThink();
+            full += d; emitUpTo();
+          }
         } catch { /* linha parcial/keep-alive — ignora */ }
       }
     }
@@ -88,6 +106,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
     try { reader.releaseLock?.(); } catch {}
   }
   if (signal?.aborted) throw new Error('CANCELLED');   // reader.cancel() resolve done → garante o throw
+  if (thinkOpen) flushThink();   // fecha o bloco de raciocínio que ainda estava aberto
   return full;
 }
 
@@ -156,6 +175,23 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
 function stripThink(s: string): string {
   if (!s || (!s.includes('<think>') && !s.includes('</think>'))) return s;
   return s.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*?<\/think>/, '').trim();
+}
+
+// Limpa vazamentos de raciocínio no content de um provedor OpenAI-compatible em modo
+// agente, SEM usar stripThink às cegas no JSON. Ordem: (1) tags <think>…</think> se
+// vazaram no content; (2) marcador órfão DEPOIS do objeto (Fara: "}\n response") — só
+// remove se vier depois de um `}`; (3) prefixo de raciocínio ANTES do primeiro `{`.
+function stripReasoningMarkers(s: string): string {
+  if (!s) return s;
+  let r = stripThink(s).trim();
+  // Marcador órfão no fim (Fara): exige o `}` pra não comer um JSON que termina em "response".
+  r = r.replace(/(\})\s* response\s*$/, '$1');
+  const brace = r.indexOf('{');
+  if (brace > 0) {
+    const prefix = r.slice(0, brace);
+    if (/think|response/i.test(prefix)) r = r.slice(brace);
+  }
+  return r.trim();
 }
 
 /**
@@ -421,19 +457,31 @@ export class AIEngine {
   private baseUrl: string;
   private ollamaModel: string;
   private cloudModel: string;   // optional cloud model override (e.g. NVIDIA model picker)
+  private isLocal: boolean;     // modo IA Local (nunca cai na nuvem; roteia pro endpoint configurado)
+  private localWarmup = false;  // pré-aquecer o modelo local é OPCIONAL (opt-in) — o llama.cpp gerencia a VRAM
   private resolvedOllamaModel: string | null = null;  // modelo realmente usado (auto-detect)
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
 
-  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string, cloudModel?: string) {
+  // local=false ⇒ provedor de NUVEM (a chave é obrigatória p/ auth). local=true ⇒ backend
+  // LOCAL (Ollama ou OpenAI-compatible) — a apiKey vira auth OPCIONAL, NUNCA um marcador
+  // de modo (o roteamento local é explícito por isLocal, não por chave fabricada 'local').
+  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string, cloudModel?: string, local = false) {
     this.provider = provider;
     // Defensive trim: pasted API keys often carry a trailing space/newline,
     // which makes DeepSeek/OpenAI reject the "Bearer <key>" header with 401.
     this.apiKey = (apiKey || '').trim();
+    this.isLocal = local;
     this.baseUrl = (baseUrl && baseUrl.trim()) ? baseUrl.trim() : this.defaultBaseUrl(provider);
-    this.ollamaModel = ollamaModel || 'qwen3-vl:8b';
+    // Local OpenAI-compatible: SEM default de modelo Ollama — um "qwen3-vl:8b" fabricado
+    // num router com rota coringa poderia carregar o modelo errado. O usuário escolhe na UI.
+    this.ollamaModel = ollamaModel || (local && provider === 'openai' ? '' : 'qwen3-vl:8b');
     this.cloudModel = (cloudModel || '').trim();
+    // Normaliza base URL OpenAI-compatible: aceita raiz ("http://host:8080") OU já com
+    // "/v1" ("http://host:8080/v1") e preserva prefixos de proxy (".../proxy/v1"). O código
+    // anexa "/v1/..." na chamada, então NÃO podemos deixar um "/v1" duplicado no final.
+    if (provider === 'openai') this.baseUrl = this.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '');
   }
 
   // Endpoint ativo (pro pré-aquecimento de conexão no boot/troca de provedor).
@@ -458,7 +506,10 @@ export class AIEngine {
   private defaultBaseUrl(provider: AIProvider): string {
     switch (provider) {
       case 'anthropic': return 'https://api.anthropic.com';
-      case 'openai': return 'https://api.openai.com';
+      // O MESMO provider 'openai' serve nuvem (api.openai.com) e LOCAL OpenAI-compatible
+      // (llama.cpp/LM Studio/vLLM em :8080). isLocal decide o default; um baseUrl explícito
+      // sempre vence e preserva prefixos de proxy/direcional.
+      case 'openai': return this.isLocal ? 'http://localhost:8080' : 'https://api.openai.com';
       case 'deepseek': return 'https://api.deepseek.com';
       case 'mistral': return 'https://api.mistral.ai';
       case 'nvidia': return 'https://integrate.api.nvidia.com';
@@ -474,6 +525,8 @@ export class AIEngine {
     let who: string;
     if (p === 'ollama') {
       who = `a LOCAL AI running on the user's OWN computer via Ollama (model "${this.resolvedOllamaModel || this.ollamaModel}") — fully offline, no cloud`;
+    } else if (p === 'openai' && this.isLocal) {
+      who = `a LOCAL AI running on the user's OWN computer via an OpenAI-compatible server (llama.cpp / LM Studio / vLLM) with model "${this.ollamaModel || 'local'}" — fully offline, no cloud`;
     } else {
       const name = p === 'deepseek' ? 'DeepSeek' : p === 'mistral' ? 'Mistral' : p === 'nvidia' ? `NVIDIA NIM${this.cloudModel ? ` (model ${this.cloudModel})` : ''}` : p === 'openai' ? 'OpenAI' : p === 'anthropic' ? 'Anthropic' : String(p);
       who = `${name}, via its cloud API (the user's own key)`;
@@ -613,37 +666,196 @@ export class AIEngine {
     return data.content?.[0]?.text ?? '';
   }
 
+  // O provedor 'openai' serve NUVEM (api.openai.com) e LOCAL OpenAI-compatible
+  // (llama.cpp/LM Studio/vLLM). O model vira: local → o modelo SELECIONADO na config local
+  // (servidor compatível exige o nome exato do carregado); nuvem → override do usuário ou gpt-4o.
   private async callOpenAI(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
+    if (this.isLocal && !this.ollamaModel.trim()) {
+      throw new Error('No local model selected. Pick a model in settings.');
+    }
+    const model = this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o');
+    return this.openAICompat(messages, isAgentMode, onDelta, signal, {
+      model,
+      jsonMode: isAgentMode,   // agent = JSON por padrão (evidence-backed); desliga só em recuperação
+      maxTokens: 4096,
+      depth: 0,
+    });
+  }
+
+  // Implementação OpenAI-compatible com: retry+backoff (429/5xx/timeout, cancelável),
+  // timeout que COBRE a leitura do corpo (não só os headers), canal de raciocínio
+  // (reasoning_content) e — em modo agente — recuperação JSON limitada (vazia / truncada /
+  // só-raciocínio → tenta com orçamento maior mantendo JSON; só desliga o response_format
+  // com evidência de que o servidor não suporta).
+  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number }): Promise<string> {
     const streaming = !!onDelta && !isAgentMode;
+    const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
+    const jsonMode = cfg?.jsonMode ?? isAgentMode;
+    const depth = cfg?.depth ?? 0;
+    const maxTokens = cfg?.maxTokens ?? 4096;
     const body: any = {
       // OpenAI-compatible servers (llama.cpp, LM Studio, vLLM) usually require the exact
       // name of the loaded model; only real OpenAI accepts 'gpt-4o'. Honor the user's model.
-      model: this.cloudModel || 'gpt-4o',
+      model,
       messages: [
         { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
         ...messages,
       ],
-      max_tokens: 4096,
     };
-    if (isAgentMode) body.response_format = { type: 'json_object' };
+    if (isAgentMode) {
+      // JSON estruturado é o DEFAULT do agente (incl. modelos de raciocínio — testado: NOTHINK,
+      // Fara e DeepSeek-V4-Flash todos produzem JSON válido com json_object). Desligar é a
+      // EXCEÇÃO, só em recuperação com evidência (falha do response_format ou retorno vazio).
+      body.temperature = 0;   // deterministic JSON (medido: mais rápido e estável na rota do llama.cpp)
+      body.max_tokens = maxTokens;
+      if (jsonMode) body.response_format = { type: 'json_object' };
+    } else {
+      body.max_tokens = 4096;
+    }
     if (streaming) body.stream = true;
+    // Auth OPCIONAL no modo local (llama.cpp/LM Studio geralmente não pedem chave). Sem chave
+    // não mandamos o header — nada de 'Bearer ' vazio/fabricado.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    const endpoint = `${this.baseUrl}/v1/chat/completions`;
+    const bodyJson = JSON.stringify(body);
 
-    const res = await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    }, 45000, signal);
+    const MAX_ATTEMPTS = 3;
+    const appendLog = (line: string) => {
+      try {
+        const logPath = require('path').join(require('electron').app.getPath('userData'), 'agent.log');
+        require('fs').appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
+      } catch {}
+    };
+    const trace = `[OpenAI] provider=${this.provider} ${isAgentMode ? 'agent' : 'chat'} model=${model} json=${jsonMode} retry_depth=${depth}`;
+    console.log(trace); appendLog(trace);
 
+    const sleep = (ms: number) => new Promise<void>((resolve, reject) => {
+      if (signal?.aborted) { reject(new Error('CANCELLED')); return; }
+      const t = setTimeout(resolve, ms);
+      if (!signal) return;
+      const onAbort = () => { clearTimeout(t); reject(new Error('CANCELLED')); };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    let lastErr: any = null;
+    let res: Response | null = null;
+    const t0 = Date.now();
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Local frio: 300s (carregar GGUF grande). Local quente: 120s. Nuvem: 45s (como antes).
+      const reqTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 45_000;
+      try {
+        const candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, reqTimeoutMs, signal);
+        // Retry 429/5xx transitórios — NÃO 4xx. "Compute error" no llama.cpp = modelo não
+        // carregado / OOM: retry não ajuda, para já com mensagem clara.
+        if (candidate.status === 429 || candidate.status >= 500) {
+          let peek = '';
+          try { peek = await candidate.text(); } catch {}
+          if (this.isLocal && /compute error/i.test(peek)) {
+            const fatal: any = new Error(`Local AI compute error for model "${model}" — is that model loaded on the server? ${peek.slice(0, 240)}`);
+            fatal.noRetry = true;
+            throw fatal;
+          }
+          if (attempt < MAX_ATTEMPTS) {
+            const wait = 800 * Math.pow(2, attempt - 1);
+            appendLog(`[OpenAI] ${candidate.status} transient → retry ${attempt + 1}/${MAX_ATTEMPTS} in ${wait}ms`);
+            await sleep(wait);
+            continue;
+          }
+          throw new Error(`OpenAI API error ${candidate.status}: ${peek.slice(0, 400)}`);
+        }
+        res = candidate;
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        if (e?.noRetry || signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        // Timeout (local frio incluso) e erros de rede: retry com backoff cancelável.
+        if (attempt < MAX_ATTEMPTS) {
+          const wait = 800 * Math.pow(2, attempt - 1);
+          appendLog(`[OpenAI] error (${attempt}/${MAX_ATTEMPTS}): ${e?.message} → retry in ${wait}ms`);
+          await sleep(wait);
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!res) throw (lastErr ?? new Error('OpenAI-compatible request failed after retries'));
+
+    // Status de erro ANTES de streamar: um 500/401 no chat virava bolha vazia (readSseStream
+    // não acha data: e devolve ''). Lê o corpo como texto — pode ser JSON ou HTML de proxy.
     if (!res.ok) {
-      throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
+      let errText = '';
+      try { errText = await res.text(); } catch {}
+      const unsupportedJson = res.status === 400 && /response_format|json|format/i.test(errText);
+      if (isAgentMode && jsonMode && unsupportedJson) {
+        appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: depth + 1 });
+      }
+      throw new Error(`OpenAI API error ${res.status}: ${errText.slice(0, 400)}`);
     }
 
+    if (this.isLocal) this.ollamaWarmed = true;
     if (streaming) return readSseStream(res, onDelta!, signal);
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content ?? '';
+
+    // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
+    // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
+    let data: any = {};
+    try {
+      const parsed = await this.readJsonWithTimeout(res, 60000, signal);
+      data = parsed.data;
+    } catch (e: any) {
+      if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+      throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
+    }
+
+    const choice = data?.choices?.[0] ?? {};
+    const msg = choice?.message ?? {};
+    let text = typeof msg?.content === 'string' ? msg.content : '';
+    const reasoning = typeof msg?.reasoning_content === 'string' ? msg.reasoning_content : '';
+    const finish = choice?.finish_reason;
+    const empty = !text;
+    const truncated = finish === 'length';
+    const usage = data?.usage;
+
+    // Recuperação JSON: UMA vez com orçamento maior (depth 0 → 1). Se ainda vazio, UMA vez
+    // prompt-only (depth 1 → 2). Não dispara o mesmo POST 16384 duas vezes.
+    if (isAgentMode && jsonMode && (empty || truncated) && depth === 0) {
+      appendLog(`[OpenAI] content vazio/truncado (finish=${finish}, depth=${depth}) → retry com orçamento maior mantendo JSON`);
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: 16384, depth: 1 });
+    }
+    if (isAgentMode && empty && jsonMode && depth === 1) {
+      appendLog('[OpenAI] ainda vazio com JSON → retry final em prompt-only');
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: 2 });
+    }
+
+    const latencyMs = Date.now() - t0;
+    appendLog(`[OpenAI] ← ${res.status} in ${latencyMs}ms finish=${finish} content_len=${text.length} reasoning_len=${reasoning.length} tokens=${JSON.stringify(usage)}`);
+    console.log(`[OpenAI] ← ${res.status} in ${latencyMs}ms finish=${finish} content_len=${text.length} reasoning_len=${reasoning.length}`);
+    if (isAgentMode) text = stripReasoningMarkers(text);   // remove marcadores órfãos (Fara) sem quebrar JSON
+    return text;
+  }
+
+  // Lê o corpo de uma Response com timeout ativo (o fetchWithTimeout para no tempo de headers;
+  // esta guarda cobre a leitura do body, que podia pendurar o stream de um servidor zumbi).
+  // Nota: res.text() não cancela por AbortController separado, então fazemos RACE com um timer
+  // — jamais pendura pra sempre; se o body não vier, tratamos como falha e seguimos o retry.
+  private async readJsonWithTimeout(res: Response, ms: number, signal?: AbortSignal): Promise<{ data: any; raw: string }> {
+    if (signal?.aborted) throw new Error('CANCELLED');
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('body read timed out')), ms); });
+      const cancelP = signal
+        ? new Promise<never>((_, reject) => { signal.addEventListener('abort', () => reject(new Error('CANCELLED')), { once: true }); })
+        : null;
+      const racers: Promise<any>[] = [res.text(), timeout];
+      if (cancelP) racers.push(cancelP);
+      const text: string = (await Promise.race(racers)) || '';
+      let data: any = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { error: { message: text.slice(0, 400) } }; }
+      return { data, raw: text };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   // Mistral: OpenAI-compatible chat completions. Default model is the cheap one;
@@ -972,23 +1184,42 @@ export class AIEngine {
     }
   }
 
-  /** Pré-carrega o modelo local na VRAM (fire-and-forget) pra a 1ª tarefa já vir quente.
-   *  Chamado quando o usuário liga o modo local. */
-  async warmupOllama(): Promise<void> {
-    if (this.provider !== 'ollama') return;
+  /** O pré-aquecimento é OPCIONAL (opt-in): o llama.cpp gerencia a VRAM sozinho e NÃO
+   *  queremos carregar modelo nenhum sem pedido — e nunca descarregar o que já está lá.
+   *  Ligar o warmup só manda uma chamada mínima pro modelo SELECIONADO (nunca os outros). */
+  setLocalWarmup(on: boolean): void { this.localWarmup = !!on; }
+  getLocalWarmup(): boolean { return this.localWarmup; }
+
+  // Pré-carrega o modelo local (fire-and-forget) pra a 1ª tarefa já vir quente.
+  async warmupLocal(): Promise<void> {
+    if (!this.isLocal || !this.localWarmup) return;
     try {
-      const model = await this.resolveOllama();
-      console.log(`[Ollama] aquecendo "${model}" na VRAM…`);
-      // 180s: carregar um modelo grande na VRAM demora mesmo; mas nunca pendura pra sempre.
-      await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', options: { num_ctx: 512 } }),
-      }, 180000);
+      if (this.provider === 'ollama') {
+        const model = await this.resolveOllama();
+        console.log(`[Local] aquecendo "${model}" na VRAM…`);
+        // 180s: carregar um modelo grande na VRAM demora mesmo; mas nunca pendura pra sempre.
+        await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', options: { num_ctx: 512 } }),
+        }, 180000);
+      } else if (this.provider === 'openai') {
+        if (!this.ollamaModel.trim()) return;   // sem modelo escolhido: não inventa um id
+        // OpenAI-compatible: chamada mínima no modelo selecionado (chave opcional).
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+        console.log(`[Local] aquecendo "${this.ollamaModel}" via OpenAI-compatible…`);
+        await fetchWithTimeout(`${this.baseUrl}/v1/chat/completions`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ model: this.ollamaModel, messages: [{ role: 'user', content: 'oi' }], max_tokens: 8 }),
+        }, 300000);
+      } else {
+        return;
+      }
       this.ollamaWarmed = true;
-      console.log(`[Ollama] "${model}" pronto na VRAM.`);
+      console.log(`[Local] modelo pronto na VRAM.`);
     } catch (e: any) {
-      console.warn('[Ollama] warmup falhou (servidor ligado?):', e?.message);
+      console.warn('[Local] warmup falhou (servidor ligado?):', e?.message);
     }
   }
   private ollamaWarmed = false;

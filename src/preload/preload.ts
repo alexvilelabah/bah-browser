@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setLocalProvider: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) =>
     ipcRenderer.invoke('ai:set-local-provider', provider, apiKey, baseUrl, modelName),
   setLocalEnabled: (enabled: boolean) => ipcRenderer.invoke('ai:set-local-enabled', enabled),
+  setLocalWarmup: (on: boolean) => ipcRenderer.invoke('ai:set-local-warmup', on),
+  // Descoberta genérica de backend local (Ollama OU OpenAI-compatible llama.cpp/LM Studio/vLLM).
+  llmList: (baseUrl?: string, provider?: string, authKey?: string) => ipcRenderer.invoke('llm:list', baseUrl, provider, authKey),
+  llmStatus: (baseUrl?: string, authKey?: string) => ipcRenderer.invoke('llm:status', baseUrl, authKey),
   // ── Gerenciador de modelos Ollama (modo local) ──
   ollamaList: (baseUrl?: string) => ipcRenderer.invoke('ollama:list', baseUrl),
   ollamaEnsureRunning: (baseUrl?: string) => ipcRenderer.invoke('ollama:ensure-running', baseUrl),
