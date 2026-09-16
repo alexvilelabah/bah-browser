@@ -476,7 +476,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSettings]);
   // Gerenciador de modelos Ollama (instalar/baixar/apagar/importar pela UI).
-  const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string; loaded?: boolean }>>([]);
+  const [models, setModels] = useState<Array<{ name: string; sizeGB: number; params: string; quant: string; loaded?: boolean; vision?: string; contextTokens?: number; unsuitable?: string }>>([]);
+  // Explicit endpoint probes (connection / model) and context detection. None of this
+  // runs on its own: the user clicks, otherwise the server is left alone.
+  const [localTestMsg, setLocalTestMsg] = useState('');
+  const [localTesting, setLocalTesting] = useState(false);
+  const [ctxInfo, setCtxInfo] = useState('');
   // Backend local escolhido nas Configurações (rascunho): 'ollama' (nativo /api/tags) ou
   // 'openai-compatible' (llama.cpp/LM Studio/vLLM, via /v1/models).
   const isLocalCompat = () => localCfg.provider === 'openai-compatible';
@@ -1054,7 +1059,20 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       if (compat) setCompatUp(running);
       else setOllamaUp(running);
       const list = r?.ok ? (r.models || []) : [];
-      setModels(list);
+      // Best-effort enrichment: vision, context window, loaded/not. If discovery fails
+      // the list stays exactly as it was - nothing here is critical.
+      let enriched = list;
+      try {
+        const d = await window.electronAPI?.localDiscover?.(localCfg.provider, localCfg.baseUrl, localCfg.authKey);
+        if (d?.ok) {
+          const meta = new Map((d.models || []).map((m: any) => [String(m.id).toLowerCase(), m]));
+          enriched = list.map((m: any) => {
+            const x: any = meta.get(String(m.name).toLowerCase());
+            return x ? { ...m, loaded: x.loaded ?? m.loaded, vision: x.vision, contextTokens: x.contextTokens, unsuitable: x.unsuitable } : m;
+          });
+        }
+      } catch { /* sem metadados extras - segue com a lista basica */ }
+      setModels(enriched);
       // Se o local está ATIVO num modelo que não existe mais (servidor rodando + lista sem ele),
       // desliga o local — o "IA ativa" para de mostrar um modelo fantasma e volta pra nuvem/grátis.
       if (running && localSettings.enabled && localSettings.model && !list.some((m: any) => m.name === localSettings.model)) {
@@ -1064,6 +1082,39 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     } catch {
       if (compat) setCompatUp(false); else setOllamaUp(false);
     }
+  };
+  // CONNECTION probe: discovery only, never inference - loads nothing, warms nothing.
+  const testLocalConnection = async () => {
+    if (localTesting) return;
+    setLocalTesting(true); setLocalTestMsg(t('set.testing'));
+    try {
+      const r = await window.electronAPI?.localTestConnection?.(localCfg.baseUrl, localCfg.authKey);
+      setLocalTestMsg(r?.ok ? t('set.testConnOk', { n: r.modelsFound ?? 0 }) : `${t('set.testFailed')}: ${r?.error || ''}`);
+      if (r?.ok) refreshModels();
+    } catch (e: any) { setLocalTestMsg(`${t('set.testFailed')}: ${String(e?.message ?? e)}`); }
+    finally { setLocalTesting(false); }
+  };
+  // MODEL probe: the only call that generates tokens (capped at 5), and only on click.
+  const testLocalModel = async () => {
+    if (localTesting || !localCfg.model) return;
+    setLocalTesting(true); setLocalTestMsg(t('set.testing'));
+    try {
+      const r = await window.electronAPI?.localTestModel?.(localCfg.provider, localCfg.baseUrl, localCfg.model, localCfg.authKey);
+      setLocalTestMsg(r?.ok
+        ? t('set.testModelOk', { ms: r.ms ?? 0, reply: (r.reply || '').slice(0, 80) })
+        : `${t('set.testFailed')}: ${r?.error || ''}`);
+    } catch (e: any) { setLocalTestMsg(`${t('set.testFailed')}: ${String(e?.message ?? e)}`); }
+    finally { setLocalTesting(false); }
+  };
+  // The REAL context window of the selected model (runtime, else the advertised one).
+  const detectLocalContext = async () => {
+    if (localTesting || !localCfg.model) return;
+    setLocalTesting(true); setCtxInfo(t('set.testing'));
+    try {
+      const r = await window.electronAPI?.localContext?.(localCfg.provider, localCfg.baseUrl, localCfg.model, localCfg.authKey);
+      setCtxInfo(r?.ok && r.tokens ? t('set.ctxDetected', { n: r.tokens, source: r.source }) : t('set.ctxUnknown'));
+    } catch { setCtxInfo(t('set.ctxUnknown')); }
+    finally { setLocalTesting(false); }
   };
   // Botão único "Ligar o Ollama": tenta SUBIR o Ollama (ensure-running sobe o `ollama serve`
   // se estiver instalado mas desligado), depois lista os modelos. Dá retorno na tela. Se nem
@@ -1371,6 +1422,59 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     onChange={e => setLocalCfg(p => ({ ...p, warmup: e.target.checked }))} />
                   <span>{t('set.warmupLocal')}<small className="mm-hint"> — {t('set.warmupHint')}</small></span>
                 </label>
+                <details className="mm-imp">
+                  <summary>{t('set.localAdvanced')}</summary>
+                  <label>
+                    {t('set.ctxMode')}
+                    <select value={localCfg.contextMode === 'custom' ? 'custom' : 'auto'}
+                      onChange={e => setLocalCfg(p => ({ ...p, contextMode: e.target.value as 'auto' | 'custom' }))}>
+                      <option value="auto">{t('set.ctxAuto')}</option>
+                      <option value="custom">{t('set.ctxCustom')}</option>
+                    </select>
+                  </label>
+                  {localCfg.contextMode === 'custom' && (
+                    <label>
+                      {t('set.ctxTokens')}
+                      <input type="number" min={4096} step={1024} value={localCfg.contextTokens || ''}
+                        onChange={e => setLocalCfg(p => ({ ...p, contextTokens: Math.max(0, Number(e.target.value) || 0) || undefined }))}
+                        placeholder="32768" />
+                    </label>
+                  )}
+                  <div className="mm-hint">
+                    <button type="button" className="mm-link" onClick={detectLocalContext} disabled={localTesting || !localCfg.model}>{t('set.ctxDetect')}</button>
+                    {ctxInfo ? <span> · {ctxInfo}</span> : null}
+                  </div>
+                  <label>
+                    {t('set.maxOut')}
+                    <input type="number" min={256} step={512} value={localCfg.maxOutputTokens || ''}
+                      onChange={e => setLocalCfg(p => ({ ...p, maxOutputTokens: Math.max(0, Number(e.target.value) || 0) || undefined }))}
+                      placeholder="4096" />
+                  </label>
+                  <div className="mm-hint">{t('set.maxOutHint')}</div>
+                  {!isLocalCompat() && (
+                    <label>
+                      {t('set.ollamaNumCtx')}
+                      <select value={localCfg.ollamaNumCtx === 'auto' ? 'auto' : String(localCfg.ollamaNumCtx || '')}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setLocalCfg(p => ({ ...p, ollamaNumCtx: v === 'auto' ? 'auto' : (v ? Number(v) : undefined) }));
+                        }}>
+                        <option value="">{t('set.ollamaNumCtxLegacy')}</option>
+                        <option value="auto">{t('set.ctxAuto')}</option>
+                        <option value="32768">32768</option>
+                        <option value="65536">65536</option>
+                        <option value="131072">131072</option>
+                        <option value="262144">262144</option>
+                      </select>
+                    </label>
+                  )}
+                  <label className="mm-check">
+                    <input type="checkbox" checked={localCfg.vision === true}
+                      onChange={e => setLocalCfg(p => ({ ...p, vision: e.target.checked }))} />
+                    {t('set.vision')}
+                  </label>
+                  <div className="mm-hint">{t('set.visionHint')}</div>
+                </details>
                 <div className="model-mgr">
                   {isLocalCompat() ? (
                     <div className={`mm-status ${compatUp === true ? 'ok' : compatUp === false ? 'off' : ''}`}>
@@ -1380,6 +1484,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       {compatUp === false && (
                         <button className="mm-recheck" onClick={refreshModels}>{t('mm.recheck')}</button>
                       )}
+                      <button className="mm-recheck" onClick={testLocalConnection} disabled={localTesting}>{t('set.testConn')}</button>
+                      <button className="mm-recheck" onClick={testLocalModel} disabled={localTesting || !localCfg.model}>{t('set.testModel')}</button>
                     </div>
                   ) : (
                     <div className={`mm-status ${ollamaUp === true ? 'ok' : ollamaInstalled === false ? 'none' : ollamaUp === false ? 'off' : ''}`}>
@@ -1395,6 +1501,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       )}
                     </div>
                   )}
+                  {(localTestMsg && isLocalCompat()) && <div className="mm-prog">{localTestMsg}</div>}
                   <div className="mm-head">
                     <span>{isLocalCompat() ? t('set.compatModels') : t('mm.installed')}</span>
                     {(isLocalCompat() ? compatUp === true : ollamaUp === true) && <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>}
@@ -1405,9 +1512,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     <div className="mm-list">
                       {models.map(m => (
                         <div key={m.name} className={`mm-item ${localCfg.enabled && m.name === localCfg.model ? 'on' : ''}`}>
-                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name, enabled: true }))} title={t('mm.use')}>
+                          <button className="mm-pick" onClick={() => setLocalCfg(p => ({ ...p, model: m.name, enabled: !m.unsuitable }))} title={m.unsuitable ? t('mm.unsuitable') : t('mm.use')}>
                             <span className="mm-name">{localCfg.enabled && m.name === localCfg.model ? '✓ ' : ''}{m.name}</span>
-                            <span className="mm-meta">{[m.params, m.sizeGB ? `${m.sizeGB}GB` : '', isLocalCompat() ? (m.loaded !== false ? t('set.modelLoaded') : t('set.modelAvailable')) : ''].filter(Boolean).join(' · ')}</span>
+                            <span className="mm-meta">{[
+                              m.params,
+                              m.sizeGB ? `${m.sizeGB}GB` : '',
+                              isLocalCompat() ? (m.loaded !== false ? t('set.modelLoaded') : t('set.modelAvailable')) : '',
+                              // Window the server advertises (router --ctx-size, Ollama
+                              // details): pick a model already knowing its context.
+                              m.contextTokens ? `${Math.round(m.contextTokens / 1024)}K ctx` : '',
+                              m.vision === 'supported' ? '👁' : '',
+                              m.unsuitable === 'embedding' ? t('mm.embOnly') : m.unsuitable === 'image' ? t('mm.imgOnly') : '',
+                            ].filter(Boolean).join(' · ')}</span>
                           </button>
                           {!isLocalCompat() && (
                             <button className="mm-del" onClick={() => handleDeleteModel(m.name)} title={t('mm.delete')}>
