@@ -32,10 +32,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
-  aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') =>
-    ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier),
-  setLocalProvider: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) =>
-    ipcRenderer.invoke('ai:set-local-provider', provider, apiKey, baseUrl, modelName),
+  aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) =>
+    ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier, actionId),
+  // Agent Stop button: aborts the in-flight request in main, not just its result.
+  actionCancel: (actionId: string) => ipcRenderer.invoke('ai:action-cancel', actionId),
+  setLocalProvider: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: object) =>
+    ipcRenderer.invoke('ai:set-local-provider', provider, apiKey, baseUrl, modelName, opts),
+  // ── Local endpoint: discovery / context / probes (no autoload, no inference,
+  // except localTestModel, which IS the explicit "Test model" button) ──
+  localDiscover: (provider: string, baseUrl?: string, authKey?: string) =>
+    ipcRenderer.invoke('local:discover', provider, baseUrl, authKey),
+  localContext: (provider: string, baseUrl?: string, model?: string, authKey?: string) =>
+    ipcRenderer.invoke('local:context', provider, baseUrl, model, authKey),
+  localTestConnection: (baseUrl?: string, authKey?: string) =>
+    ipcRenderer.invoke('local:test-connection', baseUrl, authKey),
+  localTestModel: (provider: string, baseUrl?: string, model?: string, authKey?: string) =>
+    ipcRenderer.invoke('local:test-model', provider, baseUrl, model, authKey),
   setLocalEnabled: (enabled: boolean) => ipcRenderer.invoke('ai:set-local-enabled', enabled),
   setLocalWarmup: (on: boolean) => ipcRenderer.invoke('ai:set-local-warmup', on),
   // Descoberta genérica de backend local (Ollama OU OpenAI-compatible llama.cpp/LM Studio/vLLM).

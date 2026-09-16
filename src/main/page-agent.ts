@@ -93,9 +93,9 @@ export class PageAgent {
     this.aiEngine = aiEngine;
   }
 
-  async executeCommand(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro'): Promise<AgentResult & { metrics?: any }> {
+  async executeCommand(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<AgentResult & { metrics?: any }> {
     try {
-      const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier);
+      const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier, signal);
       const parsed = this.parseResponse(r.text);
       return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model } };
     } catch (err: any) {
@@ -143,6 +143,25 @@ export class PageAgent {
       }
       
       const action = this.normalizeAction(actionRaw);
+      // Strict validation: an action that parses but is semantically empty (ref NaN,
+      // url "", missing text) must NOT execute. It becomes a structured error that the
+      // App's retry loop re-prompts on (up to 3x) with the specific cause.
+      const problem = validateAction(action);
+      if (problem) {
+        const reason = `Invalid action from model: ${problem}`;
+        try {
+          require('fs').appendFileSync(
+            require('path').join(require('electron').app.getPath('userData'), 'agent.log'),
+            `${new Date().toISOString()} [Parser] ${reason} Raw: ${raw.slice(0, 500)}\n`
+          );
+        } catch {}
+        return {
+          thought: String(parsed.thought ?? parsed.reasoning ?? ''),
+          evaluation: parsed.evaluation ? String(parsed.evaluation) : undefined,
+          action: { type: 'done', reason, success: false },
+          error: reason,
+        };
+      }
       if (action.type === 'done' && /Invalid|missing action/.test(action.reason)) {
         try {
           require('fs').appendFileSync(
@@ -202,8 +221,14 @@ export class PageAgent {
       if (typeof aliased === 'string') action = { ...action, type: aliased };
     }
     if (!action || typeof action !== 'object' || !VALID_ACTIONS.has(action.type)) {
-      if (action?.done === true || action?.success !== undefined || action?.reason) {
+      // Explicit completion is done:true, or {success, reason} together. A BARE
+      // `reason` (no done/success) is not completion - it is a malformed reply, which
+      // used to turn into a phantom done/success:true.
+      if (action?.done === true) {
         return { type: 'done', reason: String(action.reason ?? 'Task complete.'), success: action.success !== false };
+      }
+      if (action?.success !== undefined && action?.reason != null) {
+        return { type: 'done', reason: String(action.reason), success: action.success !== false };
       }
       return { type: 'done', reason: 'Invalid or missing action type from model.', success: false };
     }
@@ -315,7 +340,13 @@ export class PageAgent {
           timeout: toOptionalNumber(action.timeout),
         };
       case 'done':
-        return { type: 'done', reason: String(action.reason ?? ''), success: action.success === true };
+        return {
+          type: 'done',
+          // With no reason, the message must match `success`: saying "Task complete."
+          // on an unsuccessful done lies to the user about what happened.
+          reason: String(action.reason ?? '') || (action.success === true ? 'Task complete.' : 'The model ended the task without saying why.'),
+          success: action.success === true,
+        };
     }
 
     return { type: 'done', reason: 'Unhandled action type from model.', success: false };
@@ -326,6 +357,71 @@ function toOptionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+// Semantic validation, after normalization: returns the cause, or null when fine.
+// Rule: a missing/invalid parameter (ref NaN, empty url, absent text) is an ERROR, never
+// an executable action. Called for the main action; invalid batch items already break the
+// batch (they normalize to done, which is not batchable).
+export function validateAction(a: AgentAction): string | null {
+  const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+  const finiteInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+  // The executor accepts a scheme-less host ("youtube.com" -> https://youtube.com) and
+  // already blocks anything that is not http(s) at navigation time. Demanding "https://"
+  // here rejected VALID model output and burned all 3 retries for nothing; what actually
+  // needs blocking is a dangerous scheme (javascript:, file:, data:).
+  const BAD_SCHEME = /^\s*(javascript|data|file|blob|about|chrome|vbscript):/i;
+  const httpUrl = (v: unknown): v is string =>
+    typeof v === 'string' && v.trim().length > 0 && !BAD_SCHEME.test(v)
+    && (/^https?:\/\//i.test(v.trim()) || /^[\w.-]+\.[a-z]{2,}(\/|$|\?|#|:)/i.test(v.trim()));
+  switch (a.type) {
+    case 'click_ref': return finiteInt(a.ref) ? null : `click_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'fill_ref':
+      if (!finiteInt(a.ref)) return `fill_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+      return typeof a.value === 'string' ? null : 'fill_ref needs a string "value"';
+    case 'click_text': return nonEmpty(a.text) ? null : 'click_text needs a non-empty "text"';
+    case 'click_at':
+      return (Number.isFinite(a.x) && Number.isFinite(a.y)) ? null : 'click_at needs finite numeric "x" and "y"';
+    case 'type': return nonEmpty(a.text) ? null : 'type needs non-empty "text"';
+    case 'fill': return typeof a.value === 'string' ? null : 'fill needs a string "value"';
+    case 'press': return nonEmpty(a.key) ? null : 'press needs a non-empty "key" (e.g. Enter, Escape, Tab)';
+    case 'navigate': return httpUrl(a.url) ? null : `navigate needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'new_tab': return httpUrl(a.url) ? null : `new_tab needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'download': return httpUrl(a.url) ? null : `download needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'download_video':
+      return (httpUrl(a.url) || nonEmpty(a.query)) ? null : 'download_video needs "url" or "query"';
+    case 'switch_tab': return finiteInt(a.tab) ? null : 'switch_tab needs a finite non-negative integer "tab"';
+    case 'close_tab': return finiteInt(a.tab) ? null : 'close_tab needs a finite non-negative integer "tab"';
+    case 'wait':
+      if (a.ms == null && !a.selector) return 'wait needs "ms" or "selector"';
+      if (a.ms != null && !(Number.isFinite(a.ms) && a.ms >= 0)) return 'wait "ms" must be a non-negative number';
+      return null;
+    case 'plan': return Array.isArray(a.steps) && a.steps.length > 0 ? null : 'plan needs a non-empty "steps" array';
+    case 'store': return nonEmpty(a.key) ? null : 'store needs a non-empty "key"';
+    case 'search_images': case 'harvest_images':
+      return nonEmpty((a as any).query) ? null : `${a.type} needs a non-empty "query"`;
+    case 'generate_image': return nonEmpty(a.prompt) ? null : 'generate_image needs a non-empty "prompt"';
+    case 'open_video': return nonEmpty(a.query) ? null : 'open_video needs a non-empty "query"';
+    case 'open_video_cuts': return nonEmpty(a.phrase) ? null : 'open_video_cuts needs a non-empty "phrase"';
+    case 'create_playlist': return Array.isArray(a.songs) && a.songs.length > 0 ? null : 'create_playlist needs a non-empty "songs" array';
+    case 'compare_prices': case 'google_news':
+      return nonEmpty((a as any).query) ? null : `${a.type} needs a non-empty "query"`;
+    case 'ask_ai': return nonEmpty(a.question) ? null : 'ask_ai needs a non-empty "question"';
+    case 'find_file': return nonEmpty(a.query) ? null : 'find_file needs a non-empty "query"';
+    case 'render_view':
+      if (!Array.isArray(a.columns) || a.columns.length === 0) return 'render_view needs non-empty "columns"';
+      if (!Array.isArray(a.rows)) return 'render_view needs a "rows" array';
+      return null;
+    case 'report': return nonEmpty(a.summary) ? null : 'report needs a non-empty "summary"';
+    // A 'done' with no reason is NOT an error: the model finished the task and simply
+    // did not say why. Rejecting it here turned a COMPLETED task into "the model kept
+    // returning an invalid response" after 3 retries.
+    case 'done': return null;
+    case 'extract_text': case 'extract_images': case 'read_aloud':
+    case 'stock_movers': case 'scroll':
+      return null;
+    default: return `unknown action type "${(a as any)?.type}"`;
+  }
 }
 
 // Recupera o objeto de AÇÃO de uma saída malformada. Modelos de raciocínio (ex.: gpt-oss)
