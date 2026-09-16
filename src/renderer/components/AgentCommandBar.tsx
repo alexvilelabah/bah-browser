@@ -1235,7 +1235,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button
               type="button"
               className={`mode-opt ${view === 'local' ? 'on' : ''}`}
-              onClick={() => setView('local')}
+              // Liga o modo local DE VERDADE, não só troca de painel. Antes só o botão da
+              // nuvem mexia em `enabled` (desligando), e `enabled: true` acontecia num lugar
+              // só: clicar num modelo da lista de instalados. Com a lista vazia — que é o
+              // que acontece hoje, pelo "Premature close" — não havia como ligar o modo
+              // local pela tela: escolhia "IA Local", nada gravava, e ao reabrir a
+              // `viewFor()` recalculava a aba a partir do `enabled` e voltava pra nuvem.
+              onClick={() => { setView('local'); setLocalCfg(p => ({ ...p, enabled: true })); }}
             >🏠 {t('set.localMode')}<small>{t('set.localSmall')}</small></button>
           </div>
           {view === 'cloud' && (

@@ -7,7 +7,9 @@ import { ipcMain, utilityProcess, type UtilityProcess } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import fetch from 'cross-fetch';
+// Sem cross-fetch: o node-fetch por baixo dele quebra resposta `chunked` sem
+// `content-length` no Node do Electron ("Premature close" falso). Ver o comentário
+// em main.ts. Aqui só se usa res.arrayBuffer(), que o fetch nativo tem.
 
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;

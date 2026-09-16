@@ -1,7 +1,17 @@
 import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
-import fetch from 'cross-fetch';
+// SEM cross-fetch de propósito — usa o fetch nativo do Electron/Node 24.
+//
+// O `import fetch from 'cross-fetch'` que ficava aqui sombrava o fetch global em TODO o
+// arquivo (14 chamadas), e por baixo era node-fetch@2.7. Ele tem uma heurística para
+// resposta `chunked` SEM `content-length` que, no evento 'close', declara "Premature close"
+// se o socket ainda tiver ouvinte de dados. No Node 24.19 do sistema o ouvinte já saiu; no
+// Node 24.17 que vem no Electron 42 ele ainda está lá → FALSO POSITIVO, matando um corpo
+// que chegou inteiro. O /api/tags do Ollama responde exatamente assim, então a lista de
+// modelos vinha sempre vazia, o status dizia "Ollama desligado" com ele ligado, e o modo de
+// IA local ficava inalcançável. API de nuvem nunca quebrou porque manda content-length.
+// Provado por bissecção: mesmo fetch, mesmo endpoint — global passa, cross-fetch falha.
 import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang } from './ai-engine';
@@ -2216,10 +2226,27 @@ function setupIPC(): void {
       // (the file's MZ/executable checks below still protect the user).
       const dlCtrl = new AbortController();
       const dlTimer = setTimeout(() => { try { dlCtrl.abort(); } catch {} }, 60000);   // teto de 60s: servidor lento/infinito nao trava o main
-      const doFetch = (lenient: boolean) => {
-        const opts: any = { headers: dlHeaders, signal: dlCtrl.signal };
-        if (lenient && url.startsWith('https:')) opts.agent = new (require('https').Agent)({ rejectUnauthorized: false });
-        return fetch(url, opts);
+      // O fetch nativo IGNORA a opção `agent` — ela só existia no node-fetch, que saiu daqui
+      // (ver o comentário do topo). Sem isto, a retentativa "tolerante" refazia a requisição
+      // idêntica e falhava de novo: um no-op silencioso. O caminho tolerante passa a usar o
+      // módulo https direto, que aceita rejectUnauthorized de verdade. A resposta dele já é
+      // async-iterável e tem .headers, então o resto do código abaixo funciona igual.
+      const doFetch = (lenient: boolean): Promise<any> => {
+        if (!(lenient && url.startsWith('https:'))) {
+          return fetch(url, { headers: dlHeaders, signal: dlCtrl.signal } as any);
+        }
+        return new Promise((resolve, reject) => {
+          const req = require('https').get(url, { headers: dlHeaders, rejectUnauthorized: false }, (r: any) => {
+            resolve({
+              ok: r.statusCode >= 200 && r.statusCode < 300,
+              status: r.statusCode,
+              headers: { get: (k: string) => r.headers[String(k).toLowerCase()] ?? null },
+              body: r,
+            });
+          });
+          req.on('error', reject);
+          dlCtrl.signal.addEventListener('abort', () => { try { req.destroy(); } catch {} }, { once: true });
+        });
       };
       let res: any;
       try {
@@ -2239,7 +2266,11 @@ function setupIPC(): void {
       // aborta ao passar do teto (evita OOM quando o servidor manda/mente um arquivo gigante).
       const MAX_DL = 100 * 1024 * 1024;
       if (Number(res.headers.get('content-length') || 0) > MAX_DL) {
-        clearTimeout(dlTimer); try { (res.body as any)?.destroy?.(); } catch {}
+        // `.destroy()` só existia no corpo do node-fetch; o corpo do fetch nativo é um
+        // ReadableStream da web e não tem esse método — a chamada virava no-op silencioso e
+        // a conexão seguia baixando o arquivo gigante que a gente acabou de recusar.
+        // O AbortController já está aqui e derruba de verdade, nos dois caminhos.
+        clearTimeout(dlTimer); try { dlCtrl.abort(); } catch {}
         return { success: false, error: 'File larger than 100MB — refused.' };
       }
       let buf: Buffer;
@@ -2248,7 +2279,7 @@ function setupIPC(): void {
         try {
           for await (const chunk of res.body as any) {
             total += chunk.length;
-            if (total > MAX_DL) { try { (res.body as any).destroy?.(); } catch {} return { success: false, error: 'File larger than 100MB — refused.' }; }
+            if (total > MAX_DL) { try { dlCtrl.abort(); } catch {} return { success: false, error: 'File larger than 100MB — refused.' }; }
             chunks.push(Buffer.from(chunk));
           }
         } finally { clearTimeout(dlTimer); }
