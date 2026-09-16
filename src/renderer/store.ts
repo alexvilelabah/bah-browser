@@ -31,16 +31,24 @@ export interface AISettings {
   apiKeys?: Record<string, string>;   // key PER provider — trocar de provedor não perde a chave dos outros
 }
 
+export type LocalProvider = 'ollama' | 'openai-compatible';
+
+// Modo IA Local aceita DOIS backends: o Ollama nativo (/api/tags) e qualquer servidor
+// OpenAI-compatible (llama.cpp, LM Studio, vLLM) via /v1/models. O provedor decide qual
+// endpoint de descoberta/modelo a UI e o main usam.
 export interface LocalSettings {
   enabled: boolean;          // hybrid routing on/off
-  provider: 'ollama';        // only ollama for now
-  baseUrl: string;           // e.g. http://localhost:11434
-  model: string;             // e.g. qwen3-vl:8b
+  provider: LocalProvider;   // ollama nativo OU OpenAI-compatible (llama.cpp/LM Studio/vLLM)
+  baseUrl: string;           // e.g. http://localhost:11434 (ollama) ou :8080 (llama.cpp)
+  model: string;             // modelo selecionado (ex.: qwen3:8b ou unsloth/Qwen3.6-35B-A3B-GGUF:NOTHINK)
+  authKey?: string;          // chave OPCIONAL p/ servidores compatíveis que exigem auth (≠ roteamento local)
+  warmup?: boolean;          // pré-aquecer o modelo selecionado (opt-in; llama.cpp gerencia a VRAM)
 }
 
 // Encadeia as gravações do aiSettings no disco: garante ordem (o último Salvar é a
 // última escrita) e dá uma promise pra quem precisar aguardar a persistência real.
 let aiWriteChain: Promise<void> = Promise.resolve();
+let localWriteChain: Promise<void> = Promise.resolve();
 
 // Home page = Google in the user's language (don't force Brazil on everyone).
 // An English OS opens Google in English; pt-BR still gets Google Brazil.
@@ -97,7 +105,14 @@ export function useTabStore() {
   const [localSettings, setLocalSettingsState] = useState<LocalSettings>(() => {
     try {
       const saved = localStorage.getItem('localSettings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const s = JSON.parse(saved);
+        // Saves antigos só tinham provider:'ollama'; qualquer valor desconhecido volta pro default.
+        if (s.provider !== 'ollama' && s.provider !== 'openai-compatible') s.provider = 'ollama';
+        const _dec = (window as any).electronAPI?.decryptSecretSync;
+        if (_dec && typeof s.authKey === 'string') s.authKey = _dec(s.authKey);
+        return s;
+      }
     } catch {}
     return { enabled: false, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen3:8b' };
   });
@@ -209,7 +224,17 @@ export function useTabStore() {
     },
     setLocalSettings: (s: LocalSettings) => {
       setLocalSettingsState(s);
-      try { localStorage.setItem('localSettings', JSON.stringify(s)); } catch {}
+      // authKey segue o mesmo cofre das chaves de nuvem (encryptSecret → 'enc:…' no disco).
+      const write = async () => {
+        try {
+          const _enc = (window as any).electronAPI?.encryptSecret;
+          const copy: LocalSettings = { ...s };
+          if (_enc && s.authKey) copy.authKey = await _enc(s.authKey);
+          localStorage.setItem('localSettings', JSON.stringify(copy));
+        } catch { try { localStorage.setItem('localSettings', JSON.stringify(s)); } catch {} }
+      };
+      localWriteChain = localWriteChain.then(write, write);
+      return localWriteChain;
     },
   };
 }
