@@ -17,7 +17,7 @@ import { enqueueJob } from './job-queue';
 import { isHttpUrl, isHttpOrSearch, clampCount, isInsideAllowedRoot } from './validate';
 import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
-import { decidePopup } from './popup-shield';
+import { decidePopup, decideAuthPopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
 import { setupTorrentManager } from './torrent-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
@@ -144,6 +144,19 @@ function ensureTray() {
 function destroyTray() { try { tray?.destroy(); } catch {} tray = null; }
 // Escudo de popup: timestamps de novas abas por webContents (anti-bombardeio).
 const popupTimes = new Map<number, number[]>();
+// Estado por aba pra decidir janela de LOGIN (ver decideAuthPopup em popup-shield.ts).
+// `lastGesture` existe porque o HandlerDetails do Electron 42 não informa se houve gesto
+// do usuário — 'input-event' é o único jeito de saber que teve clique de gente. É essa
+// trava que impede uma janela de login brotar sozinha nas abas OCULTAS (Pesquisa Rápida,
+// manchetes, imagens), que rodam com allowpopups e ninguém está vendo.
+const lastGesture = new Map<number, number>();
+const liveAuthPopups = new Map<number, number>();
+const lastAuthPopupAt = new Map<number, number>();
+// Host da janela de login enquanto ela existe ('' quando não há nenhuma) + o gancho pra
+// reavaliar o bloqueador. Ficam no escopo de módulo porque quem liga é o handler de popup
+// (did-attach-webview) e quem lê é o evalAdblockForHost, lá dentro do setupIPC.
+let authPopupHost = '';
+let reavaliarAdblock: (() => void) | null = null;
 
 const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
 const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
@@ -864,6 +877,14 @@ function createWindow(): void {
       wc.setZoomFactor(next);
       mainWindow?.webContents.send('app:zoom', Math.round(next * 100));   // badge na tela
     });
+    // Marca o último gesto REAL (clique/tecla) desta aba — insumo da trava de gesto do
+    // decideAuthPopup. Sem isso, script rodando sozinho poderia pedir janela de login.
+    wc.on('input-event', (_e, ev: any) => {
+      const t = ev?.type;
+      if (t === 'mouseDown' || t === 'mouseUp' || t === 'keyDown' || t === 'rawKeyDown' || t === 'touchStart' || t === 'gestureTap') {
+        lastGesture.set(wc.id, Date.now());
+      }
+    });
     // Intercept popup window requests and forward to renderer to open as new tab
     wc.setWindowOpenHandler((details) => {
       const url = details.url;
@@ -878,6 +899,38 @@ function createWindow(): void {
           return { action: 'deny' };
         }
       } catch { return { action: 'deny' }; }   // URL inválida → bloqueia
+      // JANELA DE LOGIN — antes do escudo, porque "Entrar com Google" tem exatamente o
+      // formato que o escudo classifica como anúncio (window.open com features). Virar
+      // aba não resolve: o site precisa que window.open() devolva uma JANELA, senão o
+      // provedor desiste na hora. 'allow' é a única forma de devolver algo != null.
+      const agora = Date.now();
+      const auth = decideAuthPopup({
+        url,
+        features: details.features || '',
+        disposition: details.disposition || '',
+        openerUrl: wc.getURL(),
+        msSinceGesture: agora - (lastGesture.get(wc.id) ?? -1e9),
+        liveAuthPopups: liveAuthPopups.get(wc.id) || 0,
+        msSinceLastAuthPopup: agora - (lastAuthPopupAt.get(wc.id) ?? -1e9),
+      });
+      if (auth.allow) {
+        console.log(`[Popup] janela de login liberada (${auth.reason}): ${url.slice(0, 80)}`);
+        liveAuthPopups.set(wc.id, (liveAuthPopups.get(wc.id) || 0) + 1);
+        lastAuthPopupAt.set(wc.id, agora);
+        return {
+          action: 'allow',
+          // modal:false e outlivesOpener:false são obrigatórios: modal deixa a página de
+          // trás inerte e o retorno do login nunca completa; outlivesOpener deixa a janela
+          // órfã e o provedor fica esperando pra sempre. NÃO forçar partition/session aqui
+          // — essas opções têm precedência no merge e trocariam a sessão da aba, que é
+          // justamente onde o cookie de login precisa cair.
+          overrideBrowserWindowOptions: {
+            width: 520, height: 640, modal: false, autoHideMenuBar: true,
+            webPreferences: { nodeIntegration: false, contextIsolation: true },
+          },
+          outlivesOpener: false,
+        };
+      }
       // ESCUDO DE POPUP (genérico, todo site): aba real do usuário passa; popup de
       // anúncio (window.open com features) e rajadas são descartados — não viram aba.
       const now = Date.now();
@@ -893,7 +946,43 @@ function createWindow(): void {
       mainWindow?.webContents.send('open-new-tab', stripTrackingParams(url));
       return { action: 'deny' };
     });
-    wc.once('destroyed', () => popupTimes.delete(wc.id));
+    // A janela de login NÃO é um <webview> e não passa por 'did-attach-webview' — nasce
+    // sem menu de contexto e sem escudo de popup próprio. Recoloca o mínimo, e garante
+    // que ela não vira trampolim pra abrir outras janelas.
+    wc.on('did-create-window', (win, det: any) => {
+      try {
+        win.setMenuBarVisibility(false);
+        // Janela de login não tem barra de endereço, então o título é o ÚNICO lugar onde
+        // a pessoa vê com quem está falando. Mantém o domínio ali e reescreve a cada
+        // navegação — senão o site troca o título e some com a única pista que existe.
+        const mostrarOrigem = () => {
+          try { win.setTitle(`Entrar — ${new URL(win.webContents.getURL()).hostname}`); } catch {}
+        };
+        mostrarOrigem();
+        win.webContents.on('page-title-updated', (e) => { e.preventDefault(); mostrarOrigem(); });
+        win.webContents.on('did-navigate', mostrarOrigem);
+        attachContextMenu(win.webContents);
+        win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+        // Só vale como login se a janela ficar na MESMA sessão das abas — é lá que o
+        // cookie precisa cair. Se divergir, o login "funciona" e não vale nada.
+        if (win.webContents.session !== session.fromPartition(BROWSER_PARTITION)) {
+          console.warn('[Popup] janela de login em sessão divergente:', String(det?.url || '').slice(0, 80));
+        }
+        // Enquanto a janela de login viver, o bloqueador passa a decidir pelo host DELA.
+        // É por isso que o login do Google a partir de outro site dava "problema com os
+        // cookies": o bypass olhava só a aba de trás. Ao fechar, volta tudo como estava.
+        try { authPopupHost = new URL(win.webContents.getURL()).hostname; reavaliarAdblock?.(); } catch {}
+        win.webContents.on('did-navigate', () => {
+          try { authPopupHost = new URL(win.webContents.getURL()).hostname; reavaliarAdblock?.(); } catch {}
+        });
+        win.once('closed', () => {
+          liveAuthPopups.set(wc.id, Math.max(0, (liveAuthPopups.get(wc.id) || 1) - 1));
+          authPopupHost = '';
+          reavaliarAdblock?.();
+        });
+      } catch (e) { console.warn('[Popup] did-create-window falhou:', e); }
+    });
+    wc.once('destroyed', () => { popupTimes.delete(wc.id); lastGesture.delete(wc.id); liveAuthPopups.delete(wc.id); lastAuthPopupAt.delete(wc.id); });
     // Safe browsing on main-frame navigation
     wc.on('will-navigate', (e, url) => {
       try {
@@ -2236,15 +2325,23 @@ function setupIPC(): void {
   let agentBusy = false;
   let lastHost = '';
 
+  const casaBypass = (h: string) => ADBLOCK_BYPASS_HOSTS.has(h) ||
+    [...ADBLOCK_BYPASS_HOSTS].some(x => h.endsWith('.' + x));
+
   function evalAdblockForHost(host: string) {
     const h = host || lastHost;
     if (host) lastHost = host;
     if (!userAdblockPref) { applyAdblockState(false); return; }
     if (agentBusy) { applyAdblockState(true); return; }   // agente trabalhando → sem bypass
-    const matches = ADBLOCK_BYPASS_HOSTS.has(h) ||
-      [...ADBLOCK_BYPASS_HOSTS].some(x => h.endsWith('.' + x));
+    // Janela de LOGIN aberta: o desvio tem que valer pelo host DELA, não pelo da aba de
+    // trás. O bypass do Google existe justamente porque o EasyPrivacy quebra o fluxo de
+    // cookie ("Detectamos um problema com as configurações dos seus cookies") — mas era
+    // decidido só pela aba ativa, então logar no Google a partir de OUTRO site caía fora
+    // dele e dava esse erro. `lastHost` fica intacto: ao fechar, volta sozinho ao normal.
+    const matches = casaBypass(h) || (!!authPopupHost && casaBypass(authPopupHost));
     applyAdblockState(!matches);
   }
+  reavaliarAdblock = () => evalAdblockForHost('');
 
   ipcMain.handle('adblock:get-state', () => ({ enabled: userAdblockPref, active: actuallyEnabled, bypassedHosts: Array.from(ADBLOCK_BYPASS_HOSTS) }));
   // Aceleração de hardware: lê/grava o flag em userData (aplicado no boot do main). enabled=true → accel ligada.
@@ -2881,7 +2978,16 @@ app.whenReady().then(async () => {
   // Menu oculto (janela sem moldura) — os ACELERADORES funcionam mesmo com uma página
   // (webview) focada, então é o jeito certo de ter atalhos estilo Chrome. Cada item
   // dispara um IPC pro renderer, que executa a ação nas abas. editMenu mantém Ctrl+C/V/X/A.
-  const sendSc = (action: string) => { try { mainWindow?.webContents.send('app:shortcut', action); } catch {} };
+  // Os aceleradores do Menu são de APLICAÇÃO: valem mesmo com outra janela em foco. Com a
+  // janela de login aberta, Ctrl+W fecharia uma ABA da janela de trás — perda silenciosa.
+  // Só encaminha quando o foco é da janela principal (ou de nenhuma).
+  const sendSc = (action: string) => {
+    try {
+      const focada = BrowserWindow.getFocusedWindow();
+      if (focada && focada !== mainWindow) return;
+      mainWindow?.webContents.send('app:shortcut', action);
+    } catch {}
+  };
   const tabNumberItems: Electron.MenuItemConstructorOptions[] = Array.from({ length: 9 }, (_, i) => ({
     label: `${mt('mnu.tab')} ${i + 1}`, accelerator: `CmdOrCtrl+${i + 1}`, click: () => sendSc(`tab-${i + 1}`),
   }));

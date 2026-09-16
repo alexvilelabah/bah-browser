@@ -39,7 +39,10 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
         ['page-title-updated', (e: any) => onUpdateTab(tabId, { title: e.title })],
         ['did-navigate', (e: any) => onUpdateTab(tabId, { url: e.url, canGoBack: wv.canGoBack(), canGoForward: wv.canGoForward() })],
         ['did-navigate-in-page', (e: any) => onUpdateTab(tabId, { url: e.url })],
-        ['new-window', (e: any) => { e.preventDefault(); if (e.url && e.url !== 'about:blank') onNewTab(e.url); }],
+        // NÃO existe listener de 'new-window' aqui: o evento foi removido da <webview> no
+        // Electron 22 e este projeto roda o 42 (a interface WebviewTag em electron.d.ts
+        // não o declara). Quem decide popup é o setWindowOpenHandler no main, em
+        // did-attach-webview. Um listener aqui nunca dispararia e enganaria quem lesse.
       ];
       for (const [ev, fn] of handlers) wv.addEventListener(ev, fn);
       boundHandlers.current.set(tabId, { wv, handlers });
