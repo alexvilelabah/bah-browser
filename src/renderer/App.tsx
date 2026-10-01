@@ -698,8 +698,8 @@ export default function App() {
     const broken = /^https?:\/\/accounts\.google\.com\/(ServiceLogin|signin|v3\/signin|InteractiveLogin)/i.test(u);
     setShowGoogleRelogin(broken);   // dispensar (✕) fica dispensado até a URL mudar (dep abaixo)
     if (broken) setGoogleLoggedIn(false);   // sessão caiu → volta a oferecer "Entrar no Google"
-    // Cookies inconsistentes do Google → tela "CookieMismatch". Oferece limpar só os
-    // cookies do Google em 1 clique (a própria página do Google recomenda limpar cookies).
+    // Cookies inconsistentes do Google → tela "CookieMismatch". Oferece limpar os cookies
+    // do Google e reimportar o login em 1 clique.
     setShowCookieFix(/^https?:\/\/accounts\.google\.com\/CookieMismatch/i.test(u));
   }, [store.activeTab?.url]);
   const fixGoogleCookies = useCallback(async () => {
@@ -708,7 +708,11 @@ export default function App() {
     setGoogleLoggedIn(false);
     // Recarrega numa base limpa do Google → sem os cookies quebrados, a tela some.
     try { (getActiveWebview() as any)?.loadURL('https://www.google.com/'); } catch {}
-  }, [getActiveWebview]);
+    // E já reimporta o login do Chrome: só limpar deixava a pessoa deslogada, tendo que
+    // achar o "Entrar no Google" sozinha. Quem importou com a versão antiga (sem os
+    // __Host- do accounts.google.com) cai aqui uma vez e sai consertado.
+    await handleGoogleLogin();
+  }, [getActiveWebview, handleGoogleLogin]);
 
   // Cron-Agent: quando um monitor bate a condição, toca um som curto (além da notificação
   // nativa do sistema, disparada no main) pra chamar a atenção mesmo minimizado.

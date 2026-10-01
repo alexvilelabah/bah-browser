@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, session, Menu, clipboard, webContents, shell, dialog, safeStorage, Notification, Tray, nativeImage, components, screen, net as electronNet } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 // SEM cross-fetch de propósito — usa o fetch nativo do Electron/Node 24.
@@ -405,6 +405,41 @@ function isGoogleAuthCdpCookie(cookie: any): boolean {
   return /^(SID|HSID|SSID|APISID|SAPISID|LSID|OSID|__Secure-[13]P?SID|__Secure-[13]P?APISID)$/i.test(name);
 }
 
+// A sessão do Google nesta partição está VIVA? Pergunta pro próprio Google com um
+// ServiceLogin passivo: viva → redireciona pro "continue" (myaccount); morta → pra tela de
+// entrar do accounts.google.com. true = viva, false = morta, null = não deu pra saber.
+function googleSessionAlive(ses: Electron.Session): Promise<boolean | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    let hops = 0;
+    const req = electronNet.request({
+      url: 'https://accounts.google.com/ServiceLogin?passive=1209600&continue=https%3A%2F%2Fmyaccount.google.com%2F',
+      session: ses,
+      useSessionCookies: true,
+      redirect: 'manual',
+    });
+    const finish = (v: boolean | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { req.abort(); } catch {}
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), 6000);
+    req.on('redirect', (_status, _method, redirectUrl) => {
+      let u: URL;
+      try { u = new URL(redirectUrl); } catch { finish(null); return; }
+      if (u.hostname !== 'accounts.google.com') { finish(true); return; }
+      if (/^\/(v3\/signin|signin|InteractiveLogin|CookieMismatch|ServiceLogin)/i.test(u.pathname) || ++hops > 5) { finish(false); return; }
+      req.followRedirect();   // passo intermediário do próprio accounts (ex.: CheckCookie)
+    });
+    // Sem redirect, o accounts.google.com respondeu com uma página: a de entrar.
+    req.on('response', (res) => finish(res.statusCode >= 200 && res.statusCode < 300 ? false : null));
+    req.on('error', () => finish(null));
+    req.end();
+  });
+}
+
 function mapCdpSameSite(value: unknown): Electron.Cookie['sameSite'] | undefined {
   const v = String(value || '').toLowerCase();
   if (v === 'strict') return 'strict';
@@ -426,28 +461,14 @@ async function copyCdpGoogleCookies(cdpCookies: any[], target: Electron.Session)
 
   await clearGoogleCookies(target);
 
+  // Grava pelo setCdpCookieInto, que respeita host-only e os prefixos __Host-/__Secure-.
+  // Antes este laço punha "domain" em TODO cookie: o Electron recusava o __Host-1PLSID e o
+  // __Host-3PLSID do accounts.google.com, e sem eles o Google responde CookieMismatch pra
+  // todo serviço que pede login próprio (Agenda, Docs — a issue #9). O Drive não pede, passava.
   let copied = 0;
   for (const cookie of googleCookies) {
-    const domain = String(cookie.domain || '').replace(/^\./, '');
-    if (!domain || !cookie.name) continue;
-    const details: Electron.CookiesSetDetails = {
-      url: `${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path || '/'}`,
-      name: String(cookie.name),
-      value: String(cookie.value || ''),
-      domain: cookie.domain,
-      path: cookie.path || '/',
-      secure: !!cookie.secure,
-      httpOnly: !!cookie.httpOnly,
-    };
-    if (!cookie.session && Number.isFinite(cookie.expires) && cookie.expires > 0) details.expirationDate = cookie.expires;
-    const sameSite = mapCdpSameSite(cookie.sameSite);
-    if (sameSite) details.sameSite = sameSite;
-    try {
-      await target.cookies.set(details);
-      copied++;
-    } catch (err) {
-      console.warn(`[GoogleLogin] CDP cookie copy failed for ${cookie.name}:`, err);
-    }
+    if (await setCdpCookieInto(cookie, target)) copied++;
+    else console.warn(`[GoogleLogin] CDP cookie copy failed for ${cookie.name}`);
   }
   try { await target.cookies.flushStore(); } catch {}
   try { await (target as any).flushStorageData?.(); } catch {}
@@ -532,8 +553,8 @@ async function importGoogleCookiesFromBrowserProfile(
 // usuário loga UMA vez, e o Bah importa só os cookies daquele domínio via CDP — cookie
 // recém-criado numa sessão de debug, sem tocar no cofre criptografado do perfil real.
 
-// Grava um cookie CDP na sessão-alvo (best-effort). Extraído pra ser reusado pela importação
-// por site (sem o filtro de Google que o copyCdpGoogleCookies aplica).
+// Grava um cookie CDP na sessão-alvo (best-effort). Usado pelas duas importações: a do
+// Google (copyCdpGoogleCookies) e a por site (copyAllCdpCookies).
 async function setCdpCookieInto(cookie: any, target: Electron.Session): Promise<boolean> {
   const bareDomain = String(cookie?.domain || '').replace(/^\./, '');
   const name = String(cookie?.name || '');
@@ -545,7 +566,9 @@ async function setCdpCookieInto(cookie: any, target: Electron.Session): Promise<
   const isHostPrefix = name.startsWith('__Host-');
   const isSecurePrefix = name.startsWith('__Secure-');
   const secure = !!cookie.secure || isHostPrefix || isSecurePrefix;
-  const hostOnly = !!cookie.hostOnly || isHostPrefix;
+  // O CDP não tem campo hostOnly: cookie de domínio vem com ponto (".google.com") e o
+  // host-only vem sem ("accounts.google.com"). Sem ponto continua host-only aqui também.
+  const hostOnly = !!cookie.hostOnly || isHostPrefix || !String(cookie?.domain || '').startsWith('.');
   const cookiePath = isHostPrefix ? '/' : (cookie.path || '/');
   const url = `${secure ? 'https' : 'http'}://${bareDomain}${cookiePath}`;
 
@@ -680,9 +703,9 @@ async function loginWithSystemBrowser(opts?: { fresh?: boolean }): Promise<{ ok:
 
   const profileDir = path.join(app.getPath('userData'), 'google-system-login-profile');
   // O perfil de login agora é PERSISTENTE: depois de logar uma vez pelo Bah, os próximos
-  // cliques em "Entrar no Google" reabrem o Chrome JÁ logado, o app detecta o cookie SID em
-  // ~2,5s e reimporta a sessão na hora — sem digitar e-mail/senha/2FA de novo. Esse "abre e
-  // fecha rapidinho" agora é o caminho FELIZ (re-sync instantâneo), não um bug.
+  // cliques em "Entrar no Google" reabrem o Chrome JÁ logado, a janela cai no myaccount em
+  // ~2,5s e o app reimporta a sessão na hora — sem digitar e-mail/senha/2FA de novo. Esse
+  // "abre e fecha rapidinho" é o caminho FELIZ (re-sync instantâneo) quando a sessão está viva.
   // Só apagamos o perfil sob demanda, via "Trocar de conta" (opts.fresh), pra cair numa tela
   // de login limpa quando o usuário realmente quiser trocar de conta.
   if (opts?.fresh) {
@@ -730,6 +753,11 @@ async function loginWithSystemBrowser(opts?: { fresh?: boolean }): Promise<{ ok:
 
   // 2) Detecta SOZINHO o fim do login: polla os cookies até aparecer a sessão do Google
   //    (ou até o usuário fechar a janela / dar timeout de 5 min).
+  //    Cookie SID sozinho NÃO prova login: quando o Google encerra a sessão, os cookies
+  //    continuam no perfil. O Bah importava esse cookie morto e fechava a janela em meio
+  //    segundo — o "abre e fecha" — sem deixar a pessoa entrar de novo. Só conta como logado
+  //    quando alguma aba chegou no myaccount (o "continue" do loginUrl): sessão viva passa
+  //    direto pra lá; sessão morta para no accounts.google.com e a janela fica esperando.
   const deadline = Date.now() + 5 * 60_000;
   while (Date.now() < deadline) {
     if (exited) {
@@ -737,13 +765,33 @@ async function loginWithSystemBrowser(opts?: { fresh?: boolean }): Promise<{ ok:
       const after = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
       return after.ok ? after : { ok: false, browser: browser.name, error: 'Window closed before completing the login.' };
     }
-    let cookies: any[] = [];
-    try { cookies = await getChromeDebugCookies(port); } catch {}
-    if (cookies.some(isGoogleAuthCdpCookie)) {
-      const copied = await copyCdpGoogleCookies(cookies, session.fromPartition(BROWSER_PARTITION));
+    let reachedAccount = false;
+    try {
+      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`, 1200);
+      reachedAccount = (Array.isArray(targets) ? targets : [])
+        .some((t: any) => t?.type === 'page' && /^https:\/\/myaccount\.google\.com\//i.test(String(t.url || '')));
+    } catch {}
+    if (reachedAccount) {
+      // Logo depois de um login NOVO, a primeira cópia às vezes saía velha (medido: a Agenda
+      // caía no "escolha uma conta" e a janela já tinha fechado). Então: espera os últimos
+      // Set-Cookie assentarem, copia, e confere no próprio Google se a cópia vale — se não
+      // valer, copia de novo antes de fechar a janela.
+      const target = session.fromPartition(BROWSER_PARTITION);
+      let copied = 0;
+      let alive: boolean | null = false;
+      for (let attempt = 0; attempt < 3 && alive === false; attempt++) {
+        await sleepMs(1500);
+        let cookies: any[] = [];
+        try { cookies = await getChromeDebugCookies(port); } catch {}
+        if (!cookies.some(isGoogleAuthCdpCookie)) continue;
+        copied = await copyCdpGoogleCookies(cookies, target);
+        alive = await googleSessionAlive(target);
+      }
       await flushBrowserState();
       await closeLoginBrowser();   // fecha o Chrome de login automaticamente
-      return { ok: copied > 0, copied, browser: browser.name };
+      return alive !== false && copied > 0
+        ? { ok: true, copied, browser: browser.name }
+        : { ok: false, copied, browser: browser.name, error: 'The copied Google session was not accepted.' };
     }
     await sleepMs(2500);
   }
@@ -2033,8 +2081,13 @@ function setupIPC(): void {
   // → o renderer usa isso pra trocar o botão "Entrar no Google" por "Conectado ao Google".
   ipcMain.handle('google:check-login', async () => {
     try {
-      const cookies = await session.fromPartition(BROWSER_PARTITION).cookies.get({});
-      return { loggedIn: cookies.some(isGoogleAuthCdpCookie) };
+      const ses = session.fromPartition(BROWSER_PARTITION);
+      const cookies = await ses.cookies.get({});
+      if (!cookies.some(isGoogleAuthCdpCookie)) return { loggedIn: false };
+      // Cookie presente ≠ sessão viva: com a sessão encerrada pelo Google, o botão "Entrar
+      // no Google" sumia porque o Bah se achava logado. Confirma com o próprio Google
+      // (sem rede → null → confia no cookie, como antes).
+      return { loggedIn: (await googleSessionAlive(ses)) !== false };
     } catch { return { loggedIn: false }; }
   });
 
