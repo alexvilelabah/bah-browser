@@ -93,11 +93,11 @@ export class PageAgent {
     this.aiEngine = aiEngine;
   }
 
-  async executeCommand(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<AgentResult & { metrics?: any }> {
+  async executeCommand(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<AgentResult & { metrics?: any; vision?: VisionReport }> {
     try {
       const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier, signal);
       const parsed = this.parseResponse(r.text);
-      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model } };
+      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model }, vision: r.vision };
     } catch (err: any) {
       return {
         thought: 'Failed to generate action',

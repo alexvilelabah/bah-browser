@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
+import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
@@ -1468,10 +1469,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       </select>
                     </label>
                   )}
-                  <label className="mm-check">
-                    <input type="checkbox" checked={localCfg.vision === true}
-                      onChange={e => setLocalCfg(p => ({ ...p, vision: e.target.checked }))} />
+                  <label>
                     {t('set.vision')}
+                    <select value={resolveVisionMode(localCfg)}
+                      onChange={e => setLocalCfg(p => ({ ...p, visionMode: e.target.value as VisionMode, vision: e.target.value !== 'off' }))}>
+                      <option value="off">{t('set.visionOff')}</option>
+                      <option value="auto">{t('set.visionAuto')}</option>
+                      <option value="always">{t('set.visionAlways')}</option>
+                    </select>
                   </label>
                   <div className="mm-hint">{t('set.visionHint')}</div>
                 </details>

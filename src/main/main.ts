@@ -15,6 +15,7 @@ import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
+import { splitDataUrl, type VisionImage } from '../shared/vision';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
   discoverLocalModels,
@@ -1276,7 +1277,7 @@ function setupIPC(): void {
     try { chatAborts.get(streamId)?.abort(); } catch {}
     return true;
   });
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     const engine = (local && localEngine) ? localEngine : aiEngine;
@@ -1289,7 +1290,7 @@ function setupIPC(): void {
       const onDelta = (streamId && !stateless)
         ? (delta: string) => { try { mainWindow?.webContents.send('ai:chat-delta', { streamId, delta }); } catch {} }
         : undefined;
-      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal);
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal, image);
       return { response };
     } catch (err: any) {
       const m = err?.message ?? String(err);
@@ -1337,7 +1338,7 @@ function setupIPC(): void {
     try { actionAborts.get(actionId)?.abort(); } catch {}
     return true;
   });
-  ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
+  ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
       return {
         thought: 'E2E mock: confirming the current browser state.',
@@ -2558,11 +2559,15 @@ function setupIPC(): void {
   // ═══ OCR-only handler — used by the agent loop to enrich DOM with local OCR ═══
   // Takes a screenshot only when DOM text is sparse, runs Tesseract locally,
   // returns plain text. No image is ever sent to DeepSeek.
+  // ═══ OCR-only handler — enriches the observation with local Tesseract text ═══
+  // When the renderer already captured a frame (vision path) it passes it here, so OCR and
+  // the model describe the SAME frame. Otherwise this takes its own CDP capture (as before).
   ipcMain.handle('pipeline:take-ocr', async (
     _e,
     wcId: number,
     domText: string,       // existing DOM text — used to decide if OCR is needed
-    force = false          // force screenshot + OCR even if DOM has text
+    force = false,         // force OCR even if DOM has text
+    frameDataUrl?: string  // optional PNG dataURL of the exact frame already captured
   ) => {
     const MIN_CHARS = 200;
     const domClean = (domText ?? '').replace(/\s+/g, ' ').trim();
@@ -2573,17 +2578,25 @@ function setupIPC(): void {
     }
 
     try {
-      const { captureViewport } = await import('./page-capture');
+      const { captureViewport, screenshotFilename } = await import('./page-capture');
       const { runOCR } = await import('./ocr-engine');
-
       const taskId = `ocr_${Date.now()}`;
-      const capture = await captureViewport(wcId, sharedEnsureDebugger, taskId);
+      let imagePath: string;
+      const frame = splitDataUrl(frameDataUrl);
+      if (frame && /^image\/(png|jpeg|webp)$/.test(frame.mime)) {
+        // Same frame the model will see — OCR reads it off disk, no second capture.
+        imagePath = screenshotFilename(taskId, 'frame');
+        fs.writeFileSync(imagePath, Buffer.from(frame.base64, 'base64'));
+      } else {
+        const capture = await captureViewport(wcId, sharedEnsureDebugger, taskId);
+        imagePath = capture.imagePath;
+      }
       let ocr;
       try {
-        ocr = await runOCR(capture.imagePath);
+        ocr = await runOCR(imagePath);
       } finally {
         // No image to cloud, no image left on disk — delete the temp PNG right away.
-        try { fs.unlinkSync(capture.imagePath); } catch {}
+        try { fs.unlinkSync(imagePath); } catch {}
       }
 
       return {

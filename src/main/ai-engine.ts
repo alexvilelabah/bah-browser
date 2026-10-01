@@ -8,11 +8,22 @@ import {
   type LocalModelInfo as _LocalModelInfo,
   type LocalProvider as _LocalTransport,
 } from './local-providers';
+import {
+  NO_IMAGE_PROVIDERS,
+  VISION_MAX_BYTES,
+  estimateImageTokens,
+  resolveVisionMode,
+  splitDataUrl,
+  stripImages,
+  type VisionImage,
+  type VisionMode,
+  type VisionReport,
+} from '../shared/vision';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
-  image?: string;
+  image?: VisionImage;
 }
 
 /** Per-endpoint local tuning (context / output / vision). Everything is optional:
@@ -21,7 +32,9 @@ export interface LocalEndpointOpts {
   contextMode?: 'auto' | 'custom';   // default 'auto' (detect from the server)
   contextTokens?: number;            // used when contextMode === 'custom'
   maxOutputTokens?: number;          // reply budget, reasoning tokens included
-  vision?: boolean;                  // opt-in screenshots; off by default
+  vision?: boolean;                  // legacy opt-in (true → 'auto')
+  visionMode?: VisionMode;           // off | auto | always
+  visionMaxBytes?: number;         // encoded bytes cap per image
   /** Ollama server-side allocation: undefined = 16384 (legacy), 'auto' omits
    *  num_ctx so the server decides, a number = explicit allocation. */
   ollamaNumCtx?: 'auto' | number;
@@ -602,15 +615,29 @@ export class AIEngine {
     return { totalTokens: FALLBACK, source: 'fallback' };
   }
 
-  /** A screenshot only travels with an explicit opt-in AND a capable model.
-   *  "unsupported" is a known NO (the server said so); "unknown" is merely missing
-   *  metadata - plenty of OpenAI-compatible servers advertise no modalities at all, and
-   *  refusing there left the "send screenshots" box with no effect whatsoever. */
-  private async shouldAttachVision(screenshot?: string): Promise<boolean> {
-    if (!screenshot || !this.isLocal) return false;
-    if (this.localOpts.vision !== true) return false;
-    if (screenshot.length > 4_000_000) return false;   // dataURL gigante: lento e estoura VRAM fraca
-    try { return (await this.localVisionFor(this.ollamaModel)) !== 'unsupported'; } catch { return false; }
+  /** Gate + explain in one place. "unsupported" is a known NO from the server;
+   *  "unknown" (the common case — most OpenAI-compatible servers advertise no
+   *  modalities at all) must NOT be treated as unsupported, or the opt-in would
+   *  silently do nothing. Every NO carries a machine-readable reason for the UI. */
+  async resolveVision(shot?: VisionImage): Promise<VisionReport> {
+    if (!shot?.dataUrl) return { attached: false, reason: 'no_shot' };
+    const mode = resolveVisionMode(this.localOpts);
+    if (mode === 'off') return { attached: false, reason: 'mode_off' };
+    if (NO_IMAGE_PROVIDERS.has(this.provider)) return { attached: false, reason: 'provider_no_vision' };
+    const split = splitDataUrl(shot.dataUrl);
+    if (!split) return { attached: false, reason: 'bad_dataurl' };
+    if (!/^image\/(jpeg|png|webp|gif)$/.test(split.mime)) return { attached: false, reason: 'bad_mime' };
+    const bytes = Math.floor(split.base64.length * 3 / 4);
+    const cap = this.localOpts.visionMaxBytes ?? VISION_MAX_BYTES;
+    if (bytes > cap) return { attached: false, reason: 'too_large', bytes, width: shot.width, height: shot.height };
+    let capab: 'supported' | 'unsupported' | 'unknown' = 'unknown';
+    // Probe only our own box: asking api.openai.com / api.anthropic.com about modalities
+    // would be a surprise API call, and those routes take images anyway.
+    if (this.isLocal) {
+      try { capab = await this.localVisionFor(this.ollamaModel); } catch { /* server silent → unknown */ }
+    }
+    if (capab === 'unsupported') return { attached: false, reason: 'model_no_vision', bytes, width: shot.width, height: shot.height };
+    return { attached: true, reason: capab === 'unknown' ? 'capability_unknown' : 'ok', bytes, width: shot.width, height: shot.height };
   }
 
   // Endpoint ativo (pro pré-aquecimento de conexão no boot/troca de provedor).
@@ -687,7 +714,7 @@ export class AIEngine {
     }
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal, image?: VisionImage): Promise<string> {
     // rawContext = a self-contained block the caller already wrote (e.g. an attached
     // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
     // label — that label made weak models think there was an attachment they couldn't open.
@@ -710,7 +737,13 @@ export class AIEngine {
     // chamada e só entra no histórico DEPOIS do sucesso — uma falha do provedor não pode
     // deixar um 'user' órfão (dois 'user' seguidos quebram provedores estritos/Anthropic).
     const history = this.conversationHistories.get(tabId) ?? [];
-    const userTurn: Message = { role: 'user', content: userMessage + contextNote };
+    // Chat vision: attach the page screenshot when mode+gate allow, and state it plainly
+    // so the model neither refuses to look nor invents what it "sees".
+    const vision = await this.resolveVision(image);
+    const visionNote = vision.attached
+      ? `\n\n[PAGE SCREENSHOT attached: ${image?.width ?? '?'}x${image?.height ?? '?'} — answer from it when the question is visual.]`
+      : (image ? `\n\n[No image attached (reason: ${vision.reason}) — page text only.]` : '');
+    const userTurn: Message = { role: 'user', content: userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
 
     const text = await this.callChatLLM([...history, userTurn], onDelta, signal);
     // Cancelado no meio (Parar)? NÃO comita nada: o usuário não viu essa resposta, e gravar
@@ -720,6 +753,9 @@ export class AIEngine {
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
     const clean = stripThink(text);
+    // At most ONE image in history (this turn): re-sending old screenshots every turn
+    // costs hundreds of tokens and re-answers a page that has already moved on.
+    for (const h of history) if (h.image) h.image = undefined;
     history.push(userTurn, { role: 'assistant', content: clean || text });
     const CAP = 40;   // teto de itens por aba (evita crescer sem limite com muitas abas)
     if (history.length > CAP) history.splice(0, history.length - CAP);
@@ -727,14 +763,17 @@ export class AIEngine {
     return text;
   }
 
-  async generateAction(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean }> {
+  async generateAction(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean; vision?: VisionReport }> {
+    const vision = await this.resolveVision(screenshot);
     // Context budget: LOCAL path only, where the window is small and knowable. Fits the
     // observation to the real context (trims page text first, then history, never the
     // element list). Cloud keeps the fixed 12k slice it always had.
+    // The attached image is charged against the same window (approximate).
     let state = observedState ? observedState.slice(0, 12000) : '';
     let contextTokens: number | undefined;
     let contextSource: string | undefined;
     let contextTrimmed = false;
+    const imageTokens = vision.attached ? estimateImageTokens(screenshot?.width, screenshot?.height) : 0;
     if (this.isLocal && state) {
       try {
         const cb = await this.resolveContextBudget();
@@ -743,6 +782,7 @@ export class AIEngine {
         const fitted = _applyContextBudget(state, {
           totalTokens: cb.totalTokens,
           maxOutputTokens: this.localOpts.maxOutputTokens ?? 4096,
+          imageTokens,
         });
         state = fitted.text;
         contextTrimmed = fitted.trimmed;
@@ -751,20 +791,22 @@ export class AIEngine {
     const contextNote = state
       ? `\n\n[Observed browser state and history]\n${state}`
       : '';
-    // The image is attached only with opt-in + a capable model. Without that we must NOT
-    // claim a screenshot is attached: the dead sentence made models hallucinate
-    // coordinates from a capture that was never sent ("click_at per the screenshot").
-    const willAttach = await this.shouldAttachVision(screenshot);
-    const visionNote = willAttach
-      ? '\n\n[A screenshot of the current page is attached. Use it with the observed interactive elements.]'
-      : '';
+    // Say exactly what the model got. Claiming a screenshot that was never sent made
+    // models invent coordinates; denying one that IS sent made them refuse to look.
+    const shotFmt = splitDataUrl(screenshot?.dataUrl)?.mime?.split('/')[1] ?? 'image';
+    const coordNote = screenshot?.cssWidth && screenshot?.width
+      ? `It is ${((screenshot.width / screenshot.cssWidth) * 100).toFixed(0)}% of the live viewport size (${screenshot.cssWidth}x${screenshot.cssHeight} CSS px) — return click_at coordinates in LIVE VIEWPORT CSS pixels (0..${Math.round(screenshot.cssWidth)}, 0..${Math.round(screenshot.cssHeight)}), never screenshot pixels.]`
+      : 'Return click_at coordinates in CSS viewport pixels.]';
+    const visionNote = vision.attached
+      ? `\n\n[SCREENSHOT attached: ${screenshot?.width ?? '?'}x${screenshot?.height ?? '?'} ${shotFmt}. It shows the CURRENT page — use it for layout, icons, thumbnails and anything the DOM text does not carry. ${coordNote}`
+      : `\n\n[NO IMAGE AVAILABLE (reason: ${vision.reason}) — you receive DOM text and OCR text only. Do NOT describe visual content you cannot see; if the answer depends on how something looks, say so plainly.]`;
 
     const t0 = Date.now();
     if (signal?.aborted) throw new Error('CANCELLED');
     const reply = await this.callLLM([
-      { role: 'user', content: command + contextNote + visionNote, image: willAttach ? screenshot : undefined },
+      { role: 'user', content: command + contextNote + visionNote, image: vision.attached ? screenshot : undefined },
     ], true, tier, undefined, signal);
-    const meta = { contextTokens, contextSource, contextTrimmed };
+    const meta = { contextTokens, contextSource, contextTrimmed, vision };
     if (typeof reply === 'string') {
       return { text: reply, latencyMs: Date.now() - t0, model: this.provider, ...meta };
     }
@@ -783,12 +825,10 @@ export class AIEngine {
     switch (this.provider) {
       case 'anthropic': return this.callAnthropic(messages, isAgentMode, signal);
       case 'openai': return this.callOpenAI(messages, isAgentMode, onDelta, signal);
-      // DeepSeek does NOT support image_url — strip screenshots to avoid 400 + retry waste
-      case 'deepseek': return this.callDeepSeek(messages.map(m => ({ ...m, image: undefined })), isAgentMode, tier, onDelta, signal);
-      // Mistral is OpenAI-compatible; strip screenshots (text-first, avoids 400s)
-      case 'mistral': return this.callMistral(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
-      // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
-      case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
+      // No image input on these routes: strip so an internal field can never leak out.
+      case 'deepseek': return this.callDeepSeek(stripImages(messages), isAgentMode, tier, onDelta, signal);
+      case 'mistral': return this.callMistral(stripImages(messages), isAgentMode, onDelta, signal);
+      case 'nvidia': return this.callNim(stripImages(messages), isAgentMode, onDelta, signal);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
       // The screenshot strip moved out of here: generateAction decides (opt-in + model
       // capability), and without the opt-in no image ever reaches this point.
@@ -802,7 +842,15 @@ export class AIEngine {
       model: 'claude-sonnet-5',
       max_tokens: 4096,
       system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode),
-      messages: messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      messages: messages.map(m => m.image
+        ? {
+          role: m.role as 'user' | 'assistant',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: splitDataUrl(m.image.dataUrl)?.mime ?? 'image/jpeg', data: splitDataUrl(m.image.dataUrl)?.base64 ?? '' } },
+            { type: 'text', text: m.content },
+          ],
+        }
+        : { role: m.role as 'user' | 'assistant', content: m.content }),
     };
 
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/messages`, {
@@ -856,7 +904,18 @@ export class AIEngine {
       model,
       messages: [
         { role: 'system', content: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode) },
-        ...messages,
+        // Vision: the image travels INSIDE content as parts. An `image` field next to
+        // content is silently ignored by these servers (HTTP 200, zero pixels) — that was
+        // the whole vision bug: the screenshot was gated, sent and thrown away.
+        ...messages.map(m => m.image
+          ? {
+            role: m.role,
+            content: [
+              { type: 'text', text: m.content },
+              { type: 'image_url', image_url: { url: m.image.dataUrl } },
+            ],
+          }
+          : { role: m.role, content: m.content }),
       ],
     };
     if (isAgentMode) {
@@ -1401,7 +1460,10 @@ export class AIEngine {
           ? '\n\nReturn ONLY ONE compact JSON object for your next action, as the LAST thing in your reply with nothing after it. Example: {"thought":"short","evaluation":"short","action":"navigate","url":"https://www.youtube.com"}. Reason SILENTLY — never write analysis/explanation text outside the JSON. ALWAYS fill every field the action needs (url for navigate, ref number for click_ref/fill_ref). Keep "thought" and "evaluation" to ONE short sentence each.'
           : '\n\nIMPORTANT: You must evaluate the observed state and return your next step as a structured JSON object. Wrap your JSON in ```json blocks. Do NOT output freeform analysis. ONLY output the JSON object. Write the "thought" and "evaluation" fields in Portuguese or English ONLY — never Chinese.';
       }
-      return { role: m.role, content };
+      // Ollama takes images as a sibling array on the message, base64 WITHOUT the prefix.
+      const img = m.role === 'user' ? m.image : undefined;
+      const b64 = img ? splitDataUrl(img.dataUrl)?.base64 : undefined;
+      return { role: m.role, content, ...(b64 ? { images: [b64] } : {}) };
     });
 
     const model = resolvedModel;   // já resolvido acima (usa o que está REALMENTE instalado)

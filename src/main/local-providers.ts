@@ -303,6 +303,8 @@ export interface ContextBudget {
   maxOutputTokens: number;
   /** Safety margin kept free. */
   marginTokens?: number;
+  /** Approximate cost of attached images — text must fit around them. */
+  imageTokens?: number;
 }
 
 const OBS_MARKERS = {
@@ -316,7 +318,7 @@ const OBS_MARKERS = {
  *  list. Returns the fitted text + whether anything was trimmed. */
 export function applyContextBudget(observedState: string, budget: ContextBudget): { text: string; trimmed: boolean } {
   const margin = budget.marginTokens ?? 512;
-  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin);
+  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin - (budget.imageTokens ?? 0));
   if (!observedState || estimateTokens(observedState) <= allowed) return { text: observedState, trimmed: false };
 
   let text = observedState;

@@ -42,7 +42,7 @@ function getScreenshotsDir(): string {
   return screenshotsDir;
 }
 
-function screenshotFilename(taskId: string, type: string): string {
+export function screenshotFilename(taskId: string, type: string): string {
   const ts = Date.now();
   return path.join(getScreenshotsDir(), `${taskId}_${type}_${ts}.png`);
 }
