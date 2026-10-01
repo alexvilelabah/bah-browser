@@ -2556,9 +2556,6 @@ function setupIPC(): void {
     return { active: actuallyEnabled };
   });
 
-  // ═══ OCR-only handler — used by the agent loop to enrich DOM with local OCR ═══
-  // Takes a screenshot only when DOM text is sparse, runs Tesseract locally,
-  // returns plain text. No image is ever sent to DeepSeek.
   // ═══ OCR-only handler — enriches the observation with local Tesseract text ═══
   // When the renderer already captured a frame (vision path) it passes it here, so OCR and
   // the model describe the SAME frame. Otherwise this takes its own CDP capture (as before).

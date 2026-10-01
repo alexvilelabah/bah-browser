@@ -1,4 +1,5 @@
 import { AIEngine } from './ai-engine';
+import type { VisionImage, VisionReport } from '../shared/vision';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }

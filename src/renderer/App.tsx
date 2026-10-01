@@ -22,11 +22,14 @@ import {
   waitForSettle,
 } from './page-executor';
 import {
+  STICKY_VISION_REASONS,
   VISION_MAX_SIDE,
   VISION_MIN_SIDE,
   decideAgentShot,
   decideChatShot,
+  encodedImageSize,
   looksLikeTextReadIntent,
+  mapShotPointToViewport,
   resolveVisionMode,
   type VisionImage,
   type VisionMode,
@@ -917,15 +920,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
       const out: { thumb?: string; image?: VisionImage; png?: string } = {};
       out.thumb = img.resize({ width: 480, quality: 'good' }).toDataURL();
       if ((o.image || o.png) && size.width >= VISION_MIN_SIDE && size.height >= VISION_MIN_SIDE) {
-        const cssW = wv.clientWidth || size.width;
-        const cssH = wv.clientHeight || size.height;
-        const scale = Math.min(1, VISION_MAX_SIDE / Math.max(size.width, size.height));
         if (o.png) out.png = img.toDataURL();               // full-res frame for OCR
         if (o.image) {
-          const w = Math.max(1, Math.round(size.width * scale));
-          const h = Math.max(1, Math.round(size.height * scale));
+          // The guest's own viewport (what elementFromPoint and clicks use), not the
+          // <webview> element box, which diverges under page zoom.
+          const vp = await Promise.race([
+            wv.executeJavaScript('({w: window.innerWidth, h: window.innerHeight})') as Promise<{ w: number; h: number }>,
+            new Promise<null>(r => setTimeout(() => r(null), 1500)),
+          ]).catch(() => null);
+          const cssW = vp?.w || wv.clientWidth || size.width;
+          const cssH = vp?.h || wv.clientHeight || size.height;
+          // Size off the CSS viewport: up to VISION_MAX_SIDE the screenshot pixels ARE the
+          // CSS pixels, so click_at needs no scaling at all. Never upscaled.
+          const scale = Math.min(1, VISION_MAX_SIDE / Math.max(cssW, cssH));
+          const w = Math.max(1, Math.round(cssW * scale));
+          const h = Math.max(1, Math.round(cssH * scale));
           const buf = img.resize({ width: w, height: h, quality: 'good' }).toJPEG(82);
-          out.image = { dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`, width: w, height: h, cssWidth: cssW, cssHeight: cssH, bytes: buf.length };
+          // Report the ENCODED size: on HiDPI the bitmap can differ from the requested DIP size.
+          const real = encodedImageSize(buf);
+          out.image = {
+            dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`,
+            width: real?.width ?? w, height: real?.height ?? h,
+            cssWidth: cssW, cssHeight: cssH, bytes: buf.length,
+          };
         }
       }
       return out;
@@ -1420,11 +1437,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let previousStateKey = '';
               let noEffectCount = 0;
               // Vision: mode + how many images this run already sent (token/latency budget).
-              const visionMode = resolveVisionMode(store.localSettings);
+              // The setting lives with the LOCAL endpoint (Settings → Local AI) and only the local
+              // engine carries it; the cloud engine would answer mode_off to every frame we sent.
+              let visionMode: VisionMode = store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off';
               let imagesSent = 0;
               let lastVisionReason = 'none';
-              // Screenshot→viewport scale, so click_at from a downscaled image lands right.
-              let visionScale = 1;
+              let prevStepUrl = '';
+              // Screenshot the model actually saw on the last LLM step (with the size main
+              // measured), so click_at maps from its pixels to the live viewport.
+              let modelShot: { width?: number; height?: number } | undefined;
               // DISJUNTOR: em ∞ não há teto de passos nem relógio, então uma IA teimosa
               // poderia repetir a mesma ação pra sempre (= fatura de API infinita rodando a
               // noite toda). O detector de loop abaixo só AVISA; isto aqui conta as
@@ -1903,18 +1924,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const visionDec = decideAgentShot({
                     mode: visionMode,
                     step,
-                    pageChanged: !observationWasCarried,
+                    // A real navigation, not "the observation was re-taken" (that is most steps).
+                    pageChanged: !!prevStepUrl && observation.url !== prevStepUrl,
                     domTextLen: (observation.text_sample || '').length,
                     imagesSent,
                     command,
                     provider: shotProvider,
                   });
                   lastVisionReason = visionDec.reason;
+                  prevStepUrl = observation.url;
                   const ocrWillRun = !observationWasCarried && !commandLooksLikeGoogleLogin
                     && (commandLooksLikeImageTextRead || (observation.text_sample || '').length < 200);
                   // Capture runs in parallel with OCR (as before) — except in vision mode, where
                   // OCR must read the SAME frame the model gets, so the capture settles first.
-                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun }), 8000, undefined as any);
+                  // The full-res PNG is only worth encoding when it is awaited before OCR (vision
+                  // steps); otherwise OCR takes its own capture exactly as it always did.
+                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -2020,7 +2045,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     compactDom || '(none detected)',
                     '',
                     `PAGE TEXT: ${observation.text_sample.slice(0, 1500)}`,
-                    ocrText ? `\nOCR TEXT (extracted locally from screenshot):\n${shotForModel ? ocrText.slice(0, 600) : ocrText}` : '',
+                    // Full OCR even when a frame is attached: main may still drop the image
+                    // (capability/size/rejection) AFTER this payload is built, and then the OCR
+                    // text is all the model has. The local context budget trims if needed.
+                    ocrText ? `\nOCR TEXT (extracted locally from screenshot):\n${ocrText}` : '',
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
                   ].filter(s => s !== '').join('\n');
@@ -2105,24 +2133,28 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Vision: the frame decided above, if the gate allowed it. The main process
                   // re-checks capability/size and reports why not.
                   if (shotForModel) {
-                    imagesSent++;
                     onProgress({ kind: 'status', message: `🖼️ screenshot to model: ${shotForModel.width}x${shotForModel.height} · ${Math.round((shotForModel.bytes ?? 0) / 1024)} KB` });
                   } else if (visionMode !== 'off' && step === 0) {
                     onProgress({ kind: 'status', message: `📄 text only this step (${lastVisionReason})` });
                   }
                   let result: any;
-                  // Reset every step: coordinates from a text-only step are already CSS pixels.
-                  visionScale = 1;
+                  // Reset every LLM step: a text-only step has no picture to take coordinates from.
+                  modelShot = undefined;
                   try {
                     result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
                   } finally {
                     if (signal) signal.removeEventListener('abort', onAbortStep);
                   }
-                  if (result?.vision && !result.vision.attached && shotForModel) {
-                    onProgress({ kind: 'status', message: `📄 model got text only (${result.vision.reason})` });
-                    shotForModel = undefined;
-                  } else if (result?.vision?.attached) {
-                    visionScale = (shotForModel?.width && shotForModel?.cssWidth) ? shotForModel.cssWidth / shotForModel.width : 1;
+                  if (result?.vision?.attached && shotForModel) {
+                    imagesSent++;   // only frames the model really received count against the budget
+                    // Main measured the encoded size; that is the space the model's x,y live in.
+                    modelShot = { width: result.vision.width ?? shotForModel.width, height: result.vision.height ?? shotForModel.height };
+                  } else if (shotForModel) {
+                    const why = result?.vision?.reason ?? (result?.error ? 'error' : 'unknown');
+                    onProgress({ kind: 'status', message: `📄 model got text only (${why})` });
+                    // Permanent for this run (setting, provider, model): stop capturing and
+                    // shipping frames that will be refused every step.
+                    if (STICKY_VISION_REASONS.has(why)) visionMode = 'off';
                   }
                   throwIfCancelled();
                   // Cancellation confirmed by main: a clean stop, not a task failure.
@@ -2444,20 +2476,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       } // fim do if(!cancelled) — freio de segurança
                     }
                   } else if (action.type === 'click_at' && wcId != null) {
-                    // The model answers in LIVE VIEWPORT CSS px (stated in the prompt). Defensive
-                    // mapping: if a coordinate clearly comes from the downscaled screenshot, scale it
-                    // back; then clamp inside the viewport (outside it, no click can ever land).
-                    const cssW = shotForModel?.cssWidth || wv.clientWidth || 0;
-                    const cssH = shotForModel?.cssHeight || wv.clientHeight || 0;
-                    const rawX = visionScale !== 1 ? action.x * visionScale : action.x;
-                    const rawY = visionScale !== 1 ? action.y * visionScale : action.y;
-                    const cx = Math.max(0, Math.min(Math.round(rawX), cssW ? cssW - 1 : Math.round(rawX)));
-                    const cy = Math.max(0, Math.min(Math.round(rawY), cssH ? cssH - 1 : Math.round(rawY)));
+                    // The model answers in SCREENSHOT pixels (stated in the prompt); map them onto
+                    // the live viewport (measured now — the window may have been resized) and clamp
+                    // inside it. Without a frame this step the numbers are taken as viewport px.
+                    const vp = await withTimeout(
+                      wv.executeJavaScript('({w: window.innerWidth, h: window.innerHeight})') as Promise<{ w: number; h: number }>,
+                      1500, null as any,
+                    ).catch(() => null);
+                    const viewport = { width: vp?.w || wv.clientWidth || 0, height: vp?.h || wv.clientHeight || 0 };
+                    const { x: cx, y: cy } = mapShotPointToViewport(Number(action.x) || 0, Number(action.y) || 0, modelShot, viewport);
                     if (cx !== Math.round(action.x) || cy !== Math.round(action.y)) {
                       onProgress({ kind: 'status', message: `click mapped to viewport: ${Math.round(action.x)},${Math.round(action.y)} -> ${cx},${cy}` });
                     }
                     // FREIO: resolve o rótulo do elemento SOB a coordenada e confirma se for de risco.
-                    const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${Math.round(action.x)},${Math.round(action.y)})`), 3000, '');
+                    // Same point that will be clicked — checking anywhere else defeats the gate.
+                    const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${cx},${cy})`), 3000, '');
                     const cancelAt = await gateRisk(riskForAction(action as any, { text: String(lblAt || '') }));
                     toolResult = cancelAt ?? await window.electronAPI?.realClick?.(wcId, cx, cy);
                   } else if (action.type === 'click_text' && wcId != null) {
@@ -3691,7 +3724,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
               const chatShotDec = decideChatShot({
-                mode: resolveVisionMode(store.localSettings),
+                // Vision is a local-endpoint setting; the cloud engine would refuse the frame.
+                mode: store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off',
                 message: msg,
                 pageTextLen: (pageContent || '').length,
                 hasDoc: false,

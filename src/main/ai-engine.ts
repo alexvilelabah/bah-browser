@@ -10,7 +10,10 @@ import {
 } from './local-providers';
 import {
   NO_IMAGE_PROVIDERS,
+  RX_IMAGE_REJECTED,
   VISION_MAX_BYTES,
+  base64Head,
+  encodedImageSize,
   estimateImageTokens,
   resolveVisionMode,
   splitDataUrl,
@@ -331,7 +334,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - click_ref: { "action": "click_ref", "ref": number } — PREFERRED. Clicks the element with that id from interactive_elements. Most reliable.
 - fill_ref: { "action": "fill_ref", "ref": number, "value": string } — PREFERRED for inputs. Fills the input element with that id.
 - click_text: { "action": "click_text", "text": string, "nth"?: number } fallback when the right element isn't in the ref list.
-- click_at: { "action": "click_at", "x": number, "y": number } clicks viewport coordinates, useful when text selection fails.
+- click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.
 - fill: { "action": "fill", "selector"?: string, "label"?: string, "value": string } fills an input, textarea, or rich text editor by selector, visible label, placeholder, name, or currently focused editable area.
 - press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc.
@@ -525,6 +528,10 @@ export class AIEngine {
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
+  // Models whose server refused an image (`${baseUrl}::${model}`). Discovery often says
+  // "unknown"; the first real rejection is the ground truth, so later steps go text-only
+  // instead of failing (and retrying) every single call.
+  private visionRejected = new Set<string>();
 
   // local=false ⇒ provedor de NUVEM (a chave é obrigatória p/ auth). local=true ⇒ backend
   // LOCAL (Ollama ou OpenAI-compatible) — a apiKey vira auth OPCIONAL, NUNCA um marcador
@@ -628,16 +635,55 @@ export class AIEngine {
     if (!split) return { attached: false, reason: 'bad_dataurl' };
     if (!/^image\/(jpeg|png|webp|gif)$/.test(split.mime)) return { attached: false, reason: 'bad_mime' };
     const bytes = Math.floor(split.base64.length * 3 / 4);
+    // The size the model really sees, from the encoded header. The renderer reports DIP
+    // sizes, which on HiDPI screens can be half the encoded bitmap — and the coordinate
+    // contract is stated in these pixels.
+    let real: { width: number; height: number } | null = null;
+    try { real = encodedImageSize(base64Head(split.base64)); } catch { /* keep renderer's numbers */ }
+    const dims = { width: real?.width || shot.width, height: real?.height || shot.height };
     const cap = this.localOpts.visionMaxBytes ?? VISION_MAX_BYTES;
-    if (bytes > cap) return { attached: false, reason: 'too_large', bytes, width: shot.width, height: shot.height };
+    if (bytes > cap) return { attached: false, reason: 'too_large', bytes, ...dims };
+    if (this.visionRejected.has(this.visionKey())) return { attached: false, reason: 'model_rejected_image', bytes, ...dims };
     let capab: 'supported' | 'unsupported' | 'unknown' = 'unknown';
     // Probe only our own box: asking api.openai.com / api.anthropic.com about modalities
     // would be a surprise API call, and those routes take images anyway.
     if (this.isLocal) {
-      try { capab = await this.localVisionFor(this.ollamaModel); } catch { /* server silent → unknown */ }
+      try { capab = await this.localVisionFor(this.activeLocalModel()); } catch { /* server silent → unknown */ }
     }
-    if (capab === 'unsupported') return { attached: false, reason: 'model_no_vision', bytes, width: shot.width, height: shot.height };
-    return { attached: true, reason: capab === 'unknown' ? 'capability_unknown' : 'ok', bytes, width: shot.width, height: shot.height };
+    if (capab === 'unsupported') return { attached: false, reason: 'model_no_vision', bytes, ...dims };
+    return { attached: true, reason: capab === 'unknown' ? 'capability_unknown' : 'ok', bytes, ...dims };
+  }
+
+  /** The model id the server actually runs: Ollama resolves "qwen3-vl" to "qwen3-vl:8b",
+   *  and discovery lists the resolved id — matching the raw setting returned "unknown". */
+  private activeLocalModel(): string {
+    return this.provider === 'ollama' ? (this.resolvedOllamaModel || this.ollamaModel) : this.ollamaModel;
+  }
+
+  private visionKey(): string {
+    return `${this.baseUrl}::${this.isLocal ? this.activeLocalModel() : (this.cloudModel || this.provider)}`;
+  }
+
+  /** Run a model call; if the server refuses the image, remember that for this model and
+   *  retry ONCE without it, so a "capability unknown" model degrades to text instead of
+   *  failing the step. `onFallback` lets the caller restate what the model actually got. */
+  private async withImageFallback<T>(
+    messages: Message[],
+    call: (msgs: Message[]) => Promise<T>,
+    onFallback: (msgs: Message[]) => Message[],
+    signal?: AbortSignal,
+  ): Promise<{ value: T; rejected: boolean }> {
+    try {
+      return { value: await call(messages), rejected: false };
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      const hadImage = messages.some(m => m.image);
+      if (!hadImage || signal?.aborted || /CANCELLED|timeout|too slow/i.test(msg) || !RX_IMAGE_REJECTED.test(msg)) throw e;
+      this.visionRejected.add(this.visionKey());
+      console.warn(`[vision] server rejected image input for ${this.visionKey()} → text-only from now on: ${msg.slice(0, 200)}`);
+      const textOnly = onFallback(messages.map(m => ({ ...m, image: undefined })));
+      return { value: await call(textOnly), rejected: true };
+    }
   }
 
   // Endpoint ativo (pro pré-aquecimento de conexão no boot/troca de provedor).
@@ -740,12 +786,25 @@ export class AIEngine {
     // Chat vision: attach the page screenshot when mode+gate allow, and state it plainly
     // so the model neither refuses to look nor invents what it "sees".
     const vision = await this.resolveVision(image);
+    const noImageNote = (reason: string) => `\n\n[No image attached (reason: ${reason}) — page text only.]`;
     const visionNote = vision.attached
-      ? `\n\n[PAGE SCREENSHOT attached: ${image?.width ?? '?'}x${image?.height ?? '?'} — answer from it when the question is visual.]`
-      : (image ? `\n\n[No image attached (reason: ${vision.reason}) — page text only.]` : '');
-    const userTurn: Message = { role: 'user', content: userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
+      ? `\n\n[PAGE SCREENSHOT attached: ${vision.width ?? '?'}x${vision.height ?? '?'} — answer from it when the question is visual.]`
+      : (image ? noImageNote(vision.reason) : '');
+    let userTurn: Message = { role: 'user', content: userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
 
-    const text = await this.callChatLLM([...history, userTurn], onDelta, signal);
+    // A new screenshot supersedes the one kept in history: never send two frames per call.
+    const priorTurns = userTurn.image ? history.map(h => (h.image ? { ...h, image: undefined } : h)) : history;
+    const { value: text, rejected } = await this.withImageFallback(
+      [...priorTurns, userTurn],
+      msgs => this.callChatLLM(msgs, onDelta, signal),
+      msgs => {
+        // Restate honestly: the model is now on text only.
+        userTurn = { role: 'user', content: userMessage + contextNote + noImageNote('model_rejected_image') };
+        return [...msgs.slice(0, -1), userTurn];
+      },
+      signal,
+    );
+    if (rejected) console.log('[chat] vision: server rejected the image, answered from page text');
     // Cancelado no meio (Parar)? NÃO comita nada: o usuário não viu essa resposta, e gravar
     // deixaria um turno-fantasma que sobrescreveria a memória da PRÓXIMA mensagem daquela aba.
     if (signal?.aborted) return text;
@@ -773,7 +832,7 @@ export class AIEngine {
     let contextTokens: number | undefined;
     let contextSource: string | undefined;
     let contextTrimmed = false;
-    const imageTokens = vision.attached ? estimateImageTokens(screenshot?.width, screenshot?.height) : 0;
+    const imageTokens = vision.attached ? estimateImageTokens(vision.width, vision.height) : 0;
     if (this.isLocal && state) {
       try {
         const cb = await this.resolveContextBudget();
@@ -793,20 +852,30 @@ export class AIEngine {
       : '';
     // Say exactly what the model got. Claiming a screenshot that was never sent made
     // models invent coordinates; denying one that IS sent made them refuse to look.
+    // Coordinates are asked for in SCREENSHOT pixels: that is the only space the model can
+    // measure in (the DOM list carries no positions). The renderer maps them to the live
+    // viewport using the size reported back in `vision` — no arithmetic left to the model.
     const shotFmt = splitDataUrl(screenshot?.dataUrl)?.mime?.split('/')[1] ?? 'image';
-    const coordNote = screenshot?.cssWidth && screenshot?.width
-      ? `It is ${((screenshot.width / screenshot.cssWidth) * 100).toFixed(0)}% of the live viewport size (${screenshot.cssWidth}x${screenshot.cssHeight} CSS px) — return click_at coordinates in LIVE VIEWPORT CSS pixels (0..${Math.round(screenshot.cssWidth)}, 0..${Math.round(screenshot.cssHeight)}), never screenshot pixels.]`
-      : 'Return click_at coordinates in CSS viewport pixels.]';
+    const w = vision.width, h = vision.height;
+    const coordNote = w && h
+      ? `For click_at, give x,y as pixel coordinates IN THIS SCREENSHOT (x 0..${w - 1}, y 0..${h - 1}); the browser maps them onto the page.]`
+      : 'For click_at, give x,y as pixel coordinates in this screenshot.]';
+    const noImageNote = (reason: string) =>
+      `\n\n[NO IMAGE AVAILABLE (reason: ${reason}) — you receive DOM text and OCR text only. Do NOT describe visual content you cannot see; if the answer depends on how something looks, say so plainly. Prefer click_ref/click_text over click_at: you have no picture to take coordinates from.]`;
     const visionNote = vision.attached
-      ? `\n\n[SCREENSHOT attached: ${screenshot?.width ?? '?'}x${screenshot?.height ?? '?'} ${shotFmt}. It shows the CURRENT page — use it for layout, icons, thumbnails and anything the DOM text does not carry. ${coordNote}`
-      : `\n\n[NO IMAGE AVAILABLE (reason: ${vision.reason}) — you receive DOM text and OCR text only. Do NOT describe visual content you cannot see; if the answer depends on how something looks, say so plainly.]`;
+      ? `\n\n[SCREENSHOT attached: ${w ?? '?'}x${h ?? '?'} ${shotFmt}. It shows the CURRENT page — use it for layout, icons, thumbnails and anything the DOM text does not carry. ${coordNote}`
+      : noImageNote(vision.reason);
 
     const t0 = Date.now();
     if (signal?.aborted) throw new Error('CANCELLED');
-    const reply = await this.callLLM([
-      { role: 'user', content: command + contextNote + visionNote, image: vision.attached ? screenshot : undefined },
-    ], true, tier, undefined, signal);
-    const meta = { contextTokens, contextSource, contextTrimmed, vision };
+    const { value: reply, rejected } = await this.withImageFallback(
+      [{ role: 'user', content: command + contextNote + visionNote, image: vision.attached ? screenshot : undefined }],
+      msgs => this.callLLM(msgs, true, tier, undefined, signal),
+      () => [{ role: 'user', content: command + contextNote + noImageNote('model_rejected_image') }],
+      signal,
+    );
+    const finalVision: VisionReport = rejected ? { ...vision, attached: false, reason: 'model_rejected_image' } : vision;
+    const meta = { contextTokens, contextSource, contextTrimmed, vision: finalVision };
     if (typeof reply === 'string') {
       return { text: reply, latencyMs: Date.now() - t0, model: this.provider, ...meta };
     }
@@ -829,9 +898,7 @@ export class AIEngine {
       case 'deepseek': return this.callDeepSeek(stripImages(messages), isAgentMode, tier, onDelta, signal);
       case 'mistral': return this.callMistral(stripImages(messages), isAgentMode, onDelta, signal);
       case 'nvidia': return this.callNim(stripImages(messages), isAgentMode, onDelta, signal);
-      // Strip screenshots from local model calls — saves VRAM and avoids hangs
-      // The screenshot strip moved out of here: generateAction decides (opt-in + model
-      // capability), and without the opt-in no image ever reaches this point.
+      // resolveVision() decides (mode + capability), so no image reaches here without it.
       case 'ollama': return this.callOllama(messages, isAgentMode, onDelta, signal);
     }
   }
@@ -842,15 +909,18 @@ export class AIEngine {
       model: 'claude-sonnet-5',
       max_tokens: 4096,
       system: (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode),
-      messages: messages.map(m => m.image
-        ? {
-          role: m.role as 'user' | 'assistant',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: splitDataUrl(m.image.dataUrl)?.mime ?? 'image/jpeg', data: splitDataUrl(m.image.dataUrl)?.base64 ?? '' } },
-            { type: 'text', text: m.content },
-          ],
-        }
-        : { role: m.role as 'user' | 'assistant', content: m.content }),
+      messages: messages.map(m => {
+        const img = m.image ? splitDataUrl(m.image.dataUrl) : null;
+        return img
+          ? {
+            role: m.role as 'user' | 'assistant',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: img.mime, data: img.base64 } },
+              { type: 'text', text: m.content },
+            ],
+          }
+          : { role: m.role as 'user' | 'assistant', content: m.content };
+      }),
     };
 
     const res = await fetchWithTimeout(`${this.baseUrl}/v1/messages`, {
@@ -972,6 +1042,13 @@ export class AIEngine {
             fatal.noRetry = true;
             throw fatal;
           }
+          // llama.cpp without --mmproj answers an image with a 500: permanent, not transient.
+          // Fail fast so the caller can drop the image instead of backing off 3 times.
+          if (messages.some(m => m.image) && RX_IMAGE_REJECTED.test(peek)) {
+            const fatal: any = new Error(`OpenAI API error ${candidate.status}: ${peek.slice(0, 400)}`);
+            fatal.noRetry = true;
+            throw fatal;
+          }
           if (attempt < MAX_ATTEMPTS) {
             const wait = 800 * Math.pow(2, attempt - 1);
             appendLog(`[OpenAI] ${candidate.status} transient → retry ${attempt + 1}/${MAX_ATTEMPTS} in ${wait}ms`);
@@ -1002,7 +1079,10 @@ export class AIEngine {
     if (!res.ok) {
       let errText = '';
       try { errText = await res.text(); } catch {}
-      const unsupportedJson = res.status === 400 && /response_format|json|format/i.test(errText);
+      // An image rejection ("…image format…") is not a JSON-mode problem: let it surface so
+      // withImageFallback() drops the image, instead of retrying with the image still on.
+      const imageRejected = messages.some(m => m.image) && RX_IMAGE_REJECTED.test(errText);
+      const unsupportedJson = res.status === 400 && !imageRejected && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
         appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
         return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: depth + 1 });
@@ -1442,7 +1522,7 @@ export class AIEngine {
 
   private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
-    // Never send images to local model — it consumes too much VRAM and causes hangs
+    // Images arrive here only when resolveVision() allowed them (mode + capability gate).
     const resolvedModel = await this.resolveOllama();
     // Modelo de RACIOCÍNIO (gpt-oss/harmony, qwen3, deepseek-r1): pensa antes de responder.
     // NÃO pode ser tratado como modelo comum — forçar format:json + "wrap em ```json" faz
