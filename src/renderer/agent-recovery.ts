@@ -129,6 +129,24 @@ function elementTexts(input: RecoveryInput): string {
   return input.elements.map(e => `${e.text || ''} ${e.aria || ''} ${e.role || ''}`).join(' ').toLowerCase();
 }
 
+/** A challenge/block page IS the whole page: a short body and a handful of controls.
+ *  A content page that merely MENTIONS "captcha", "Cloudflare" or "blocked" (a news front
+ *  page like Hacker News, search results, an article) must not be read as one — scanning
+ *  every headline for those words made the agent stop and ask for a captcha that wasn't there. */
+function looksLikeInterstitial(input: RecoveryInput): boolean {
+  return (input.textSample || '').trim().length < 800 && input.elements.length < 20;
+}
+
+/** Titles that challenge pages actually use (Cloudflare, reCAPTCHA/hCaptcha gates, Amazon). */
+const CAPTCHA_TITLE = /^\s*(just a moment|attention required|one more step|security check|verifying you are human|human verification|are you a (robot|human)|robot check|captcha|um momento|verifica[cç][aã]o de seguran[cç]a)/i;
+
+/** A captcha widget among the controls (checkbox/iframe), not a link whose text mentions one. */
+function hasCaptchaWidget(input: RecoveryInput): boolean {
+  return input.elements.some(e =>
+    (e.role === 'checkbox' || e.tag === 'iframe')
+    && /captcha|not a robot|n[aã]o sou um rob|human|turnstile|cloudflare|challenge/i.test(`${e.text || ''} ${e.aria || ''}`));
+}
+
 function findCookieCloseButton(input: RecoveryInput): { ref: number; text: string } | null {
   // Prioridade: "Rejeitar" > "Rejeitar todos" > "Fechar" > "Aceitar"
   const priorities = [
@@ -169,7 +187,9 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   }
 
   // ── 1. Captcha / verificação humana (prioridade máxima) ──────────
-  if (CAPTCHA_PATTERNS.test(text) || CAPTCHA_PATTERNS.test(elText)) {
+  const interstitial = looksLikeInterstitial(input);
+  if (CAPTCHA_TITLE.test(input.title || '') || hasCaptchaWidget(input)
+    || (interstitial && (CAPTCHA_PATTERNS.test(text) || CAPTCHA_PATTERNS.test(elText)))) {
     if (input.commandRequiresThisSite) {
       return {
         decision: 'ask_user',
@@ -187,7 +207,8 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   }
 
   // ── 2. Acesso negado / bloqueio anti-bot ─────────────────────────
-  if (ACCESS_DENIED_PATTERNS.test(text) || (lr && !lr.success && /403|429/.test(lr.error || ''))) {
+  // Same rule as the captcha check: "blocked"/"forbidden" in a headline is not a block page.
+  if ((interstitial && ACCESS_DENIED_PATTERNS.test(text)) || (lr && !lr.success && /403|429/.test(lr.error || ''))) {
     return {
       decision: 'search_alternative',
       reason: `Access denied or traffic blocked on ${domain}. I will look for another source.`,
