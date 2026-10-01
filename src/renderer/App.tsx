@@ -60,7 +60,11 @@ declare global {
       decryptSecretSync?: (t: string) => string;
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
-      setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string) => Promise<any>;
+      setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean }) => Promise<any>;
+      localDiscover?: (provider: string, baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; models: Array<{ id: string; loaded?: boolean; vision: string; contextTokens?: number; contextSource?: string; unsuitable?: string }>; error?: string }>;
+      localContext?: (provider: string, baseUrl?: string, model?: string, authKey?: string) => Promise<{ ok: boolean; tokens?: number; source: string; error?: string }>;
+      localTestConnection?: (baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; reachable: boolean; modelsFound: number; error?: string }>;
+      localTestModel?: (provider: string, baseUrl?: string, model?: string, authKey?: string) => Promise<{ ok: boolean; ms?: number; reply?: string; error?: string }>;
       setLocalEnabled?: (enabled: boolean) => Promise<boolean>;
       setLocalWarmup?: (on: boolean) => Promise<boolean>;
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
@@ -68,7 +72,8 @@ declare global {
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => Promise<{ response?: string; error?: string }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
-      aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => Promise<any>;
+      aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
+      actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
       torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
@@ -137,6 +142,17 @@ declare global {
       }>;
     };
   }
+}
+
+/** Just the local-endpoint tuning the main process needs (context / output / vision). */
+function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean }) {
+  return {
+    contextMode: ls.contextMode ?? 'auto',
+    contextTokens: ls.contextTokens,
+    maxOutputTokens: ls.maxOutputTokens,
+    ollamaNumCtx: ls.ollamaNumCtx,
+    vision: ls.vision === true,
+  };
 }
 
 export default function App() {
@@ -283,7 +299,7 @@ export default function App() {
     // 'local' — o roteamento local é explícito no main, e um 'Bearer local' fabricado confundia).
     if (store.localSettings.enabled) {
       window.electronAPI?.setLocalWarmup?.(!!store.localSettings.warmup);
-      window.electronAPI?.setLocalProvider?.(store.localSettings.provider, store.localSettings.authKey ?? '', store.localSettings.baseUrl, store.localSettings.model);
+      window.electronAPI?.setLocalProvider?.(store.localSettings.provider, store.localSettings.authKey ?? '', store.localSettings.baseUrl, store.localSettings.model, localOptsForMain(store.localSettings));
     }
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url)) as any);
     // Som na aba: o main manda o webContents que começou/parou de emitir áudio; aqui
@@ -2009,10 +2025,26 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     tier = 'flash';
                   }
                   const tierIcon = tier === 'local' ? '🏠 local' : tier === 'pro' ? '🧠 thinking deeper' : '⚡ flash';
-                  // Never send raw screenshot — OCR text is already in the payload
                   console.log(`[Agent] step ${step + 1} → aiAction (tier=${tier}, ocrUsed=${!!ocrText})`);
-                  const result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, undefined, tier));
+                  // One actionId per step: on Stop the main process aborts the in-flight
+                  // request. Without it the late result was dropped here while the GPU
+                  // carried on generating.
+                  const actionId = `a-${Date.now().toString(36)}-s${step}`;
+                  const onAbortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
+                  if (signal) signal.addEventListener('abort', onAbortStep, { once: true });
+                  // The raw screenshot only travels with the vision opt-in; the main
+                  // process still applies the capability and size gates. Without the
+                  // opt-in it is text only (DOM + OCR), exactly as before.
+                  const shotForModel = (tier === 'local' && store.localSettings.vision === true) ? screenshot : undefined;
+                  let result: any;
+                  try {
+                    result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
+                  } finally {
+                    if (signal) signal.removeEventListener('abort', onAbortStep);
+                  }
                   throwIfCancelled();
+                  // Cancellation confirmed by main: a clean stop, not a task failure.
+                  if (result?.error && /CANCELLED|TASK_CANCELLED/.test(String(result.error))) throw new Error('TASK_CANCELLED_BY_USER');
                   console.log(`[Agent] step ${step + 1} ← result:`, result?.error || `action=${result?.action?.type} engine=${result?._engine}`);
                   if (result?._engine) {
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
@@ -2154,16 +2186,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (action.type === 'done') {
                     // Robustness: a malformed model response is parsed into a sentinel 'done'.
                     // Don't kill the whole task on one bad output — re-prompt a few times.
-                    if (/Invalid or missing action|did not return valid structured JSON/i.test(action.reason) && invalidActionRetries < 3) {
+                    if (/Invalid or missing action|Invalid action from model|did not return valid structured JSON/i.test(action.reason) && invalidActionRetries < 3) {
                       invalidActionRetries++;
-                      history += '\nFORMAT ERROR: Your previous reply was not a valid action. Reply with ONE JSON object exactly: keys "evaluation", "thought", "action" (a tool name string) plus that tool\'s flat params. Try again now.';
+                      // The specific cause ("click_ref needs an integer ref") teaches far
+                      // more than "was not valid" - models usually get it right next try.
+                      history += `\nFORMAT ERROR: ${action.reason.slice(0, 300)} Reply with ONE JSON object exactly: keys "evaluation", "thought", "action" (a tool name string) plus that tool's flat params. Try again now.`;
                       onProgress({ kind: 'status', message: `Malformed model response — retrying (${invalidActionRetries}/3)` });
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
                     // Retries esgotados num erro de JSON: troca a mensagem críptica por
                     // orientação. No grátis (sem chave), empurra pra DeepSeek pro agente.
-                    if (/Invalid or missing action|did not return valid structured JSON/i.test(action.reason)) {
+                    if (/Invalid or missing action|Invalid action from model|did not return valid structured JSON/i.test(action.reason)) {
                       action.reason = (!store.aiSettings.apiKey && !store.localSettings.enabled)
                         ? 'The free model struggled with this multi-step task. For the full agent, add a DeepSeek key in settings (cheap) — the free tier is best for chat and image generation.'
                         : 'The model kept returning an invalid response for this task. Try rephrasing it, or run it again.';
@@ -3596,7 +3630,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               await store.setLocalSettings(ls);
               await window.electronAPI?.setLocalWarmup?.(!!ls.warmup);
               if (ls.enabled) {
-                await window.electronAPI?.setLocalProvider?.(ls.provider, ls.authKey ?? '', ls.baseUrl, ls.model);
+                await window.electronAPI?.setLocalProvider?.(ls.provider, ls.authKey ?? '', ls.baseUrl, ls.model, localOptsForMain(ls));
               }
             }}
             onSwitchToCloud={() => {

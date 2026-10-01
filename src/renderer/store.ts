@@ -43,6 +43,12 @@ export interface LocalSettings {
   model: string;             // modelo selecionado (ex.: qwen3:8b ou unsloth/Qwen3.6-35B-A3B-GGUF:NOTHINK)
   authKey?: string;          // chave OPCIONAL p/ servidores compatíveis que exigem auth (≠ roteamento local)
   warmup?: boolean;          // pré-aquecer o modelo selecionado (opt-in; llama.cpp gerencia a VRAM)
+  // ── Per-endpoint tuning (all optional; empty = current behaviour) ──
+  contextMode?: 'auto' | 'custom';  // 'auto' detects the real window from the server
+  contextTokens?: number;           // custom window, when contextMode === 'custom'
+  maxOutputTokens?: number;         // reply budget, reasoning tokens included
+  ollamaNumCtx?: 'auto' | number;   // Ollama server-side allocation; empty = 16384
+  vision?: boolean;                 // send screenshots (opt-in, vision models only)
 }
 
 // Encadeia as gravações do aiSettings no disco: garante ordem (o último Salvar é a

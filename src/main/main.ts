@@ -14,7 +14,14 @@ import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 // Provado por bissecção: mesmo fetch, mesmo endpoint — global passa, cross-fetch falha.
 import fs from 'fs';
 import path from 'path';
-import { AIEngine, AIProvider, setEngineLang } from './ai-engine';
+import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
+import {
+  normalizeBaseUrl as normalizeLocalBaseUrl,
+  discoverLocalModels,
+  detectRuntimeContext,
+  testLocalConnection,
+  type LocalProvider,
+} from './local-providers';
 import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
@@ -1126,14 +1133,14 @@ function setupIPC(): void {
   // Local (GPU) model configuration — backend local = Ollama (nativo) OU OpenAI-compatible
   // (llama.cpp/LM Studio/vLLM). isLocal=true explicita o modo local: a apiKey vira auth
   // OPCIONAL, e NUNCA um marcador fabricado ('local') que virava um 'Bearer local' na chamada.
-  ipcMain.handle('ai:set-local-provider', async (_event, providerIn: string, apiKey: string, baseUrl?: string, modelName?: string) => {
+  ipcMain.handle('ai:set-local-provider', async (_event, providerIn: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: LocalEndpointOpts) => {
     // A UI usa LocalProvider ('ollama' | 'openai-compatible'); o engine fala AIProvider
     // ('openai'). Normaliza aqui (ponto único) pra um 'openai-compatible' nunca vazar pro
     // switch do AIEngine (que não tem esse case). isLocal=true faz 'openai' virar o backend
     // local compatível, não a api.openai.com.
     const provider: AIProvider = providerIn === 'openai-compatible' ? 'openai' : (providerIn as AIProvider);
     const prevLocal = localEngine;
-    localEngine = new AIEngine(provider, apiKey || '', baseUrl, modelName, undefined, true);
+    localEngine = new AIEngine(provider, apiKey || '', baseUrl, modelName, undefined, true, opts);
     localEngine.adoptHistoriesFrom(prevLocal);   // salvar Config não apaga a conversa local
     localPageAgent = new PageAgent(localEngine);
     console.log(`[HybridRouter] Local engine set: ${provider} (${providerIn}) model=${modelName || 'default'} @ ${localEngine.getBaseUrl()}`);
@@ -1148,6 +1155,66 @@ function setupIPC(): void {
     localWarmupOn = !!on;
     try { localEngine?.setLocalWarmup(localWarmupOn); } catch {}
     return !!on;
+  });
+
+  // ── Local endpoint discovery / context / probes ─────────────────────────────
+  // These only READ: nothing here loads, unloads or warms a model. llama.cpp's /props
+  // gets autoload=false deliberately - the router autoloads on metadata requests by
+  // default, and listing models must never touch anyone's VRAM.
+  const localTransportOf = (p?: string): LocalProvider =>
+    p === 'openai-compatible' ? 'openai-compatible' : 'ollama';
+  ipcMain.handle('local:discover', async (_e, _provider: string, baseUrl?: string, authKey?: string) => {
+    try {
+      const d = await discoverLocalModels(normalizeLocalBaseUrl(baseUrl), authKey, 8000);
+      return { ok: d.ok, models: d.models, error: d.error };
+    } catch (e: any) { return { ok: false, models: [], error: String(e?.message ?? e) }; }
+  });
+  ipcMain.handle('local:context', async (_e, provider: string, baseUrl?: string, model?: string, authKey?: string) => {
+    try {
+      const base = normalizeLocalBaseUrl(baseUrl);
+      const rc = await detectRuntimeContext(localTransportOf(provider), base, model || '', authKey, 8000);
+      if (rc.tokens) return { ok: true, tokens: rc.tokens, source: rc.source };
+      // No runtime allocation (model unloaded, or a server with no /props | /api/ps):
+      // discovery still knows the configured size. Better than reporting "unknown".
+      const d = await discoverLocalModels(base, authKey, 8000);
+      const info = d.models.find(m => m.id.toLowerCase() === (model || '').toLowerCase());
+      if (info?.contextTokens) return { ok: true, tokens: info.contextTokens, source: info.contextSource ?? 'configured' };
+      return { ok: false, source: 'unknown' };
+    } catch (e: any) { return { ok: false, source: 'unknown', error: String(e?.message ?? e) }; }
+  });
+  ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: string) => {
+    try {
+      return await testLocalConnection(normalizeLocalBaseUrl(baseUrl), authKey);
+    } catch (e: any) { return { ok: false, reachable: false, modelsFound: 0, error: String(e?.message ?? e) }; }
+  });
+  // The only place that runs real inference - and ONLY on a button click, capped at 5
+  // tokens. Uses the global fetch (see the cross-fetch note at the top of this file).
+  ipcMain.handle('local:test-model', async (_e, provider: string, baseUrl?: string, model?: string, authKey?: string) => {
+    const base = normalizeLocalBaseUrl(baseUrl);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 120000);
+    const t0 = Date.now();
+    try {
+      if (localTransportOf(provider) === 'openai-compatible') {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (authKey?.trim()) headers.Authorization = `Bearer ${authKey.trim()}`;
+        const r = await fetch(`${base}/v1/chat/completions`, {
+          method: 'POST', headers, signal: ctrl.signal as any,
+          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with exactly: ok' }], max_tokens: 5 }),
+        });
+        if (!r.ok) return { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
+        const data: any = await r.json();
+        return { ok: true, ms: Date.now() - t0, reply: String(data?.choices?.[0]?.message?.content ?? '').slice(0, 200) };
+      }
+      const r = await fetch(`${base}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal as any,
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with exactly: ok' }], stream: false }),
+      });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
+      const data: any = await r.json();
+      return { ok: true, ms: Date.now() - t0, reply: String(data?.message?.content ?? '').slice(0, 200) };
+    } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
+    finally { clearTimeout(timer); }
   });
 
   // Espelha o liga/desliga do modo IA Local (pros trabalhos em background respeitarem).
@@ -1214,7 +1281,15 @@ function setupIPC(): void {
   });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine
-  ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro') => {
+  // Agent Stop: the renderer sends an actionId per step and calls ai:action-cancel on
+  // Stop. Before, the late result was merely discarded in the renderer - the inference
+  // kept the GPU busy until it finished on its own.
+  const actionAborts = new Map<string, AbortController>();
+  ipcMain.handle('ai:action-cancel', (_e, actionId: string) => {
+    try { actionAborts.get(actionId)?.abort(); } catch {}
+    return true;
+  });
+  ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
       return {
         thought: 'E2E mock: confirming the current browser state.',
@@ -1225,10 +1300,18 @@ function setupIPC(): void {
       };
     }
     const resolvedTier = tier ?? 'pro';
+    const ac = actionId ? new AbortController() : undefined;
+    if (actionId && ac) {
+      actionAborts.set(actionId, ac);
+      // Safety cap: a renderer that dies without cancelling leaves no orphan entries.
+      setTimeout(() => { if (actionAborts.get(actionId) === ac) actionAborts.delete(actionId); }, 360000).unref?.();
+    }
+    try {
     // Route to local engine if requested AND local is configured
     if (resolvedTier === 'local' && localPageAgent) {
       try {
-        const result = await localPageAgent.executeCommand(command, pageContent, screenshot, 'flash');
+        const result = await localPageAgent.executeCommand(command, pageContent, screenshot, 'flash', ac?.signal);
+        if (ac?.signal.aborted) return { error: 'CANCELLED' };
         if (result.error) throw new Error(result.error);
         return { ...result, _engine: 'local' };
       } catch (err: any) {
@@ -1236,6 +1319,7 @@ function setupIPC(): void {
         // o conteúdo da página pro provedor de nuvem sem avisar, devolve um erro claro —
         // o modo local fica offline de verdade. (Trocar de provedor é escolha explícita do usuário.)
         const msg = err?.message ?? String(err);
+        if (/CANCELLED/.test(msg) || ac?.signal.aborted) return { error: 'CANCELLED' };
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
         // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
         // devagar) manda consertar o que não está quebrado — e esconde o que está.
@@ -1250,10 +1334,16 @@ function setupIPC(): void {
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };
     try {
-      const result = await pageAgent.executeCommand(command, pageContent, screenshot, resolvedTier === 'local' ? 'flash' : resolvedTier);
+      const result = await pageAgent.executeCommand(command, pageContent, screenshot, resolvedTier === 'local' ? 'flash' : resolvedTier, ac?.signal);
+      if (ac?.signal.aborted) return { error: 'CANCELLED' };
       return { ...result, _engine: resolvedTier };
     } catch (err: any) {
-      return { error: err.message ?? String(err) };
+      const msg = err?.message ?? String(err);
+      if (/CANCELLED/.test(msg) || ac?.signal.aborted) return { error: 'CANCELLED' };
+      return { error: msg };
+    }
+    } finally {
+      if (actionId) actionAborts.delete(actionId);
     }
   });
 

@@ -1,9 +1,30 @@
 export type AIProvider = 'anthropic' | 'openai' | 'deepseek' | 'mistral' | 'nvidia' | 'ollama';
 
+import {
+  normalizeBaseUrl as _normalizeBaseUrl,
+  discoverLocalModels as _discoverLocalModels,
+  detectRuntimeContext as _detectRuntimeContext,
+  applyContextBudget as _applyContextBudget,
+  type LocalModelInfo as _LocalModelInfo,
+  type LocalProvider as _LocalTransport,
+} from './local-providers';
+
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   image?: string;
+}
+
+/** Per-endpoint local tuning (context / output / vision). Everything is optional:
+ *  with nothing configured the behaviour is exactly what it was before. */
+export interface LocalEndpointOpts {
+  contextMode?: 'auto' | 'custom';   // default 'auto' (detect from the server)
+  contextTokens?: number;            // used when contextMode === 'custom'
+  maxOutputTokens?: number;          // reply budget, reasoning tokens included
+  vision?: boolean;                  // opt-in screenshots; off by default
+  /** Ollama server-side allocation: undefined = 16384 (legacy), 'auto' omits
+   *  num_ctx so the server decides, a number = explicit allocation. */
+  ollamaNumCtx?: 'auto' | number;
 }
 
 // fetch com timeout via AbortController: o timeout ABORTA a request de verdade
@@ -51,11 +72,18 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
     try { onDelta(d); } catch {}
   };
   let emitted = 0;
-  // Emite o content acumulado, sem cortar no meio de um par surrogate (emoji) — evita o
-  // "�" no rabo do preview.
-  const emitUpTo = () => {
+  // Emit the accumulated content without splitting a surrogate pair (emoji) in half.
+  // The old guard tested target < full.length immediately after target = full.length:
+  // never true, so the pair was still cut in half. Now, when the text ends on a lead
+  // surrogate (0xD800-0xDBFF) with no pair, that char is held back until the next delta
+  // brings the trail. final=true releases whatever is left at end of stream - there the
+  // lead really is orphaned, and showing a broken char beats swallowing text.
+  const emitUpTo = (final = false) => {
     let target = full.length;
-    if (target > 0 && target < full.length) { const c = full.charCodeAt(target - 1); if (c >= 0xD800 && c <= 0xDBFF) target -= 1; }
+    if (!final && target > emitted) {
+      const c = full.charCodeAt(target - 1);
+      if (c >= 0xD800 && c <= 0xDBFF) target -= 1;
+    }
     if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
   };
   // Cancelamento (botão Parar): o listener de abort do fetch some quando os headers
@@ -83,7 +111,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
         buf = buf.slice(nl + 1);
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload === '[DONE]') { if (thinkOpen) flushThink(); return full; }
+        if (payload === '[DONE]') { emitUpTo(true); if (thinkOpen) flushThink(); return full; }
         try {
           const j = JSON.parse(payload);
           const dl = j.choices?.[0]?.delta;
@@ -106,6 +134,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
     try { reader.releaseLock?.(); } catch {}
   }
   if (signal?.aborted) throw new Error('CANCELLED');   // reader.cancel() resolve done → garante o throw
+  emitUpTo(true);   // stream over: release a held lead surrogate, if any
   if (thinkOpen) flushThink();   // fecha o bloco de raciocínio que ainda estava aberto
   return full;
 }
@@ -122,7 +151,19 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
   let buf = '';
   let full = '';
   let thinkOpen = false;
-  const emit = (d: string) => { if (d) { full += d; try { onDelta(d); } catch {} } };
+  // Same surrogate-pair guard as readSseStream: an emoji can straddle two tokens, and
+  // JSON.parse('"\\ud83d"') yields a lone lead - valid in JS, broken on screen.
+  let pendingLead = '';
+  const safeEmit = (d: string) => {
+    let out = pendingLead + d;
+    pendingLead = '';
+    const last = out.charCodeAt(out.length - 1);
+    if (out.length > 0 && last >= 0xD800 && last <= 0xDBFF) { pendingLead = out.slice(-1); out = out.slice(0, -1); }
+    if (out) { try { onDelta(out); } catch {} }
+  };
+  // End of stream: whatever is still held really is an orphan lead - show it.
+  const flushLead = () => { if (pendingLead) { const q = pendingLead; pendingLead = ''; try { onDelta(q); } catch {} } };
+  const emit = (d: string) => { if (d) { full += d; safeEmit(d); } };
   // Cancelamento (Parar): cancela o reader na mão — senão o Ollama segue gerando na GPU
   // até o fim mesmo depois do Stop, e o turno-fantasma vai pro histórico.
   const onAbort = () => { try { reader.cancel(); } catch {} };
@@ -151,7 +192,7 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
           if (th) { if (!thinkOpen) { emit('<think>'); thinkOpen = true; } emit(th); }
           const d = j.message?.content ?? '';
           if (d) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } emit(d); }
-          if (j.done === true) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } return full; }
+          if (j.done === true) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } flushLead(); return full; }
         } catch { /* linha parcial — ignora */ }
       }
     }
@@ -165,6 +206,7 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
   }
   if (signal?.aborted) throw new Error('CANCELLED');
   if (thinkOpen) emit('</think>');
+  flushLead();
   return full;
 }
 
@@ -460,6 +502,13 @@ export class AIEngine {
   private isLocal: boolean;     // modo IA Local (nunca cai na nuvem; roteia pro endpoint configurado)
   private localWarmup = false;  // pré-aquecer o modelo local é OPCIONAL (opt-in) — o llama.cpp gerencia a VRAM
   private resolvedOllamaModel: string | null = null;  // modelo realmente usado (auto-detect)
+  private localOpts: LocalEndpointOpts = {};
+  // Discovery (per baseUrl) and runtime context (per model), cached for 5min: without
+  // this EVERY agent step would repeat the same probes against the local server.
+  private localModelsCache: { at: number; models: _LocalModelInfo[] } | null = null;
+  private localModelsCacheBase = '';
+  private runtimeCtxCache = new Map<string, { at: number; tokens?: number; source: string }>();
+  private static readonly LOCAL_CACHE_TTL_MS = 5 * 60 * 1000;
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
@@ -467,7 +516,7 @@ export class AIEngine {
   // local=false ⇒ provedor de NUVEM (a chave é obrigatória p/ auth). local=true ⇒ backend
   // LOCAL (Ollama ou OpenAI-compatible) — a apiKey vira auth OPCIONAL, NUNCA um marcador
   // de modo (o roteamento local é explícito por isLocal, não por chave fabricada 'local').
-  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string, cloudModel?: string, local = false) {
+  constructor(provider: AIProvider, apiKey: string, baseUrl?: string, ollamaModel?: string, cloudModel?: string, local = false, localOpts?: LocalEndpointOpts) {
     this.provider = provider;
     // Defensive trim: pasted API keys often carry a trailing space/newline,
     // which makes DeepSeek/OpenAI reject the "Bearer <key>" header with 401.
@@ -482,6 +531,86 @@ export class AIEngine {
     // "/v1" ("http://host:8080/v1") e preserva prefixos de proxy (".../proxy/v1"). O código
     // anexa "/v1/..." na chamada, então NÃO podemos deixar um "/v1" duplicado no final.
     if (provider === 'openai') this.baseUrl = this.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '');
+    this.localOpts = { ...(localOpts || {}) };
+  }
+
+  getLocalOpts(): LocalEndpointOpts { return { ...this.localOpts }; }
+
+  /** Which discovery transport to use: native Ollama (/api/*) or /v1/* only. */
+  private localTransport(): _LocalTransport {
+    return this.provider === 'ollama' ? 'ollama' : 'openai-compatible';
+  }
+
+  /** Models the server advertises (5min cache). Feeds the UI and the vision gate.
+   *  Never loads or unloads a model as a side effect. */
+  async listLocalModels(force = false): Promise<_LocalModelInfo[]> {
+    const base = _normalizeBaseUrl(this.baseUrl);
+    const fresh = this.localModelsCache && !force
+      && this.localModelsCacheBase === base
+      && Date.now() - this.localModelsCache.at < AIEngine.LOCAL_CACHE_TTL_MS;
+    if (fresh) return this.localModelsCache!.models;
+    const d = await _discoverLocalModels(base, this.apiKey || undefined);
+    this.localModelsCache = { at: Date.now(), models: d.models };
+    this.localModelsCacheBase = base;
+    return d.models;
+  }
+
+  /** Vision as ADVERTISED for the selected model - 'unknown' when the server is silent. */
+  async localVisionFor(modelId: string): Promise<'supported' | 'unsupported' | 'unknown'> {
+    try {
+      const models = await this.listLocalModels();
+      const hit = models.find(m => m.id.toLowerCase() === (modelId || '').toLowerCase());
+      return hit?.vision ?? 'unknown';
+    } catch { return 'unknown'; }
+  }
+
+  /** The local endpoint's real context window, so the observation can be fitted to it.
+   *  Order: user's custom value -> runtime allocation -> size advertised by discovery
+   *  -> 16k as a last resort. The negative result is cached TOO (without that the probe
+   *  repeated on every agent step, failing identically each time). */
+  async resolveContextBudget(): Promise<{ totalTokens: number; source: string }> {
+    const FALLBACK = 16384;
+    if ((this.localOpts.contextMode ?? 'auto') === 'custom' && (this.localOpts.contextTokens || 0) > 0) {
+      return { totalTokens: this.localOpts.contextTokens!, source: 'configured' };
+    }
+    const modelId = this.provider === 'ollama' ? (this.resolvedOllamaModel || this.ollamaModel) : this.ollamaModel;
+    const ck = `${this.baseUrl}::${modelId}`;
+    const hit = this.runtimeCtxCache.get(ck);
+    if (hit && Date.now() - hit.at < AIEngine.LOCAL_CACHE_TTL_MS) {
+      return { totalTokens: hit.tokens ?? FALLBACK, source: hit.source };
+    }
+    try {
+      const rc = await _detectRuntimeContext(this.localTransport(), this.baseUrl, modelId, this.apiKey || undefined);
+      if (rc.tokens) {
+        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: rc.tokens, source: rc.source });
+        return { totalTokens: rc.tokens, source: rc.source };
+      }
+    } catch { /* runtime unknown - fall through to what discovery already knows */ }
+    // Model unloaded (llama.cpp's /props answers 400) or a server with no /api/ps:
+    // discovery usually knows the number anyway (details.context_length on Ollama,
+    // --ctx-size in the router's argv). That is "configured", not runtime - but it beats
+    // assuming 16k for a 128k model by a mile.
+    try {
+      const info = (await this.listLocalModels()).find(m => m.id.toLowerCase() === (modelId || '').toLowerCase());
+      if (info?.contextTokens && info.contextTokens > 0) {
+        const src = info.contextSource ?? 'configured';
+        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: info.contextTokens, source: src });
+        return { totalTokens: info.contextTokens, source: src };
+      }
+    } catch { /* discovery unavailable - fall back below */ }
+    this.runtimeCtxCache.set(ck, { at: Date.now(), source: 'fallback' });
+    return { totalTokens: FALLBACK, source: 'fallback' };
+  }
+
+  /** A screenshot only travels with an explicit opt-in AND a capable model.
+   *  "unsupported" is a known NO (the server said so); "unknown" is merely missing
+   *  metadata - plenty of OpenAI-compatible servers advertise no modalities at all, and
+   *  refusing there left the "send screenshots" box with no effect whatsoever. */
+  private async shouldAttachVision(screenshot?: string): Promise<boolean> {
+    if (!screenshot || !this.isLocal) return false;
+    if (this.localOpts.vision !== true) return false;
+    if (screenshot.length > 4_000_000) return false;   // dataURL gigante: lento e estoura VRAM fraca
+    try { return (await this.localVisionFor(this.ollamaModel)) !== 'unsupported'; } catch { return false; }
   }
 
   // Endpoint ativo (pro pré-aquecimento de conexão no boot/troca de provedor).
@@ -598,22 +727,48 @@ export class AIEngine {
     return text;
   }
 
-  async generateAction(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro'): Promise<{ text: string; usage?: any; latencyMs: number; model: string }> {
-    const contextNote = observedState
-      ? `\n\n[Observed browser state and history]\n${observedState.slice(0, 12000)}`
+  async generateAction(command: string, observedState?: string, screenshot?: string, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean }> {
+    // Context budget: LOCAL path only, where the window is small and knowable. Fits the
+    // observation to the real context (trims page text first, then history, never the
+    // element list). Cloud keeps the fixed 12k slice it always had.
+    let state = observedState ? observedState.slice(0, 12000) : '';
+    let contextTokens: number | undefined;
+    let contextSource: string | undefined;
+    let contextTrimmed = false;
+    if (this.isLocal && state) {
+      try {
+        const cb = await this.resolveContextBudget();
+        contextTokens = cb.totalTokens;
+        contextSource = cb.source;
+        const fitted = _applyContextBudget(state, {
+          totalTokens: cb.totalTokens,
+          maxOutputTokens: this.localOpts.maxOutputTokens ?? 4096,
+        });
+        state = fitted.text;
+        contextTrimmed = fitted.trimmed;
+      } catch { /* budgeting failed -> carry on with the legacy slice */ }
+    }
+    const contextNote = state
+      ? `\n\n[Observed browser state and history]\n${state}`
       : '';
-    const visionNote = screenshot
+    // The image is attached only with opt-in + a capable model. Without that we must NOT
+    // claim a screenshot is attached: the dead sentence made models hallucinate
+    // coordinates from a capture that was never sent ("click_at per the screenshot").
+    const willAttach = await this.shouldAttachVision(screenshot);
+    const visionNote = willAttach
       ? '\n\n[A screenshot of the current page is attached. Use it with the observed interactive elements.]'
       : '';
 
     const t0 = Date.now();
+    if (signal?.aborted) throw new Error('CANCELLED');
     const reply = await this.callLLM([
-      { role: 'user', content: command + contextNote + visionNote, image: screenshot },
-    ], true, tier);
+      { role: 'user', content: command + contextNote + visionNote, image: willAttach ? screenshot : undefined },
+    ], true, tier, undefined, signal);
+    const meta = { contextTokens, contextSource, contextTrimmed };
     if (typeof reply === 'string') {
-      return { text: reply, latencyMs: Date.now() - t0, model: this.provider };
+      return { text: reply, latencyMs: Date.now() - t0, model: this.provider, ...meta };
     }
-    return reply;
+    return { ...reply, ...meta };
   }
 
   private async callLLM(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
@@ -635,7 +790,9 @@ export class AIEngine {
       // NVIDIA NIM is OpenAI-compatible too; same text-first treatment
       case 'nvidia': return this.callNim(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
       // Strip screenshots from local model calls — saves VRAM and avoids hangs
-      case 'ollama': return this.callOllama(messages.map(m => ({ ...m, image: undefined })), isAgentMode, onDelta, signal);
+      // The screenshot strip moved out of here: generateAction decides (opt-in + model
+      // capability), and without the opt-in no image ever reaches this point.
+      case 'ollama': return this.callOllama(messages, isAgentMode, onDelta, signal);
     }
   }
 
@@ -1259,7 +1416,15 @@ export class AIEngine {
         // 16k: cabe o DOM + texto da página + histórico E os system prompts maiores dos
         // modelos novos/de raciocínio (o de 8k estourava por poucos tokens num "olá" simples,
         // e o pensamento do modelo também consome contexto durante a geração).
-        num_ctx: 16384,
+        //
+        // That 16k stays the default for existing setups. 'auto' OMITS num_ctx so the
+        // server keeps whatever it allocated (pinning 16k here would SHRINK a larger
+        // allocation), and an explicit number requests exactly that.
+        ...(this.localOpts.ollamaNumCtx === 'auto'
+          ? {}
+          : { num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
+              ? this.localOpts.ollamaNumCtx
+              : 16384 }),
         temperature: 0,      // deterministic JSON
       },
     };
