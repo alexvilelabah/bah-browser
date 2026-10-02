@@ -1097,7 +1097,11 @@ export class AIEngine {
     // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
     let data: any = {};
     try {
-      const parsed = await this.readJsonWithTimeout(res, 60000, signal);
+      // Servers that send headers early keep generating while we read the body, so a local
+      // model gets the same budget as the request itself (120s warm / 300s cold). A flat 60s
+      // cut off long answers (e.g. a 75-track JSON) that the header timeout would have allowed.
+      const bodyTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 60_000;
+      const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
       data = parsed.data;
     } catch (e: any) {
       if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;

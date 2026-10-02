@@ -1375,7 +1375,9 @@ function setupIPC(): void {
         const start = localBackendIsCompat()
           ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
           : 'start Ollama and select a model in settings.';
-        const tail = /too slow|timeout/i.test(msg)
+        // "timed out" too: the body-read timeout says "body read timed out", which fell through
+        // to "start your server" while the server was up and simply generating slowly.
+        const tail = /too slow|timeout|timed out/i.test(msg)
           ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
           : `Local mode stays offline — ${start}`;
         return { error: `Local AI failed: ${msg}. ${tail}` };

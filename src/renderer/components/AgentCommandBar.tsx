@@ -143,7 +143,7 @@ function hintForError(text: string): string | null {
   if (/confirm you are human|are human|captcha|rob[oô]|verifica/.test(s)) return t('hint.captcha');
   // ANTES do padrão "ollama" genérico: modelo lento e Ollama desligado são problemas
   // opostos com conselhos opostos, e a ordem antiga pescava os dois na mesma dica.
-  if (/too slow|request timeout/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
+  if (/too slow|request timeout|timed out/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
   // JSON inválido vem ANTES do padrão "ollama": TODA falha local carrega o prefixo
   // "Local AI (Ollama) failed: …", então deixar o /ollama/ decidir fazia "o modelo não
   // devolveu JSON válido" virar "abra o app do Ollama" — mandando ligar o que já estava
