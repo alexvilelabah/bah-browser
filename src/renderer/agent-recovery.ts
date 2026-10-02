@@ -320,7 +320,20 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   }
 
   // ── 9. Caminho sem saída (app, extensão, SMS) ────────────────────
-  if (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText)) {
+  // Interstitial only: almost every big site carries an "Install App" / "Get the app" link
+  // in its header (Spotify, Reddit, LinkedIn…), and treating that as a dead end made the
+  // agent go back from pages that had loaded the content just fine.
+  if (interstitial && (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText))) {
+    // The user named this site: going back silently drops them on the previous page (often
+    // Google) with the task unfinished. Ask instead, as captcha and login already do.
+    if (input.commandRequiresThisSite) {
+      return {
+        decision: 'ask_user',
+        reason: `${domain} is asking for its app, an extension or SMS/2FA before showing the content. Handle it in this tab, then click Continue.`,
+        blocker: 'dead_end',
+        maxRetries: 0,
+      };
+    }
     return {
       decision: 'go_back',
       reason: `Dead end: the page asks for app/extension/SMS/2FA. Going back.`,
