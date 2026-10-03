@@ -16,7 +16,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
-import { clampWindow, outputBudget as _outputBudget } from './local-providers';
+import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx } from './local-providers';
 import { readSseStream, readOllamaNdjson } from './stream-readers';
 import {
   NO_IMAGE_PROVIDERS,
@@ -456,7 +456,9 @@ export class AIEngine {
     const ck = `${this.baseUrl}::${modelId}`;
     // What we ask the server to allocate. 'auto' sends nothing (server default), so it can
     // neither raise nor lower the window.
-    const requested = typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0 ? this.localOpts.ollamaNumCtx : undefined;
+    const requested = (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
+      ? this.localOpts.ollamaNumCtx
+      : this.numCtxSent.get(modelId);
     const hit = this.runtimeCtxCache.get(ck);
     if (hit && Date.now() - hit.at < AIEngine.LOCAL_CACHE_TTL_MS) {
       const w = clampWindow({ runtime: hit.source === 'runtime' ? hit.tokens : undefined, advertised: hit.tokens, requested, fallback: FALLBACK });
@@ -864,6 +866,9 @@ export class AIEngine {
   private thinkingKnobRejected = new Set<string>();
   private slowThinking = new Set<string>();
   private stepTokens = new Map<string, number>();
+  /** Measured prompt cost and the num_ctx already asked for (never shrunk). */
+  private promptTokens = new Map<string, number>();
+  private numCtxSent = new Map<string, number>();
 
   /** The app marks a stuck run so thinking comes back on (C15 wires the caller). */
   noteStuck(model: string): void {
@@ -1109,6 +1114,7 @@ export class AIEngine {
         const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
         data = parsed.data;
         if (data?.usage?.completion_tokens) this.stepTokens.set(key, data.usage.completion_tokens);
+        if (data?.usage?.prompt_tokens) this.promptTokens.set(key, data.usage.prompt_tokens);
       } catch (e: any) {
         if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
         // THE original killer: a body timeout used to be final — the retry loop had already
@@ -1582,14 +1588,20 @@ export class AIEngine {
         // modelos novos/de raciocínio (o de 8k estourava por poucos tokens num "olá" simples,
         // e o pensamento do modelo também consome contexto durante a geração).
         //
-        // That 16k stays the default for existing setups. 'auto' OMITS num_ctx so the
-        // server keeps whatever it allocated (pinning 16k here would SHRINK a larger
-        // allocation), and an explicit number requests exactly that.
-        ...(this.localOpts.ollamaNumCtx === 'auto'
-          ? {}
-          : { num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
-              ? this.localOpts.ollamaNumCtx
-              : 16384 }),
+        // Explicit number: request exactly that. 'auto' no longer sends nothing - it asks
+        // for what the measured prompt plus the output budget needs (16k floor, 32k ceil),
+        // because an unknown window is what overflowed the server.
+        num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
+          ? this.localOpts.ollamaNumCtx
+          : (() => {
+              const n = ollamaAutoNumCtx({
+                measuredPromptTokens: this.promptTokens.get(sKey),
+                outputTokens: this.outputBudget(isAgentMode ? 16384 : 4096),
+                sent: this.numCtxSent.get(sKey),
+              });
+              this.numCtxSent.set(sKey, n);
+              return n;
+            })(),
         ...(isReasoning ? {} : { temperature: 0 }),   // no temperature for the reasoning pass
       },
     };
@@ -1689,6 +1701,7 @@ export class AIEngine {
           const text = await readOllamaNdjson(res, thinkWrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics);
           this.emitMetrics('answer', text.length, t0, !!metrics.usage?.eval_count, { completion_tokens: metrics.usage?.eval_count });
           if (metrics.usage?.eval_count) this.stepTokens.set(sKey, metrics.usage.eval_count);
+          if (metrics.usage?.prompt_tokens) this.promptTokens.set(sKey, metrics.usage.prompt_tokens);
           if ((thinkingOff || this.isThinkingThrottled(model)) && (metrics.usage?.thinking_count ?? 0) > 0) {
             console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.thinking_count} thinking tokens)`);
           }
@@ -1732,6 +1745,7 @@ export class AIEngine {
         throw new LocalRequestError('BAD_JSON', `Ollama body read failed: ${e?.message ?? e}`, true);
       }
       if (data?.eval_count) this.stepTokens.set(sKey, data.eval_count);
+      if (data?.prompt_eval_count) this.promptTokens.set(sKey, data.prompt_eval_count);
       const content = data?.message?.content ?? '';
       if (!content) {
         console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);

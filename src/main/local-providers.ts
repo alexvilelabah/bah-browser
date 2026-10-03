@@ -368,6 +368,22 @@ export function outputBudget(o: { isLocal: boolean; userMax?: number; cfgMax?: n
   return Math.min(cap, Math.max(o.cfgMax ?? 0, user || cap));
 }
 
+/** num_ctx for Ollama 'auto'. Sending nothing leaves the window unknown to both sides; this
+ *  asks for what the measured prompt plus the output budget actually needs, between 16384 and
+ *  32768, and never shrinks (lowering num_ctx reallocates - and reloads - the model). */
+export function ollamaAutoNumCtx(o: {
+  measuredPromptTokens?: number; outputTokens: number; sent?: number; floor?: number; ceil?: number;
+}): number {
+  const floor = o.floor ?? 16384, ceil = o.ceil ?? 32768;
+  // Nothing measured yet: ask for the floor, do not guess a bigger window from the budget.
+  if (!Number.isFinite(o.measuredPromptTokens ?? NaN) || (o.measuredPromptTokens ?? 0) <= 0) {
+    return Math.max(o.sent ?? 0, floor);
+  }
+  const need = (o.measuredPromptTokens ?? 0) + o.outputTokens + 256;
+  const want = Math.min(ceil, Math.max(floor, need));
+  return Math.max(o.sent ?? 0, want);
+}
+
 /** Fit an assembled agent observation into budget by trimming the variable
  *  sections first (page text, then history), NEVER the interactive-element
  *  list. Returns the fitted text + whether anything was trimmed. */

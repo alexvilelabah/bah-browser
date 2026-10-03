@@ -2,7 +2,7 @@
 // reserve, images — or the observation is fitted to a window that does not exist.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { applyContextBudget, estimateTokens, outputBudget } from '../../src/main/local-providers.ts';
+import { applyContextBudget, estimateTokens, outputBudget, ollamaAutoNumCtx } from '../../src/main/local-providers.ts';
 
 const obs = (n: number) => `PAGE TEXT:\n${'x'.repeat(n)}\nRECENT HISTORY:\nold step\n`;
 
@@ -37,4 +37,15 @@ test('the computed output budget is what gets sent', () => {
   assert.equal(outputBudget({ isLocal: true, userMax: 8192, cfgMax: 16384 }), 16384, 'recovery headroom outranks the user setting');
   assert.equal(outputBudget({ isLocal: true, userMax: 32768 }), 16384, 'hard cap');
   assert.equal(outputBudget({ isLocal: true, cfgMax: 4096 }), 16384);
+});
+
+test('auto num_ctx is measured, never shrunk, and bounded', () => {
+  // No measurement yet: the 16k floor.
+  assert.equal(ollamaAutoNumCtx({ outputTokens: 16384 }), 16384);
+  // A measured prompt that does not fit escalates once, up to the ceiling.
+  assert.equal(ollamaAutoNumCtx({ measuredPromptTokens: 20000, outputTokens: 16384, sent: 16384 }), 32768);
+  // Ceiling holds even when the need is absurd.
+  assert.equal(ollamaAutoNumCtx({ measuredPromptTokens: 200000, outputTokens: 16384, sent: 16384 }), 32768);
+  // Never shrinks: lowering num_ctx reallocates and reloads the model.
+  assert.equal(ollamaAutoNumCtx({ measuredPromptTokens: 1000, outputTokens: 512, sent: 32768 }), 32768);
 });
