@@ -488,6 +488,24 @@ export class AIEngine {
     return { totalTokens: FALLBACK, source: 'fallback' };
   }
 
+  /** One context knob, two transports. The custom window the user sets is BOTH the number
+   *  we budget with and the num_ctx we ask Ollama to allocate - they cannot disagree. */
+  private resolveNumCtx(sKey: string, isAgentMode: boolean): number {
+    const explicit = this.localOpts.ollamaNumCtx;
+    const custom = (this.localOpts.contextMode ?? 'auto') === 'custom' ? (this.localOpts.contextTokens ?? 0) : 0;
+    const n = (typeof explicit === 'number' && explicit > 0)
+      ? explicit
+      : custom > 0
+        ? custom
+        : ollamaAutoNumCtx({
+          measuredPromptTokens: this.promptTokens.get(sKey),
+          outputTokens: this.outputBudget(isAgentMode ? 16384 : 4096),
+          sent: this.numCtxSent.get(sKey),
+        });
+    this.numCtxSent.set(sKey, n);
+    return n;
+  }
+
   private async recoverMaxTokens(key: string, previous: number): Promise<number> {
     // Cloud keeps its historic recovery number; local grows only as far as its window allows.
     if (!this.isLocal) return 16384;
@@ -1599,17 +1617,10 @@ export class AIEngine {
         // Explicit number: request exactly that. 'auto' no longer sends nothing - it asks
         // for what the measured prompt plus the output budget needs (16k floor, 32k ceil),
         // because an unknown window is what overflowed the server.
-        num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
-          ? this.localOpts.ollamaNumCtx
-          : (() => {
-              const n = ollamaAutoNumCtx({
-                measuredPromptTokens: this.promptTokens.get(sKey),
-                outputTokens: this.outputBudget(isAgentMode ? 16384 : 4096),
-                sent: this.numCtxSent.get(sKey),
-              });
-              this.numCtxSent.set(sKey, n);
-              return n;
-            })(),
+        // One context knob for both transports: an explicit number means exactly that; a
+        // custom window from the single knob is sent as num_ctx too (so the budget and the
+        // server can never disagree); 'auto' asks for what the measured prompt needs.
+        num_ctx: this.resolveNumCtx(sKey, isAgentMode),
         ...(isReasoning ? {} : { temperature: 0 }),   // no temperature for the reasoning pass
       },
     };

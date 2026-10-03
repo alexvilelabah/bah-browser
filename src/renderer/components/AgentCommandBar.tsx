@@ -1445,6 +1445,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     <button type="button" className="mm-link" onClick={detectLocalContext} disabled={localTesting || !localCfg.model}>{t('set.ctxDetect')}</button>
                     {ctxInfo ? <span> · {ctxInfo}</span> : null}
                   </div>
+                  <div className="mm-hint">{t('set.ctxMergedHint')}</div>
                   <label>
                     {t('set.maxOut')}
                     <input type="number" min={256} step={512} value={localCfg.maxOutputTokens || ''}
@@ -1452,23 +1453,6 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       placeholder="4096" />
                   </label>
                   <div className="mm-hint">{t('set.maxOutHint')}</div>
-                  {!isLocalCompat() && (
-                    <label>
-                      {t('set.ollamaNumCtx')}
-                      <select value={localCfg.ollamaNumCtx === 'auto' ? 'auto' : String(localCfg.ollamaNumCtx || '')}
-                        onChange={e => {
-                          const v = e.target.value;
-                          setLocalCfg(p => ({ ...p, ollamaNumCtx: v === 'auto' ? 'auto' : (v ? Number(v) : undefined) }));
-                        }}>
-                        <option value="">{t('set.ollamaNumCtxLegacy')}</option>
-                        <option value="auto">{t('set.ctxAuto')}</option>
-                        <option value="32768">32768</option>
-                        <option value="65536">65536</option>
-                        <option value="131072">131072</option>
-                        <option value="262144">262144</option>
-                      </select>
-                    </label>
-                  )}
                   <label>
                     {t('set.vision')}
                     <select value={resolveVisionMode(localCfg)}
