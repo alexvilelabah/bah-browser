@@ -2217,7 +2217,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (localHelpPauses < 2) {
                       localHelpPauses++;
                       await waitForManualHelp({
-                        kind: 'stuck',
+                        kind: 'local_unavailable',
                         reason: `${code}: ${result.error}`,
                         instruction: retryable
                           ? 'The local model did not answer. Start it (or check its context window), then press Continue — this step runs again. Press Stop to end the task.'
