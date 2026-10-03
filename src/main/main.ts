@@ -1446,10 +1446,10 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // um .gguf — tudo pela UI, sem terminal. Assim, IA nova = só digitar o nome (não
   // precisa atualizar o app). NÃO toca o caminho da API/nuvem.
   // Normaliza pra IPv4: no Windows `localhost` pode resolver pra IPv6 `::1`, mas o
-  // Ollama escuta só em `127.0.0.1` → conexão recusada. Forçar 127.0.0.1 elimina isso
-  // (cobre list/pull/delete de uma vez, sem migrar settings salvos do usuário).
-  const ollamaUrl = (b?: string) =>
-    (b || 'http://localhost:11434').replace(/\/$/, '').replace(/(\/\/)localhost(\b|:)/i, '$1127.0.0.1$2');
+  // Ollama escuta só em `127.0.0.1` → conexão recusada. Delega ao mesmo helper do
+  // resto do app para haver uma única regra (ele só reescreve `localhost` nu — um
+  // nome real como `localhost.local` é mDNS e precisa continuar intacto).
+  const ollamaUrl = (b?: string) => normalizeLocalBaseUrl(b || 'http://localhost:11434');
   ipcMain.handle('ollama:list', async (_e, baseUrl?: string) => {
     try {
       const r = await fetch(`${ollamaUrl(baseUrl)}/api/tags`, { signal: AbortSignal.timeout(4000) } as any);

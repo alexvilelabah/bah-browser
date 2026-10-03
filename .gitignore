@@ -52,6 +52,4 @@ PROGRESS.md
 CLEANUP-NOTE.md
 *.local.md
 NOTES-*.md
-tmp-*.cjs
-tmp-*.png
-tmp-*.js
+tmp-*

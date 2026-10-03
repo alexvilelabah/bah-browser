@@ -83,8 +83,9 @@ export function normalizeBaseUrl(raw: string | undefined | null): string {
   b = b.replace(/\/v1$/i, '');
   // Windows IPv6-localhost fix (same as the legacy ollamaUrl helper): Ollama
   // on Windows often listens on 127.0.0.1 only, while `localhost` may resolve
-  // to ::1. Apply narrowly — only a bare `localhost` host segment.
-  b = b.replace(/(\/\/)localhost(\b|:)/i, '$1127.0.0.1$2');
+  // to ::1. Only a bare `localhost` host: `localhost.local` is a real mDNS name
+  // and rewriting it produces the unresolvable `127.0.0.1.local`.
+  b = b.replace(/^(https?:\/\/)localhost(?=(:\d+)?(\/|$))/i, '$1127.0.0.1');
   return b;
 }
 
