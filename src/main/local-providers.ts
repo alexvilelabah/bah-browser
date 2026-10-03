@@ -41,23 +41,35 @@ export interface LocalDiscovery {
 export type LocalErrorCode =
   | 'CONNECTION_FAILED'
   | 'TIMEOUT'
+  | 'TIMEOUT_FIRST_CHUNK'   // server accepted the connection but never answered in time
+  | 'TIMEOUT_TOTAL'        // non-streaming: nothing to measure by, so the whole call is capped
+  | 'TIMEOUT_STALL'        // streaming: the answer started and then went silent
   | 'CANCELLED'
   | 'MODEL_NOT_FOUND'
   | 'UNSUITABLE_MODEL'
   | 'CONTEXT_OVERFLOW'
   | 'TRUNCATED'
+  | 'THINKING_BUDGET'      // reasoning ran long with no answer / was repeating itself
+  | 'INSTREAM_ERROR'       // HTTP 200, then an error payload inside the stream
+  | 'COMPUTE_ERROR'        // llama.cpp/Ollama failed to run the model (slot/OOM/unloaded)
+  | 'BAD_JSON'
+  | 'IMAGE_REJECTED'
   | 'AUTH_FAILED'
   | 'SERVER_ERROR'
+  | 'RATE_LIMIT'
   | 'STREAM_ERROR'
   | 'UNKNOWN';
 
 export class LocalRequestError extends Error {
   code: LocalErrorCode;
   retryable: boolean;
-  constructor(code: LocalErrorCode, message: string, retryable = false) {
+  /** Extra context for the log and the UI (attempt number, token counts, ...). */
+  detail?: Record<string, unknown>;
+  constructor(code: LocalErrorCode, message: string, retryable = false, detail?: Record<string, unknown>) {
     super(message);
     this.code = code;
     this.retryable = retryable;
+    this.detail = detail;
   }
 }
 

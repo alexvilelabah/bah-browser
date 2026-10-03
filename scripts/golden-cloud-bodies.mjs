@@ -1,28 +1,10 @@
-// Cloud request-body guard — proves the cloud provider request bodies in
-// src/main/ai-engine.ts never change while the local-AI work lands.
-//
-// Why this exists: every change in the local-AI reliability work is gated on
-// isLocal, and the rule is that cloud request bodies stay byte-identical. The
-// normal enforcement is to point the app at a fake server and diff the JSON on the
-// wire; that needs Electron, which this project's dev setup does not install. So we
-// lock the source that builds those bodies instead: same keys, same literals, same
-// insertion order (JSON.stringify emits keys in insertion order, so reordering IS a
-// byte change). No markers, no source clutter — each cloud provider's request is
-// located by its own function name.
-//
-// What it locks, per provider: the `const body` declaration (brace-matched) plus
-// every immediately following statement in that function that mutates `body`.
-//
-// What it does NOT lock: comments (stripped), whitespace, anything after the body is
-// assembled (transport, parsing, logging).
-//
-// It fails LOUDLY rather than silently passing: a missing function, a missing body
-// literal or an unbalanced brace is an error, never a skipped check.
-//
-// Run:  node scripts/golden-cloud-bodies.mjs          → check (exit 1 on drift)
-//       node scripts/golden-cloud-bodies.mjs --write   → regenerate the golden file
-//
-// Zero dependencies: node builtins only.
+// Locks the cloud request bodies in ai-engine.ts against tests/goldens/cloud-bodies.json,
+// so the local-AI work cannot silently change what cloud providers receive.
+// Bodies are located structurally by function name - no marker comments in the source.
+
+// Local-only knobs must never appear in a cloud body.
+//   node scripts/golden-cloud-bodies.mjs            -> check
+//   node scripts/golden-cloud-bodies.mjs --write    -> re-record (explicit decision only)
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';

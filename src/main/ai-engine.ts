@@ -5,9 +5,11 @@ import {
   discoverLocalModels as _discoverLocalModels,
   detectRuntimeContext as _detectRuntimeContext,
   applyContextBudget as _applyContextBudget,
+  LocalRequestError,
   type LocalModelInfo as _LocalModelInfo,
   type LocalProvider as _LocalTransport,
 } from './local-providers';
+import { fetchCancellable } from './cancellable-fetch';
 import {
   NO_IMAGE_PROVIDERS,
   RX_IMAGE_REJECTED,
@@ -1026,17 +1028,28 @@ export class AIEngine {
 
     let lastErr: any = null;
     let res: Response | null = null;
+    // LOCAL only: released once the body is consumed (see cancellable-fetch.ts).
+    let localSettle: (() => void) | undefined;
+    const release = () => { const s = localSettle; localSettle = undefined; try { s?.(); } catch {} };
     const t0 = Date.now();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Local frio: 300s (carregar GGUF grande). Local quente: 120s. Nuvem: 45s (como antes).
       const reqTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 45_000;
       try {
-        const candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, reqTimeoutMs, signal);
+        let candidate: Response;
+        if (this.isLocal) {
+          const cf = await fetchCancellable(endpoint, { method: 'POST', headers, body: bodyJson }, { firstChunkMs: reqTimeoutMs, signal, label: `local ${model}` });
+          candidate = cf.res;
+          localSettle = cf.settle;
+        } else {
+          candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, reqTimeoutMs, signal);
+        }
         // Retry 429/5xx transitórios — NÃO 4xx. "Compute error" no llama.cpp = modelo não
         // carregado / OOM: retry não ajuda, para já com mensagem clara.
         if (candidate.status === 429 || candidate.status >= 500) {
           let peek = '';
           try { peek = await candidate.text(); } catch {}
+          release();   // body consumed (or discarded): the socket is ours to free now
           if (this.isLocal && /compute error/i.test(peek)) {
             const fatal: any = new Error(`Local AI compute error for model "${model}" — is that model loaded on the server? ${peek.slice(0, 240)}`);
             fatal.noRetry = true;
@@ -1061,6 +1074,7 @@ export class AIEngine {
         break;
       } catch (e: any) {
         lastErr = e;
+        release();
         if (e?.noRetry || signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
         // Timeout (local frio incluso) e erros de rede: retry com backoff cancelável.
         if (attempt < MAX_ATTEMPTS) {
@@ -1079,6 +1093,7 @@ export class AIEngine {
     if (!res.ok) {
       let errText = '';
       try { errText = await res.text(); } catch {}
+      release();
       // An image rejection ("…image format…") is not a JSON-mode problem: let it surface so
       // withImageFallback() drops the image, instead of retrying with the image still on.
       const imageRejected = messages.some(m => m.image) && RX_IMAGE_REJECTED.test(errText);
@@ -1091,22 +1106,23 @@ export class AIEngine {
     }
 
     if (this.isLocal) this.ollamaWarmed = true;
-    if (streaming) return readSseStream(res, onDelta!, signal);
-
-    // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
-    // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
-    let data: any = {};
     try {
-      // Servers that send headers early keep generating while we read the body, so a local
-      // model gets the same budget as the request itself (120s warm / 300s cold). A flat 60s
-      // cut off long answers (e.g. a 75-track JSON) that the header timeout would have allowed.
-      const bodyTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 60_000;
-      const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
-      data = parsed.data;
-    } catch (e: any) {
-      if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
-      throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
-    }
+      if (streaming) return await readSseStream(res, onDelta!, signal);
+
+      // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
+      // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
+      let data: any = {};
+      try {
+        // Servers that send headers early keep generating while we read the body, so a local
+        // model gets the same budget as the request itself (120s warm / 300s cold). A flat 60s
+        // cut off long answers (e.g. a 75-track JSON) that the header timeout would have allowed.
+        const bodyTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 60_000;
+        const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
+        data = parsed.data;
+      } catch (e: any) {
+        if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
+      }
 
     const choice = data?.choices?.[0] ?? {};
     const msg = choice?.message ?? {};
@@ -1133,6 +1149,9 @@ export class AIEngine {
     console.log(`[OpenAI] ← ${res.status} in ${latencyMs}ms finish=${finish} content_len=${text.length} reasoning_len=${reasoning.length}`);
     if (isAgentMode) text = stripReasoningMarkers(text);   // remove marcadores órfãos (Fara) sem quebrar JSON
     return text;
+    } finally {
+      release();   // body consumed on every exit path above
+    }
   }
 
   // Lê o corpo de uma Response com timeout ativo (o fetchWithTimeout para no tempo de headers;
@@ -1599,18 +1618,28 @@ export class AIEngine {
     // socket e nunca limpava o timer — deixava o event loop ativo por ate 5 min por request).
     const timeoutMs = this.ollamaWarmed ? 120_000 : 300_000;
     let res: Response;
+    let settle: (() => void) | undefined;
+    const release = () => { const s = settle; settle = undefined; try { s?.(); } catch {} };
     try {
-      res = await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+      const cf = await fetchCancellable(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, timeoutMs, signal);
+      }, { firstChunkMs: timeoutMs, signal, label: `Ollama ${model}` });
+      res = cf.res;
+      settle = cf.settle;
     } catch (e: any) {
+      release();
       // Estouro de tempo NÃO é falha de conexão. O Ollama respondeu — devagar demais, quase
       // sempre porque o modelo não cabe na VRAM e parte dele roda na CPU (medido: 27B Q6_K =
       // 24 GB numa placa de 16 GB → 10,7 GB na CPU, e a chamada com a página inteira estourava).
       // Embrulhar os dois casos na mesma frase mandava o usuário ligar um Ollama já ligado.
-      if (e?.message === 'CANCELLED') throw e;   // Parar do usuário: repassa intacto
+      if (e instanceof LocalRequestError) {
+        if (e.code === 'CANCELLED') throw e;   // Parar do usuário: repassa intacto
+        if (e.code === 'TIMEOUT_FIRST_CHUNK') throw new LocalRequestError('TIMEOUT_FIRST_CHUNK', `Ollama too slow: ${e.message}`, true, e.detail);
+        if (e.code === 'CONNECTION_FAILED') throw new LocalRequestError('CONNECTION_FAILED', `Ollama connection failed: ${e.message}`, true, e.detail);
+      }
+      if (e?.message === 'CANCELLED') throw e;
       if (/^Request timeout/.test(e?.message || '')) {
         throw new Error(`Ollama too slow: ${e.message}`);
       }
@@ -1621,17 +1650,20 @@ export class AIEngine {
     console.log(`[Ollama] ← ${res.status} in ${Date.now() - t0}ms`);
     if (!res.ok) {
       const errText = await res.text();
+      release();
       // Modelo importado de GGUF cru pode não ter a capability 'thinking' → o Ollama
       // recusa o think:true. Refaz UMA vez sem ele (ainda streamando; os tags <think>
       // inline no texto seguem tratados pelo renderer).
       if (body.think && res.status >= 400 && res.status < 500) {
         delete body.think;
-        res = await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+        const retry = await fetchCancellable(`${this.baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-        }, timeoutMs, signal);
-        if (!res.ok) throw new Error(`Ollama API error ${res.status}: ${(await res.text()).slice(0, 400)}`);
+        }, { firstChunkMs: timeoutMs, signal, label: `Ollama ${model} (no-think)` });
+        res = retry.res;
+        settle = retry.settle;
+        if (!res.ok) { const t = await res.text().catch(() => ''); release(); throw new Error(`Ollama API error ${res.status}: ${t.slice(0, 400)}`); }
       } else {
         throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 400)}`);
       }
@@ -1639,16 +1671,20 @@ export class AIEngine {
 
     // Chat streamado: NDJSON linha a linha (o fallback do callChatLLM refaz sem stream
     // se der erro antes do 1º delta — mesmo contrato dos provedores de nuvem).
-    if (streaming) return readOllamaNdjson(res, onDelta!, signal);
+    try {
+      if (streaming) return await readOllamaNdjson(res, onDelta!, signal);
 
-    const data = await res.json();
-    const content = data.message?.content ?? '';
-    if (!content) {
-      console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);
-    }
+      const data = await res.json();
+      const content = data.message?.content ?? '';
+      if (!content) {
+        console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);
+      }
     // Chat não-streamado: se o Ollama separou o pensamento (message.thinking), reanexa
     // como <think> pra UI mostrar o chip 💭. Modo agente fica só com o content (JSON).
-    const th = !isAgentMode ? (data.message?.thinking ?? '') : '';
-    return th ? `<think>${th}</think>${content}` : content;
+      const th = !isAgentMode ? (data.message?.thinking ?? '') : '';
+      return th ? `${content}` : content;
+    } finally {
+      release();   // body consumed or abandoned: free the socket and the clocks
+    }
   }
 }
