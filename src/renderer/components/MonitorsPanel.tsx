@@ -13,7 +13,12 @@ interface Monitor {
   lastValue?: string;
   lastNote?: string;
   triggeredAt?: number;
+  notify?: NotifyKind[];
 }
+
+type NotifyKind = 'trigger' | 'change' | 'error';
+
+const NOTIFY_KINDS: NotifyKind[] = ['trigger', 'change', 'error'];
 
 const INTERVALS = [5, 15, 30, 60, 120, 360, 720, 1440];
 
@@ -43,10 +48,15 @@ export default function MonitorsPanel({ onClose }: { onClose: () => void }) {
     return () => { try { off?.(); } catch {} };
   }, []);
 
+  // Which events may post a system notification. Default: trigger only = old behaviour.
+  const [notify, setNotify] = useState<NotifyKind[]>(['trigger']);
+  const toggleKind = (k: NotifyKind) =>
+    setNotify((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+
   const add = async () => {
     if (!url.trim() || !condition.trim()) return;
-    try { await api()?.monitorAdd?.({ url: url.trim(), condition: condition.trim(), intervalMin }); } catch {}
-    setUrl(''); setCondition('');
+    try { await api()?.monitorAdd?.({ url: url.trim(), condition: condition.trim(), intervalMin, notify }); } catch {}
+    setUrl(''); setCondition(''); setNotify(['trigger']);
     refresh();
   };
   const toggle = async (m: Monitor) => { try { await api()?.monitorUpdate?.(m.id, { enabled: !m.enabled }); } catch {} refresh(); };
@@ -76,6 +86,15 @@ export default function MonitorsPanel({ onClose }: { onClose: () => void }) {
           <select className="mon-input mon-interval" value={intervalMin} onChange={e => setIntervalMin(Number(e.target.value))}>
             {INTERVALS.map(v => <option key={v} value={v}>{t('mon.every')} {fmtInterval(v)}</option>)}
           </select>
+        <div className="mon-notify" role="group" aria-label={t('mon.notify.title')}>
+          <span className="mon-notify-label">{t('mon.notify.title')}</span>
+          {NOTIFY_KINDS.map((k) => (
+            <label key={k} className={notify.includes(k) ? 'mon-check on' : 'mon-check'}>
+              <input type="checkbox" checked={notify.includes(k)} onChange={() => toggleKind(k)} />
+              <span>{t(`mon.notify.${k}`)}</span>
+            </label>
+          ))}
+        </div>
           <button className="mon-add-btn" onClick={add} disabled={!url.trim() || !condition.trim()}>{t('mon.add')}</button>
         </div>
       </div>

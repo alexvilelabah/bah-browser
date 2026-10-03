@@ -2171,7 +2171,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
 
   // ═══ Cron-Agent: monitores em background ═══
   ipcMain.handle('monitors:list', () => monitorManager?.list() || []);
-  ipcMain.handle('monitors:add', (_e, data: { url: string; condition: string; intervalMin: number }) => monitorManager?.add(data));
+  ipcMain.handle('monitors:add', (_e, data: { url: string; condition: string; intervalMin: number; notify?: Array<'trigger'|'change'|'error'> }) => monitorManager?.add(data));
   ipcMain.handle('monitors:update', (_e, id: string, patch: any) => { monitorManager?.update(id, patch); return true; });
   ipcMain.handle('monitors:remove', (_e, id: string) => { monitorManager?.remove(id); return true; });
   ipcMain.handle('monitors:run-now', async (_e, id: string) => { try { await monitorManager?.runNow(id); } catch {} return true; });

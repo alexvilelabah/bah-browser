@@ -330,6 +330,10 @@ const dict: Record<Lang, Record<string, string>> = {
     'tour.4.x': 'With a local model (Ollama / LM Studio) nothing leaves your machine. If it is off, the browser asks instead of failing.',
     'tour.5.t': 'Reports you can read',
     'tour.5.x': 'Finished tasks, downloads and monitors live in the side panels — no logs to interpret.',
+    'mon.notify.title': 'Notify me when',
+    'mon.notify.trigger': 'condition is met',
+    'mon.notify.change': 'the value changes',
+    'mon.notify.error': 'the check fails',
   },
   pt: {
     'addr.placeholder': 'Pergunte ao Google ou digite um URL',
@@ -638,6 +642,10 @@ const dict: Record<Lang, Record<string, string>> = {
     'tour.4.x': 'Com modelo local (Ollama / LM Studio) nada sai do seu PC. Se ele estiver desligado, o navegador avisa em vez de falhar calado.',
     'tour.5.t': 'Relatório que se lê',
     'tour.5.x': 'Tarefas concluídas, downloads e monitores ficam nos painéis laterais — sem log pra interpretar.',
+    'mon.notify.title': 'Me avise quando',
+    'mon.notify.trigger': 'a condição bater',
+    'mon.notify.change': 'o valor mudar',
+    'mon.notify.error': 'a checagem falhar',
   },
   es: {
     'addr.placeholder': 'Busca en Google o escribe una URL',
@@ -946,6 +954,10 @@ const dict: Record<Lang, Record<string, string>> = {
     'tour.4.x': 'Con modelo local (Ollama / LM Studio) nada sale de tu equipo. Si está apagado, el navegador avisa en vez de fallar en silencio.',
     'tour.5.t': 'Informes que se leen',
     'tour.5.x': 'Tareas terminadas, descargas y monitores viven en los paneles laterales — sin logs que interpretar.',
+    'mon.notify.title': 'Avísame cuando',
+    'mon.notify.trigger': 'se cumpla la condición',
+    'mon.notify.change': 'el valor cambie',
+    'mon.notify.error': 'la comprobación falle',
   },
 };
 

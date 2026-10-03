@@ -2110,3 +2110,15 @@ body {
 }
 .tour-btn-primary{ background:var(--accent); color:#fff; }
 .tour-btn-primary:hover{ filter:brightness(1.1); }
+
+/* Que tipos de evento podem postar notificação, por monitor. Três caixinhas no
+   formulário: sem elas o usuário não tinha como saber que um monitor quebrado fica
+   mudo — nem como pedir o contrário. */
+.mon-notify{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:8px; }
+.mon-notify-label{ font-size:11.5px; color:var(--text-secondary); font-weight:600; }
+.mon-check{
+  display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+  font-size:11.5px; color:var(--text-secondary); user-select:none;
+}
+.mon-check.on{ color:var(--text-primary); }
+.mon-check input{ accent-color:var(--accent); width:13px; height:13px; cursor:pointer; margin:0; }

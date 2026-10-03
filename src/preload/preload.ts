@@ -152,7 +152,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   preconnect: (url: string) => ipcRenderer.invoke('net:preconnect', url),
   // Cron-Agent: monitores em background
   monitorsList: () => ipcRenderer.invoke('monitors:list'),
-  monitorAdd: (data: { url: string; condition: string; intervalMin: number }) => ipcRenderer.invoke('monitors:add', data),
+  monitorAdd: (data: { url: string; condition: string; intervalMin: number; notify?: Array<'trigger'|'change'|'error'> }) => ipcRenderer.invoke('monitors:add', data),
   monitorUpdate: (id: string, patch: any) => ipcRenderer.invoke('monitors:update', id, patch),
   monitorRemove: (id: string) => ipcRenderer.invoke('monitors:remove', id),
   monitorRunNow: (id: string) => ipcRenderer.invoke('monitors:run-now', id),
