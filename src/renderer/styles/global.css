@@ -2052,3 +2052,61 @@ body {
   background:#2e7d4f; border-color:transparent; color:#fff;
   box-shadow:none; animation:none;
 }
+
+/* ── Guia de primeira uso (AppGuideBar / BeginnerTour) ────────────────────────────
+   Mesma linguagem visual da .relogin-bar: flutua no topo da área do webview, não
+   empurra layout, e some pro sempre quando o usuário diz "entendi". */
+.guide-bar{
+  position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:58;
+  display:flex; align-items:center; gap:10px; max-width:min(760px, 92%);
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  border-radius:10px; padding:7px 8px 7px 13px;
+  box-shadow:0 10px 28px rgba(0,0,0,0.40); animation:msgIn 0.2s var(--ease);
+}
+.guide-title{ font-size:13px; font-weight:600; color:var(--text-primary); white-space:nowrap; }
+.guide-text{ font-size:12.5px; color:var(--text-secondary); }
+.guide-btn{
+  height:28px; padding:0 14px; border:none; border-radius:8px; cursor:pointer; flex:none;
+  background:var(--accent); color:#fff; font-size:13px; font-weight:600; font-family:inherit;
+  transition:filter 0.12s var(--ease);
+}
+.guide-btn:hover{ filter:brightness(1.1); }
+.guide-x{
+  width:26px; height:26px; border:none; background:transparent; color:var(--text-secondary);
+  cursor:pointer; border-radius:6px; font-size:13px; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  transition:background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.guide-x:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
+
+/* Tour: um cartão, cinco passos, nada de paginar. Fecha no ✕, no "começar a usar",
+   ou clicando fora — quem só queria fechar não fica preso num tutorial. */
+.tour-backdrop{
+  position:fixed; inset:0; z-index:120; background:rgba(0,0,0,0.55);
+  display:flex; align-items:center; justify-content:center; animation:msgIn 0.18s var(--ease);
+}
+.tour-card{
+  width:min(520px, 92vw); background:var(--bg-secondary); border:1px solid var(--border);
+  border-radius:14px; padding:16px 18px; box-shadow:0 24px 60px rgba(0,0,0,0.55);
+}
+.tour-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.tour-title{ font-size:15px; font-weight:700; color:var(--text-primary); }
+.tour-x{
+  width:28px; height:28px; border:none; background:transparent; color:var(--text-secondary);
+  cursor:pointer; border-radius:7px; font-size:14px;
+  display:flex; align-items:center; justify-content:center;
+}
+.tour-x:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
+.tour-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px; }
+.tour-step{ display:flex; gap:11px; align-items:flex-start; }
+.tour-step-icon{ font-size:17px; line-height:1.5; flex:none; width:22px; text-align:center; }
+.tour-step-body{ min-width:0; }
+.tour-step-title{ font-size:13px; font-weight:650; color:var(--text-primary); }
+.tour-step-text{ font-size:12.5px; color:var(--text-secondary); line-height:1.45; }
+.tour-foot{ display:flex; justify-content:flex-end; margin-top:14px; }
+.tour-btn{
+  height:32px; padding:0 16px; border:none; border-radius:9px; cursor:pointer;
+  font-size:13px; font-weight:600; font-family:inherit;
+}
+.tour-btn-primary{ background:var(--accent); color:#fff; }
+.tour-btn-primary:hover{ filter:brightness(1.1); }

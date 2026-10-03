@@ -312,6 +312,24 @@ const dict: Record<Lang, Record<string, string>> = {
     'dl.done': 'Done',
     'dl.failed': 'Failed',
     'dl.blocked': 'Blocked',
+    // Guia de primeira uso (AppGuide / BeginnerTour) — palavras simples, sem jargão.
+    'guide.title': 'What can this browser do?',
+    'guide.text': 'Type what you want in plain words — it reads the page, clicks, fills forms, downloads, and answers questions about what is on screen.',
+    'guide.tour': 'Show me',
+    'guide.dismiss': 'Got it',
+    'tour.title': 'Five things to know',
+    'tour.skip': 'Close',
+    'tour.got': 'Start using it',
+    'tour.1.t': 'Ask or command',
+    'tour.1.x': '“What is this page about?” answers from the page. “Open YouTube and play lo-fi” does the clicking for you.',
+    'tour.2.t': 'It shows its plan',
+    'tour.2.x': 'Before acting it lists the steps. You can approve, skip steps, or change the wording and run the rest.',
+    'tour.3.t': 'Stop always works',
+    'tour.3.x': 'The Stop button ends the task at once — even while the AI is thinking or downloading.',
+    'tour.4.t': 'Local or cloud',
+    'tour.4.x': 'With a local model (Ollama / LM Studio) nothing leaves your machine. If it is off, the browser asks instead of failing.',
+    'tour.5.t': 'Reports you can read',
+    'tour.5.x': 'Finished tasks, downloads and monitors live in the side panels — no logs to interpret.',
   },
   pt: {
     'addr.placeholder': 'Pergunte ao Google ou digite um URL',
@@ -603,6 +621,23 @@ const dict: Record<Lang, Record<string, string>> = {
     'dl.done': 'Concluído',
     'dl.failed': 'Falhou',
     'dl.blocked': 'Bloqueado',
+    'guide.title': 'O que este navegador faz?',
+    'guide.text': 'Escreva o que você quer em palavras simples — ele lê a página, clica, preenche formulários, baixa arquivos e responde sobre o que está na tela.',
+    'guide.tour': 'Me mostra',
+    'guide.dismiss': 'Entendi',
+    'tour.title': 'Cinco coisas pra saber',
+    'tour.skip': 'Fechar',
+    'tour.got': 'Começar a usar',
+    'tour.1.t': 'Pergunte ou mande',
+    'tour.1.x': '“Sobre o que é esta página?” responde com o que está na tela. “Abre o YouTube e toca lo-fi” clica por você.',
+    'tour.2.t': 'Ele mostra o plano',
+    'tour.2.x': 'Antes de agir ele lista os passos. Você aprova, pula passos ou muda o texto e roda o resto.',
+    'tour.3.t': 'Parar sempre funciona',
+    'tour.3.x': 'O botão Parar encerra a tarefa na hora — até com a IA pensando ou baixando.',
+    'tour.4.t': 'Local ou nuvem',
+    'tour.4.x': 'Com modelo local (Ollama / LM Studio) nada sai do seu PC. Se ele estiver desligado, o navegador avisa em vez de falhar calado.',
+    'tour.5.t': 'Relatório que se lê',
+    'tour.5.x': 'Tarefas concluídas, downloads e monitores ficam nos painéis laterais — sem log pra interpretar.',
   },
   es: {
     'addr.placeholder': 'Busca en Google o escribe una URL',
@@ -894,6 +929,23 @@ const dict: Record<Lang, Record<string, string>> = {
     'dl.done': 'Completado',
     'dl.failed': 'Falló',
     'dl.blocked': 'Bloqueado',
+    'guide.title': '¿Qué puede hacer este navegador?',
+    'guide.text': 'Escribe lo que quieres con palabras normales — lee la página, hace clic, rellena formularios, descarga y responde sobre lo que ves en pantalla.',
+    'guide.tour': 'Enséñame',
+    'guide.dismiss': 'Entendido',
+    'tour.title': 'Cinco cosas que saber',
+    'tour.skip': 'Cerrar',
+    'tour.got': 'Empezar a usarlo',
+    'tour.1.t': 'Pregunta o manda',
+    'tour.1.x': '“¿De qué trata esta página?” responde con lo que está en pantalla. “Abre YouTube y pon lo-fi” hace los clics por ti.',
+    'tour.2.t': 'Muestra el plan',
+    'tour.2.x': 'Antes de actuar lista los pasos. Apruebas, saltas pasos o cambias el texto y ejecutas el resto.',
+    'tour.3.t': 'Parar siempre funciona',
+    'tour.3.x': 'El botón Parar termina la tarea al instante — incluso con la IA pensando o descargando.',
+    'tour.4.t': 'Local o nube',
+    'tour.4.x': 'Con modelo local (Ollama / LM Studio) nada sale de tu equipo. Si está apagado, el navegador avisa en vez de fallar en silencio.',
+    'tour.5.t': 'Informes que se leen',
+    'tour.5.x': 'Tareas terminadas, descargas y monitores viven en los paneles laterales — sin logs que interpretar.',
   },
 };
 
@@ -959,4 +1011,14 @@ export function t(key: string, vars?: Record<string, string | number>): string {
   let s = (dict[currentLang] && dict[currentLang][key]) || dict.en[key] || key;
   if (vars) for (const k of Object.keys(vars)) s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), String(vars[k]));
   return s;
+}
+
+/** Os cinco passos do tour, no idioma atual (ícone + título + texto). */
+export function tourSteps(): Array<{ icon: string; title: string; text: string }> {
+  const icons = ['💬', '🗺️', '🛑', '🏠', '📋'];
+  return [1, 2, 3, 4, 5].map((n, i) => ({
+    icon: icons[i],
+    title: t(`tour.${n}.t`),
+    text: t(`tour.${n}.x`),
+  }));
 }

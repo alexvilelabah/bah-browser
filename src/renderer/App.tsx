@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
+import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
 import TabBar from './components/TabBar';
@@ -481,6 +482,10 @@ export default function App() {
   // que contar passos, e é o único freio que age quando o usuário foi dormir (o botão
   // Parar exige alguém na frente da tela). 0 = desligada, que é o padrão — coerente com
   // o resto: nada limita por precaução, só por escolha explícita.
+  // First-run guide: shown once, reopened from the bar. Two flags because the bar is a
+  // hint that stays until dismissed and the tour is a dialog the user can reopen.
+  const [showGuide, setShowGuide] = useState<boolean>(() => { try { return localStorage.getItem('guideSeen') !== '1'; } catch { return true; } });
+  const [showTour, setShowTour] = useState<boolean>(() => { try { return localStorage.getItem('tourSeen') !== '1'; } catch { return true; } });
   const [agentTimeLimitMin, setAgentTimeLimitMin] = useState<number>(() => {
     try {
       const v = Number(localStorage.getItem('agentTimeLimitMin'));
@@ -1339,6 +1344,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: true })} title={t('find.next')}>↓</button>
               <button className="find-btn" onClick={closeFind} title={t('find.close')}>✕</button>
             </div>
+          )}
+          {showGuide && (
+            <AppGuideBar
+              onStartTour={() => setShowTour(true)}
+              onDismiss={() => { setShowGuide(false); try { localStorage.setItem('guideSeen', '1'); } catch {} }}
+            />
           )}
           {showGoogleRelogin && (
             <div className="relogin-bar">
@@ -3862,6 +3873,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             }}
           />
         </div>
+          {showTour && (
+            <BeginnerTour
+              onClose={() => { setShowTour(false); try { localStorage.setItem('tourSeen', '1'); } catch {} }}
+            />
+          )}
       </div>
 
       {historyOpen && (
