@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { VisionImage } from '../shared/vision';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Window controls
@@ -21,8 +22,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:zoom', listener);
     return () => ipcRenderer.removeListener('app:zoom', listener);
   },
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image),
   // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
   chatCancel: (streamId: string) => ipcRenderer.invoke('ai:chat-cancel', streamId),
   // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
@@ -32,7 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
-  aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) =>
+  aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) =>
     ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier, actionId),
   // Agent Stop button: aborts the in-flight request in main, not just its result.
   actionCancel: (actionId: string) => ipcRenderer.invoke('ai:action-cancel', actionId),
@@ -191,7 +192,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('safe-browsing-block', listener);
     return () => ipcRenderer.removeListener('safe-browsing-block', listener);
   },
-  // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud)
-  takeOcr: (wcId: number, domText: string, force?: boolean) =>
-    ipcRenderer.invoke('pipeline:take-ocr', wcId, domText, force ?? false),
+  // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud).
+  // frameDataUrl: optional PNG of a frame already captured, so OCR and the model agree.
+  takeOcr: (wcId: number, domText: string, force?: boolean, frameDataUrl?: string) =>
+    ipcRenderer.invoke('pipeline:take-ocr', wcId, domText, force ?? false, frameDataUrl),
 });

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
+import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
@@ -142,7 +143,7 @@ function hintForError(text: string): string | null {
   if (/confirm you are human|are human|captcha|rob[oô]|verifica/.test(s)) return t('hint.captcha');
   // ANTES do padrão "ollama" genérico: modelo lento e Ollama desligado são problemas
   // opostos com conselhos opostos, e a ordem antiga pescava os dois na mesma dica.
-  if (/too slow|request timeout/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
+  if (/too slow|request timeout|timed out/.test(s) && /ollama|local ai|ia local/.test(s)) return t('hint.ollamaSlow');
   // JSON inválido vem ANTES do padrão "ollama": TODA falha local carrega o prefixo
   // "Local AI (Ollama) failed: …", então deixar o /ollama/ decidir fazia "o modelo não
   // devolveu JSON válido" virar "abra o app do Ollama" — mandando ligar o que já estava
@@ -1468,10 +1469,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       </select>
                     </label>
                   )}
-                  <label className="mm-check">
-                    <input type="checkbox" checked={localCfg.vision === true}
-                      onChange={e => setLocalCfg(p => ({ ...p, vision: e.target.checked }))} />
+                  <label>
                     {t('set.vision')}
+                    <select value={resolveVisionMode(localCfg)}
+                      onChange={e => setLocalCfg(p => ({ ...p, visionMode: e.target.value as VisionMode, vision: e.target.value !== 'off' }))}>
+                      <option value="off">{t('set.visionOff')}</option>
+                      <option value="auto">{t('set.visionAuto')}</option>
+                      <option value="always">{t('set.visionAlways')}</option>
+                    </select>
                   </label>
                   <div className="mm-hint">{t('set.visionHint')}</div>
                 </details>

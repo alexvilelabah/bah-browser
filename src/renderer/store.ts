@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { detectLang } from './i18n';
+import type { VisionMode } from '../shared/vision';
 
 export interface Tab {
   id: string;
@@ -48,7 +49,8 @@ export interface LocalSettings {
   contextTokens?: number;           // custom window, when contextMode === 'custom'
   maxOutputTokens?: number;         // reply budget, reasoning tokens included
   ollamaNumCtx?: 'auto' | number;   // Ollama server-side allocation; empty = 16384
-  vision?: boolean;                 // send screenshots (opt-in, vision models only)
+  vision?: boolean;                 // legacy opt-in (true = 'auto'); old profiles keep working
+  visionMode?: VisionMode;        // off | auto | always — screenshots to the model
 }
 
 // Encadeia as gravações do aiSettings no disco: garante ordem (o último Salvar é a

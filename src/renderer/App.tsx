@@ -22,6 +22,20 @@ import {
   waitForSettle,
 } from './page-executor';
 import {
+  STICKY_VISION_REASONS,
+  VISION_MAX_SIDE,
+  VISION_MIN_SIDE,
+  base64Head,
+  decideAgentShot,
+  decideChatShot,
+  encodedImageSize,
+  looksLikeTextReadIntent,
+  mapShotPointToViewport,
+  resolveVisionMode,
+  type VisionImage,
+  type VisionMode,
+} from '../shared/vision';
+import {
   buildKnownSitesBlock,
   detectQuickAction,
   getInitialShortcutAction,
@@ -60,7 +74,7 @@ declare global {
       decryptSecretSync?: (t: string) => string;
       setUILanguage?: (lang: string) => Promise<any>;
       onZoom?: (cb: (pct: number) => void) => void;
-      setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean }) => Promise<any>;
+      setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean; visionMode?: VisionMode }) => Promise<any>;
       localDiscover?: (provider: string, baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; models: Array<{ id: string; loaded?: boolean; vision: string; contextTokens?: number; contextSource?: string; unsuitable?: string }>; error?: string }>;
       localContext?: (provider: string, baseUrl?: string, model?: string, authKey?: string) => Promise<{ ok: boolean; tokens?: number; source: string; error?: string }>;
       localTestConnection?: (baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; reachable: boolean; modelsFound: number; error?: string }>;
@@ -69,10 +83,10 @@ declare global {
       setLocalWarmup?: (on: boolean) => Promise<boolean>;
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
-      aiAction: (command: string, pageContent?: string, screenshot?: string, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
+      aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
       actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
@@ -136,7 +150,7 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
-      takeOcr?: (wcId: number, domText: string, force?: boolean) => Promise<{
+      takeOcr?: (wcId: number, domText: string, force?: boolean, frameDataUrl?: string) => Promise<{
         ocrText: string; ocrUsed: boolean; skipped: boolean;
         confidence?: number; screenshotPath?: string; durationMs?: number; error?: string;
       }>;
@@ -145,13 +159,14 @@ declare global {
 }
 
 /** Just the local-endpoint tuning the main process needs (context / output / vision). */
-function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean }) {
+function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean; visionMode?: VisionMode }) {
   return {
     contextMode: ls.contextMode ?? 'auto',
     contextTokens: ls.contextTokens,
     maxOutputTokens: ls.maxOutputTokens,
     ollamaNumCtx: ls.ollamaNumCtx,
     vision: ls.vision === true,
+    visionMode: resolveVisionMode(ls),
   };
 }
 
@@ -888,19 +903,62 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
     }
   }, [store.activeTab, store.localSettings.enabled]);
 
-  const captureScreenshot = useCallback(async (): Promise<string | undefined> => {
+  /** ONE capture per step, three consumers: change-detection hash + feed thumbnail,
+   *  local OCR, and (when the vision gate allows) the model. Deriving them from the same
+   *  NativeImage is what stops OCR and the model from describing different frames.
+   *  The model image is downscaled JPEG (never upscaled); OCR keeps the full-res PNG,
+   *  because vision encoders blur small type that Tesseract reads exactly. */
+  const captureFrame = useCallback(async (o: { image: boolean; png: boolean }): Promise<{
+    thumb?: string;
+    image?: VisionImage;
+    png?: string;
+  } | undefined> => {
     const wv = getActiveWebview();
     if (!wv) return undefined;
     try {
       const img = await wv.capturePage();
-      // Resize the NativeImage to 480px BEFORE encoding — avoids building a multi-MB
-      // full-res PNG dataURL each step (the result only feeds change-detection hashing
-      // and the feed thumbnail; never sent to the AI). ~4x less memory/CPU per step.
-      return img.resize({ width: 480, quality: 'good' }).toDataURL();
+      const size = img.getSize();
+      const out: { thumb?: string; image?: VisionImage; png?: string } = {};
+      out.thumb = img.resize({ width: 480, quality: 'good' }).toDataURL();
+      if ((o.image || o.png) && size.width >= VISION_MIN_SIDE && size.height >= VISION_MIN_SIDE) {
+        if (o.png) out.png = img.toDataURL();               // full-res frame for OCR
+        if (o.image) {
+          // The guest's own viewport (what elementFromPoint and clicks use), not the
+          // <webview> element box, which diverges under page zoom.
+          const vp = await Promise.race([
+            wv.executeJavaScript('({w: window.innerWidth, h: window.innerHeight})') as Promise<{ w: number; h: number }>,
+            new Promise<null>(r => setTimeout(() => r(null), 1500)),
+          ]).catch(() => null);
+          const cssW = vp?.w || wv.clientWidth || size.width;
+          const cssH = vp?.h || wv.clientHeight || size.height;
+          // Size off the CSS viewport: up to VISION_MAX_SIDE the screenshot pixels ARE the
+          // CSS pixels, so click_at needs no scaling at all. Never upscaled.
+          const scale = Math.min(1, VISION_MAX_SIDE / Math.max(cssW, cssH));
+          const w = Math.max(1, Math.round(cssW * scale));
+          const h = Math.max(1, Math.round(cssH * scale));
+          // PNG aqui, nunca toJPEG(): neste renderer (sandbox) o toJPEG() derruba o processo
+          // inteiro (medido: FATAL "V8 error: Empty MaybeLocal" → a janela do Bah apaga).
+          // O processo principal converte pra JPEG antes de mandar pro modelo.
+          const dataUrl = img.resize({ width: w, height: h, quality: 'good' }).toDataURL();
+          const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+          // Report the ENCODED size: on HiDPI the bitmap can differ from the requested DIP size.
+          const real = encodedImageSize(base64Head(b64));
+          out.image = {
+            dataUrl,
+            width: real?.width ?? w, height: real?.height ?? h,
+            cssWidth: cssW, cssHeight: cssH, bytes: Math.floor(b64.length * 3 / 4),
+          };
+        }
+      }
+      return out;
     } catch {
       return undefined;
     }
   }, [getActiveWebview]);
+
+  const captureScreenshot = useCallback(async (): Promise<string | undefined> => {
+    return (await captureFrame({ image: false, png: false }))?.thumb;
+  }, [captureFrame]);
 
   // ── PESQUISA RÁPIDA (estilo Perplexity/Comet) ──────────────────────────────
   // Para perguntas/pesquisas, NÃO dirige o navegador na cara do usuário: abre uma
@@ -1383,6 +1441,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
               let previousStateKey = '';
               let noEffectCount = 0;
+              // Vision: mode + how many images this run already sent (token/latency budget).
+              // The setting lives with the LOCAL endpoint (Settings → Local AI) and only the local
+              // engine carries it; the cloud engine would answer mode_off to every frame we sent.
+              let visionMode: VisionMode = store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off';
+              let imagesSent = 0;
+              let lastVisionReason = 'none';
+              let prevStepUrl = '';
+              // Screenshot the model actually saw on the last LLM step (with the size main
+              // measured), so click_at maps from its pixels to the live viewport.
+              let modelShot: { width?: number; height?: number } | undefined;
               // DISJUNTOR: em ∞ não há teto de passos nem relógio, então uma IA teimosa
               // poderia repetir a mesma ação pra sempre (= fatura de API infinita rodando a
               // noite toda). O detector de loop abaixo só AVISA; isto aqui conta as
@@ -1399,8 +1467,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let lastSeenUrl = '';
               let stepsOnSameUrl = 0;
               let usedInitialShortcut = false;
-              const commandLooksLikeImageTextRead = /imagem|imagens|foto|fotos|print|ocr/i.test(command)
-                && /texto|escrito|escrita|aparece|diga|ler|leia/i.test(command);
+              const commandLooksLikeImageTextRead = looksLikeTextReadIntent(command);
               const commandLooksLikeDestructiveEmailTask = /gmail|email|e-mail|mensagem|mensagens/i.test(command)
                 && /apagar|deletar|delete|excluir|remover|lixeira|trash/i.test(command);
               const commandRequiresGmailPromotions = commandLooksLikeDestructiveEmailTask
@@ -1854,15 +1921,42 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       rememberObservedSite(observation);
                     }
                   }
-                  // Screenshot em PARALELO com o OCR abaixo (a imagem não vai pro modelo —
-                  // vira só o hash de detecção de mudança) → corta o tempo serial do passo.
-                  const screenshotP = withTimeout(captureScreenshot(), 8000, undefined as any);
+                  // ONE frame for the whole step: hash+thumbnail, OCR and (if the vision gate
+                  // allows) the model all read the same NativeImage.
+                  const shotProvider = store.localSettings.enabled
+                    ? (store.localSettings.provider === 'ollama' ? 'ollama' : 'openai-compatible')
+                    : store.aiSettings.provider;
+                  const visionDec = decideAgentShot({
+                    mode: visionMode,
+                    step,
+                    // A real navigation, not "the observation was re-taken" (that is most steps).
+                    pageChanged: !!prevStepUrl && observation.url !== prevStepUrl,
+                    domTextLen: (observation.text_sample || '').length,
+                    imagesSent,
+                    command,
+                    provider: shotProvider,
+                  });
+                  lastVisionReason = visionDec.reason;
+                  prevStepUrl = observation.url;
+                  const ocrWillRun = !observationWasCarried && !commandLooksLikeGoogleLogin
+                    && (commandLooksLikeImageTextRead || (observation.text_sample || '').length < 200);
+                  // Capture runs in parallel with OCR (as before) — except in vision mode, where
+                  // OCR must read the SAME frame the model gets, so the capture settles first.
+                  // The full-res PNG is only worth encoding when it is awaited before OCR (vision
+                  // steps); otherwise OCR takes its own capture exactly as it always did.
+                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach }), 8000, undefined as any);
                   let screenshot: string | undefined;
+                  let shotForModel: VisionImage | undefined;
+                  let framePngForOcr: string | undefined;
                   let stateKeyBefore = '';
                   const settleShotBefore = async () => {
-                    screenshot = await screenshotP;
+                    const fr = await frameP;
+                    screenshot = fr?.thumb;
+                    shotForModel = visionDec.attach ? fr?.image : undefined;
+                    framePngForOcr = fr?.png;
                     stateKeyBefore = `${observation.url}|${observation.title}|${hashScreenshotDataUrl(screenshot)}`;
                   };
+                  if (visionDec.attach) await settleShotBefore();
 
                   // ── FAST MODE: try to consume a queued batched action (no LLM call) ──
                   let action: BrowserAction | undefined;
@@ -1898,7 +1992,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ocrText = carriedOcrText;
                   } else if (ocrWcId != null && window.electronAPI?.takeOcr && !commandLooksLikeGoogleLogin) {
                     try {
-                      const ocrResult = await window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead);
+                      // framePngForOcr = the exact frame the model may get; OCR reads the same one.
+                      const ocrResult = await window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead, framePngForOcr);
                       if (ocrResult?.ocrUsed && ocrResult.ocrText) {
                         ocrText = ocrResult.ocrText;
                         onProgress({ kind: 'status', message: `🔍 Local OCR: ${ocrText.length} chars (conf: ${ocrResult.confidence ?? '?'}%)` });
@@ -1955,6 +2050,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     compactDom || '(none detected)',
                     '',
                     `PAGE TEXT: ${observation.text_sample.slice(0, 1500)}`,
+                    // Full OCR even when a frame is attached: main may still drop the image
+                    // (capability/size/rejection) AFTER this payload is built, and then the OCR
+                    // text is all the model has. The local context budget trims if needed.
                     ocrText ? `\nOCR TEXT (extracted locally from screenshot):\n${ocrText}` : '',
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
@@ -2010,7 +2108,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     `[STEP ${step + 1}/${MAX_STEPS === Infinity ? '∞' : MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
                   ].filter(Boolean).join('\n');
                   // ── Tier routing ──────────────────────────────────────────────
-                  // Screenshots are NEVER sent to the model — OCR text replaces visual context.
+                  // Text (DOM + OCR) is the default context; a screenshot travels only when the
+                  // vision mode/heuristics say so (see decideAgentShot + ai-engine:resolveVision).
                   // When the user enables the local (Ollama) model, the whole agent runs on it
                   // (the main process falls back to cloud automatically if the local call errors).
                   // Otherwise: fast non-thinking flash for routine steps; thinking flash ('pro')
@@ -2036,15 +2135,31 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const actionId = `a-${Date.now().toString(36)}-s${step}`;
                   const onAbortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
                   if (signal) signal.addEventListener('abort', onAbortStep, { once: true });
-                  // The raw screenshot only travels with the vision opt-in; the main
-                  // process still applies the capability and size gates. Without the
-                  // opt-in it is text only (DOM + OCR), exactly as before.
-                  const shotForModel = (tier === 'local' && store.localSettings.vision === true) ? screenshot : undefined;
+                  // Vision: the frame decided above, if the gate allowed it. The main process
+                  // re-checks capability/size and reports why not.
+                  if (shotForModel) {
+                    onProgress({ kind: 'status', message: `🖼️ screenshot to model: ${shotForModel.width}x${shotForModel.height} · ${Math.round((shotForModel.bytes ?? 0) / 1024)} KB` });
+                  } else if (visionMode !== 'off' && step === 0) {
+                    onProgress({ kind: 'status', message: `📄 text only this step (${lastVisionReason})` });
+                  }
                   let result: any;
+                  // Reset every LLM step: a text-only step has no picture to take coordinates from.
+                  modelShot = undefined;
                   try {
                     result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
                   } finally {
                     if (signal) signal.removeEventListener('abort', onAbortStep);
+                  }
+                  if (result?.vision?.attached && shotForModel) {
+                    imagesSent++;   // only frames the model really received count against the budget
+                    // Main measured the encoded size; that is the space the model's x,y live in.
+                    modelShot = { width: result.vision.width ?? shotForModel.width, height: result.vision.height ?? shotForModel.height };
+                  } else if (shotForModel) {
+                    const why = result?.vision?.reason ?? (result?.error ? 'error' : 'unknown');
+                    onProgress({ kind: 'status', message: `📄 model got text only (${why})` });
+                    // Permanent for this run (setting, provider, model): stop capturing and
+                    // shipping frames that will be refused every step.
+                    if (STICKY_VISION_REASONS.has(why)) visionMode = 'off';
                   }
                   throwIfCancelled();
                   // Cancellation confirmed by main: a clean stop, not a task failure.
@@ -2366,10 +2481,23 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       } // fim do if(!cancelled) — freio de segurança
                     }
                   } else if (action.type === 'click_at' && wcId != null) {
+                    // The model answers in SCREENSHOT pixels (stated in the prompt); map them onto
+                    // the live viewport (measured now — the window may have been resized) and clamp
+                    // inside it. Without a frame this step the numbers are taken as viewport px.
+                    const vp = await withTimeout(
+                      wv.executeJavaScript('({w: window.innerWidth, h: window.innerHeight})') as Promise<{ w: number; h: number }>,
+                      1500, null as any,
+                    ).catch(() => null);
+                    const viewport = { width: vp?.w || wv.clientWidth || 0, height: vp?.h || wv.clientHeight || 0 };
+                    const { x: cx, y: cy } = mapShotPointToViewport(Number(action.x) || 0, Number(action.y) || 0, modelShot, viewport);
+                    if (cx !== Math.round(action.x) || cy !== Math.round(action.y)) {
+                      onProgress({ kind: 'status', message: `click mapped to viewport: ${Math.round(action.x)},${Math.round(action.y)} -> ${cx},${cy}` });
+                    }
                     // FREIO: resolve o rótulo do elemento SOB a coordenada e confirma se for de risco.
-                    const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${Math.round(action.x)},${Math.round(action.y)})`), 3000, '');
+                    // Same point that will be clicked — checking anywhere else defeats the gate.
+                    const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${cx},${cy})`), 3000, '');
                     const cancelAt = await gateRisk(riskForAction(action as any, { text: String(lblAt || '') }));
-                    toolResult = cancelAt ?? await window.electronAPI?.realClick?.(wcId, action.x, action.y);
+                    toolResult = cancelAt ?? await window.electronAPI?.realClick?.(wcId, cx, cy);
                   } else if (action.type === 'click_text' && wcId != null) {
                     // FREIO DE SEGURANÇA: confirma antes de clicar em pagamento/exclusão.
                     const riskT = classifyRisk('click_text', action.text);
@@ -3600,7 +3728,23 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
                 if (tr) pageContent += `\n\n[TRANSCRIÇÃO/LEGENDA DO VÍDEO ATUAL — use isto pra responder sobre o que é DITO no vídeo]\n${tr}`;
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId);
+              const chatShotDec = decideChatShot({
+                // Vision is a local-endpoint setting; the cloud engine would refuse the frame.
+                mode: store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off',
+                message: msg,
+                pageTextLen: (pageContent || '').length,
+                hasDoc: false,
+                provider: store.localSettings.enabled
+                  ? (store.localSettings.provider === 'ollama' ? 'ollama' : 'openai-compatible')
+                  : store.aiSettings.provider,
+              });
+              let chatShot: VisionImage | undefined;
+              if (chatShotDec.attach) {
+                const fr = await captureFrame({ image: true, png: false });
+                chatShot = fr?.image;
+                if (!chatShot) console.log(`[chat] vision skipped: ${chatShotDec.reason} (capture failed)`);
+              }
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot);
               const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
