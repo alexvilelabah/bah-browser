@@ -68,6 +68,7 @@ import {
   summarizeResult,
 } from './agent-run-logger';
 import { createDeadline } from './task-deadline';
+import { classifySelfEval, nextSelfFailCount } from '../shared/self-eval';
 
 declare global {
   interface Window {
@@ -1565,6 +1566,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
               let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
+              let lastActionSummary = '';  // what the previous step did
+              let lastActionOutcome = '';  // what the page looked like after it
+              let selfFailCount = 0;       // consecutive self-reported failures
               // Observation reuse: carry the post-action observation of step N into step N+1
               // when the page hasn't changed — otherwise every step pays the full AXTree
               // observation (2-8s on heavy pages) twice. carriedOcrText rides along so
@@ -2131,8 +2135,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
-                    // A attached frame must produce an action, not a description. Without this the
-                    // model wrote 'I see the login page' and the run clicked nothing (measured).
+                    // Judge the last action before choosing the next one. Small models happily
+                    // repeat a click that did nothing; making the judgement an explicit field
+                    // turns that into a signal the loop can act on.
+                    step > 0 ? [
+                      `Previous action: ${lastActionSummary}.`,
+                      `Observed after it: ${lastActionOutcome}.`,
+                      "Set \"evaluation\" to success, failed or unclear followed by why, judged",
+                      "ONLY from what is on the page NOW - not from what you intended.",
+                      "If it failed, do NOT propose the same action again: change target,",
+                      "method, or stop and tell the user what is blocking you.",
+                    ].join(' ') : '',
+                    selfFailCount >= 2 ? 'STUCK: you reported the last ' + selfFailCount + ' actions as failed. Do not repeat them. Pick a different route or emit done with an honest reason.' : '',
                     // Measured: without this the model narrated the page for steps and clicked nothing.
                     shotForModel ? [
                       'A SCREENSHOT of the live page is attached to this request.',
@@ -2290,6 +2304,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (result?.evaluation && step > 0) {
                     const evalStr = String(result.evaluation);
                     stepEvaluation = evalStr;
+                    // The model judged its own last action. Two in a row means repeating a
+                    // failing route, which is when the loop has to force a change.
+                    selfFailCount = nextSelfFailCount(selfFailCount, classifySelfEval(evalStr));
                     history += `\nSELF-EVAL [step ${step}]: ${evalStr.slice(0, 200)}`;
                     const icon = /^success/i.test(evalStr) ? '✅' : /^fail/i.test(evalStr) ? '❌' : '❓';
                     onProgress({ kind: 'status', message: `${icon} ${evalStr.slice(0, 160)}` });
@@ -3642,6 +3659,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   previousStateKey = stateKeyAfter;
                   // Carry the post-action observation into the next step (consumed there if the URL still matches).
                   carriedObservation = afterObservation;
+                  lastActionSummary = formatAction(action).slice(0, 120);
+                  lastActionOutcome = (hadVisibleEffect
+                    ? `page changed: ${afterObservation.title || afterObservation.url}`
+                    : 'page did not change') + (afterObservation.text_sample
+                    ? ` | text: ${String(afterObservation.text_sample).slice(0, 90)}` : '');
                   // Reuse is only safe when nothing moved: a stale frame makes the model aim at
                   // pixels that are no longer there.
                   if (stateKeyAfter === stateKeyBefore && shotForModel) {
