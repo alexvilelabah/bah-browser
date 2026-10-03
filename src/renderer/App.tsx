@@ -1569,6 +1569,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let lastActionSummary = '';  // what the previous step did
               let lastActionOutcome = '';  // what the page looked like after it
               let selfFailCount = 0;       // consecutive self-reported failures
+              let planShown = false;       // the preview appears once per run, not every step
               // Observation reuse: carry the post-action observation of step N into step N+1
               // when the page hasn't changed — otherwise every step pays the full AXTree
               // observation (2-8s on heavy pages) twice. carriedOcrText rides along so
@@ -2682,6 +2683,35 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = c ?? await window.electronAPI?.realKey?.(wcId, action.key);
                   } else if (action.type === 'plan') {
                     plan = action.steps || [];
+                    // Show the plan before acting on it. The user can approve, rewrite the
+                    // goal in their own words, or stop - all cheaper than 15 steps going the
+                    // wrong way. Once per run: asking every step is nagging.
+                    const previewOn = (() => { try { return localStorage.getItem('planPreview') !== '0'; } catch { return true; } })();
+                    if (previewOn && !planShown && plan.length > 0) {
+                      planShown = true;
+                      const decision = await new Promise<'run' | 'cancel' | string>((resolve) => {
+                        let settled = false;
+                        const fin = (v: 'run' | 'cancel' | string) => { if (!settled) { settled = true; resolve(v); } };
+                        signal?.addEventListener('abort', () => fin('cancel'), { once: true });
+                        onProgress({
+                          kind: 'plan_preview',
+                          goal: command,
+                          steps: plan.slice(0, 8).map((st) => String(st)),
+                          onApprove: () => fin('run'),
+                          onEdit: (g) => fin(g),
+                          onCancel: () => fin('cancel'),
+                        });
+                      });
+                      if (decision === 'cancel') {
+                        finishRun('cancelled', 'Cancelled before acting.');
+                        return { thought: 'Task cancelled before acting.', results: allResults, done: { type: 'done', success: false, reason: 'Cancelled before acting.' } };
+                      }
+                      if (typeof decision === 'string') {
+                        // Rewritten goal: the model re-plans from the user's own wording.
+                        command = decision;
+                        history += '\nGOAL EDITED BY USER: ' + decision.slice(0, 400);
+                      }
+                    }
                     toolResult = { success: true, info: { steps: plan.length } };
                   } else if (action.type === 'store') {
                     memory.push({ key: action.key, value: action.value, source: action.source, ts: Date.now() });

@@ -2122,3 +2122,31 @@ body {
 }
 .mon-check.on{ color:var(--text-primary); }
 .mon-check input{ accent-color:var(--accent); width:13px; height:13px; cursor:pointer; margin:0; }
+
+/* Plan preview: the user sees the plan before anything is clicked. Cheapest
+   intervention in the whole loop - rewording a goal costs seconds, fifteen wrong
+   steps cost minutes. */
+.plan-card{
+  margin:8px 10px 0; padding:10px 12px; border:1px solid var(--border);
+  border-radius:12px; background:var(--bg-tertiary);
+  box-shadow:0 8px 22px rgba(0,0,0,0.30); animation:msgIn 0.18s var(--ease);
+}
+.plan-head{ font-size:12.5px; font-weight:700; color:var(--text-primary); margin-bottom:4px; }
+.plan-goal{ font-size:12px; color:var(--text-secondary); line-height:1.45; margin-bottom:6px; }
+.plan-steps{ margin:0 0 8px; padding-left:20px; display:flex; flex-direction:column; gap:3px; }
+.plan-steps li{ font-size:12px; color:var(--text-primary); line-height:1.4; }
+.plan-textarea{
+  width:100%; box-sizing:border-box; resize:vertical; margin-bottom:8px;
+  background:var(--bg-secondary); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:8px; padding:7px 9px;
+  font-size:12px; font-family:inherit; line-height:1.45;
+}
+.plan-actions{ display:flex; gap:7px; justify-content:flex-end; flex-wrap:wrap; }
+.plan-btn{
+  height:28px; padding:0 12px; border:1px solid var(--border); border-radius:8px;
+  background:var(--bg-secondary); color:var(--text-primary); cursor:pointer;
+  font-size:12px; font-weight:600; font-family:inherit;
+}
+.plan-btn:hover{ filter:brightness(1.12); }
+.plan-btn.primary{ background:var(--accent); border-color:transparent; color:#fff; }
+.plan-btn.ghost{ background:transparent; color:var(--text-secondary); }

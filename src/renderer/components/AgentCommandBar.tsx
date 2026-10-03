@@ -26,6 +26,7 @@ export type AgentProgressEvent =
   | { kind: 'status'; message: string }
   | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
   | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void }
+  | { kind: 'plan_preview'; goal: string; steps: string[]; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void }
   | { kind: 'thought'; message: string }
   | { kind: 'action'; action: BrowserAction }
   | { kind: 'result'; action: BrowserAction; result: any }
@@ -397,6 +398,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   }, [tabIds]);
   const [manualHelp, setManualHelp] = useState<{ message: string; instruction: string } | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ message: string } | null>(null);   // freio de segurança
+  const [planPreview, setPlanPreview] = useState<{ goal: string; steps: string[] } | null>(null);
+  const [planDraft, setPlanDraft] = useState('');
+  const [planEditing, setPlanEditing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(aiSettings);
   const [localCfg, setLocalCfg] = useState(localSettings);
@@ -504,6 +508,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const abortRef = useRef<AbortController | null>(null);
   const manualContinueRef = useRef<(() => void) | null>(null);
   const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void } | null>(null);
+  const planCbRef = useRef<{ approve: () => void; edit: (goal: string) => void; cancel: () => void } | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const idRef = useRef(0);
@@ -606,6 +611,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           manualContinueRef.current = event.onContinue;
           setManualHelp({ message: event.message, instruction: event.instruction });
           push({ kind: 'help', message: event.message, instruction: event.instruction });
+        } else if (event.kind === 'plan_preview') {
+          planCbRef.current = { approve: event.onApprove, edit: event.onEdit, cancel: event.onCancel };
+          setPlanPreview({ goal: event.goal, steps: event.steps });
+          setPlanDraft(event.goal);
+          setPlanEditing(false);
         } else if (event.kind === 'confirm') {
           confirmActionsRef.current = { onConfirm: event.onConfirm, onCancel: event.onCancel };
           setPendingConfirm({ message: event.message });
@@ -640,6 +650,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       setLoading(false);
       setManualHelp(null);
       manualContinueRef.current = null;
+      planCbRef.current = null;
+      setPlanPreview(null);
+      setPlanEditing(false);
       setPendingConfirm(null);
       confirmActionsRef.current = null;
     }
@@ -1022,6 +1035,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   // Freio de segurança: usuário decidiu (Sim, pode / Cancelar) na ação de risco.
+  const runPlanAsIs = () => {
+    const cb = planCbRef.current;
+    if (!cb) return;
+    planCbRef.current = null; setPlanPreview(null); setPlanEditing(false);
+    cb.approve();
+  };
+  const runPlanEdited = () => {
+    const cb = planCbRef.current;
+    if (!cb) return;
+    const goal = planDraft.trim();
+    planCbRef.current = null; setPlanPreview(null); setPlanEditing(false);
+    if (goal) cb.edit(goal); else cb.approve();
+  };
+  const cancelPlan = () => {
+    const cb = planCbRef.current;
+    planCbRef.current = null; setPlanPreview(null); setPlanEditing(false);
+    cb?.cancel();
+  };
+
   const handleConfirmRisky = (ok: boolean) => {
     const actions = confirmActionsRef.current;
     confirmActionsRef.current = null;
@@ -1423,6 +1455,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     onChange={e => setLocalCfg(p => ({ ...p, warmup: e.target.checked }))} />
                   <span>{t('set.warmupLocal')}<small className="mm-hint"> — {t('set.warmupHint')}</small></span>
                 </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input type="checkbox" defaultChecked={(() => { try { return localStorage.getItem('planPreview') !== '0'; } catch { return true; } })()}
+                    onChange={e => { try { localStorage.setItem('planPreview', e.target.checked ? '1' : '0'); } catch {} }} />
+                  <span>{t('set.planPreview')}<small className="mm-hint"> {"—"} {t('set.planPreviewHint')}</small></span>
+                </label>
                 <details className="mm-imp">
                   <summary>{t('set.localAdvanced')}</summary>
                   <label>
@@ -1686,6 +1723,35 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             onClick={() => setPageShared(v => !v)}
             title={pageShared ? t('composer.pageOffTitle') : t('composer.pageOnTitle')}
           >{pageShared ? '✕' : '↩'}</button>
+        </div>
+      )}
+      {planPreview && (
+        <div className="plan-card" role="dialog" aria-label={t('plan.title')}>
+          <div className="plan-head">🗺️ {t('plan.title')}</div>
+          <div className="plan-goal">{planPreview.goal}</div>
+          <ol className="plan-steps">
+            {planPreview.steps.map((st, i) => <li key={i}>{st}</li>)}
+          </ol>
+          {planEditing && (
+            <textarea
+              className="plan-textarea"
+              value={planDraft}
+              rows={3}
+              onChange={(e) => setPlanDraft(e.target.value)}
+              placeholder={t('plan.editPh')}
+            />
+          )}
+          <div className="plan-actions">
+            {!planEditing && (
+              <button className="plan-btn" onClick={() => setPlanEditing(true)}>{t('plan.edit')}</button>
+            )}
+            {planEditing ? (
+              <button className="plan-btn primary" onClick={runPlanEdited}>{t('plan.runEdited')}</button>
+            ) : (
+              <button className="plan-btn primary" data-testid="plan-approve" onClick={runPlanAsIs}>{t('plan.run')}</button>
+            )}
+            <button className="plan-btn ghost" onClick={cancelPlan}>{t('plan.cancel')}</button>
+          </div>
         </div>
       )}
       <div className="composer">
@@ -2108,6 +2174,8 @@ function StepCard({ step }: { step: StepRecord }) {
 function ProgressLine({ event }: { event: AgentProgressEvent }) {
   if (event.kind === 'step') return null;
   if (event.kind === 'manual_help') return null;
+  // rendered as its own card above the composer, not as a feed row
+  if (event.kind === 'plan_preview') return null;
   if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui
   if (event.kind === 'action') {
     return <div className="result-action"><span className="result-desc">▶ {formatAction(event.action)}</span></div>;
