@@ -23,11 +23,7 @@ export interface Monitor {
   lastValue?: string;       // o valor-chave que a IA leu (preço, status…)
   lastNote?: string;        // explicação curta / erro
   triggeredAt?: number;     // última vez que disparou a notificação
-  // What actually reaches the user. Default is ['trigger'], which is EXACTLY the old
-  // behaviour: fire on the edge, when the condition starts to hold.
-  // 'change' fires when the read VALUE moved (price dropped without hitting the target).
-  // 'error' fires when the CHECK failed - without it a broken monitor stays silent and
-  // the user believes the page is still being watched.
+  // What may notify. Default ['trigger'] = the old edge-only behaviour.
   notify?: MonitorNotifyKind[];
   lastNotifiedValue?: string;   // baseline for 'change'
 }
@@ -128,8 +124,7 @@ export class MonitorManager {
     if (!m.enabled && !force) return;
     if (this.running.has(id)) return;
     this.running.add(id);
-    // Read the previous state BEFORE anything is touched: the catch block below needs it
-    // too, and by then m.lastResult/m.lastValue may already have been overwritten.
+    // Read before anything is touched: the catch block needs these too.
     const prev = m.lastResult;
     const prevValue = m.lastValue || '';
     try {
@@ -139,7 +134,7 @@ export class MonitorManager {
       m.lastValue = verdict.value || '';
       m.lastNote = verdict.reason || '';
       m.lastResult = verdict.met ? 'met' : 'unmet';
-      // One decision point, in shared code, so the rule is testable without Electron.
+      // Rule lives in shared code so it is testable without Electron.
       const kind = shouldNotify(m.notify || [], {
         met: verdict.met, prevMet: prev === 'met',
         value: m.lastValue || '', prevValue, failed: false,
@@ -153,7 +148,7 @@ export class MonitorManager {
       m.lastRun = Date.now();
       m.lastResult = 'error';
       m.lastNote = String(e?.message || e).slice(0, 120);
-      // Same rule, one input flipped: silent failure is the worst outcome.
+      // Same rule, failed flipped in.
       const kindErr = shouldNotify(m.notify || [], {
         met: false, prevMet: prev === 'met', value: m.lastValue || '', prevValue, failed: true,
       });
@@ -230,8 +225,7 @@ export class MonitorManager {
   }
 
   private fireNotification(m: Monitor, kind: MonitorNotifyKind = 'trigger') {
-    // The title carries the event. "Bah — monitor" told nobody anything; they had to
-    // open the app to learn whether it fired, changed or broke.
+    // The title carries the event: "Bah - monitor" told nobody anything.
     const title =
       kind === 'error' ? 'Bah — monitor failed'
         : kind === 'change' ? 'Bah — value changed'

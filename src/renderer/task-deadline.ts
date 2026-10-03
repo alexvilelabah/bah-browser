@@ -1,18 +1,13 @@
-// task-deadline.ts — a clock that can be paused.
+// task-deadline.ts - a clock that can be paused.
 //
-// The task deadline used to be compared only at the top of a step, so a step that took
-// 150s (or hung until its own clocks fired) could run far past the limit the user set.
-// This owns a timer that fires DURING the step, and it suspends while a human is being
-// asked for help - time spent by a person is not the model being slow.
-//
-// Budget is spent MACHINE time only: elapsed wall time minus the spans spent suspended.
-// (An earlier version subtracted the suspended spans twice, which quietly halved the
-// budget after the first manual-help pause.)
+// The deadline used to be compared only between steps, so one slow step could run far
+// past the limit the user set. This fires DURING the step, and sleeps while a human is
+// being asked for help: time spent by a person is not the model being slow.
+// Budget is MACHINE time only (elapsed minus suspended spans).
+
 export interface TaskDeadline {
   signal: AbortSignal;
-  /** ms of budget left, or Infinity when no limit is set. */
   remainingMs(): number;
-  /** ms of machine time already spent. */
   spentMs(): number;
   suspended(): boolean;
   suspend(): void;

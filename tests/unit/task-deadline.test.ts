@@ -2,9 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeadline } from '../../src/renderer/task-deadline.ts';
 
-// The user set a time limit and the agent blew straight through it, because the limit
-// was only compared between steps and a single step (or a hung local model) could take
-// as long as it liked. These are the two behaviours that were missing.
+// // The limit was only compared between steps, so one slow step blew straight through it.
 
 test('the deadline fires on its own, without anyone checking a clock', async () => {
   const d = createDeadline(Date.now(), 20);

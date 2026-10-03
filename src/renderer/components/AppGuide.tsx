@@ -1,13 +1,8 @@
 import { useEffect } from 'react';
 import { t, tourSteps } from '../i18n';
 
-/**
- * AppGuide.tsx — the plain-words answer to "what can this thing do?".
- *
- * Written for someone who has never used an agent browser: no jargon, no feature list,
- * three verbs and one example each. It is a bar above the command bar (the same shape as
- * the re-login bar), dismissible, and never comes back once the user says "got it".
- */
+/** Plain-words intro for someone who has never used an agent browser. Same shape as the
+ * re-login bar; dismissing it is permanent. */
 export function AppGuideBar(props: { onStartTour: () => void; onDismiss: () => void }) {
   const { onStartTour, onDismiss } = props;
   return (
@@ -20,10 +15,7 @@ export function AppGuideBar(props: { onStartTour: () => void; onDismiss: () => v
   );
 }
 
-/**
- * BeginnerTour.tsx — five steps, one screen, no pages to click through.
- * Shown once (localStorage flag); reopenable from the guide bar.
- */
+/** Five steps, one screen. Shown once, reopenable from the guide bar. */
 export function BeginnerTour(props: { onClose: () => void }) {
   const { onClose } = props;
   const steps = tourSteps();

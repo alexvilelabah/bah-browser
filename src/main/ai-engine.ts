@@ -895,7 +895,7 @@ export class AIEngine {
   private promptTokens = new Map<string, number>();
   private numCtxSent = new Map<string, number>();
 
-  /** The app marks a stuck run so thinking comes back on (C15 wires the caller). */
+  /** The app marks a stuck run so thinking comes back on. */
   noteStuck(model: string): void {
     this.slowThinking.delete(streamKey(this.baseUrl, model));
   }

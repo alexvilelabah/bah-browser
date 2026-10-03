@@ -1,15 +1,11 @@
-// monitor-notify.ts — which events a monitor may post a notification for.
-// Pure (no electron, no fs): monitor-manager.ts imports this, tests import this,
-// and nothing else has to boot Electron to check the rule.
+// monitor-notify.ts - which events a monitor may notify for. Pure (no electron, no fs)
+// so the manager and the tests can share one copy of the rule.
 
 export type MonitorNotifyKind = 'trigger' | 'change' | 'error';
 
 /**
- * Only the three known kinds survive. An empty or invalid selection falls back to
- * ['trigger'] on purpose: a monitor that never notifies is not what somebody meant
- * when they added it, and a checkbox that silently does nothing is worse than no
- * checkbox. Unknown values are dropped rather than trusted - a typo ('triger') would
- * otherwise disable notifications for a monitor the user believes is armed.
+ * Unknown kinds are dropped and an empty selection falls back to ['trigger']: a typo
+ * ('triger') must not silently disarm a monitor the user believes is armed.
  */
 export function normalizeNotifyKinds(kinds?: unknown): MonitorNotifyKind[] {
   const ok = Array.isArray(kinds)
@@ -19,11 +15,9 @@ export function normalizeNotifyKinds(kinds?: unknown): MonitorNotifyKind[] {
 }
 
 /**
- * Should this run post a notification?
- * - trigger: fires on the EDGE (was not met, now met) - a level trigger spams every cycle.
- * - change:  fires when the read value moved, even without the target being hit.
- * - error:   fires when the check itself failed. Silent failure is the worst outcome:
- *            the user believes the page is still being watched.
+ * trigger fires on the EDGE (was not met, now met) - a level trigger spams every cycle.
+ * change fires when the value moved without the target being hit.
+ * error fires when the check itself failed; a silent broken monitor is worse than none.
  */
 export function shouldNotify(
   wants: MonitorNotifyKind[],

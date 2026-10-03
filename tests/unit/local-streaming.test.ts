@@ -1,4 +1,4 @@
-// C5: agent calls stream locally. Cloud must not change — including by accident,
+// Agent calls stream locally. Cloud must not change - including by accident,
 // which is exactly what the structural checks below catch.
 import { test } from 'node:test';
 import assert from 'node:assert';

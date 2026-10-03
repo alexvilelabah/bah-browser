@@ -1,4 +1,4 @@
-// C2 locks the two local clocks and removes `ollamaWarmed`, whose early `= true` made the
+// The two local clocks are honoured, and `ollamaWarmed` is gone: setting it to true early made the
 // cold 300s budget unreachable on exactly the call that loads the model (it got 120s).
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';

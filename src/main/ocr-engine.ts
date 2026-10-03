@@ -32,10 +32,8 @@ export function hasEnoughDomText(domText: string, minChars = 150): boolean {
 const workerCache = new Map<string, Promise<any>>();
 
 /**
- * Onde os .traineddata empacotados vivem, ou null quando nao estao no disco.
- * Empacotado: <resources>/tessdata (extraResources do electron-builder).
- * Dev: raiz do repo. Null mantem o comportamento antigo - o tesseract.js baixa do CDN -
- * pra que um checkout sem os ~7 MB de dados de idioma continue funcionando.
+ * Onde os .traineddata empacotados vivem (resources/tessdata), ou null se nao estao no
+ * disco - ai o tesseract.js volta a baixar do CDN e um checkout sem os ~7 MB funciona.
  */
 function localTessdataDir(): string | null {
   const pth = require('path') as typeof import('path');
@@ -60,8 +58,7 @@ function getWorker(lang: string): Promise<any> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { createWorker } = require('tesseract.js') as typeof import('tesseract.js');
     const tessdata = localTessdataDir();
-    // langPath como diretorio local faz o adapter Node ler do disco em vez do CDN:
-    // OCR funciona sem rede. gzip:false porque os arquivos shipped sao raw.
+    // langPath local = ler do disco sem rede; gzip:false porque os arquivos sao raw.
     const opts: Record<string, unknown> = { logger: () => {}, errorHandler: () => {} };
     if (tessdata) { opts.langPath = tessdata; opts.gzip = false; }
     w = createWorker(lang, 1, opts);

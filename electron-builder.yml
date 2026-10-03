@@ -27,10 +27,7 @@ files:
 extraResources:
   - from: build/icon.png
     to: icon.png
-  # OCR offline: os dois .traineddata vivem na raiz do repo e vao pra resources/tessdata/.
-  # Sem isso o tesseract.js cai no CDN da jsdelivr na primeira OCR - e um app de IA local
-  # que precisa de internet pra ler a tela nao e local. ocr-engine.ts aponta langPath pra
-  # ca, e so quando os arquivos existem (em dev sem eles o download antigo segue valendo).
+  # OCR offline: sem isso o tesseract.js baixa do CDN na primeira OCR. langPath aponta pra ca.
   - from: eng.traineddata
     to: tessdata/eng.traineddata
   - from: por.traineddata

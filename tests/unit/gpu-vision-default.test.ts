@@ -2,8 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hasCapableGpu, defaultVisionMode } from '../../src/shared/vision.ts';
 
-// Vision ON by default was a bad default: on a machine with no real GPU the encoder runs
-// on the CPU, a 2s step becomes 30s, and the user reads that as the agent being broken.
+// // Vision ON by default punished machines with no GPU: a 2s step became 30s.
 
 test('a real GPU is capable, software rasterisers are not', () => {
   assert.equal(hasCapableGpu({ gpuDevice: [{ vendor: 'nvidia', renderer: 'GeForce RTX 4070' }] }), true);

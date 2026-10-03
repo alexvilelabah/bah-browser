@@ -2,8 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeNotifyKinds, shouldNotify } from '../../src/shared/monitor-notify.ts';
 
-// Monitors used to fire one way only, and a monitor whose check kept failing stayed
-// silent forever - the user believed the page was still being watched.
+// // A monitor whose check kept failing stayed silent forever; the user thought it was watched.
 
 test('unknown kinds are dropped, empty falls back to trigger', () => {
   assert.deepEqual(normalizeNotifyKinds(['trigger']), ['trigger']);

@@ -1,4 +1,4 @@
-// C35: the thinking budget is soft — it only bites while there is NO answer.
+// The thinking budget is soft - it only bites while there is NO answer.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { ThinkingBudget, detectRepeat, THINKING_TOKENS_SOFT } from '../../src/main/thinking-budget.ts';

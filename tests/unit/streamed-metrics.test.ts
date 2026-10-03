@@ -1,4 +1,4 @@
-// C6: streamed metrics must exist end-to-end (engine -> IPC -> preload -> UI) and stay
+// Streamed metrics exist end-to-end (engine -> IPC -> preload -> UI) and stay
 // honest: estimated from characters until the usage chunk makes them exact.
 import { test } from 'node:test';
 import assert from 'node:assert';

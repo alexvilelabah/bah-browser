@@ -1,4 +1,4 @@
-// C0 — cloud request bodies must stay byte-identical while all the local-AI work lands.
+// Cloud request bodies must stay byte-identical while all the local-AI work lands.
 //
 // Runs with `node --test tests/unit/` — zero dependencies, no build, no Electron.
 // The guard lives in scripts/golden-cloud-bodies.mjs; this file only asserts its

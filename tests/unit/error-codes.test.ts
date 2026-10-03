@@ -1,4 +1,4 @@
-// C14: failures travel as codes. The renderer must not need a regex over prose to know
+// Failures travel as codes. The renderer must not need a regex over prose to know
 // whether a failure is retryable, permanent, or the user pressing Stop.
 import { test } from 'node:test';
 import assert from 'node:assert';

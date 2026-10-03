@@ -1,4 +1,4 @@
-// C7 guards, run against a real server: an error inside a 200 stream must not become a
+// Guards, run against a real server: an error inside a 200 stream must not become a
 // silently empty answer.
 import { test } from 'node:test';
 import assert from 'node:assert';

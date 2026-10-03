@@ -1,4 +1,4 @@
-// C8/C32: the context window must be read from the server and budgeted as the window the
+// The context window is read from the server and budgeted as the window the
 // request actually gets — not the model's nominal maximum.
 import { test } from 'node:test';
 import assert from 'node:assert';

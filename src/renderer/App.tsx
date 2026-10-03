@@ -197,7 +197,7 @@ export default function App() {
   // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
   // never shows on the next step.
   useEffect(() => {
-                prefetchGpuInfo();   // answers before the user can start a run
+                prefetchGpuInfo();
     if (agentVisual === 'idle') { setLiveMetrics(null); return; }
     const off = window.electronAPI?.onActionDelta?.((m) => { if (m?.kind) setLiveMetrics(m); });
     return () => { try { off?.(); } catch {} };
@@ -487,8 +487,7 @@ export default function App() {
   // que contar passos, e é o único freio que age quando o usuário foi dormir (o botão
   // Parar exige alguém na frente da tela). 0 = desligada, que é o padrão — coerente com
   // o resto: nada limita por precaução, só por escolha explícita.
-  // First-run guide: shown once, reopened from the bar. Two flags because the bar is a
-  // hint that stays until dismissed and the tour is a dialog the user can reopen.
+  // First-run guide: the bar is a hint until dismissed, the tour is a reopenable dialog.
   const [showGuide, setShowGuide] = useState<boolean>(() => { try { return localStorage.getItem('guideSeen') !== '1'; } catch { return true; } });
   const [showTour, setShowTour] = useState<boolean>(() => { try { return localStorage.getItem('tourSeen') !== '1'; } catch { return true; } });
   const [agentTimeLimitMin, setAgentTimeLimitMin] = useState<number>(() => {
@@ -1479,9 +1478,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Vision: mode + how many images this run already sent (token/latency budget).
               // The setting lives with the LOCAL endpoint (Settings → Local AI) and only the local
               // engine carries it; the cloud engine would answer mode_off to every frame we sent.
-              // An explicit choice in Settings always wins. With no choice made, vision turns on
-              // only on a machine that can carry the encoder - elsewhere it starts off and the
-              // user turns it on knowing what it costs (the probe answered at app start).
+              // An explicit choice in Settings wins; otherwise vision needs a GPU that can run it.
               let visionMode: VisionMode = store.localSettings.enabled
                 ? defaultVisionMode(store.localSettings, gpuInfo())
                 : 'off';
@@ -1550,11 +1547,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? Infinity
                     : (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000);
               const taskStartedAt = Date.now();
-              // The deadline has to cut a step that is RUNNING, not just be noticed at the next
-              // boundary: when it fires, the in-flight request is cancelled in main so the model
+              // Cuts the step that is RUNNING: main cancels the in-flight request, so the model
               // stops generating instead of finishing a step nobody asked for any more.
               const deadline = createDeadline(taskStartedAt, TASK_DEADLINE_MS);
-              let activeActionId = '';   // the request in flight, so the deadline can cancel it
+              let activeActionId = '';   // in-flight request, so the deadline can cancel it
               const onDeadline = () => { try { window.electronAPI?.actionCancel?.(activeActionId); } catch {} };
               deadline.signal.addEventListener('abort', onDeadline, { once: true });
               const recentActionHashes: string[] = [];
@@ -1568,16 +1564,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // observation; if the element vanished, the whole batch is discarded.
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
-              let localHelpPauses = 0;   // a dead local model pauses for help; it does not kill the run
+              let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
               // Observation reuse: carry the post-action observation of step N into step N+1
               // when the page hasn't changed — otherwise every step pays the full AXTree
               // observation (2-8s on heavy pages) twice. carriedOcrText rides along so
               // Tesseract isn't re-run on an unchanged page either.
               let carriedObservation: ObservedState | null = null;
               let carriedOcrText = '';
-              // C19: the frame travels WITH the carried observation. Capture + resize + encode costs
-              // ~200-600ms and the pixels are identical when the page did not change, so reusing it
-              // is free and skipping the capture is the win.
+              // The frame travels with the carried observation: capture + resize + encode costs
+              // ~200-600ms for pixels that are identical when the page did not change.
               let carriedShot: VisionImage | undefined = undefined;
               let carriedThumb: string | undefined = undefined;
               let carriedPng: string | undefined = undefined;
@@ -1880,8 +1875,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
-                  // Same clock as the in-flight abort: human help is not the model being slow,
-                  // so raw wall time would end a task that still had budget left.
+                  // Same clock as the in-flight abort, so a human pause never burns the budget.
                   if (deadline.remainingMs() <= 0 || deadline.fired()) {
                     const done: BrowserAction = { type: 'done', success: false, reason: `Task time limit reached (${Math.round(TASK_DEADLINE_MS / 60000)} min). Stopping to avoid a loop.` };
                     finishRun('failed', done.reason);
@@ -1912,7 +1906,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? carriedObservation!
                     : await observeFast(wv, observeTimeoutMs);
                   carriedObservation = null;
-                  carriedShot = undefined;   // a carried frame is used once, never twice
+                  carriedShot = undefined;
                   carriedThumb = undefined;
                   carriedPng = undefined;
                   // Porteiro fechou um aviso de cookie/consent → avisa no feed (uma vez).
@@ -2011,8 +2005,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // OCR must read the SAME frame the model gets, so the capture settles first.
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
-                  // A carried observation means this is the same page we just looked at: reuse its
-                  // frame instead of paying capture + resize + encode for identical pixels.
+                  // Carried observation = same page, so reuse its frame instead of recapturing.
                   const reuseFrame = observationWasCarried && !!carriedShot;
                   const frameP = reuseFrame
                     ? Promise.resolve({ thumb: carriedThumb, image: visionDec.attach ? carriedShot : undefined, png: (ocrWillRun && visionDec.attach) ? carriedPng : undefined })
@@ -2140,9 +2133,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
                     // A attached frame must produce an action, not a description. Without this the
                     // model wrote 'I see the login page' and the run clicked nothing (measured).
+                    // Measured: without this the model narrated the page for steps and clicked nothing.
                     shotForModel ? [
                       'A SCREENSHOT of the live page is attached to this request.',
-                      'You are the ACTOR, not the narrator: answer with a ACTION that changes the page.',
+                      'You are the ACTOR, not the narrator: answer with an ACTION that changes the page.',
                       'Never answer with a description of the screenshot, and never finish with done',
                       'unless the user goal is already complete on this page.',
                       'Click exactly what the image shows: poster art does not open a page, the PLAY (assistir/play) button does.',
@@ -2269,8 +2263,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
                   if (result?.error) {
-                    // Codes, never prose: a retryable transport failure is not the same event
-                    // as a permanent one. Ask the user (max twice per run) before failing.
+                    // Decide on codes, not prose. Ask the user (max twice per run) before failing.
                     const code = result?.errorCode ?? 'UNKNOWN';
                     const retryable = result?.errorRetryable === true;
                     onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retries exhausted' : ''}]: ${result.error}` });
@@ -3649,10 +3642,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   previousStateKey = stateKeyAfter;
                   // Carry the post-action observation into the next step (consumed there if the URL still matches).
                   carriedObservation = afterObservation;
-                  // C19: the frame travels with the observation ONLY when the page did not
-                  // change. A stale frame is worse than a slow step: the model would aim at
-                  // pixels that are no longer there. stateKeyAfter !== stateKeyBefore means
-                  // something moved, so the frame is dropped and the next step recaptures.
+                  // Reuse is only safe when nothing moved: a stale frame makes the model aim at
+                  // pixels that are no longer there.
                   if (stateKeyAfter === stateKeyBefore && shotForModel) {
                     carriedShot = shotForModel;
                     carriedThumb = screenshotAfter;
