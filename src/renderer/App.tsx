@@ -58,6 +58,7 @@ import {
 import {
   appendAgentRunStep,
   finishAgentRun,
+  setRunError,
   startAgentRun,
   summarizeAction,
   summarizeResult,
@@ -87,7 +88,12 @@ declare global {
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
-      aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
+      aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<{
+        action?: any; actions?: any[]; thought?: string; error?: string;
+        /** Machine-readable failure (shared/error-codes.ts) — the renderer decides on this. */
+        errorCode?: string; errorRetryable?: boolean; errorDetail?: Record<string, unknown>;
+        [k: string]: any;
+      }>;
       actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
@@ -1559,7 +1565,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const finishRun = (
                 status: 'success' | 'failed' | 'cancelled' | 'max_steps',
                 rawReason?: string,
+                errCtx?: { errorCode?: string; retryable?: boolean },
               ) => {
+                // The code goes to the run log: "failed" with no code tells the user nothing
+                // and tells the next retry nothing.
+                if (errCtx?.errorCode) {
+                  try { setRunError(runLog, errCtx.errorCode, errCtx.retryable === true); } catch {}
+                }
                 // NUNCA terminar sem explicação: um motivo vazio virava "falhou" mudo na tela
                 // (e no histórico), sem o usuário saber o que houve. Se veio vazio/undefined,
                 // usa um texto honesto conforme o desfecho.
@@ -2173,15 +2185,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   throwIfCancelled();
                   // Cancellation confirmed by main: a clean stop, not a task failure.
-                  if (result?.error && /CANCELLED|TASK_CANCELLED/.test(String(result.error))) throw new Error('TASK_CANCELLED_BY_USER');
+                  if (result?.error && (result?.errorCode === 'CANCELLED' || /CANCELLED|TASK_CANCELLED/.test(String(result.error)))) throw new Error('TASK_CANCELLED_BY_USER');
                   console.log(`[Agent] step ${step + 1} ← result:`, result?.error || `action=${result?.action?.type} engine=${result?._engine}`);
                   if (result?._engine) {
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
                   if (result?.error) {
-                    onProgress({ kind: 'status', message: `Error: ${result.error}` });
-                    finishRun('failed', result.error);
-                    return { error: result.error, thought: thoughts.join('\n'), results: allResults };
+                    // Decide on the code, never on the prose: a retryable transport failure is
+                    // not the same event as a permanent one (C15 acts on this split).
+                    const code = result?.errorCode ?? 'UNKNOWN';
+                    const retryable = result?.errorRetryable === true;
+                    onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retryable' : ''}]: ${result.error}` });
+                    finishRun('failed', result.error, { errorCode: code, retryable });
+                    return { error: result.error, errorCode: code, retryable, thought: thoughts.join('\n'), results: allResults };
                   }
                   // browser-use style: surface the model's self-evaluation of its previous action.
                   if (result?.evaluation && step > 0) {

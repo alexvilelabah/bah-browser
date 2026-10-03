@@ -41,6 +41,9 @@ export interface AgentRunLog {
   endedAt?: number;
   status: 'running' | 'success' | 'failed' | 'cancelled' | 'max_steps';
   finalReason?: string;
+  /** Machine-readable failure (shared/error-codes.ts) — "failed" alone tells nobody why. */
+  errorCode?: string;
+  errorRetryable?: boolean;
   steps: AgentRunStepLog[];
 }
 
@@ -65,6 +68,13 @@ export function appendAgentRunStep(run: AgentRunLog, step: AgentRunStepLog): voi
   if (run.steps.length > MAX_STEPS_PER_RUN) {
     run.steps = run.steps.slice(-MAX_STEPS_PER_RUN);
   }
+  saveRun(run);
+}
+
+/** Record why a run failed, as a code the next retry/log can act on. */
+export function setRunError(run: AgentRunLog, code: string, retryable: boolean): void {
+  run.errorCode = code;
+  run.errorRetryable = retryable;
   saveRun(run);
 }
 
