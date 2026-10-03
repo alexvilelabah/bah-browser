@@ -1575,6 +1575,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Tesseract isn't re-run on an unchanged page either.
               let carriedObservation: ObservedState | null = null;
               let carriedOcrText = '';
+              // C19: the frame travels WITH the carried observation. Capture + resize + encode costs
+              // ~200-600ms and the pixels are identical when the page did not change, so reusing it
+              // is free and skipping the capture is the win.
+              let carriedShot: VisionImage | undefined = undefined;
+              let carriedThumb: string | undefined = undefined;
+              let carriedPng: string | undefined = undefined;
               const withTimeout = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
                 let id: ReturnType<typeof setTimeout>;
                 const t = new Promise<T>(r => { id = setTimeout(() => r(fallback), ms); });
@@ -1906,6 +1912,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? carriedObservation!
                     : await observeFast(wv, observeTimeoutMs);
                   carriedObservation = null;
+                  carriedShot = undefined;   // a carried frame is used once, never twice
+                  carriedThumb = undefined;
+                  carriedPng = undefined;
                   // Porteiro fechou um aviso de cookie/consent → avisa no feed (uma vez).
                   if (observation?.dismissed) {
                     onProgress({ kind: 'status', message: `🚪 Closed a cookie/consent notice (${observation.dismissed})` });
@@ -2002,7 +2011,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // OCR must read the SAME frame the model gets, so the capture settles first.
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
-                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
+                  // A carried observation means this is the same page we just looked at: reuse its
+                  // frame instead of paying capture + resize + encode for identical pixels.
+                  const reuseFrame = observationWasCarried && !!carriedShot;
+                  const frameP = reuseFrame
+                    ? Promise.resolve({ thumb: carriedThumb, image: visionDec.attach ? carriedShot : undefined, png: (ocrWillRun && visionDec.attach) ? carriedPng : undefined })
+                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -3635,6 +3649,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   previousStateKey = stateKeyAfter;
                   // Carry the post-action observation into the next step (consumed there if the URL still matches).
                   carriedObservation = afterObservation;
+                  // C19: the frame travels with the observation ONLY when the page did not
+                  // change. A stale frame is worse than a slow step: the model would aim at
+                  // pixels that are no longer there. stateKeyAfter !== stateKeyBefore means
+                  // something moved, so the frame is dropped and the next step recaptures.
+                  if (stateKeyAfter === stateKeyBefore && shotForModel) {
+                    carriedShot = shotForModel;
+                    carriedThumb = screenshotAfter;
+                    carriedPng = framePngForOcr;
+                  } else {
+                    carriedShot = undefined;
+                    carriedThumb = undefined;
+                    carriedPng = undefined;
+                  }
                   // Site-initiated downloads triggered by this action (clicking a "baixar"
                   // button fires will-download; the page itself doesn't change). Tell the AI
                   // the click WORKED so it doesn't repeat it, and clear the no-effect penalty.
