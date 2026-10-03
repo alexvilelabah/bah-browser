@@ -63,6 +63,7 @@ import {
   summarizeAction,
   summarizeResult,
 } from './agent-run-logger';
+import { createDeadline } from './task-deadline';
 
 declare global {
   interface Window {
@@ -1526,6 +1527,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? Infinity
                     : (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000);
               const taskStartedAt = Date.now();
+              // The deadline has to cut a step that is RUNNING, not just be noticed at the next
+              // boundary: when it fires, the in-flight request is cancelled in main so the model
+              // stops generating instead of finishing a step nobody asked for any more.
+              const deadline = createDeadline(taskStartedAt, TASK_DEADLINE_MS);
+              let activeActionId = '';   // the request in flight, so the deadline can cancel it
+              const onDeadline = () => { try { window.electronAPI?.actionCancel?.(activeActionId); } catch {} };
+              deadline.signal.addEventListener('abort', onDeadline, { once: true });
               const recentActionHashes: string[] = [];
               // browser-use style: track element identities to mark what's NEW after each action
               const elementKey = (e: { tag?: string; text?: string; aria?: string; backendNodeId?: number }): string =>
@@ -1843,7 +1851,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
-                  if (Date.now() - taskStartedAt > TASK_DEADLINE_MS) {
+                  // Same clock as the in-flight abort: human help is not the model being slow,
+                  // so raw wall time would end a task that still had budget left.
+                  if (deadline.remainingMs() <= 0 || deadline.fired()) {
                     const done: BrowserAction = { type: 'done', success: false, reason: `Task time limit reached (${Math.round(TASK_DEADLINE_MS / 60000)} min). Stopping to avoid a loop.` };
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1899,7 +1909,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
+                      deadline.suspend();   // a human thinking is not the model being slow
                       await waitForManualHelp(manualHelpNeed, observation.url);
+                      deadline.resume();
                       continue;
                     }
                   }
@@ -2156,6 +2168,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // request. Without it the late result was dropped here while the GPU
                   // carried on generating.
                   const actionId = `a-${Date.now().toString(36)}-s${step}`;
+                  activeActionId = actionId;
                   const onAbortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
                   if (signal) signal.addEventListener('abort', onAbortStep, { once: true });
                   // Vision: the frame decided above, if the gate allowed it. The main process
@@ -2216,6 +2229,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retries exhausted' : ''}]: ${result.error}` });
                     if (localHelpPauses < 2) {
                       localHelpPauses++;
+                      deadline.suspend();
                       await waitForManualHelp({
                         kind: 'local_unavailable',
                         reason: `${code}: ${result.error}`,
@@ -2223,6 +2237,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           ? 'The local model did not answer. Start it (or check its context window), then press Continue — this step runs again. Press Stop to end the task.'
                           : 'The local model refused this request. Press Stop, or change the model / screenshot setting, then press Continue.'
                       }, observation.url);
+                      deadline.resume();
                       throwIfCancelled();
                       onProgress({ kind: 'status', message: '▶️ continuing after your help' });
                       step--;   // this step gets another go, with whatever the user fixed
@@ -3749,6 +3764,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 finishRun('failed', String(err?.message || err || '').trim() || 'Unexpected error while running the task.');
                 throw err;
               } finally {
+                deadline.clear();
                 setAgentVisual('idle');
               }
               } finally {
