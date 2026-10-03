@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
-import { fetchCancellable } from '../../src/main/cancellable-fetch.ts';
+import { fetchCancellable, sleep } from '../../src/main/cancellable-fetch.ts';
 import { LocalRequestError } from '../../src/main/local-providers.ts';
 
 function startServer() {
@@ -28,8 +28,6 @@ function startServer() {
     });
   });
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test('slow headers abort as TIMEOUT_FIRST_CHUNK', async () => {
   const { server, url, wasClosed } = await startServer();
@@ -82,6 +80,28 @@ test('happy path reads the body and settle() leaves no timers behind', async () 
   } finally { server.close(); }
 });
 
+test('abort() drops the socket so a resend never queues behind the abandoned one', async () => {
+  const { server, url, wasClosed } = await startServer();
+  try {
+    const first = await fetchCancellable(`${url}/?mode=trickle`, { method: 'POST' }, { firstChunkMs: 5000, label: 'local m' });
+    assert.equal(first.res.status, 200);
+    first.abort();
+    await sleep(120);
+    assert.ok(wasClosed(), 'abandoned attempt must be gone before the resend starts');
+    const second = await fetchCancellable(`${url}/?mode=ok`, { method: 'POST' }, { firstChunkMs: 5000, label: 'local m' });
+    assert.deepEqual(JSON.parse(await second.res.text()), { ok: true });
+    second.settle();
+  } finally { server.close(); }
+});
+
+test('sleep is cancellable so Stop is instant, not after the backoff', async () => {
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 30);
+  const t0 = Date.now();
+  await assert.rejects(sleep(10_000, ac.signal), (e: any) => e.code === 'CANCELLED');
+  assert.ok(Date.now() - t0 < 2000, 'Stop must not wait out the backoff');
+});
+
 test('connection refused is CONNECTION_FAILED and retryable', async () => {
   const { server } = await startServer();
   const port = (server.address() as any).port;
@@ -91,3 +111,4 @@ test('connection refused is CONNECTION_FAILED and retryable', async () => {
     (e: any) => e instanceof LocalRequestError && e.code === 'CONNECTION_FAILED' && e.retryable,
   );
 });
+

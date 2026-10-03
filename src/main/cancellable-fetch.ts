@@ -19,10 +19,21 @@ export const LOCAL_INACTIVITY_MS = 60_000;     // streaming: silence between chu
 export const CLOUD_FIRST_CHUNK_MS = 45_000;
 export const CLOUD_BODY_MS = 60_000;
 export const CLOUD_INACTIVITY_MS = 30_000;
+/** Cancellable sleep: a Stop during backoff returns immediately instead of waiting. */
+export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) { reject(new LocalRequestError('CANCELLED', 'cancelled', false)); return; }
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(new LocalRequestError('CANCELLED', 'cancelled', false)); }, { once: true });
+  });
+}
+
 export interface CancellableFetch {
   res: Response;
   /** Release the listener and clocks. Once, AFTER the body is consumed or discarded. */
   settle: () => void;
+  /** Drop the socket (abandon before resend) so the server stops generating. */
+  abort: () => void;
 }
 
 export interface CancellableFetchOptions {
@@ -66,12 +77,13 @@ export async function fetchCancellable(
     clearTimers();
     if (o.signal) o.signal.removeEventListener('abort', onAbort);
   };
+  const abort = () => { abortWith('abandoned'); settle(); };
 
   try {
     const res = await fetch(url, { ...opts, signal: ctrl.signal });
     // Headers in: first-chunk clock done, total clock and caller abort stay armed.
     if (firstTimer) { clearTimeout(firstTimer); firstTimer = null; }
-    return { res, settle };
+    return { res, settle, abort };
   } catch (e: any) {
     clearTimers();
     if (o.signal) o.signal.removeEventListener('abort', onAbort);

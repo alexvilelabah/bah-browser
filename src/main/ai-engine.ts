@@ -10,7 +10,7 @@ import {
   type LocalProvider as _LocalTransport,
 } from './local-providers';
 import {
-  fetchCancellable, shouldStream, streamKey,
+  fetchCancellable, shouldStream, streamKey, sleep,
   LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
@@ -1009,8 +1009,9 @@ export class AIEngine {
     return this.slowThinking.has(streamKey(this.baseUrl, model));
   }
 
-  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean; thinkingOff?: boolean }): Promise<string> {
+  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean; thinkingOff?: boolean; bodyRetry?: number }): Promise<string> {
     const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
+    const bodyRetry = cfg?.bodyRetry ?? 0;
     // LOCAL streams agent calls as well: a silent 150s step looks hung, and a stream
     // proves liveness. Cloud agent calls stay non-streaming (bodies are locked).
     const key = `${this.baseUrl}::${model}`;
@@ -1086,9 +1087,13 @@ export class AIEngine {
 
     let lastErr: any = null;
     let res: Response | null = null;
-    // LOCAL only: released once the body is consumed (see cancellable-fetch.ts).
+    // LOCAL only: released once the body is consumed; abandoned (socket dropped) before any
+    // resend, so the server is not still generating while we retry (measured: half speed).
     let localSettle: (() => void) | undefined;
+    let localAbort: (() => void) | undefined;
     const release = () => { const s = localSettle; localSettle = undefined; try { s?.(); } catch {} };
+    const abandon = () => { const a = localAbort; localAbort = undefined; release(); try { a?.(); } catch {} };
+    const backoffMs = (n: number) => (n <= 1 ? 2000 : 5000);
     const t0 = Date.now();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const firstChunkMs = this.isLocal ? LOCAL_FIRST_CHUNK_MS : CLOUD_FIRST_CHUNK_MS;
@@ -1098,6 +1103,7 @@ export class AIEngine {
           const cf = await fetchCancellable(endpoint, { method: 'POST', headers, body: bodyJson }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `local ${model}` });
           candidate = cf.res;
           localSettle = cf.settle;
+          localAbort = cf.abort;
         } else {
           candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, firstChunkMs, signal);
         }
@@ -1192,13 +1198,23 @@ export class AIEngine {
           if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && this.isLocal && !cfg?.thinkingOff) {
             this.slowThinking.add(key);
             appendLog(`[Local] thinking longo demais em "${model}" → thinking desligado nesta sessao`);
+            abandon();
             return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: true });
+          }
+          // Nothing delivered yet: resend the whole request (previous socket dropped first).
+          if (this.isLocal && !sawDelta && !signal?.aborted && bodyRetry < 2) {
+            const wait = backoffMs(bodyRetry + 1);
+            appendLog(`[Local] stream falhou antes do 1º delta (${e?.message}) → reenvio ${bodyRetry + 2}/3 em ${wait}ms`);
+            abandon();
+            await sleep(wait);
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff, bodyRetry: bodyRetry + 1 });
           }
           // Stream dead before the first delta: remember it and redo unstreamed for the
           // rest of the run — never worse than before this change.
           if (this.isLocal && !sawDelta && !signal?.aborted && !cfg?.noStream) {
             this.streamRejected.add(key);
             appendLog('[Local] stream falhou antes do 1º delta → sem stream para este modelo');
+            abandon();
             return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: true, noStreamOptions: cfg?.noStreamOptions });
           }
           throw e;
@@ -1217,6 +1233,15 @@ export class AIEngine {
         if (data?.usage?.completion_tokens) this.stepTokens.set(key, data.usage.completion_tokens);
       } catch (e: any) {
         if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        // THE original killer: a body timeout used to be final — the retry loop had already
+        // exited at the headers. Now the whole request is resent (previous one dropped first).
+        if (this.isLocal && bodyRetry < 2) {
+          const wait = backoffMs(bodyRetry + 1);
+          appendLog(`[Local] corpo nao veio (${e?.message}) → reenvio ${bodyRetry + 2}/3 em ${wait}ms`);
+          abandon();
+          await sleep(wait);
+          return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff, bodyRetry: bodyRetry + 1 });
+        }
         throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
       }
 
@@ -1637,7 +1662,7 @@ export class AIEngine {
     }
   }
 
-  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false, thinkingOff = false): Promise<string> {
+  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false, thinkingOff = false, resend = 0): Promise<string> {
 
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Images arrive here only when resolveVision() allowed them (mode + capability gate).
@@ -1717,7 +1742,10 @@ export class AIEngine {
     const firstChunkMs = LOCAL_FIRST_CHUNK_MS;
     let res: Response;
     let settle: (() => void) | undefined;
+    let abortFn: (() => void) | undefined;
     const release = () => { const s = settle; settle = undefined; try { s?.(); } catch {} };
+    // Drop the socket before a resend: otherwise Ollama keeps generating while we retry.
+    const abandon = () => { const a = abortFn; abortFn = undefined; release(); try { a?.(); } catch {} };
     try {
       const cf = await fetchCancellable(`${this.baseUrl}/api/chat`, {
         method: 'POST',
@@ -1726,6 +1754,7 @@ export class AIEngine {
       }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model}` });
       res = cf.res;
       settle = cf.settle;
+      abortFn = cf.abort;
     } catch (e: any) {
       release();
       // Estouro de tempo NÃO é falha de conexão. O Ollama respondeu — devagar demais, quase
@@ -1761,6 +1790,7 @@ export class AIEngine {
         }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model} (no-think)` });
         res = retry.res;
         settle = retry.settle;
+        abortFn = retry.abort;
         if (!res.ok) { const t = await res.text().catch(() => ''); release(); throw new Error(`Ollama API error ${res.status}: ${t.slice(0, 400)}`); }
       } else {
         throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 400)}`);
@@ -1786,19 +1816,42 @@ export class AIEngine {
           if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && !thinkingOff) {
             this.slowThinking.add(sKey);
             console.log(`[Ollama] thinking longo demais em ${model} → think:false nesta sessao`);
+            abandon();
             return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, true);
+          }
+          if (!sawDelta && !signal?.aborted && resend < 2) {
+            const wait = resend === 0 ? 2000 : 5000;
+            console.log(`[Ollama] stream falhou antes do 1º delta (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);
+            abandon();
+            await sleep(wait, signal);
+            return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, thinkingOff, resend + 1);
           }
           if (!sawDelta && !signal?.aborted && !forceNoStream) {
             this.streamRejected.add(sKey);
             console.log('[Ollama] stream falhou antes do 1º delta → sem stream para este modelo');
+            abandon();
             return this.callOllama(messages, isAgentMode, onDelta, signal, true, thinkingOff);
           }
           throw e;
         }
       }
 
-      const data = await res.json();
-      const content = data.message?.content ?? '';
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch (e: any) {
+        if (signal?.aborted) throw e;
+        if (resend < 2) {
+          const wait = resend === 0 ? 2000 : 5000;
+          console.log(`[Ollama] corpo nao veio (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);
+          abandon();
+          await sleep(wait, signal);
+          return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, thinkingOff, resend + 1);
+        }
+        throw new LocalRequestError('BAD_JSON', `Ollama body read failed: ${e?.message ?? e}`, true);
+      }
+      if (data?.eval_count) this.stepTokens.set(sKey, data.eval_count);
+      const content = data?.message?.content ?? '';
       if (!content) {
         console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);
       }
