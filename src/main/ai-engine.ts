@@ -1009,6 +1009,14 @@ export class AIEngine {
     return this.slowThinking.has(streamKey(this.baseUrl, model));
   }
 
+  /** Reasoning models must not be pinned to temperature 0 (they loop); the name is the prior,
+   *  reported usage is the proof (see the usage checks in the local paths). */
+  private isReasoningModel(model: string): boolean {
+    const m = (model || '').toLowerCase();
+    if (/not.?think|no.?think|instruct/.test(m)) return false;
+    return /gpt-?oss|gptoss|qwen3(?!-?vl)|deepseek-r1|thinking/.test(m);
+  }
+
   private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean; thinkingOff?: boolean; bodyRetry?: number }): Promise<string> {
     const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
     const bodyRetry = cfg?.bodyRetry ?? 0;
@@ -1043,7 +1051,10 @@ export class AIEngine {
       // JSON estruturado é o DEFAULT do agente (incl. modelos de raciocínio — testado: NOTHINK,
       // Fara e DeepSeek-V4-Flash todos produzem JSON válido com json_object). Desligar é a
       // EXCEÇÃO, só em recuperação com evidência (falha do response_format ou retorno vazio).
-      body.temperature = 0;   // deterministic JSON (medido: mais rápido e estável na rota do llama.cpp)
+      // Deterministic JSON on cloud and on local instruct models (measured: faster and more
+      // stable on the llama.cpp route). Thinking models get no temperature at all — vendors
+      // recommend sampling for the reasoning pass and temp 0 is what makes them loop.
+      if (!(this.isLocal && this.isReasoningModel(model))) body.temperature = 0;
       body.max_tokens = maxTokens;
       if (jsonMode) body.response_format = { type: 'json_object' };
     } else {
@@ -1711,7 +1722,7 @@ export class AIEngine {
           : { num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
               ? this.localOpts.ollamaNumCtx
               : 16384 }),
-        temperature: 0,      // deterministic JSON
+        ...(isReasoning ? {} : { temperature: 0 }),   // no temperature for the reasoning pass
       },
     };
     // Modo agente precisa de JSON confiável: força a gramática JSON do Ollama para os

@@ -50,3 +50,19 @@ test('a stream that dies before the first delta falls back once, not forever', (
   assert.ok(/noStream: true/.test(src), 'compat fallback must be bounded');
   assert.ok(/signal\?: AbortSignal, forceNoStream = false/.test(src), 'ollama fallback must be bounded');
 });
+
+test('temperature: cloud stays at 0, local thinking models get none', () => {
+  const compat = src.slice(src.indexOf('private async openAICompat'), src.indexOf('private async callMistral'));
+  assert.ok(/if \(!\(this\.isLocal && this\.isReasoningModel\(model\)\)\) body\.temperature = 0;/.test(compat),
+    'local thinking models must not be pinned to temperature 0');
+  const ollama = src.slice(src.indexOf('private async callOllama('));
+  assert.ok(/\.\.\.\(isReasoning \? \{\} : \{ temperature: 0 \}\)/.test(ollama), 'ollama: same rule');
+  // cloud providers are locked elsewhere (golden bodies) — this only guards the shared path.
+  assert.ok(/deepseek/.test(src.toLowerCase()));
+});
+
+test('reasoning prior excludes instruct/no-think names', () => {
+  const i = src.indexOf('private isReasoningModel');
+  const body = src.slice(i, i + 400);
+  assert.ok(/not\.\?think/.test(body), 'no-think names must not look like reasoning models');
+});
