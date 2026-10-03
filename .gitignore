@@ -43,3 +43,15 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# ── Notas internas de trabalho (NUNCA versionar) ─────────────────────────────
+# Rascunhos de sessão: progresso, inventário de limpeza, scripts de patch de
+# uma uso, imagens de teste. São temporários por natureza e dizem respeito à
+# sessão de desenvolvimento, não ao produto.
+PROGRESS.md
+CLEANUP-NOTE.md
+*.local.md
+NOTES-*.md
+tmp-*.cjs
+tmp-*.png
+tmp-*.js

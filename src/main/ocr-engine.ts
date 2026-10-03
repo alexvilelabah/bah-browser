@@ -31,12 +31,40 @@ export function hasEnoughDomText(domText: string, minChars = 150): boolean {
 // Memory cost (~40–80MB resident) is fine on the user's machine and worth the speed.
 const workerCache = new Map<string, Promise<any>>();
 
+/**
+ * Onde os .traineddata empacotados vivem, ou null quando nao estao no disco.
+ * Empacotado: <resources>/tessdata (extraResources do electron-builder).
+ * Dev: raiz do repo. Null mantem o comportamento antigo - o tesseract.js baixa do CDN -
+ * pra que um checkout sem os ~7 MB de dados de idioma continue funcionando.
+ */
+function localTessdataDir(): string | null {
+  const pth = require('path') as typeof import('path');
+  const fsx = require('fs') as typeof import('fs');
+  const dirs: string[] = [];
+  try {
+    const electron = require('electron') as typeof import('electron');
+    if (electron?.app?.isPackaged) dirs.push(pth.join(process.resourcesPath, 'tessdata'));
+    else { dirs.push(pth.join(__dirname, '..', '..', '..')); dirs.push(process.cwd()); }
+  } catch { dirs.push(process.cwd()); }
+  for (const d of dirs) {
+    try {
+      if (fsx.existsSync(pth.join(d, 'eng.traineddata'))) return d;
+    } catch {}
+  }
+  return null;
+}
+
 function getWorker(lang: string): Promise<any> {
   let w = workerCache.get(lang);
   if (!w) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { createWorker } = require('tesseract.js') as typeof import('tesseract.js');
-    w = createWorker(lang, 1, { logger: () => {}, errorHandler: () => {} });
+    const tessdata = localTessdataDir();
+    // langPath como diretorio local faz o adapter Node ler do disco em vez do CDN:
+    // OCR funciona sem rede. gzip:false porque os arquivos shipped sao raw.
+    const opts: Record<string, unknown> = { logger: () => {}, errorHandler: () => {} };
+    if (tessdata) { opts.langPath = tessdata; opts.gzip = false; }
+    w = createWorker(lang, 1, opts);
     workerCache.set(lang, w);
     // If creation fails, drop it so the next call retries cleanly.
     w.catch(() => workerCache.delete(lang));
