@@ -1537,6 +1537,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // observation; if the element vanished, the whole batch is discarded.
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
+              let localHelpPauses = 0;   // a dead local model pauses for help; it does not kill the run
               // Observation reuse: carry the post-action observation of step N into step N+1
               // when the page hasn't changed — otherwise every step pays the full AXTree
               // observation (2-8s on heavy pages) twice. carriedOcrText rides along so
@@ -2167,10 +2168,27 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   let result: any;
                   // Reset every LLM step: a text-only step has no picture to take coordinates from.
                   modelShot = undefined;
-                  try {
-                    result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
-                  } finally {
-                    if (signal) signal.removeEventListener('abort', onAbortStep);
+                  // Retry / degrade / pause - one transient local failure must not kill the run.
+                  // 1) retry the step, 2) degrade: drop the screenshot, then shrink the context,
+                  // 3) pause and ask the user. Stop always wins immediately.
+                  for (let tries = 0; tries < 3; tries++) {
+                    try {
+                      result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
+                    } finally {
+                      if (signal) signal.removeEventListener('abort', onAbortStep);
+                    }
+                    if (!result?.error || result?.errorCode === 'CANCELLED') break;
+                    const code = result?.errorCode ?? 'UNKNOWN';
+                    if (result?.errorRetryable !== true || tries === 2) break;
+                    const wait = tries === 0 ? 2000 : 5000;
+                    onProgress({ kind: 'status', message: `⏳ ${code} — retrying step ${step + 1} (${tries + 2}/3) in ${wait / 1000}s` });
+                    await new Promise<void>((res2) => setTimeout(res2, wait));
+                    throwIfCancelled();
+                    // Degrade so the retry is cheaper than the attempt that just failed.
+                    if (tries === 0 && shotForModel) {
+                      shotForModel = undefined;
+                      onProgress({ kind: 'status', message: '📄 retrying without the screenshot' });
+                    }
                   }
                   if (result?.vision?.attached && shotForModel) {
                     imagesSent++;   // only frames the model really received count against the budget
@@ -2191,11 +2209,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
                   if (result?.error) {
-                    // Decide on the code, never on the prose: a retryable transport failure is
-                    // not the same event as a permanent one (C15 acts on this split).
+                    // Codes, never prose: a retryable transport failure is not the same event
+                    // as a permanent one. Ask the user (max twice per run) before failing.
                     const code = result?.errorCode ?? 'UNKNOWN';
                     const retryable = result?.errorRetryable === true;
-                    onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retryable' : ''}]: ${result.error}` });
+                    onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retries exhausted' : ''}]: ${result.error}` });
+                    if (localHelpPauses < 2) {
+                      localHelpPauses++;
+                      await waitForManualHelp({
+                        kind: 'stuck',
+                        reason: `${code}: ${result.error}`,
+                        instruction: retryable
+                          ? 'The local model did not answer. Start it (or check its context window), then press Continue — this step runs again. Press Stop to end the task.'
+                          : 'The local model refused this request. Press Stop, or change the model / screenshot setting, then press Continue.'
+                      }, observation.url);
+                      throwIfCancelled();
+                      onProgress({ kind: 'status', message: '▶️ continuing after your help' });
+                      step--;   // this step gets another go, with whatever the user fixed
+                      continue;
+                    }
                     finishRun('failed', result.error, { errorCode: code, retryable });
                     return { error: result.error, errorCode: code, retryable, thought: thoughts.join('\n'), results: allResults };
                   }
