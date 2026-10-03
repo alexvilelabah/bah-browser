@@ -174,11 +174,13 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
       if (inputModalities.length > 0) {
         info.vision = inputModalities.includes('image') ? 'supported' : 'unsupported';
       }
-      // Router-launched servers carry their llama-server argv; --ctx-size is the
-      // allocation the model WILL get once loaded (the only context number
-      // available while it is unloaded, since /props 400s on unloaded models).
+      // Server-advertised window first (vLLM/LM Studio report it on the model card), then
+      // the router argv (--ctx-size: the allocation the model will get once loaded — /props
+      // 400s on unloaded models), then the Ollama registry (nominal, never runtime).
+      const adv = advertisedContextTokens(m);
+      if (adv) { info.contextTokens = adv; info.contextSource = 'configured'; }
       const ctxArg = ctxSizeFromArgs(m?.status?.args);
-      if (ctxArg) { info.contextTokens = ctxArg; info.contextSource = 'configured'; }
+      if (!adv && ctxArg) { info.contextTokens = ctxArg; info.contextSource = 'configured'; }
       if (tag) enrichFromOllamaTag(info, tag);
       info.unsuitable = classifyUnsuitable(info.id, tag?.capabilities);
       out.push(info);
@@ -198,6 +200,23 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
     return { ok: true, models: out };
   }
   return { ok: false, models: [], error: v1Error || 'no models reported' };
+}
+
+/** Context window as the server advertises it: vLLM max_model_len, LM Studio
+ *  context_length / max_context_tokens, llama.cpp n_ctx, Ollama num_ctx. Names differ
+ *  per server; the VALUE is the window requests must fit in. */
+export function advertisedContextTokens(m: any): number | undefined {
+  if (!m || typeof m !== 'object') return undefined;
+  const keys = ['max_model_len', 'context_length', 'max_context_tokens', 'n_ctx', 'num_ctx', 'max_context_window'];
+  const holders = [m, m?.metadata, m?.parameters, m?.model_card, m?.extra] as any[];
+  for (const h of holders) {
+    if (!h || typeof h !== 'object') continue;
+    for (const k of keys) {
+      const n = Number(h[k]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return undefined;
 }
 
 /** Pull `--ctx-size N` (or `-c N`) out of a llama.cpp router's recorded argv. */
