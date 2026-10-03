@@ -1253,7 +1253,26 @@ function setupIPC(): void {
       return { ok: false, source: 'unknown' };
     } catch (e: any) { return { ok: false, source: 'unknown', error: String(e?.message ?? e) }; }
   });
-  ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: string) => {
+  // Vision costs a small model a lot on a machine with no real GPU: the encoder runs on the
+// CPU and a 2s step becomes 30s, which the user reads as the agent being broken. The app
+// asks once, caches the answer, and defaults vision OFF when there is nothing to run it on.
+// 'basic' resolves as soon as the GPU process is up; a failure answers 'unknown', which the
+// shared rule treats as NO GPU - the cautious side.
+let gpuInfoCache: unknown = null;
+let gpuInfoPromise: Promise<unknown> | null = null;
+async function gpuInfoFresh() {
+  if (gpuInfoCache) return gpuInfoCache;
+  if (!gpuInfoPromise) {
+    gpuInfoPromise = app
+      .getGPUInfo('basic')
+      .then((info) => { gpuInfoCache = info; return info; })
+      .catch(() => ({ gpuDevice: [] }));
+  }
+  return gpuInfoPromise;
+}
+ipcMain.handle('local:gpu', () => gpuInfoFresh());
+
+ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: string) => {
     try {
       return await testLocalConnection(normalizeLocalBaseUrl(baseUrl), authKey);
     } catch (e: any) { return { ok: false, reachable: false, modelsFound: 0, error: String(e?.message ?? e) }; }

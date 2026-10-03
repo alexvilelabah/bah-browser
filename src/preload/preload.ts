@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('local:test-connection', baseUrl, authKey),
   localTestModel: (provider: string, baseUrl?: string, model?: string, authKey?: string) =>
     ipcRenderer.invoke('local:test-model', provider, baseUrl, model, authKey),
+  gpuInfo: () => ipcRenderer.invoke('local:gpu'),
   setLocalEnabled: (enabled: boolean) => ipcRenderer.invoke('ai:set-local-enabled', enabled),
   setLocalWarmup: (on: boolean) => ipcRenderer.invoke('ai:set-local-warmup', on),
   // Descoberta genérica de backend local (Ollama OU OpenAI-compatible llama.cpp/LM Studio/vLLM).

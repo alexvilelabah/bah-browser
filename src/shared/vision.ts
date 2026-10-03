@@ -44,6 +44,37 @@ export function resolveVisionMode(ls: { vision?: boolean; visionMode?: VisionMod
   return ls.vision === true ? 'auto' : 'off';
 }
 
+/** A GPU that can carry a vision encoder. `basic` GPU info from Electron lists active
+ *  devices; `Software only` / `SwiftShader` / `llvmpipe` mean there is no real GPU, and
+ *  a vision encoder on those turns a 2s step into a 30s one - which reads to the user as
+ *  the agent being broken. Unknown is treated as NO, so an unprobed machine behaves the
+ *  cautious way; the setting always overrides. */
+export function hasCapableGpu(info: unknown): boolean {
+  const g = info as { gpuDevice?: Array<{ vendor?: string; renderer?: string }> } | null | undefined;
+  const list = Array.isArray(g?.gpuDevice) ? g!.gpuDevice : [];
+  if (!list.length) return false;
+  return list.some((d) => {
+    const r = String(d?.renderer || '').toLowerCase();
+    const v = String(d?.vendor || '').toLowerCase();
+    if (!r) return false;
+    if (/swiftshader|llvmpipe|software|basic render|microsoft basic/.test(r)) return false;
+    if (/apple m[1-9]|nvidia|geforce|quadro|rtx|gtx|amd|radeon|radv|intel.?arc|arc.?graphics/.test(r)) return true;
+    // Intel UHD/Iris: capable for small models, still a real GPU.
+    if (/intel/.test(r) && !/hd graphics 4[0-9]{3}|intel.?9[0-9]{3}/.test(r)) return true;
+    return v === 'apple';
+  });
+}
+
+/**
+ * The default nobody chose. An explicit choice (visionMode, or the legacy vision boolean)
+ * always wins. With no choice made, vision turns ON only on a machine that can carry the
+ * encoder - elsewhere it starts OFF and the user turns it on in Settings.
+ */
+export function defaultVisionMode(ls: { vision?: boolean; visionMode?: VisionMode }, gpuInfo: unknown): VisionMode {
+  if (ls.visionMode || ls.vision !== undefined) return resolveVisionMode(ls);
+  return hasCapableGpu(gpuInfo) ? 'auto' : 'off';
+}
+
 /** Providers with no image input on their API route — images never travel. */
 export const NO_IMAGE_PROVIDERS = new Set(['deepseek', 'mistral', 'nvidia']);
 
@@ -118,6 +149,16 @@ export function mapShotPointToViewport(
 
 /** Max long edge of the inference image. Never upscaled. */
 export const VISION_MAX_SIDE = 1280;
+
+/**
+ * Long edge for the AGENT vision frames - larger than VISION_MAX_SIDE on purpose.
+ * A vision model on a desktop GPU sees a 1280px frame as a blurry thumbnail and loses
+ * small targets: the reported symptom was clicking the wrong Netflix row, because at
+ * 1280 the poster art and its title blur together. Coordinates survive the round trip
+ * (mapShotPointToViewport scales shot pixels -> CSS pixels), so clarity is free here.
+ * Text-only steps never send a frame at all, so this costs nothing on those turns.
+ */
+export const VISION_AGENT_MAX_SIDE = 2560;
 /** Encoded bytes cap per image (main enforces its own hard cap too).
  *  A 1280px JPEG at q82 is ~150-400 KB, so this only trips on pathological pages. */
 export const VISION_MAX_BYTES = 2_500_000;

@@ -25,6 +25,7 @@ import {
 import {
   STICKY_VISION_REASONS,
   VISION_MAX_SIDE,
+  VISION_AGENT_MAX_SIDE,
   VISION_MIN_SIDE,
   base64Head,
   decideAgentShot,
@@ -930,7 +931,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
    *  NativeImage is what stops OCR and the model from describing different frames.
    *  The model image is downscaled JPEG (never upscaled); OCR keeps the full-res PNG,
    *  because vision encoders blur small type that Tesseract reads exactly. */
-  const captureFrame = useCallback(async (o: { image: boolean; png: boolean }): Promise<{
+  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean }): Promise<{
     thumb?: string;
     image?: VisionImage;
     png?: string;
@@ -955,7 +956,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           const cssH = vp?.h || wv.clientHeight || size.height;
           // Size off the CSS viewport: up to VISION_MAX_SIDE the screenshot pixels ARE the
           // CSS pixels, so click_at needs no scaling at all. Never upscaled.
-          const scale = Math.min(1, VISION_MAX_SIDE / Math.max(cssW, cssH));
+          // Agent vision frames go up to VISION_AGENT_MAX_SIDE; other paths keep 1280.
+          const cap = o.agentVision ? VISION_AGENT_MAX_SIDE : VISION_MAX_SIDE;
+          const scale = Math.min(1, cap / Math.max(cssW, cssH));
           const w = Math.max(1, Math.round(cssW * scale));
           const h = Math.max(1, Math.round(cssH * scale));
           // PNG aqui, nunca toJPEG(): neste renderer (sandbox) o toJPEG() derruba o processo
@@ -1990,7 +1993,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // OCR must read the SAME frame the model gets, so the capture settles first.
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
-                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach }), 8000, undefined as any);
+                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -2112,6 +2115,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
+                    // A attached frame must produce an action, not a description. Without this the
+                    // model wrote 'I see the login page' and the run clicked nothing (measured).
+                    shotForModel ? [
+                      'A SCREENSHOT of the live page is attached to this request.',
+                      'You are the ACTOR, not the narrator: answer with a ACTION that changes the page.',
+                      'Never answer with a description of the screenshot, and never finish with done',
+                      'unless the user goal is already complete on this page.',
+                      'Click exactly what the image shows: poster art does not open a page, the PLAY (assistir/play) button does.',
+                      'Coordinates use the viewport size stated above.',
+                    ].join(' ') : '',
                     commandRequiresGmailPromotions ? [
                       'DESTRUCTIVE EMAIL SAFETY:',
                       'The user asked to remove/delete emails from Gmail Promotions only.',
