@@ -336,6 +336,8 @@ export interface ContextBudget {
   marginTokens?: number;
   /** Approximate cost of attached images — text must fit around them. */
   imageTokens?: number;
+  /** The system prompt travels in the same window; uncounted, it overflows the server. */
+  systemTokens?: number;
 }
 
 const OBS_MARKERS = {
@@ -362,7 +364,7 @@ export function clampWindow(o: {
  *  list. Returns the fitted text + whether anything was trimmed. */
 export function applyContextBudget(observedState: string, budget: ContextBudget): { text: string; trimmed: boolean } {
   const margin = budget.marginTokens ?? 512;
-  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin - (budget.imageTokens ?? 0));
+  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin - (budget.imageTokens ?? 0) - (budget.systemTokens ?? 0));
   if (!observedState || estimateTokens(observedState) <= allowed) return { text: observedState, trimmed: false };
 
   let text = observedState;

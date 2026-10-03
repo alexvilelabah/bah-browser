@@ -5,6 +5,7 @@ import {
   discoverLocalModels as _discoverLocalModels,
   detectRuntimeContext as _detectRuntimeContext,
   applyContextBudget as _applyContextBudget,
+  estimateTokens,
   LocalRequestError,
   type LocalModelInfo as _LocalModelInfo,
   type LocalProvider as _LocalTransport,
@@ -485,6 +486,12 @@ export class AIEngine {
     return { totalTokens: FALLBACK, source: 'fallback' };
   }
 
+  /** Mirrors the system text actually sent (same constants, same order) - used to charge the
+   *  window honestly. Keep in sync with the messages composition in the call paths. */
+  private systemPromptText(isAgentMode: boolean): string {
+    return (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
+  }
+
   /** Gate + explain in one place. "unsupported" is a known NO from the server;
    *  "unknown" (the common case — most OpenAI-compatible servers advertise no
    *  modalities at all) must NOT be treated as unsupported, or the opt-in would
@@ -696,6 +703,9 @@ export class AIEngine {
     let contextSource: string | undefined;
     let contextTrimmed = false;
     const imageTokens = vision.attached ? estimateImageTokens(vision.width, vision.height) : 0;
+    // The system prompt rides in the same window. Uncounted it is ~6.8k tokens of a 16k
+    // budget silently spent before the observation is even measured.
+    const systemTokens = estimateTokens(this.systemPromptText(true) + command);
     if (this.isLocal && state) {
       try {
         const cb = await this.resolveContextBudget();
@@ -705,6 +715,7 @@ export class AIEngine {
           totalTokens: cb.totalTokens,
           maxOutputTokens: this.localOpts.maxOutputTokens ?? 4096,
           imageTokens,
+          systemTokens,
         });
         state = fitted.text;
         contextTrimmed = fitted.trimmed;
