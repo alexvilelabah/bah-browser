@@ -10,6 +10,15 @@
 // cannot be used. Cloud callers keep fetchWithTimeout. Electron-free so `node --test` runs it.
 import { LocalRequestError } from './local-providers.ts';
 
+// Clocks. A cold local model takes minutes to load; a warm step is seconds; but one long
+// answer can sit silent for minutes (measured: 2,869 output tokens at 19 tok/s = 151s,
+// and oMLX sends nothing between headers and body when not streaming). Cloud is unchanged.
+export const LOCAL_FIRST_CHUNK_MS = 300_000;   // connect + model load + prompt processing
+export const LOCAL_TOTAL_MS = 300_000;         // non-streaming: no chunks to measure by
+export const LOCAL_INACTIVITY_MS = 60_000;     // streaming: silence between chunks
+export const CLOUD_FIRST_CHUNK_MS = 45_000;
+export const CLOUD_BODY_MS = 60_000;
+export const CLOUD_INACTIVITY_MS = 30_000;
 export interface CancellableFetch {
   res: Response;
   /** Release the listener and clocks. Once, AFTER the body is consumed or discarded. */

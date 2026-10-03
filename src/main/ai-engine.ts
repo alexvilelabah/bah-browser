@@ -9,7 +9,11 @@ import {
   type LocalModelInfo as _LocalModelInfo,
   type LocalProvider as _LocalTransport,
 } from './local-providers';
-import { fetchCancellable } from './cancellable-fetch';
+import {
+  fetchCancellable,
+  LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
+  CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
+} from './cancellable-fetch';
 import {
   NO_IMAGE_PROVIDERS,
   RX_IMAGE_REJECTED,
@@ -75,8 +79,8 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
 // (delta.reasoning_content). Embrulhamos em <think>…</think> pro renderer exibir o
 // chip 💭 — o MESMO padrão do reader NDJSON do Ollama. O retorno (histórico) fica
 // LIMPO: só o content, sem o raciocínio vazado (a UI já mostrou os chips via onDelta).
-// Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
-async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
+// Guarda de inatividade: sem chunk por inactivityMs → aborta (stream pendurado não congela o chat).
+async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
@@ -115,7 +119,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
       if (signal?.aborted) throw new Error('CANCELLED');
       // Timer limpo a CADA leitura (senão um stream longo acumula um timer de 30s por chunk).
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
+        stallTimer = setTimeout(() => reject(new LocalRequestError('TIMEOUT_STALL', `stream stalled (${Math.round(inactivityMs / 1000)}s)`, true)), inactivityMs);
         Promise.resolve(reader.read()).then(
           (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
           (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
@@ -162,7 +166,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
 // readSseStream: guarda de 30s por chunk + cancel no erro. Modelos de raciocínio
 // (qwen3 etc.) podem mandar o pensamento em message.thinking — embrulhamos em
 // <think>…</think> pra o renderer exibir igual ao caso dos tags inline no content.
-async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
+async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
@@ -191,7 +195,7 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
     while (true) {
       if (signal?.aborted) throw new Error('CANCELLED');
       const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
+        stallTimer = setTimeout(() => reject(new LocalRequestError('TIMEOUT_STALL', `stream stalled (${Math.round(inactivityMs / 1000)}s)`, true)), inactivityMs);
         Promise.resolve(reader.read()).then(
           (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
           (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
@@ -1033,16 +1037,15 @@ export class AIEngine {
     const release = () => { const s = localSettle; localSettle = undefined; try { s?.(); } catch {} };
     const t0 = Date.now();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      // Local frio: 300s (carregar GGUF grande). Local quente: 120s. Nuvem: 45s (como antes).
-      const reqTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 45_000;
+      const firstChunkMs = this.isLocal ? LOCAL_FIRST_CHUNK_MS : CLOUD_FIRST_CHUNK_MS;
       try {
         let candidate: Response;
         if (this.isLocal) {
-          const cf = await fetchCancellable(endpoint, { method: 'POST', headers, body: bodyJson }, { firstChunkMs: reqTimeoutMs, signal, label: `local ${model}` });
+          const cf = await fetchCancellable(endpoint, { method: 'POST', headers, body: bodyJson }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `local ${model}` });
           candidate = cf.res;
           localSettle = cf.settle;
         } else {
-          candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, reqTimeoutMs, signal);
+          candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, firstChunkMs, signal);
         }
         // Retry 429/5xx transitórios — NÃO 4xx. "Compute error" no llama.cpp = modelo não
         // carregado / OOM: retry não ajuda, para já com mensagem clara.
@@ -1105,18 +1108,16 @@ export class AIEngine {
       throw new Error(`OpenAI API error ${res.status}: ${errText.slice(0, 400)}`);
     }
 
-    if (this.isLocal) this.ollamaWarmed = true;
     try {
-      if (streaming) return await readSseStream(res, onDelta!, signal);
+      if (streaming) return await readSseStream(res, onDelta!, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS);
 
       // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
       // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
       let data: any = {};
       try {
-        // Servers that send headers early keep generating while we read the body, so a local
-        // model gets the same budget as the request itself (120s warm / 300s cold). A flat 60s
-        // cut off long answers (e.g. a 75-track JSON) that the header timeout would have allowed.
-        const bodyTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 60_000;
+        // A flat 60s cut off long answers (e.g. a 75-track JSON) the header budget allowed.
+        // Local gets the full non-streaming budget; cloud keeps 60s.
+        const bodyTimeoutMs = this.isLocal ? LOCAL_TOTAL_MS : CLOUD_BODY_MS;
         const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
         data = parsed.data;
       } catch (e: any) {
@@ -1535,13 +1536,11 @@ export class AIEngine {
       } else {
         return;
       }
-      this.ollamaWarmed = true;
       console.log(`[Local] modelo pronto na VRAM.`);
     } catch (e: any) {
       console.warn('[Local] warmup falhou (servidor ligado?):', e?.message);
     }
   }
-  private ollamaWarmed = false;
 
   private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
@@ -1616,7 +1615,7 @@ export class AIEngine {
     // 1ª chamada carrega o modelo na VRAM (pode levar minutos num modelo grande/frio); depois
     // fica quente. fetchWithTimeout ABORTA de verdade no estouro (!= Promise.race, que vazava o
     // socket e nunca limpava o timer — deixava o event loop ativo por ate 5 min por request).
-    const timeoutMs = this.ollamaWarmed ? 120_000 : 300_000;
+    const firstChunkMs = LOCAL_FIRST_CHUNK_MS;
     let res: Response;
     let settle: (() => void) | undefined;
     const release = () => { const s = settle; settle = undefined; try { s?.(); } catch {} };
@@ -1625,7 +1624,7 @@ export class AIEngine {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, { firstChunkMs: timeoutMs, signal, label: `Ollama ${model}` });
+      }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model}` });
       res = cf.res;
       settle = cf.settle;
     } catch (e: any) {
@@ -1645,7 +1644,7 @@ export class AIEngine {
       }
       throw new Error(`Ollama connection failed: ${e.message}`);
     }
-    this.ollamaWarmed = true;  // a partir daqui o modelo está na VRAM → timeout curto
+
 
     console.log(`[Ollama] ← ${res.status} in ${Date.now() - t0}ms`);
     if (!res.ok) {
@@ -1660,7 +1659,7 @@ export class AIEngine {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-        }, { firstChunkMs: timeoutMs, signal, label: `Ollama ${model} (no-think)` });
+        }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model} (no-think)` });
         res = retry.res;
         settle = retry.settle;
         if (!res.ok) { const t = await res.text().catch(() => ''); release(); throw new Error(`Ollama API error ${res.status}: ${t.slice(0, 400)}`); }
@@ -1672,7 +1671,7 @@ export class AIEngine {
     // Chat streamado: NDJSON linha a linha (o fallback do callChatLLM refaz sem stream
     // se der erro antes do 1º delta — mesmo contrato dos provedores de nuvem).
     try {
-      if (streaming) return await readOllamaNdjson(res, onDelta!, signal);
+      if (streaming) return await readOllamaNdjson(res, onDelta!, signal, LOCAL_INACTIVITY_MS);
 
       const data = await res.json();
       const content = data.message?.content ?? '';
