@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
+import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
 import TabBar from './components/TabBar';
@@ -26,6 +27,7 @@ import {
   STICKY_VISION_REASONS,
   VISION_MAX_SIDE,
   VISION_AGENT_MAX_SIDE,
+  defaultVisionMode,
   VISION_MIN_SIDE,
   base64Head,
   decideAgentShot,
@@ -70,6 +72,7 @@ import { createDeadline } from './task-deadline';
 declare global {
   interface Window {
     electronAPI?: {
+    gpuInfo?: () => Promise<any>;
       minimize: () => void;
       maximize: () => void;
       close: () => void;
@@ -193,7 +196,8 @@ export default function App() {
   const taskRunningRef = useRef(false);           // tem uma tarefa do agente rodando agora?
   // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
   // never shows on the next step.
-  useEffect(() => {
+  useEffect(() => {
+                prefetchGpuInfo();   // answers before the user can start a run
     if (agentVisual === 'idle') { setLiveMetrics(null); return; }
     const off = window.electronAPI?.onActionDelta?.((m) => { if (m?.kind) setLiveMetrics(m); });
     return () => { try { off?.(); } catch {} };
@@ -1475,7 +1479,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Vision: mode + how many images this run already sent (token/latency budget).
               // The setting lives with the LOCAL endpoint (Settings → Local AI) and only the local
               // engine carries it; the cloud engine would answer mode_off to every frame we sent.
-              let visionMode: VisionMode = store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off';
+              // An explicit choice in Settings always wins. With no choice made, vision turns on
+              // only on a machine that can carry the encoder - elsewhere it starts off and the
+              // user turns it on knowing what it costs (the probe answered at app start).
+              let visionMode: VisionMode = store.localSettings.enabled
+                ? defaultVisionMode(store.localSettings, gpuInfo())
+                : 'off';
               let imagesSent = 0;
               let lastVisionReason = 'none';
               let prevStepUrl = '';
