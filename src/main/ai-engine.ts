@@ -14,6 +14,7 @@ import {
   LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
+import { ThinkingBudget, THINKING_TOKENS_SOFT, THINKING_SECONDS_SOFT } from './thinking-budget';
 import {
   NO_IMAGE_PROVIDERS,
   RX_IMAGE_REJECTED,
@@ -80,7 +81,7 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
 // chip 💭 — o MESMO padrão do reader NDJSON do Ollama. O retorno (histórico) fica
 // LIMPO: só o content, sem o raciocínio vazado (a UI já mostrou os chips via onDelta).
 // Guarda de inatividade: sem chunk por inactivityMs → aborta (stream pendurado não congela o chat).
-async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS): Promise<string> {
+async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any }): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
@@ -94,6 +95,7 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
     try { onDelta(d); } catch {}
   };
   let emitted = 0;
+  let thinkingText = '';
   // Emit the accumulated content without splitting a surrogate pair (emoji) in half.
   // The old guard tested target < full.length immediately after target = full.length:
   // never true, so the pair was still cut in half. Now, when the text ends on a lead
@@ -134,17 +136,25 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') { emitUpTo(true); if (thinkOpen) flushThink(); return full; }
-        try {
-          const j = JSON.parse(payload);
-          const dl = j.choices?.[0]?.delta;
-          const rc = dl?.reasoning_content ?? '';
-          const d = dl?.content ?? '';
-          if (rc) emitThink(rc);
-          if (d) {
-            if (thinkOpen) flushThink();
-            full += d; emitUpTo();
-          }
-        } catch { /* linha parcial/keep-alive — ignora */ }
+        let j: any = null;
+        try { j = JSON.parse(payload); } catch { /* linha parcial/keep-alive — ignora */ }
+        if (!j) continue;
+        const dl = j.choices?.[0]?.delta;
+        if (j.usage && metrics) metrics.usage = j.usage;
+        const rc = dl?.reasoning_content ?? '';
+        const d = dl?.content ?? '';
+        if (rc) {
+          emitThink(rc);
+          // Soft budget, in characters (usage only arrives in the final chunk) and only while
+          // there is no answer yet.
+          thinkingText += rc;
+          const cut = thinking?.check(thinkingText, !!full);
+          if (cut) throw new LocalRequestError('THINKING_BUDGET', `local thinking cut (${cut}) after ${thinkingText.length} chars with no answer`, true);
+        }
+        if (d) {
+          if (thinkOpen) flushThink();
+          full += d; emitUpTo();
+        }
       }
     }
   } catch (e) {
@@ -166,12 +176,14 @@ async function readSseStream(res: Response, onDelta: (d: string) => void, signal
 // readSseStream: guarda de 30s por chunk + cancel no erro. Modelos de raciocínio
 // (qwen3 etc.) podem mandar o pensamento em message.thinking — embrulhamos em
 // <think>…</think> pra o renderer exibir igual ao caso dos tags inline no content.
-async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS): Promise<string> {
+async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any }): Promise<string> {
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new Error('stream unsupported');
   const decoder = new TextDecoder();
   let buf = '';
   let full = '';
+  let thinkingText = '';
+  let contentChars = 0;
   let thinkOpen = false;
   // Same surrogate-pair guard as readSseStream: an emoji can straddle two tokens, and
   // JSON.parse('"\\ud83d"') yields a lone lead - valid in JS, broken on screen.
@@ -208,14 +220,27 @@ async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, sig
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
         if (!line) continue;
+        let j: any = null;
+        let th = '';
+        let d = '';
         try {
-          const j = JSON.parse(line);
-          const th = j.message?.thinking ?? '';
+          j = JSON.parse(line);
+          th = j.message?.thinking ?? '';
           if (th) { if (!thinkOpen) { emit('<think>'); thinkOpen = true; } emit(th); }
-          const d = j.message?.content ?? '';
+          d = j.message?.content ?? '';
+          if (metrics && (j.eval_count || j.prompt_eval_count)) {
+            metrics.usage = { completion_tokens: j.eval_count, prompt_tokens: j.prompt_eval_count, reasoning_tokens: j.thinking_eval_count };
+          }
           if (d) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } emit(d); }
           if (j.done === true) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } flushLead(); return full; }
         } catch { /* linha parcial — ignora */ }
+        if (d) contentChars += d.length;
+        if (th) {
+          thinkingText += th;
+          // full also carries the thinking tags here, so "has an answer" is contentChars.
+          const cut = thinking?.check(thinkingText, contentChars > 0);
+          if (cut) throw new LocalRequestError('THINKING_BUDGET', `local thinking cut (${cut}) after ${thinkingText.length} chars with no answer`, true);
+        }
       }
     }
   } catch (e) {
@@ -971,8 +996,20 @@ export class AIEngine {
   // Sticky, per baseUrl::model — learned from the server, not assumed.
   private streamOptionsRejected = new Set<string>();
   private streamRejected = new Set<string>();
+  private thinkingKnobRejected = new Set<string>();
+  private slowThinking = new Set<string>();
+  private stepTokens = new Map<string, number>();
 
-  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean }): Promise<string> {
+  /** The app marks a stuck run so thinking comes back on (C15 wires the caller). */
+  noteStuck(model: string): void {
+    this.slowThinking.delete(streamKey(this.baseUrl, model));
+  }
+
+  isThinkingThrottled(model: string): boolean {
+    return this.slowThinking.has(streamKey(this.baseUrl, model));
+  }
+
+  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean; thinkingOff?: boolean }): Promise<string> {
     const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
     // LOCAL streams agent calls as well: a silent 150s step looks hung, and a stream
     // proves liveness. Cloud agent calls stay non-streaming (bodies are locked).
@@ -1016,6 +1053,11 @@ export class AIEngine {
       // Final usage chunk (tokens/sec for the UI). Dropped and remembered if the
       // server rejects it — verified, not assumed.
       if (this.isLocal && !cfg?.noStreamOptions && !this.streamOptionsRejected.has(key)) body.stream_options = { include_usage: true };
+    }
+    // Soft thinking budget (local): after a cut, thinking stays off for the run. The knob is
+    // dropped and remembered if the server rejects it; measured usage proves if it worked.
+    if (this.isLocal && cfg?.thinkingOff && !this.thinkingKnobRejected.has(key)) {
+      body.chat_template_kwargs = { ...(body.chat_template_kwargs || {}), enable_thinking: false };
     }
     // Auth OPCIONAL no modo local (llama.cpp/LM Studio geralmente não pedem chave). Sem chave
     // não mandamos o header — nada de 'Bearer ' vazio/fabricado.
@@ -1117,6 +1159,11 @@ export class AIEngine {
         appendLog('[Local] stream_options rejeitado → removendo do corpo');
         return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStreamOptions: true });
       }
+      if (this.isLocal && /chat_template_kwargs|enable_thinking/i.test(errText) && !this.thinkingKnobRejected.has(key)) {
+        this.thinkingKnobRejected.add(key);
+        appendLog(`[Local] ${model} rejeitou chat_template_kwargs → nao manda mais esse campo`);
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: false });
+      }
       const unsupportedJson = res.status === 400 && !imageRejected && !/stream_options/i.test(errText) && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
         appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
@@ -1129,9 +1176,24 @@ export class AIEngine {
       if (streaming) {
         let sawDelta = false;
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        const metrics: { usage?: any } = {};
+        const thinking = this.isLocal ? ThinkingBudget.forStep(this.stepTokens.get(key) ?? 0) : undefined;
         try {
-          return await readSseStream(res, wrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS);
+          const text = await readSseStream(res, wrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics);
+          if (metrics.usage?.completion_tokens) this.stepTokens.set(key, metrics.usage.completion_tokens);
+          const reasoningTok = metrics.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+          if (cfg?.thinkingOff && reasoningTok > 0 && !this.thinkingKnobRejected.has(key)) {
+            // Server accepted the field but kept thinking — remember so we stop pretending.
+            this.thinkingKnobRejected.add(key);
+            appendLog(`[Local] ${model} ignorou enable_thinking:false (usage: ${reasoningTok} reasoning tokens)`);
+          }
+          return text;
         } catch (e: any) {
+          if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && this.isLocal && !cfg?.thinkingOff) {
+            this.slowThinking.add(key);
+            appendLog(`[Local] thinking longo demais em "${model}" → thinking desligado nesta sessao`);
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: true });
+          }
           // Stream dead before the first delta: remember it and redo unstreamed for the
           // rest of the run — never worse than before this change.
           if (this.isLocal && !sawDelta && !signal?.aborted && !cfg?.noStream) {
@@ -1152,6 +1214,7 @@ export class AIEngine {
         const bodyTimeoutMs = this.isLocal ? LOCAL_TOTAL_MS : CLOUD_BODY_MS;
         const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
         data = parsed.data;
+        if (data?.usage?.completion_tokens) this.stepTokens.set(key, data.usage.completion_tokens);
       } catch (e: any) {
         if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
         throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
@@ -1574,7 +1637,7 @@ export class AIEngine {
     }
   }
 
-  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false): Promise<string> {
+  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false, thinkingOff = false): Promise<string> {
 
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Images arrive here only when resolveVision() allowed them (mode + capability gate).
@@ -1640,7 +1703,9 @@ export class AIEngine {
     // o content vem limpo (só o JSON, raciocínio fora); no chat, o leitor NDJSON embrulha
     // em <think> pra UI. Se o Ollama não suportar 'think', a retentativa abaixo refaz sem.
     if (isReasoning) {
-      body.think = true;
+      // Sticky: once thinking has been cut in this run it stays off (the app can lift it by
+      // marking the run stuck). Proven via usage below, not assumed.
+      body.think = thinkingOff || this.isThinkingThrottled(model) ? false : true;
     }
 
     const t0 = Date.now();
@@ -1708,13 +1773,25 @@ export class AIEngine {
       if (streaming) {
         let sawDelta = false;
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        const metrics: { usage?: any } = {};
+        const thinking = ThinkingBudget.forStep(this.stepTokens.get(sKey) ?? 0);
         try {
-          return await readOllamaNdjson(res, wrap, signal, LOCAL_INACTIVITY_MS);
+          const text = await readOllamaNdjson(res, wrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics);
+          if (metrics.usage?.eval_count) this.stepTokens.set(sKey, metrics.usage.eval_count);
+          if ((thinkingOff || this.isThinkingThrottled(model)) && (metrics.usage?.thinking_count ?? 0) > 0) {
+            console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.thinking_count} thinking tokens)`);
+          }
+          return text;
         } catch (e: any) {
+          if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && !thinkingOff) {
+            this.slowThinking.add(sKey);
+            console.log(`[Ollama] thinking longo demais em ${model} → think:false nesta sessao`);
+            return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, true);
+          }
           if (!sawDelta && !signal?.aborted && !forceNoStream) {
             this.streamRejected.add(sKey);
             console.log('[Ollama] stream falhou antes do 1º delta → sem stream para este modelo');
-            return this.callOllama(messages, isAgentMode, onDelta, signal, true);
+            return this.callOllama(messages, isAgentMode, onDelta, signal, true, thinkingOff);
           }
           throw e;
         }
