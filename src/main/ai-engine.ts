@@ -16,7 +16,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
-import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx } from './local-providers';
+import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, recoverOutputBudget } from './local-providers';
 import { readSseStream, readOllamaNdjson } from './stream-readers';
 import {
   NO_IMAGE_PROVIDERS,
@@ -486,6 +486,13 @@ export class AIEngine {
     } catch { /* discovery unavailable - fall back below */ }
     this.runtimeCtxCache.set(ck, { at: Date.now(), source: 'fallback' });
     return { totalTokens: FALLBACK, source: 'fallback' };
+  }
+
+  private async recoverMaxTokens(key: string, previous: number): Promise<number> {
+    // Cloud keeps its historic recovery number; local grows only as far as its window allows.
+    if (!this.isLocal) return 16384;
+    const w = await this.resolveContextBudget().catch(() => ({ totalTokens: 16384, source: 'fallback' }));
+    return recoverOutputBudget({ previous, measuredPromptTokens: this.promptTokens.get(key), window: w.totalTokens });
   }
 
   /** Output budget actually sent. Cloud keeps its historic number (byte-identical bodies);
@@ -1054,7 +1061,7 @@ export class AIEngine {
       const unsupportedJson = res.status === 400 && !imageRejected && !/stream_options/i.test(errText) && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
         appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
-        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: depth + 1 });
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: depth + 1 });
       }
       throw new Error(`OpenAI API error ${res.status}: ${errText.slice(0, 400)}`);
     }
@@ -1139,14 +1146,15 @@ export class AIEngine {
     const usage = data?.usage;
 
     // Recuperação JSON: UMA vez com orçamento maior (depth 0 → 1). Se ainda vazio, UMA vez
-    // prompt-only (depth 1 → 2). Não dispara o mesmo POST 16384 duas vezes.
+    // prompt-only (depth 1 → 2). Não dispara o mesmo POST duas vezes.
     if (isAgentMode && jsonMode && (empty || truncated) && depth === 0) {
-      appendLog(`[OpenAI] content vazio/truncado (finish=${finish}, depth=${depth}) → retry com orçamento maior mantendo JSON`);
-      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: 16384, depth: 1 });
+      const bigger = await this.recoverMaxTokens(key, maxTokens);
+      appendLog(`[OpenAI] content vazio/truncado (finish=${finish}, depth=${depth}) → retry com orçamento maior mantendo JSON (max_tokens=${bigger})`);
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: bigger, depth: 1 });
     }
     if (isAgentMode && empty && jsonMode && depth === 1) {
       appendLog('[OpenAI] ainda vazio com JSON → retry final em prompt-only');
-      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: 2 });
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: 2 });
     }
 
     const latencyMs = Date.now() - t0;

@@ -384,6 +384,13 @@ export function ollamaAutoNumCtx(o: {
   return Math.max(o.sent ?? 0, want);
 }
 
+/** Recovery budget after a truncated answer: grow the output budget to what the window can
+ *  actually give, instead of jumping to a fixed 16384 that may not fit the prompt. */
+export function recoverOutputBudget(o: { previous: number; measuredPromptTokens?: number; window: number; cap?: number }): number {
+  const cap = Math.min(o.cap ?? 16384, Math.max(1024, o.window - (o.measuredPromptTokens ?? 0) - 512));
+  return Math.max(Math.min(o.previous, cap), Math.min(cap, o.previous * 2));
+}
+
 /** Fit an assembled agent observation into budget by trimming the variable
  *  sections first (page text, then history), NEVER the interactive-element
  *  list. Returns the fitted text + whether anything was trimmed. */

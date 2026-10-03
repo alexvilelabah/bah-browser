@@ -2,7 +2,7 @@
 // reserve, images — or the observation is fitted to a window that does not exist.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { applyContextBudget, estimateTokens, outputBudget, ollamaAutoNumCtx } from '../../src/main/local-providers.ts';
+import { applyContextBudget, estimateTokens, outputBudget , ollamaAutoNumCtx, recoverOutputBudget } from '../../src/main/local-providers.ts';
 
 const obs = (n: number) => `PAGE TEXT:\n${'x'.repeat(n)}\nRECENT HISTORY:\nold step\n`;
 
@@ -48,4 +48,14 @@ test('auto num_ctx is measured, never shrunk, and bounded', () => {
   assert.equal(ollamaAutoNumCtx({ measuredPromptTokens: 200000, outputTokens: 16384, sent: 16384 }), 32768);
   // Never shrinks: lowering num_ctx reallocates and reloads the model.
   assert.equal(ollamaAutoNumCtx({ measuredPromptTokens: 1000, outputTokens: 512, sent: 32768 }), 32768);
+});
+
+test('recovery grows to what fits, not to a fixed 16k', () => {
+  // Small window, big prompt: recovery cannot ask for 16k.
+  assert.equal(recoverOutputBudget({ previous: 4096, measuredPromptTokens: 12000, window: 16384 }), 3872);
+  // Roomy window: double, capped at the hard 16384.
+  assert.equal(recoverOutputBudget({ previous: 4096, measuredPromptTokens: 2000, window: 32768 }), 8192);
+  assert.equal(recoverOutputBudget({ previous: 12000, measuredPromptTokens: 2000, window: 262144 }), 16384);
+  // Recovery never asks for less than the attempt that just failed.
+  assert.ok(recoverOutputBudget({ previous: 16384, measuredPromptTokens: 40000, window: 32768 }) >= 1024);
 });
