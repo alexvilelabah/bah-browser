@@ -344,6 +344,19 @@ const OBS_MARKERS = {
   history: 'RECENT HISTORY:',
 } as const;
 
+/** The window a request actually gets: a server allocates min(what the model can do, what
+ *  we ask for), so an advertised 262144 with num_ctx 16384 means 16384. A runtime number IS
+ *  the allocation and wins. Absence stays absence - never invent a window. */
+export function clampWindow(o: {
+  advertised?: number; runtime?: number; requested?: number; fallback: number;
+}): { tokens: number; source: ContextSource | 'fallback' | 'clamped' } {
+  const pos = (n?: number) => (Number.isFinite(n ?? NaN) && (n as number) > 0 ? n : undefined);
+  const runtime = pos(o.runtime), advertised = pos(o.advertised), requested = pos(o.requested);
+  if (runtime) return requested ? { tokens: Math.min(runtime, requested), source: 'clamped' } : { tokens: runtime, source: 'runtime' };
+  if (advertised) return requested ? { tokens: Math.min(advertised, requested), source: 'clamped' } : { tokens: advertised, source: 'configured' };
+  return { tokens: o.fallback, source: 'fallback' };
+}
+
 /** Fit an assembled agent observation into budget by trimming the variable
  *  sections first (page text, then history), NEVER the interactive-element
  *  list. Returns the fitted text + whether anything was trimmed. */

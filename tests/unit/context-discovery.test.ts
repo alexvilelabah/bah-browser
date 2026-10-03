@@ -1,8 +1,9 @@
-// C8: the advertised context window must be read, not assumed.
+// C8/C32: the context window must be read from the server and budgeted as the window the
+// request actually gets — not the model's nominal maximum.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
-import { discoverLocalModels, advertisedContextTokens } from '../../src/main/local-providers.ts';
+import { discoverLocalModels, advertisedContextTokens, clampWindow } from '../../src/main/local-providers.ts';
 
 function serveJson(routes: Record<string, any>) {
   return new Promise<{ url: string; server: http.Server }>((resolve) => {
@@ -49,4 +50,16 @@ test('router argv --ctx-size is used when nothing is advertised', async () => {
     assert.equal(d.models[0].contextTokens, 8192);
     assert.equal(d.models[0].contextSource, 'configured');
   } finally { server.close(); }
+});
+
+test('clampWindow: the allocation wins over the nominal maximum', () => {
+  // Nominal 262144 with num_ctx 16384 is a 16k window, not a 256k one.
+  assert.deepEqual(clampWindow({ advertised: 262144, requested: 16384, fallback: 16384 }), { tokens: 16384, source: 'clamped' });
+  // A runtime number IS the allocation; if we also asked for more, we were clamped to it.
+  assert.deepEqual(clampWindow({ runtime: 8192, advertised: 262144, requested: 16384, fallback: 16384 }), { tokens: 8192, source: 'clamped' });
+  assert.deepEqual(clampWindow({ runtime: 4096, fallback: 16384 }), { tokens: 4096, source: 'runtime' });
+  // Asking for more than the model can do never inflates the window.
+  assert.deepEqual(clampWindow({ advertised: 8192, requested: 131072, fallback: 16384 }), { tokens: 8192, source: 'clamped' });
+  assert.deepEqual(clampWindow({ fallback: 16384 }), { tokens: 16384, source: 'fallback' });
+  assert.deepEqual(clampWindow({ advertised: 0, fallback: 16384 }), { tokens: 16384, source: 'fallback' });
 });

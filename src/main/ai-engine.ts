@@ -15,6 +15,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
+import { clampWindow } from './local-providers';
 import { readSseStream, readOllamaNdjson } from './stream-readers';
 import {
   NO_IMAGE_PROVIDERS,
@@ -452,15 +453,20 @@ export class AIEngine {
     }
     const modelId = this.provider === 'ollama' ? (this.resolvedOllamaModel || this.ollamaModel) : this.ollamaModel;
     const ck = `${this.baseUrl}::${modelId}`;
+    // What we ask the server to allocate. 'auto' sends nothing (server default), so it can
+    // neither raise nor lower the window.
+    const requested = typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0 ? this.localOpts.ollamaNumCtx : undefined;
     const hit = this.runtimeCtxCache.get(ck);
     if (hit && Date.now() - hit.at < AIEngine.LOCAL_CACHE_TTL_MS) {
-      return { totalTokens: hit.tokens ?? FALLBACK, source: hit.source };
+      const w = clampWindow({ runtime: hit.source === 'runtime' ? hit.tokens : undefined, advertised: hit.tokens, requested, fallback: FALLBACK });
+      return { totalTokens: w.tokens, source: w.source };
     }
     try {
       const rc = await _detectRuntimeContext(this.localTransport(), this.baseUrl, modelId, this.apiKey || undefined);
       if (rc.tokens) {
+        const w = clampWindow({ runtime: rc.source === 'runtime' ? rc.tokens : undefined, advertised: rc.tokens, requested, fallback: FALLBACK });
         this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: rc.tokens, source: rc.source });
-        return { totalTokens: rc.tokens, source: rc.source };
+        return { totalTokens: w.tokens, source: w.source };
       }
     } catch { /* runtime unknown - fall through to what discovery already knows */ }
     // Model unloaded (llama.cpp's /props answers 400) or a server with no /api/ps:
@@ -470,9 +476,9 @@ export class AIEngine {
     try {
       const info = (await this.listLocalModels()).find(m => m.id.toLowerCase() === (modelId || '').toLowerCase());
       if (info?.contextTokens && info.contextTokens > 0) {
-        const src = info.contextSource ?? 'configured';
-        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: info.contextTokens, source: src });
-        return { totalTokens: info.contextTokens, source: src };
+        const w = clampWindow({ advertised: info.contextTokens, requested, fallback: FALLBACK });
+        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: info.contextTokens, source: info.contextSource ?? 'configured' });
+        return { totalTokens: w.tokens, source: w.source };
       }
     } catch { /* discovery unavailable - fall back below */ }
     this.runtimeCtxCache.set(ck, { at: Date.now(), source: 'fallback' });
