@@ -25,6 +25,7 @@ import {
   STICKY_VISION_REASONS,
   VISION_MAX_SIDE,
   VISION_MIN_SIDE,
+  base64Head,
   decideAgentShot,
   decideChatShot,
   encodedImageSize,
@@ -935,13 +936,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           const scale = Math.min(1, VISION_MAX_SIDE / Math.max(cssW, cssH));
           const w = Math.max(1, Math.round(cssW * scale));
           const h = Math.max(1, Math.round(cssH * scale));
-          const buf = img.resize({ width: w, height: h, quality: 'good' }).toJPEG(82);
+          // PNG aqui, nunca toJPEG(): neste renderer (sandbox) o toJPEG() derruba o processo
+          // inteiro (medido: FATAL "V8 error: Empty MaybeLocal" → a janela do Bah apaga).
+          // O processo principal converte pra JPEG antes de mandar pro modelo.
+          const dataUrl = img.resize({ width: w, height: h, quality: 'good' }).toDataURL();
+          const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
           // Report the ENCODED size: on HiDPI the bitmap can differ from the requested DIP size.
-          const real = encodedImageSize(buf);
+          const real = encodedImageSize(base64Head(b64));
           out.image = {
-            dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`,
+            dataUrl,
             width: real?.width ?? w, height: real?.height ?? h,
-            cssWidth: cssW, cssHeight: cssH, bytes: buf.length,
+            cssWidth: cssW, cssHeight: cssH, bytes: Math.floor(b64.length * 3 / 4),
           };
         }
       }

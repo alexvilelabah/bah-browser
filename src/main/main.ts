@@ -1104,6 +1104,22 @@ function attachContextMenu(wc: Electron.WebContents): void {
   });
 }
 
+// O print pra visão chega do renderer em PNG: lá o toJPEG() derruba o processo (sandbox).
+// Aqui no principal o nativeImage tem Buffer, então a conversão pra JPEG (bem menor que o PNG
+// numa página com foto) acontece antes de o print ir pro modelo. Mesmo tamanho em pixels —
+// o click_at continua valendo. Qualquer falha devolve o original, que também é aceito.
+function visionImageToJpeg(img?: VisionImage): VisionImage | undefined {
+  if (!img?.dataUrl || !/^data:image\/png;base64,/i.test(img.dataUrl)) return img;
+  try {
+    const ni = nativeImage.createFromDataURL(img.dataUrl);
+    if (ni.isEmpty()) return img;
+    const buf = ni.toJPEG(82);
+    return { ...img, dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`, bytes: buf.length };
+  } catch {
+    return img;
+  }
+}
+
 function setupIPC(): void {
   // Helpers de "humanização" do input (jitter de tempo/trajeto) — DOR 3.
   const rnd = (min: number, max: number) => min + Math.random() * (max - min);
@@ -1282,6 +1298,7 @@ function setupIPC(): void {
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
+    image = visionImageToJpeg(image);
     const ac = streamId ? new AbortController() : undefined;
     if (streamId && ac) chatAborts.set(streamId, ac);
     try {
@@ -1349,6 +1366,7 @@ function setupIPC(): void {
       };
     }
     const resolvedTier = tier ?? 'pro';
+    screenshot = visionImageToJpeg(screenshot);
     const ac = actionId ? new AbortController() : undefined;
     if (actionId && ac) {
       actionAborts.set(actionId, ac);
