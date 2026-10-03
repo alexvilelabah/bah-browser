@@ -87,3 +87,14 @@ export async function fetchCancellable(
     throw new LocalRequestError('CONNECTION_FAILED', `Cannot reach ${url}: ${msg}`, true);
   }
 }
+
+/** Streaming decision, kept pure so it is testable. Agent mode streams locally: a step
+/** silent for 150s looks hung, and a stream proves liveness. */
+export function shouldStream(o: { hasDelta: boolean; isAgentMode: boolean; isLocal: boolean; noStream?: boolean; rejected?: boolean }): boolean {
+  return o.hasDelta && (!o.isAgentMode || o.isLocal) && !o.noStream && !o.rejected;
+}
+
+/** Sticky capability key: what one server told us must not be assumed about another. */
+export function streamKey(baseUrl: string, model: string): string {
+  return `${baseUrl}::${model}`;
+}

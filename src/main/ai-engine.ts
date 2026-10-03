@@ -10,7 +10,7 @@ import {
   type LocalProvider as _LocalTransport,
 } from './local-providers';
 import {
-  fetchCancellable,
+  fetchCancellable, shouldStream, streamKey,
   LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
@@ -968,9 +968,16 @@ export class AIEngine {
   // (reasoning_content) e — em modo agente — recuperação JSON limitada (vazia / truncada /
   // só-raciocínio → tenta com orçamento maior mantendo JSON; só desliga o response_format
   // com evidência de que o servidor não suporta).
-  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number }): Promise<string> {
-    const streaming = !!onDelta && !isAgentMode;
+  // Sticky, per baseUrl::model — learned from the server, not assumed.
+  private streamOptionsRejected = new Set<string>();
+  private streamRejected = new Set<string>();
+
+  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean }): Promise<string> {
     const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
+    // LOCAL streams agent calls as well: a silent 150s step looks hung, and a stream
+    // proves liveness. Cloud agent calls stay non-streaming (bodies are locked).
+    const key = `${this.baseUrl}::${model}`;
+    const streaming = !!onDelta && (!isAgentMode || this.isLocal) && !cfg?.noStream && !this.streamRejected.has(key);
     const jsonMode = cfg?.jsonMode ?? isAgentMode;
     const depth = cfg?.depth ?? 0;
     const maxTokens = cfg?.maxTokens ?? 4096;
@@ -1004,7 +1011,12 @@ export class AIEngine {
     } else {
       body.max_tokens = 4096;
     }
-    if (streaming) body.stream = true;
+    if (streaming) {
+      body.stream = true;
+      // Final usage chunk (tokens/sec for the UI). Dropped and remembered if the
+      // server rejects it — verified, not assumed.
+      if (this.isLocal && !cfg?.noStreamOptions && !this.streamOptionsRejected.has(key)) body.stream_options = { include_usage: true };
+    }
     // Auth OPCIONAL no modo local (llama.cpp/LM Studio geralmente não pedem chave). Sem chave
     // não mandamos o header — nada de 'Bearer ' vazio/fabricado.
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -1100,7 +1112,12 @@ export class AIEngine {
       // An image rejection ("…image format…") is not a JSON-mode problem: let it surface so
       // withImageFallback() drops the image, instead of retrying with the image still on.
       const imageRejected = messages.some(m => m.image) && RX_IMAGE_REJECTED.test(errText);
-      const unsupportedJson = res.status === 400 && !imageRejected && /response_format|json|format/i.test(errText);
+      if (this.isLocal && streaming && !cfg?.noStreamOptions && /stream_options/i.test(errText)) {
+        this.streamOptionsRejected.add(key);
+        appendLog('[Local] stream_options rejeitado → removendo do corpo');
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStreamOptions: true });
+      }
+      const unsupportedJson = res.status === 400 && !imageRejected && !/stream_options/i.test(errText) && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
         appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
         return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: depth + 1 });
@@ -1109,7 +1126,22 @@ export class AIEngine {
     }
 
     try {
-      if (streaming) return await readSseStream(res, onDelta!, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS);
+      if (streaming) {
+        let sawDelta = false;
+        const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        try {
+          return await readSseStream(res, wrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS);
+        } catch (e: any) {
+          // Stream dead before the first delta: remember it and redo unstreamed for the
+          // rest of the run — never worse than before this change.
+          if (this.isLocal && !sawDelta && !signal?.aborted && !cfg?.noStream) {
+            this.streamRejected.add(key);
+            appendLog('[Local] stream falhou antes do 1º delta → sem stream para este modelo');
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: true, noStreamOptions: cfg?.noStreamOptions });
+          }
+          throw e;
+        }
+      }
 
       // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
       // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
@@ -1542,7 +1574,8 @@ export class AIEngine {
     }
   }
 
-  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
+  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false): Promise<string> {
+
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Images arrive here only when resolveVision() allowed them (mode + capability gate).
     const resolvedModel = await this.resolveOllama();
@@ -1569,8 +1602,9 @@ export class AIEngine {
     });
 
     const model = resolvedModel;   // já resolvido acima (usa o que está REALMENTE instalado)
-    // Streaming SÓ no chat (modo agente precisa do JSON inteiro de uma vez).
-    const streaming = !!onDelta && !isAgentMode;
+    const sKey = streamKey(this.baseUrl, model);
+    // Agent mode streams too: a silent 150s step looks hung, and a stream proves liveness.
+    const streaming = shouldStream({ hasDelta: !!onDelta, isAgentMode, isLocal: true, noStream: forceNoStream, rejected: this.streamRejected.has(sKey) });
     const body: any = {
       model,
       messages: [{ role: 'system', content: systemMsg }, ...formatted],
@@ -1671,7 +1705,20 @@ export class AIEngine {
     // Chat streamado: NDJSON linha a linha (o fallback do callChatLLM refaz sem stream
     // se der erro antes do 1º delta — mesmo contrato dos provedores de nuvem).
     try {
-      if (streaming) return await readOllamaNdjson(res, onDelta!, signal, LOCAL_INACTIVITY_MS);
+      if (streaming) {
+        let sawDelta = false;
+        const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        try {
+          return await readOllamaNdjson(res, wrap, signal, LOCAL_INACTIVITY_MS);
+        } catch (e: any) {
+          if (!sawDelta && !signal?.aborted && !forceNoStream) {
+            this.streamRejected.add(sKey);
+            console.log('[Ollama] stream falhou antes do 1º delta → sem stream para este modelo');
+            return this.callOllama(messages, isAgentMode, onDelta, signal, true);
+          }
+          throw e;
+        }
+      }
 
       const data = await res.json();
       const content = data.message?.content ?? '';
