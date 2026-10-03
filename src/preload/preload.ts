@@ -33,6 +33,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
+  // Live model progress (tokens/sec) so a slow local step reads as working, not hung.
+  onActionDelta: (cb: (m: { kind: string; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => {
+    const listener = (_e: any, m: any) => cb(m);
+    ipcRenderer.on('ai:action-delta', listener);
+    return () => ipcRenderer.removeListener('ai:action-delta', listener);
+  },
   aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) =>
     ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier, actionId),
   // Agent Stop button: aborts the in-flight request in main, not just its result.

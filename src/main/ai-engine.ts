@@ -540,6 +540,14 @@ function langSuffix(): string {
   return `\n\nLANGUAGE: Write your "thought", "evaluation", "reason"/report text and ANY message shown to the user in ${LANG_NAMES[engineLang]}, regardless of the page's language. Keep JSON keys, action/tool names and URLs in English.`;
 }
 
+export interface AiMetrics {
+  kind: 'thinking' | 'answer';
+  estTokens: number;
+  tokPerSec: number;
+  elapsedMs: number;
+  exact: boolean;
+}
+
 export class AIEngine {
   private provider: AIProvider;
   private apiKey: string;
@@ -993,6 +1001,20 @@ export class AIEngine {
   // (reasoning_content) e — em modo agente — recuperação JSON limitada (vazia / truncada /
   // só-raciocínio → tenta com orçamento maior mantendo JSON; só desliga o response_format
   // com evidência de que o servidor não suporta).
+  /** Live progress for the UI: a slow local step must read as working, not hung. */
+  onMetrics?: (m: AiMetrics) => void;
+  private lastMetricsAt = 0;
+
+  /** Estimated from characters until the usage chunk arrives, exact afterwards. */
+  private emitMetrics(kind: 'thinking' | 'answer', chars: number, t0: number, exact = false, usage?: any): void {
+    const now = Date.now();
+    if (!exact && now - this.lastMetricsAt < 1000) return;
+    this.lastMetricsAt = now;
+    const estTokens = exact ? Math.round(usage?.completion_tokens ?? 0) : Math.round(chars / 3.5);
+    const secs = Math.max(0.001, (now - t0) / 1000);
+    try { this.onMetrics?.({ kind, estTokens, tokPerSec: Math.round(estTokens / secs), elapsedMs: now - t0, exact }); } catch {}
+  }
+
   // Sticky, per baseUrl::model — learned from the server, not assumed.
   private streamOptionsRejected = new Set<string>();
   private streamRejected = new Set<string>();
@@ -1195,8 +1217,10 @@ export class AIEngine {
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
         const metrics: { usage?: any } = {};
         const thinking = this.isLocal ? ThinkingBudget.forStep(this.stepTokens.get(key) ?? 0) : undefined;
+        const thinkWrap = (d: string) => { wrap(d); if (this.isLocal) this.emitMetrics('thinking', d.length, t0); };
         try {
-          const text = await readSseStream(res, wrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics);
+          const text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics);
+          if (this.isLocal) this.emitMetrics('answer', text.length, t0, !!metrics.usage?.completion_tokens, metrics.usage);
           if (metrics.usage?.completion_tokens) this.stepTokens.set(key, metrics.usage.completion_tokens);
           const reasoningTok = metrics.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
           if (cfg?.thinkingOff && reasoningTok > 0 && !this.thinkingKnobRejected.has(key)) {
@@ -1816,8 +1840,10 @@ export class AIEngine {
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
         const metrics: { usage?: any } = {};
         const thinking = ThinkingBudget.forStep(this.stepTokens.get(sKey) ?? 0);
+        const thinkWrap = (d: string) => { wrap(d); this.emitMetrics('thinking', d.length, t0); };
         try {
-          const text = await readOllamaNdjson(res, wrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics);
+          const text = await readOllamaNdjson(res, thinkWrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics);
+          this.emitMetrics('answer', text.length, t0, !!metrics.usage?.eval_count, { completion_tokens: metrics.usage?.eval_count });
           if (metrics.usage?.eval_count) this.stepTokens.set(sKey, metrics.usage.eval_count);
           if ((thinkingOff || this.isThinkingThrottled(model)) && (metrics.usage?.thinking_count ?? 0) > 0) {
             console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.thinking_count} thinking tokens)`);

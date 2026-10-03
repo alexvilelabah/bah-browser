@@ -139,6 +139,11 @@ function trayIconPath(): string {
     ? path.join(process.resourcesPath, 'icon.png')
     : path.join(__dirname, '..', '..', 'build', 'icon.png');
 }
+function attachLocalMetrics(e: AIEngine | null): void {
+  if (!e) return;
+  e.onMetrics = (m) => { try { mainWindow?.webContents.send('ai:action-delta', m); } catch {} };
+}
+
 function showMainWindow() {
   if (!mainWindow) { createWindow(); return; }
   try { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } catch {}
@@ -1206,6 +1211,7 @@ function setupIPC(): void {
     const provider: AIProvider = providerIn === 'openai-compatible' ? 'openai' : (providerIn as AIProvider);
     const prevLocal = localEngine;
     localEngine = new AIEngine(provider, apiKey || '', baseUrl, modelName, undefined, true, opts);
+    attachLocalMetrics(localEngine);
     localEngine.adoptHistoriesFrom(prevLocal);   // salvar Config não apaga a conversa local
     localPageAgent = new PageAgent(localEngine);
     console.log(`[HybridRouter] Local engine set: ${provider} (${providerIn}) model=${modelName || 'default'} @ ${localEngine.getBaseUrl()}`);
@@ -3277,6 +3283,7 @@ app.whenReady().then(async () => {
   // isLocal=true (último arg): apiKey vira auth OPCIONAL, não marcador de modo.
   try {
     localEngine = new AIEngine('ollama', '', 'http://localhost:11434', 'qwen3-vl:8b', undefined, true);
+    attachLocalMetrics(localEngine);
     localPageAgent = new PageAgent(localEngine);
     console.log('[HybridRouter] Local engine (Ollama) initialized at http://localhost:11434');
   } catch (e) {

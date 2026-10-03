@@ -85,6 +85,7 @@ declare global {
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
+      onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
       aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
       actionCancel?: (actionId: string) => Promise<any>;
@@ -174,11 +175,20 @@ export default function App() {
   const store = useTabStore();
   const webviewRefs = useRef<Map<string, Electron.WebviewTag>>(new Map());
   const [agentVisual, setAgentVisual] = useState<AgentVisualState>('idle');
+  // Live tokens/sec from the engine, shown while the agent works.
+  const [liveMetrics, setLiveMetrics] = useState<{ kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean } | null>(null);
   const [ripples, setRipples] = useState<ClickRipple[]>([]);
   const rippleId = useRef(0);
   const activeTabIdRef = useRef(store.activeTabId);
   const userTabRef = useRef(store.activeTabId);   // a aba que o USUÁRIO está vendo (sempre atualizada)
   const taskRunningRef = useRef(false);           // tem uma tarefa do agente rodando agora?
+  // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
+  // never shows on the next step.
+  useEffect(() => {
+    if (agentVisual === 'idle') { setLiveMetrics(null); return; }
+    const off = window.electronAPI?.onActionDelta?.((m) => { if (m?.kind) setLiveMetrics(m); });
+    return () => { try { off?.(); } catch {} };
+  }, [agentVisual]);
   useEffect(() => {
     userTabRef.current = store.activeTabId;
     // Enquanto uma tarefa roda, a "aba de trabalho" do agente é controlada pelo PRÓPRIO loop
@@ -1289,7 +1299,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             }}
             onNewTab={store.addTab}
           />
-          <AgentVisualOverlay state={agentVisual} ripples={ripples} />
+          <AgentVisualOverlay state={agentVisual} ripples={ripples} metrics={agentVisual === 'idle' ? null : liveMetrics} />
           {torrent && (
             <TorrentSheet
               torrent={torrent}
