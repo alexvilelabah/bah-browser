@@ -359,6 +359,15 @@ export function clampWindow(o: {
   return { tokens: o.fallback, source: 'fallback' };
 }
 
+/** Output budget actually sent. Cloud keeps its historic number; local honours the user's
+ *  setting (reasoning tokens live inside it), capped at the hard 16384. */
+export function outputBudget(o: { isLocal: boolean; userMax?: number; cfgMax?: number; cap?: number }): number {
+  const cap = o.cap ?? 16384;
+  if (!o.isLocal) return o.cfgMax ?? 4096;
+  const user = o.userMax ?? 0;
+  return Math.min(cap, Math.max(o.cfgMax ?? 0, user || cap));
+}
+
 /** Fit an assembled agent observation into budget by trimming the variable
  *  sections first (page text, then history), NEVER the interactive-element
  *  list. Returns the fitted text + whether anything was trimmed. */

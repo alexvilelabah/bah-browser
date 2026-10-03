@@ -16,7 +16,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
-import { clampWindow } from './local-providers';
+import { clampWindow, outputBudget as _outputBudget } from './local-providers';
 import { readSseStream, readOllamaNdjson } from './stream-readers';
 import {
   NO_IMAGE_PROVIDERS,
@@ -486,6 +486,14 @@ export class AIEngine {
     return { totalTokens: FALLBACK, source: 'fallback' };
   }
 
+  /** Output budget actually sent. Cloud keeps its historic number (byte-identical bodies);
+   *  local honours the user's setting - reasoning tokens live inside this number - defaulting
+   *  to the 16384 hard cap. Measured: median 230, p90 ~600, max 2,869 output tokens, so a
+   *  4096 ceiling was silently cutting long JSON answers (e.g. a 75-track list). */
+  private outputBudget(cfgMax?: number): number {
+    return _outputBudget({ isLocal: this.isLocal, userMax: this.localOpts.maxOutputTokens, cfgMax });
+  }
+
   /** Mirrors the system text actually sent (same constants, same order) - used to charge the
    *  window honestly. Keep in sync with the messages composition in the call paths. */
   private systemPromptText(isAgentMode: boolean): string {
@@ -912,10 +920,10 @@ export class AIEngine {
       // stable on the llama.cpp route). Thinking models get no temperature at all — vendors
       // recommend sampling for the reasoning pass and temp 0 is what makes them loop.
       if (!(this.isLocal && this.isReasoningModel(model))) body.temperature = 0;
-      body.max_tokens = maxTokens;
+      body.max_tokens = this.outputBudget(maxTokens);
       if (jsonMode) body.response_format = { type: 'json_object' };
     } else {
-      body.max_tokens = 4096;
+      body.max_tokens = this.outputBudget(4096);
     }
     if (streaming) {
       body.stream = true;
@@ -1569,6 +1577,7 @@ export class AIEngine {
       stream: streaming,
       keep_alive: '15m',     // keep the model hot in VRAM between agent steps
       options: {
+        num_predict: this.outputBudget(isAgentMode ? 16384 : 4096),   // the budget we computed, actually sent
         // 16k: cabe o DOM + texto da página + histórico E os system prompts maiores dos
         // modelos novos/de raciocínio (o de 8k estourava por poucos tokens num "olá" simples,
         // e o pensamento do modelo também consome contexto durante a geração).
