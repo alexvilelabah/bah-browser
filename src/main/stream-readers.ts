@@ -4,6 +4,25 @@
 import { LocalRequestError } from './local-providers.ts';
 import { ThinkingBudget } from './thinking-budget.ts';
 import { CLOUD_INACTIVITY_MS } from './cancellable-fetch.ts';
+/** One read with the right clock. Until the first token, the deadline is the time left of
+ *  firstTokenMs (load + prompt processing): keepalive chunks (oMLX sends one every ~10s
+ *  while it processes the prompt) prove the socket is up, not that the model is answering.
+ *  After the first token, silence longer than inactivityMs means the stream is dead. */
+function readWithClock(reader: any, o: { sawToken: boolean; inactivityMs: number; firstDeadline: number }): Promise<{ done: boolean; value?: Uint8Array }> {
+  const preToken = !o.sawToken && o.firstDeadline > 0;
+  const ms = preToken ? Math.max(1, o.firstDeadline - Date.now()) : o.inactivityMs;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(preToken
+      ? new LocalRequestError('TIMEOUT_FIRST_CHUNK', 'the model produced no token in time (still loading or processing the prompt)', true)
+      : new LocalRequestError('TIMEOUT_STALL', `stream stalled (${Math.round(o.inactivityMs / 1000)}s)`, true)), ms);
+    Promise.resolve(reader.read()).then(
+      (r: any) => { if (timer) clearTimeout(timer); resolve(r); },
+      (e: any) => { if (timer) clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 // Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas conforme chegam.
 // Devolve o texto COMPLETO no fim.
 // Modelos de raciocínio (DeepSeek-V4, Fara…) mandam o pensamento num canal SEPARADO
@@ -11,7 +30,9 @@ import { CLOUD_INACTIVITY_MS } from './cancellable-fetch.ts';
 // chip 💭 — o MESMO padrão do reader NDJSON do Ollama. O retorno (histórico) fica
 // LIMPO: só o content, sem o raciocínio vazado (a UI já mostrou os chips via onDelta).
 // Guarda de inatividade: sem chunk por inactivityMs → aborta (stream pendurado não congela o chat).
-export async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any; finish?: string }): Promise<string> {
+export async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any; finish?: string }, firstTokenMs?: number): Promise<string> {
+  const firstDeadline = firstTokenMs ? Date.now() + firstTokenMs : 0;
+  let sawToken = false;
   const reader = (res.body as any)?.getReader?.();
   // No body on a 200 is a server fault, not an empty answer: say so with a code.
   if (!reader) throw new LocalRequestError('STREAM_ERROR', 'server sent no response body to stream', true);
@@ -46,18 +67,10 @@ export async function readSseStream(res: Response, onDelta: (d: string) => void,
   // o Stop no meio do streaming deixava o modelo gerar até o fim e gravava turno-fantasma.
   const onAbort = () => { try { reader.cancel(); } catch {} };
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
-  let stallTimer: ReturnType<typeof setTimeout> | null = null;
   try {
     while (true) {
       if (signal?.aborted) throw new Error('CANCELLED');
-      // Timer limpo a CADA leitura (senão um stream longo acumula um timer de 30s por chunk).
-      const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new LocalRequestError('TIMEOUT_STALL', `stream stalled (${Math.round(inactivityMs / 1000)}s)`, true)), inactivityMs);
-        Promise.resolve(reader.read()).then(
-          (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
-          (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
-        );
-      });
+      const chunk = await readWithClock(reader, { sawToken, inactivityMs, firstDeadline });
       if (chunk.done) break;
       buf += decoder.decode(chunk.value, { stream: true });
       let nl: number;
@@ -80,8 +93,10 @@ export async function readSseStream(res: Response, onDelta: (d: string) => void,
         if (j.choices?.[0]?.finish_reason && metrics) metrics.finish = j.choices[0].finish_reason;
         const dl = j.choices?.[0]?.delta;
         if (j.usage && metrics) metrics.usage = j.usage;
-        const rc = dl?.reasoning_content ?? '';
+        // llama.cpp/oMLX name the channel reasoning_content; vLLM and LM Studio use reasoning.
+        const rc = dl?.reasoning_content ?? dl?.reasoning ?? '';
         const d = dl?.content ?? '';
+        if (rc || d) sawToken = true;
         if (rc) {
           emitThink(rc);
           // Soft budget, in characters (usage only arrives in the final chunk) and only while
@@ -100,7 +115,6 @@ export async function readSseStream(res: Response, onDelta: (d: string) => void,
     try { await reader.cancel(); } catch {}   // fecha a conexão de verdade (não deixa o socket pendurado)
     throw e;
   } finally {
-    if (stallTimer) clearTimeout(stallTimer);
     if (signal) signal.removeEventListener('abort', onAbort);
     try { reader.releaseLock?.(); } catch {}
   }
@@ -115,7 +129,9 @@ export async function readSseStream(res: Response, onDelta: (d: string) => void,
 // readSseStream: guarda de 30s por chunk + cancel no erro. Modelos de raciocínio
 // (qwen3 etc.) podem mandar o pensamento em message.thinking — embrulhamos em
 // <think>…</think> pra o renderer exibir igual ao caso dos tags inline no content.
-export async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any }): Promise<string> {
+export async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal, inactivityMs = CLOUD_INACTIVITY_MS, thinking?: ThinkingBudget, metrics?: { usage?: any; finish?: string }, firstTokenMs?: number): Promise<string> {
+  const firstDeadline = firstTokenMs ? Date.now() + firstTokenMs : 0;
+  let sawToken = false;
   const reader = (res.body as any)?.getReader?.();
   if (!reader) throw new LocalRequestError('STREAM_ERROR', 'server sent no response body to stream', true);
   const decoder = new TextDecoder();
@@ -141,17 +157,10 @@ export async function readOllamaNdjson(res: Response, onDelta: (d: string) => vo
   // até o fim mesmo depois do Stop, e o turno-fantasma vai pro histórico.
   const onAbort = () => { try { reader.cancel(); } catch {} };
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
-  let stallTimer: ReturnType<typeof setTimeout> | null = null;
   try {
     while (true) {
       if (signal?.aborted) throw new Error('CANCELLED');
-      const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new LocalRequestError('TIMEOUT_STALL', `stream stalled (${Math.round(inactivityMs / 1000)}s)`, true)), inactivityMs);
-        Promise.resolve(reader.read()).then(
-          (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
-          (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
-        );
-      });
+      const chunk = await readWithClock(reader, { sawToken, inactivityMs, firstDeadline });
       if (chunk.done) break;
       buf += decoder.decode(chunk.value, { stream: true });
       let nl: number;
@@ -167,6 +176,8 @@ export async function readOllamaNdjson(res: Response, onDelta: (d: string) => vo
           th = j.message?.thinking ?? '';
           if (th) { if (!thinkOpen) { emit('<think>'); thinkOpen = true; } emit(th); }
           d = j.message?.content ?? '';
+          if (th || d) sawToken = true;
+          if (metrics && j.done_reason) metrics.finish = j.done_reason;
           if (metrics && (j.eval_count || j.prompt_eval_count)) {
             metrics.usage = { completion_tokens: j.eval_count, prompt_tokens: j.prompt_eval_count, reasoning_tokens: j.thinking_eval_count };
           }
@@ -191,7 +202,6 @@ export async function readOllamaNdjson(res: Response, onDelta: (d: string) => vo
     try { await reader.cancel(); } catch {}
     throw e;
   } finally {
-    if (stallTimer) clearTimeout(stallTimer);
     if (signal) signal.removeEventListener('abort', onAbort);
     try { reader.releaseLock?.(); } catch {}
   }
@@ -201,3 +211,44 @@ export async function readOllamaNdjson(res: Response, onDelta: (d: string) => vo
   return full;
 }
 
+
+export interface LiveMetrics {
+  kind: 'thinking' | 'answer';
+  estTokens: number;
+  tokPerSec: number;
+  elapsedMs: number;
+  exact: boolean;
+}
+
+/** Live progress for one streamed call. Counts are cumulative (estimated from characters
+ *  until the usage chunk makes them exact), reports are throttled to ~1/s, and the rate is
+ *  measured from the first token: model load and prompt processing are not generation speed. */
+export function createLiveMeter(send: (m: LiveMetrics) => void, now: () => number = Date.now) {
+  const t0 = now();
+  let chars = 0, firstAt = 0, lastAt = 0, inThink = false;
+  const emit = (m: LiveMetrics) => { try { send(m); } catch { /* UI only */ } };
+  return {
+    add(d: string): void {
+      if (d === '<think>') { inThink = true; return; }
+      if (d === '</think>') { inThink = false; return; }
+      if (!d) return;
+      const t = now();
+      if (!firstAt) firstAt = t;
+      chars += d.length;
+      if (t - lastAt < 1000) return;
+      lastAt = t;
+      const est = Math.round(chars / 3.5);
+      const secs = Math.max(0.5, (t - firstAt) / 1000);
+      emit({ kind: inThink ? 'thinking' : 'answer', estTokens: est, tokPerSec: Math.round(est / secs), elapsedMs: t - t0, exact: false });
+    },
+    /** Final report: the server's own numbers when it sent usage. */
+    done(usage?: any): void {
+      const t = now();
+      const exact = !!usage?.completion_tokens;
+      const tokens = exact ? Math.round(usage.completion_tokens) : Math.round(chars / 3.5);
+      const genSecs = firstAt ? Math.max(0.001, (t - firstAt) / 1000) : 0;
+      const tps = Number(usage?.generation_tokens_per_second) || (genSecs ? tokens / genSecs : 0);
+      emit({ kind: 'answer', estTokens: tokens, tokPerSec: Math.round(tps), elapsedMs: t - t0, exact });
+    },
+  };
+}
