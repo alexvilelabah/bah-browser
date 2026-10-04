@@ -197,8 +197,8 @@ export default function App() {
   const taskRunningRef = useRef(false);           // tem uma tarefa do agente rodando agora?
   // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
   // never shows on the next step.
-  useEffect(() => {
-                prefetchGpuInfo();
+  useEffect(() => {
+    prefetchGpuInfo();
     if (agentVisual === 'idle') { setLiveMetrics(null); return; }
     const off = window.electronAPI?.onActionDelta?.((m) => { if (m?.kind) setLiveMetrics(m); });
     return () => { try { off?.(); } catch {} };
