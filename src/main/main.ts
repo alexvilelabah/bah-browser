@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
+import { classifyError } from '../shared/error-codes';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
   discoverLocalModels,
@@ -1376,6 +1377,19 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Stop. Before, the late result was merely discarded in the renderer - the inference
   // kept the GPU busy until it finished on its own.
   const actionAborts = new Map<string, AbortController>();
+  // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
+  // devagar) manda consertar o que não está quebrado — e esconde o que está.
+  const localFailureAdvice = (msg: string): string => {
+    const start = localBackendIsCompat()
+      ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
+      : 'start Ollama and select a model in settings.';
+    // "timed out" too: the body-read timeout says "body read timed out", which fell through
+    // to "start your server" while the server was up and simply generating slowly.
+    const tail = /too slow|timeout|timed out|no token in time|no complete answer/i.test(msg)
+      ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
+      : `Local mode stays offline — ${start}`;
+    return `Local AI failed: ${msg}. ${tail}`;
+  };
   ipcMain.handle('ai:action-cancel', (_e, actionId: string) => {
     try { actionAborts.get(actionId)?.abort(); } catch {}
     return true;
@@ -1403,8 +1417,14 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     if (resolvedTier === 'local' && localPageAgent) {
       try {
         const result = await localPageAgent.executeCommand(command, pageContent, screenshot, 'flash', ac?.signal);
-        if (ac?.signal.aborted) return { error: 'CANCELLED' };
-        if (result.error) throw new Error(result.error);
+        if (ac?.signal.aborted) return { error: 'CANCELLED', errorCode: 'CANCELLED' };
+        if (result.errorCode === 'CANCELLED') return { error: 'CANCELLED', errorCode: 'CANCELLED' };
+        if (result.error) {
+          // Keep the code: the renderer decides retry / degrade / pause on it. Re-throwing
+          // as a plain Error dropped it, and every local failure arrived as UNKNOWN.
+          console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', result.error);
+          return { ...result, error: localFailureAdvice(result.error), _engine: 'local' };
+        }
         return { ...result, _engine: 'local' };
       } catch (err: any) {
         // PRIVACIDADE: em modo local a falha do Ollama NÃO vaza pra nuvem. Em vez de mandar
@@ -1413,17 +1433,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         const msg = err?.message ?? String(err);
         if (/CANCELLED/.test(msg) || ac?.signal.aborted) return { error: 'CANCELLED' };
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
-        // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
-        // devagar) manda consertar o que não está quebrado — e esconde o que está.
-        const start = localBackendIsCompat()
-          ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
-          : 'start Ollama and select a model in settings.';
-        // "timed out" too: the body-read timeout says "body read timed out", which fell through
-        // to "start your server" while the server was up and simply generating slowly.
-        const tail = /too slow|timeout|timed out/i.test(msg)
-          ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
-          : `Local mode stays offline — ${start}`;
-        return { error: `Local AI failed: ${msg}. ${tail}` };
+        const e = classifyError(err);
+        return { error: localFailureAdvice(msg), errorCode: e.code, errorRetryable: e.retryable, errorDetail: e.detail, _engine: 'local' };
       }
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };

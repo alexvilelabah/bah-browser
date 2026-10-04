@@ -2237,27 +2237,31 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   let result: any;
                   // Reset every LLM step: a text-only step has no picture to take coordinates from.
                   modelShot = undefined;
-                  // Retry / degrade / pause - one transient local failure must not kill the run.
-                  // 1) retry the step, 2) degrade: drop the screenshot, then shrink the context,
-                  // 3) pause and ask the user. Stop always wins immediately.
-                  for (let tries = 0; tries < 3; tries++) {
-                    try {
+                  // Retry / degrade / pause - LOCAL only (cloud keeps failing fast, as before).
+                  // 1) retry the step, 2) degrade: drop the screenshot, 3) pause and ask the user.
+                  // The engine already resent transport failures; a slow server (the whole 300s
+                  // budget used) gets ONE step retry, not two: each try can cost five minutes.
+                  // Stop always wins: the abort listener stays wired across every try.
+                  const isLocalStep = tier === 'local';
+                  try {
+                    for (let tries = 0; ; tries++) {
                       result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
-                    } finally {
-                      if (signal) signal.removeEventListener('abort', onAbortStep);
+                      if (!isLocalStep || !result?.error || result?.errorCode === 'CANCELLED' || result?.errorRetryable !== true) break;
+                      const code = String(result?.errorCode ?? 'UNKNOWN');
+                      const maxTries = /^TIMEOUT_(FIRST_CHUNK|TOTAL)$/.test(code) ? 2 : 3;
+                      if (tries + 1 >= maxTries || deadline.fired()) break;
+                      const wait = tries === 0 ? 2000 : 5000;
+                      onProgress({ kind: 'status', message: `⏳ ${code} — retrying step ${step + 1} (${tries + 2}/${maxTries}) in ${wait / 1000}s` });
+                      await raceCancel(new Promise<void>((res2) => setTimeout(res2, wait)));
+                      throwIfCancelled();
+                      // Degrade so the retry is cheaper than the attempt that just failed.
+                      if (tries === 0 && shotForModel) {
+                        shotForModel = undefined;
+                        onProgress({ kind: 'status', message: '📄 retrying without the screenshot' });
+                      }
                     }
-                    if (!result?.error || result?.errorCode === 'CANCELLED') break;
-                    const code = result?.errorCode ?? 'UNKNOWN';
-                    if (result?.errorRetryable !== true || tries === 2) break;
-                    const wait = tries === 0 ? 2000 : 5000;
-                    onProgress({ kind: 'status', message: `⏳ ${code} — retrying step ${step + 1} (${tries + 2}/3) in ${wait / 1000}s` });
-                    await new Promise<void>((res2) => setTimeout(res2, wait));
-                    throwIfCancelled();
-                    // Degrade so the retry is cheaper than the attempt that just failed.
-                    if (tries === 0 && shotForModel) {
-                      shotForModel = undefined;
-                      onProgress({ kind: 'status', message: '📄 retrying without the screenshot' });
-                    }
+                  } finally {
+                    if (signal) signal.removeEventListener('abort', onAbortStep);
                   }
                   if (result?.vision?.attached && shotForModel) {
                     imagesSent++;   // only frames the model really received count against the budget
@@ -2271,6 +2275,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (STICKY_VISION_REASONS.has(why)) visionMode = 'off';
                   }
                   throwIfCancelled();
+                  // The deadline cancels the in-flight request too; that is the time limit, not
+                  // the user's Stop - go round so the deadline check reports it honestly.
+                  if (result?.error && deadline.fired()) continue;
                   // Cancellation confirmed by main: a clean stop, not a task failure.
                   if (result?.error && (result?.errorCode === 'CANCELLED' || /CANCELLED|TASK_CANCELLED/.test(String(result.error)))) throw new Error('TASK_CANCELLED_BY_USER');
                   console.log(`[Agent] step ${step + 1} ← result:`, result?.error || `action=${result?.action?.type} engine=${result?._engine}`);
@@ -2282,7 +2289,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const code = result?.errorCode ?? 'UNKNOWN';
                     const retryable = result?.errorRetryable === true;
                     onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retries exhausted' : ''}]: ${result.error}` });
-                    if (localHelpPauses < 2) {
+                    if (isLocalStep && localHelpPauses < 2) {
                       localHelpPauses++;
                       deadline.suspend();
                       await waitForManualHelp({
