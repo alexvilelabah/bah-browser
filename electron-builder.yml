@@ -27,6 +27,11 @@ files:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  # OCR offline: sem isso o tesseract.js baixa do CDN na primeira OCR. langPath aponta pra ca.
+  - from: eng.traineddata
+    to: tessdata/eng.traineddata
+  - from: por.traineddata
+    to: tessdata/por.traineddata
 # Desempacota o WASM (motor de voz local) — o onnxruntime nao carrega WASM de dentro do asar.
 asarUnpack:
   - "**/*.wasm"

@@ -17,6 +17,8 @@
     "build:renderer": "npm run typecheck:renderer && vite build",
     "build:main": "tsc -p tsconfig.main.json && node scripts/build-torrent-engine.mjs",
     "i18n:check": "node scripts/i18n-check.mjs",
+    "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"tests/unit/*.test.ts\"",
+    "test:goldens": "node scripts/golden-cloud-bodies.mjs",
     "build": "npm run i18n:check && npm run build:renderer && npm run build:main",
     "start": "npm run build && electron .",
     "test:e2e": "npm run build && playwright test",

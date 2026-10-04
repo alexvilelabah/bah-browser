@@ -2052,3 +2052,105 @@ body {
   background:#2e7d4f; border-color:transparent; color:#fff;
   box-shadow:none; animation:none;
 }
+
+/* ── Guia de primeira uso (AppGuideBar / BeginnerTour) ────────────────────────────
+   Mesma linguagem visual da .relogin-bar: flutua no topo da área do webview, não
+   empurra layout, e some pro sempre quando o usuário diz "entendi". */
+.guide-bar{
+  position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:58;
+  display:flex; align-items:center; gap:10px;
+  /* largura do conteúdo, com teto: sem o width, o left:50% faz o navegador espremer
+     a barra na metade da área e o texto vira uma coluna fininha por cima da página */
+  width:max-content; max-width:min(760px, 92%);
+  background:var(--bg-tertiary); border:1px solid var(--border);
+  border-radius:10px; padding:7px 8px 7px 13px;
+  box-shadow:0 10px 28px rgba(0,0,0,0.40); animation:msgIn 0.2s var(--ease);
+}
+.guide-title{ font-size:13px; font-weight:600; color:var(--text-primary); white-space:nowrap; }
+.guide-text{ font-size:12.5px; color:var(--text-secondary); min-width:0; }
+.guide-btn{
+  height:28px; padding:0 14px; border:none; border-radius:8px; cursor:pointer; flex:none;
+  background:var(--accent); color:#fff; font-size:13px; font-weight:600; font-family:inherit;
+  transition:filter 0.12s var(--ease);
+}
+.guide-btn:hover{ filter:brightness(1.1); }
+.guide-x{
+  width:26px; height:26px; border:none; background:transparent; color:var(--text-secondary);
+  cursor:pointer; border-radius:6px; font-size:13px; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  transition:background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.guide-x:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
+
+/* Tour: um cartão, cinco passos, nada de paginar. Fecha no ✕, no "começar a usar",
+   ou clicando fora — quem só queria fechar não fica preso num tutorial. */
+.tour-backdrop{
+  position:fixed; inset:0; z-index:120; background:rgba(0,0,0,0.55);
+  display:flex; align-items:center; justify-content:center; animation:msgIn 0.18s var(--ease);
+}
+.tour-card{
+  width:min(520px, 92vw); background:var(--bg-secondary); border:1px solid var(--border);
+  border-radius:14px; padding:16px 18px; box-shadow:0 24px 60px rgba(0,0,0,0.55);
+}
+.tour-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.tour-title{ font-size:15px; font-weight:700; color:var(--text-primary); }
+.tour-x{
+  width:28px; height:28px; border:none; background:transparent; color:var(--text-secondary);
+  cursor:pointer; border-radius:7px; font-size:14px;
+  display:flex; align-items:center; justify-content:center;
+}
+.tour-x:hover{ background:rgba(255,255,255,0.09); color:var(--text-primary); }
+.tour-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px; }
+.tour-step{ display:flex; gap:11px; align-items:flex-start; }
+.tour-step-icon{ font-size:17px; line-height:1.5; flex:none; width:22px; text-align:center; }
+.tour-step-body{ min-width:0; }
+.tour-step-title{ font-size:13px; font-weight:650; color:var(--text-primary); }
+.tour-step-text{ font-size:12.5px; color:var(--text-secondary); line-height:1.45; }
+.tour-foot{ display:flex; justify-content:flex-end; margin-top:14px; }
+.tour-btn{
+  height:32px; padding:0 16px; border:none; border-radius:9px; cursor:pointer;
+  font-size:13px; font-weight:600; font-family:inherit;
+}
+.tour-btn-primary{ background:var(--accent); color:#fff; }
+.tour-btn-primary:hover{ filter:brightness(1.1); }
+
+/* Que tipos de evento podem postar notificação, por monitor. Três caixinhas no
+   formulário: sem elas o usuário não tinha como saber que um monitor quebrado fica
+   mudo — nem como pedir o contrário. */
+.mon-notify{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:8px; }
+.mon-notify-label{ font-size:11.5px; color:var(--text-secondary); font-weight:600; }
+.mon-check{
+  display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+  font-size:11.5px; color:var(--text-secondary); user-select:none;
+}
+.mon-check.on{ color:var(--text-primary); }
+.mon-check input{ accent-color:var(--accent); width:13px; height:13px; cursor:pointer; margin:0; }
+
+/* Plan preview: the user sees the plan before anything is clicked. Cheapest
+   intervention in the whole loop - rewording a goal costs seconds, fifteen wrong
+   steps cost minutes. */
+.plan-card{
+  margin:8px 10px 0; padding:10px 12px; border:1px solid var(--border);
+  border-radius:12px; background:var(--bg-tertiary);
+  box-shadow:0 8px 22px rgba(0,0,0,0.30); animation:msgIn 0.18s var(--ease);
+}
+.plan-head{ font-size:12.5px; font-weight:700; color:var(--text-primary); margin-bottom:4px; }
+.plan-goal{ font-size:12px; color:var(--text-secondary); line-height:1.45; margin-bottom:6px; }
+.plan-auto{ font-size:12px; color:var(--text-secondary); margin:6px 0 2px; }
+.plan-steps{ margin:0 0 8px; padding-left:20px; display:flex; flex-direction:column; gap:3px; }
+.plan-steps li{ font-size:12px; color:var(--text-primary); line-height:1.4; }
+.plan-textarea{
+  width:100%; box-sizing:border-box; resize:vertical; margin-bottom:8px;
+  background:var(--bg-secondary); color:var(--text-primary);
+  border:1px solid var(--border); border-radius:8px; padding:7px 9px;
+  font-size:12px; font-family:inherit; line-height:1.45;
+}
+.plan-actions{ display:flex; gap:7px; justify-content:flex-end; flex-wrap:wrap; }
+.plan-btn{
+  height:28px; padding:0 12px; border:1px solid var(--border); border-radius:8px;
+  background:var(--bg-secondary); color:var(--text-primary); cursor:pointer;
+  font-size:12px; font-weight:600; font-family:inherit;
+}
+.plan-btn:hover{ filter:brightness(1.12); }
+.plan-btn.primary{ background:var(--accent); border-color:transparent; color:#fff; }
+.plan-btn.ghost{ background:transparent; color:var(--text-secondary); }

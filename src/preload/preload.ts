@@ -33,6 +33,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
+  // Live model progress (tokens/sec) so a slow local step reads as working, not hung.
+  onActionDelta: (cb: (m: { kind: string; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => {
+    const listener = (_e: any, m: any) => cb(m);
+    ipcRenderer.on('ai:action-delta', listener);
+    return () => ipcRenderer.removeListener('ai:action-delta', listener);
+  },
   aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) =>
     ipcRenderer.invoke('ai:action', command, pageContent, screenshot, tier, actionId),
   // Agent Stop button: aborts the in-flight request in main, not just its result.
@@ -49,6 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('local:test-connection', baseUrl, authKey),
   localTestModel: (provider: string, baseUrl?: string, model?: string, authKey?: string) =>
     ipcRenderer.invoke('local:test-model', provider, baseUrl, model, authKey),
+  gpuInfo: () => ipcRenderer.invoke('local:gpu'),
   setLocalEnabled: (enabled: boolean) => ipcRenderer.invoke('ai:set-local-enabled', enabled),
   setLocalWarmup: (on: boolean) => ipcRenderer.invoke('ai:set-local-warmup', on),
   // Descoberta genérica de backend local (Ollama OU OpenAI-compatible llama.cpp/LM Studio/vLLM).
@@ -145,7 +152,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   preconnect: (url: string) => ipcRenderer.invoke('net:preconnect', url),
   // Cron-Agent: monitores em background
   monitorsList: () => ipcRenderer.invoke('monitors:list'),
-  monitorAdd: (data: { url: string; condition: string; intervalMin: number }) => ipcRenderer.invoke('monitors:add', data),
+  monitorAdd: (data: { url: string; condition: string; intervalMin: number; notify?: Array<'trigger'|'change'|'error'> }) => ipcRenderer.invoke('monitors:add', data),
   monitorUpdate: (id: string, patch: any) => ipcRenderer.invoke('monitors:update', id, patch),
   monitorRemove: (id: string) => ipcRenderer.invoke('monitors:remove', id),
   monitorRunNow: (id: string) => ipcRenderer.invoke('monitors:run-now', id),

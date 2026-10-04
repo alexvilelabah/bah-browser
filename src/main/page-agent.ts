@@ -1,5 +1,6 @@
 import { AIEngine } from './ai-engine';
 import type { VisionImage, VisionReport } from '../shared/vision';
+import { classifyError, type AgentErrorCode } from '../shared/error-codes';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }
@@ -45,6 +46,11 @@ export interface AgentResult {
   /** Model's self-judgement of whether its PREVIOUS action succeeded (forced reflection). */
   evaluation?: string;
   error?: string;
+  /** Machine-readable failure (see shared/error-codes.ts). The renderer decides on this,
+   *  never on the prose of `error`. */
+  errorCode?: AgentErrorCode;
+  errorRetryable?: boolean;
+  errorDetail?: Record<string, unknown>;
 }
 
 /** Action types that are safe to batch in one step (same-page interactions; downloads don't change the page). */
@@ -100,10 +106,14 @@ export class PageAgent {
       const parsed = this.parseResponse(r.text);
       return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model }, vision: r.vision };
     } catch (err: any) {
+      const e = classifyError(err);
       return {
         thought: 'Failed to generate action',
-        action: { type: 'done', reason: err.message ?? String(err), success: false },
-        error: err.message ?? String(err),
+        action: { type: 'done', reason: e.message, success: false },
+        error: e.message,
+        errorCode: e.code as AgentErrorCode,
+        errorRetryable: e.retryable,
+        errorDetail: e.detail,
       };
     }
   }

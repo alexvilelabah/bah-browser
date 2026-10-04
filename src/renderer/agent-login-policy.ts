@@ -1,6 +1,6 @@
 import type { ObservedState } from './page-executor';
 
-export type ManualHelpKind = 'login' | 'captcha' | 'paywall' | 'blocked' | 'stuck';
+export type ManualHelpKind = 'login' | 'captcha' | 'paywall' | 'blocked' | 'stuck' | 'local_unavailable';
 
 export interface ManualHelpRequest {
   kind: ManualHelpKind;

@@ -63,6 +63,14 @@ export interface LearnedProfiles {
 }
 
 const LEARNED_SITES_KEY = 'learnedSiteProfiles.v1';
+
+// Ações que carregam DADO da tarefa (o valor anotado, o plano, a resposta) não ensinam "como
+// usar o site". Mostradas como dica numa tarefa seguinte, viravam resposta velha: medido, o
+// agente entregou como atual o preço do Mercado Livre anotado no dia anterior, por outro modelo.
+const TASK_DATA_ACTIONS = new Set(['store', 'plan', 'report', 'done']);
+export function isTaskDataAction(type?: string): boolean {
+  return TASK_DATA_ACTIONS.has(String(type || ''));
+}
 const MAX_URLS_PER_SITE = 20;
 const MAX_ACTIONS_PER_SITE = 80;
 const MAX_ELEMENTS_PER_SITE = 80;
@@ -131,8 +139,8 @@ export function buildKnownSitesBlock(observation?: ObservedState): string {
         currentProfile.landmarks.likeButtons.length
           ? `LIKE BUTTONS:\n${currentProfile.landmarks.likeButtons.slice(0, 5).map(formatLearnedElement).join('\n')}`
           : '',
-        currentProfile.successfulActions.length
-          ? `RECENT SUCCESSFUL ACTIONS:\n${currentProfile.successfulActions.slice(0, 6).map(a => `- ${a.type}: ${a.key} (${a.note ?? a.url})`).join('\n')}`
+        currentProfile.successfulActions.some(a => !isTaskDataAction(a.type))
+          ? `RECENT SUCCESSFUL ACTIONS:\n${currentProfile.successfulActions.filter(a => !isTaskDataAction(a.type)).slice(0, 6).map(a => `- ${a.type}: ${a.key} (${a.note ?? a.url})`).join('\n')}`
           : '',
         ...currentProfile.elements.slice(0, 12).map(el => {
           const bits = [el.tag, el.role, el.placeholder ? `placeholder=${el.placeholder}` : '', el.text ? `text=${el.text}` : '']

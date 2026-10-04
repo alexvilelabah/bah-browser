@@ -41,23 +41,35 @@ export interface LocalDiscovery {
 export type LocalErrorCode =
   | 'CONNECTION_FAILED'
   | 'TIMEOUT'
+  | 'TIMEOUT_FIRST_CHUNK'   // server accepted the connection but never answered in time
+  | 'TIMEOUT_TOTAL'        // non-streaming: nothing to measure by, so the whole call is capped
+  | 'TIMEOUT_STALL'        // streaming: the answer started and then went silent
   | 'CANCELLED'
   | 'MODEL_NOT_FOUND'
   | 'UNSUITABLE_MODEL'
   | 'CONTEXT_OVERFLOW'
   | 'TRUNCATED'
+  | 'THINKING_BUDGET'      // reasoning ran long with no answer / was repeating itself
+  | 'INSTREAM_ERROR'       // HTTP 200, then an error payload inside the stream
+  | 'COMPUTE_ERROR'        // llama.cpp/Ollama failed to run the model (slot/OOM/unloaded)
+  | 'BAD_JSON'
+  | 'IMAGE_REJECTED'
   | 'AUTH_FAILED'
   | 'SERVER_ERROR'
+  | 'RATE_LIMIT'
   | 'STREAM_ERROR'
   | 'UNKNOWN';
 
 export class LocalRequestError extends Error {
   code: LocalErrorCode;
   retryable: boolean;
-  constructor(code: LocalErrorCode, message: string, retryable = false) {
+  /** Extra context for the log and the UI (attempt number, token counts, ...). */
+  detail?: Record<string, unknown>;
+  constructor(code: LocalErrorCode, message: string, retryable = false, detail?: Record<string, unknown>) {
     super(message);
     this.code = code;
     this.retryable = retryable;
+    this.detail = detail;
   }
 }
 
@@ -71,8 +83,9 @@ export function normalizeBaseUrl(raw: string | undefined | null): string {
   b = b.replace(/\/v1$/i, '');
   // Windows IPv6-localhost fix (same as the legacy ollamaUrl helper): Ollama
   // on Windows often listens on 127.0.0.1 only, while `localhost` may resolve
-  // to ::1. Apply narrowly — only a bare `localhost` host segment.
-  b = b.replace(/(\/\/)localhost(\b|:)/i, '$1127.0.0.1$2');
+  // to ::1. Only a bare `localhost` host: `localhost.local` is a real mDNS name
+  // and rewriting it produces the unresolvable `127.0.0.1.local`.
+  b = b.replace(/^(https?:\/\/)localhost(?=(:\d+)?(\/|$))/i, '$1127.0.0.1');
   return b;
 }
 
@@ -123,7 +136,7 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
 // context_length). llama.cpp-only extras (load status, modalities) come from
 // /v1/models itself. Never throws: returns { ok:false, models:[], error }.
 
-export async function discoverLocalModels(baseUrl: string, apiKey?: string, timeoutMs = 8000): Promise<LocalDiscovery> {
+export async function discoverLocalModels(baseUrl: string, apiKey?: string, timeoutMs = 8000, transport?: LocalProvider): Promise<LocalDiscovery> {
   const base = normalizeBaseUrl(baseUrl);
   if (!base) return { ok: false, models: [], error: 'empty base URL' };
   let v1: any = null;
@@ -135,8 +148,10 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
   }
   // Optional Ollama enrichment — failure here must not fail discovery (a
   // llama.cpp server has no /api/tags at all).
+  // Skipped when the user chose an OpenAI-compatible server: /api/* is Ollama's namespace,
+  // and on someone else's server it is a stray request at best. Unknown transport probes both.
   let tags: any[] = [];
-  try {
+  if (transport !== 'openai-compatible') try {
     const t = await fetchJson(`${base}/api/tags`, { headers: authHeaders(apiKey) }, Math.min(timeoutMs, 4000));
     if (Array.isArray(t?.models)) tags = t.models;
   } catch { /* not an Ollama server — fine */ }
@@ -162,11 +177,13 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
       if (inputModalities.length > 0) {
         info.vision = inputModalities.includes('image') ? 'supported' : 'unsupported';
       }
-      // Router-launched servers carry their llama-server argv; --ctx-size is the
-      // allocation the model WILL get once loaded (the only context number
-      // available while it is unloaded, since /props 400s on unloaded models).
+      // Server-advertised window first (vLLM/LM Studio report it on the model card), then
+      // the router argv (--ctx-size: the allocation the model will get once loaded — /props
+      // 400s on unloaded models), then the Ollama registry (nominal, never runtime).
+      const adv = advertisedContextTokens(m);
+      if (adv) { info.contextTokens = adv; info.contextSource = 'configured'; }
       const ctxArg = ctxSizeFromArgs(m?.status?.args);
-      if (ctxArg) { info.contextTokens = ctxArg; info.contextSource = 'configured'; }
+      if (!adv && ctxArg) { info.contextTokens = ctxArg; info.contextSource = 'configured'; }
       if (tag) enrichFromOllamaTag(info, tag);
       info.unsuitable = classifyUnsuitable(info.id, tag?.capabilities);
       out.push(info);
@@ -186,6 +203,23 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
     return { ok: true, models: out };
   }
   return { ok: false, models: [], error: v1Error || 'no models reported' };
+}
+
+/** Context window as the server advertises it: vLLM max_model_len, LM Studio
+ *  context_length / max_context_tokens, llama.cpp n_ctx, Ollama num_ctx. Names differ
+ *  per server; the VALUE is the window requests must fit in. */
+export function advertisedContextTokens(m: any): number | undefined {
+  if (!m || typeof m !== 'object') return undefined;
+  const keys = ['max_model_len', 'context_length', 'max_context_tokens', 'n_ctx', 'num_ctx', 'max_context_window'];
+  const holders = [m, m?.metadata, m?.parameters, m?.model_card, m?.extra] as any[];
+  for (const h of holders) {
+    if (!h || typeof h !== 'object') continue;
+    for (const k of keys) {
+      const n = Number(h[k]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return undefined;
 }
 
 /** Pull `--ctx-size N` (or `-c N`) out of a llama.cpp router's recorded argv. */
@@ -305,6 +339,8 @@ export interface ContextBudget {
   marginTokens?: number;
   /** Approximate cost of attached images — text must fit around them. */
   imageTokens?: number;
+  /** The system prompt travels in the same window; uncounted, it overflows the server. */
+  systemTokens?: number;
 }
 
 const OBS_MARKERS = {
@@ -313,12 +349,74 @@ const OBS_MARKERS = {
   history: 'RECENT HISTORY:',
 } as const;
 
+/** The window a request actually gets: a server allocates min(what the model can do, what
+ *  we ask for), so an advertised 262144 with num_ctx 16384 means 16384. A runtime number IS
+ *  the allocation and wins. Absence stays absence - never invent a window. */
+export function clampWindow(o: {
+  advertised?: number; runtime?: number; requested?: number; fallback: number;
+}): { tokens: number; source: ContextSource | 'fallback' | 'clamped' } {
+  const pos = (n?: number) => (Number.isFinite(n ?? NaN) && (n as number) > 0 ? n : undefined);
+  const runtime = pos(o.runtime), advertised = pos(o.advertised), requested = pos(o.requested);
+  if (runtime) return requested ? { tokens: Math.min(runtime, requested), source: 'clamped' } : { tokens: runtime, source: 'runtime' };
+  if (advertised) return requested ? { tokens: Math.min(advertised, requested), source: 'clamped' } : { tokens: advertised, source: 'configured' };
+  return { tokens: o.fallback, source: 'fallback' };
+}
+
+/** Output budget actually sent. Cloud keeps its historic number; local honours the user's
+ *  setting (reasoning tokens live inside it), capped at the hard 16384. */
+export function outputBudget(o: { isLocal: boolean; userMax?: number; cfgMax?: number; cap?: number }): number {
+  const cap = o.cap ?? 16384;
+  if (!o.isLocal) return o.cfgMax ?? 4096;
+  const user = o.userMax ?? 0;
+  return Math.min(cap, Math.max(o.cfgMax ?? 0, user || cap));
+}
+
+/** The output budget that fits: prompt + max_tokens must stay inside the window. vLLM rejects
+ *  the request outright when it does not (400 "maximum context length"); llama.cpp and Ollama
+ *  run out of window mid-answer. The floor keeps a usable reply even on a tight window -
+ *  if the prompt really leaves less than that, the server's overflow error is the honest result. */
+export function fitOutputToWindow(o: { budget: number; window: number; promptTokens: number; margin?: number; floor?: number }): number {
+  const room = o.window - o.promptTokens - (o.margin ?? 512);
+  return Math.max(o.floor ?? 1024, Math.min(o.budget, room));
+}
+
+/** Whether to send Ollama `think`. Newer models think unless told not to (measured on
+ *  gemma4:12b: 510 thinking tokens and 8s before a 31-token JSON action; a 256 cap
+ *  produced no content at all). On only for a reasoning model we have not throttled.
+ *  Off otherwise — omitting the field is not the same as off. */
+export function ollamaThink(isReasoning: boolean, suppressed: boolean): boolean {
+  return isReasoning && !suppressed;
+}
+
+/** num_ctx for Ollama 'auto'. Sending nothing leaves the window unknown to both sides; this
+ *  asks for what the measured prompt plus the output budget actually needs, between 16384 and
+ *  32768, and never shrinks (lowering num_ctx reallocates - and reloads - the model). */
+export function ollamaAutoNumCtx(o: {
+  measuredPromptTokens?: number; outputTokens: number; sent?: number; floor?: number; ceil?: number;
+}): number {
+  const floor = o.floor ?? 16384, ceil = o.ceil ?? 32768;
+  // Nothing measured yet: ask for the floor, do not guess a bigger window from the budget.
+  if (!Number.isFinite(o.measuredPromptTokens ?? NaN) || (o.measuredPromptTokens ?? 0) <= 0) {
+    return Math.max(o.sent ?? 0, floor);
+  }
+  const need = (o.measuredPromptTokens ?? 0) + o.outputTokens + 256;
+  const want = Math.min(ceil, Math.max(floor, need));
+  return Math.max(o.sent ?? 0, want);
+}
+
+/** Recovery budget after a truncated answer: grow the output budget to what the window can
+ *  actually give, instead of jumping to a fixed 16384 that may not fit the prompt. */
+export function recoverOutputBudget(o: { previous: number; measuredPromptTokens?: number; window: number; cap?: number }): number {
+  const cap = Math.min(o.cap ?? 16384, Math.max(1024, o.window - (o.measuredPromptTokens ?? 0) - 512));
+  return Math.max(Math.min(o.previous, cap), Math.min(cap, o.previous * 2));
+}
+
 /** Fit an assembled agent observation into budget by trimming the variable
  *  sections first (page text, then history), NEVER the interactive-element
  *  list. Returns the fitted text + whether anything was trimmed. */
 export function applyContextBudget(observedState: string, budget: ContextBudget): { text: string; trimmed: boolean } {
   const margin = budget.marginTokens ?? 512;
-  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin - (budget.imageTokens ?? 0));
+  const allowed = Math.max(0, budget.totalTokens - budget.maxOutputTokens - margin - (budget.imageTokens ?? 0) - (budget.systemTokens ?? 0));
   if (!observedState || estimateTokens(observedState) <= allowed) return { text: observedState, trimmed: false };
 
   let text = observedState;

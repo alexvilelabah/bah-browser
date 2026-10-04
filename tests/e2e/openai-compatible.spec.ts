@@ -14,6 +14,11 @@ async function launch() {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // A fresh profile opens the first-run tour, a modal that intercepts every click. This spec
+  // is about settings, not the tour: mark it seen and reload.
+  await page.evaluate(() => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); });
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
   return { app, page };
 }
 

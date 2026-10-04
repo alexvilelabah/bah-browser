@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
+import { classifyError } from '../shared/error-codes';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
   discoverLocalModels,
@@ -139,6 +140,11 @@ function trayIconPath(): string {
     ? path.join(process.resourcesPath, 'icon.png')
     : path.join(__dirname, '..', '..', 'build', 'icon.png');
 }
+function attachLocalMetrics(e: AIEngine | null): void {
+  if (!e) return;
+  e.onMetrics = (m) => { try { mainWindow?.webContents.send('ai:action-delta', m); } catch {} };
+}
+
 function showMainWindow() {
   if (!mainWindow) { createWindow(); return; }
   try { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } catch {}
@@ -1108,11 +1114,34 @@ function attachContextMenu(wc: Electron.WebContents): void {
 // Aqui no principal o nativeImage tem Buffer, então a conversão pra JPEG (bem menor que o PNG
 // numa página com foto) acontece antes de o print ir pro modelo. Mesmo tamanho em pixels —
 // o click_at continua valendo. Qualquer falha devolve o original, que também é aceito.
+// Print de uma cor só = janela coberta por outra (o Chromium não desenha a página e o print
+// sai preto). Amostra ~2000 pixels; qualquer variação real (texto, logo, foto) passa do limite.
+function isBlankFrame(ni: Electron.NativeImage): boolean {
+  try {
+    const bmp = ni.toBitmap();   // BGRA
+    if (bmp.length < 16) return false;
+    const step = Math.max(4, Math.floor(bmp.length / 4 / 2000) * 4);
+    let min = 255, max = 0;
+    for (let i = 0; i + 2 < bmp.length; i += step) {
+      const lum = (bmp[i] + bmp[i + 1] + bmp[i + 2]) / 3;
+      if (lum < min) min = lum;
+      if (lum > max) max = lum;
+      if (max - min > 12) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function visionImageToJpeg(img?: VisionImage): VisionImage | undefined {
   if (!img?.dataUrl || !/^data:image\/png;base64,/i.test(img.dataUrl)) return img;
   try {
     const ni = nativeImage.createFromDataURL(img.dataUrl);
     if (ni.isEmpty()) return img;
+    // Mandar o print preto confundia o modelo ("a imagem, que não consigo ver") e ele chegou a
+    // inventar URL. Sem print, ele recebe o aviso honesto de que não há imagem neste passo.
+    if (isBlankFrame(ni)) return undefined;
     const buf = ni.toJPEG(82);
     return { ...img, dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`, bytes: buf.length };
   } catch {
@@ -1206,6 +1235,7 @@ function setupIPC(): void {
     const provider: AIProvider = providerIn === 'openai-compatible' ? 'openai' : (providerIn as AIProvider);
     const prevLocal = localEngine;
     localEngine = new AIEngine(provider, apiKey || '', baseUrl, modelName, undefined, true, opts);
+    attachLocalMetrics(localEngine);
     localEngine.adoptHistoriesFrom(prevLocal);   // salvar Config não apaga a conversa local
     localPageAgent = new PageAgent(localEngine);
     console.log(`[HybridRouter] Local engine set: ${provider} (${providerIn}) model=${modelName || 'default'} @ ${localEngine.getBaseUrl()}`);
@@ -1228,9 +1258,9 @@ function setupIPC(): void {
   // default, and listing models must never touch anyone's VRAM.
   const localTransportOf = (p?: string): LocalProvider =>
     p === 'openai-compatible' ? 'openai-compatible' : 'ollama';
-  ipcMain.handle('local:discover', async (_e, _provider: string, baseUrl?: string, authKey?: string) => {
+  ipcMain.handle('local:discover', async (_e, provider: string, baseUrl?: string, authKey?: string) => {
     try {
-      const d = await discoverLocalModels(normalizeLocalBaseUrl(baseUrl), authKey, 8000);
+      const d = await discoverLocalModels(normalizeLocalBaseUrl(baseUrl), authKey, 8000, provider ? localTransportOf(provider) : undefined);
       return { ok: d.ok, models: d.models, error: d.error };
     } catch (e: any) { return { ok: false, models: [], error: String(e?.message ?? e) }; }
   });
@@ -1247,7 +1277,26 @@ function setupIPC(): void {
       return { ok: false, source: 'unknown' };
     } catch (e: any) { return { ok: false, source: 'unknown', error: String(e?.message ?? e) }; }
   });
-  ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: string) => {
+  // Vision costs a small model a lot on a machine with no real GPU: the encoder runs on the
+// CPU and a 2s step becomes 30s, which the user reads as the agent being broken. The app
+// asks once, caches the answer, and defaults vision OFF when there is nothing to run it on.
+// 'basic' resolves as soon as the GPU process is up; a failure answers 'unknown', which the
+// shared rule treats as NO GPU - the cautious side.
+let gpuInfoCache: unknown = null;
+let gpuInfoPromise: Promise<unknown> | null = null;
+async function gpuInfoFresh() {
+  if (gpuInfoCache) return gpuInfoCache;
+  if (!gpuInfoPromise) {
+    gpuInfoPromise = app
+      .getGPUInfo('basic')
+      .then((info) => { gpuInfoCache = info; return info; })
+      .catch(() => ({ gpuDevice: [] }));
+  }
+  return gpuInfoPromise;
+}
+ipcMain.handle('local:gpu', () => gpuInfoFresh());
+
+ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: string) => {
     try {
       return await testLocalConnection(normalizeLocalBaseUrl(baseUrl), authKey);
     } catch (e: any) { return { ok: false, reachable: false, modelsFound: 0, error: String(e?.message ?? e) }; }
@@ -1351,6 +1400,19 @@ function setupIPC(): void {
   // Stop. Before, the late result was merely discarded in the renderer - the inference
   // kept the GPU busy until it finished on its own.
   const actionAborts = new Map<string, AbortController>();
+  // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
+  // devagar) manda consertar o que não está quebrado — e esconde o que está.
+  const localFailureAdvice = (msg: string): string => {
+    const start = localBackendIsCompat()
+      ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
+      : 'start Ollama and select a model in settings.';
+    // "timed out" too: the body-read timeout says "body read timed out", which fell through
+    // to "start your server" while the server was up and simply generating slowly.
+    const tail = /too slow|timeout|timed out|no token in time|no complete answer/i.test(msg)
+      ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
+      : `Local mode stays offline — ${start}`;
+    return `Local AI failed: ${msg}. ${tail}`;
+  };
   ipcMain.handle('ai:action-cancel', (_e, actionId: string) => {
     try { actionAborts.get(actionId)?.abort(); } catch {}
     return true;
@@ -1378,8 +1440,14 @@ function setupIPC(): void {
     if (resolvedTier === 'local' && localPageAgent) {
       try {
         const result = await localPageAgent.executeCommand(command, pageContent, screenshot, 'flash', ac?.signal);
-        if (ac?.signal.aborted) return { error: 'CANCELLED' };
-        if (result.error) throw new Error(result.error);
+        if (ac?.signal.aborted) return { error: 'CANCELLED', errorCode: 'CANCELLED' };
+        if (result.errorCode === 'CANCELLED') return { error: 'CANCELLED', errorCode: 'CANCELLED' };
+        if (result.error) {
+          // Keep the code: the renderer decides retry / degrade / pause on it. Re-throwing
+          // as a plain Error dropped it, and every local failure arrived as UNKNOWN.
+          console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', result.error);
+          return { ...result, error: localFailureAdvice(result.error), _engine: 'local' };
+        }
         return { ...result, _engine: 'local' };
       } catch (err: any) {
         // PRIVACIDADE: em modo local a falha do Ollama NÃO vaza pra nuvem. Em vez de mandar
@@ -1388,17 +1456,8 @@ function setupIPC(): void {
         const msg = err?.message ?? String(err);
         if (/CANCELLED/.test(msg) || ac?.signal.aborted) return { error: 'CANCELLED' };
         console.warn('[HybridRouter] Local engine failed (local mode stays offline, no cloud fallback):', msg);
-        // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
-        // devagar) manda consertar o que não está quebrado — e esconde o que está.
-        const start = localBackendIsCompat()
-          ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
-          : 'start Ollama and select a model in settings.';
-        // "timed out" too: the body-read timeout says "body read timed out", which fell through
-        // to "start your server" while the server was up and simply generating slowly.
-        const tail = /too slow|timeout|timed out/i.test(msg)
-          ? 'The model answered too slowly — usually it does not fit in your GPU, so part of it runs on the CPU. Pick a smaller (lower-quant) model in settings, or switch to a cloud provider.'
-          : `Local mode stays offline — ${start}`;
-        return { error: `Local AI failed: ${msg}. ${tail}` };
+        const e = classifyError(err);
+        return { error: localFailureAdvice(msg), errorCode: e.code, errorRetryable: e.retryable, errorDetail: e.detail, _engine: 'local' };
       }
     }
     if (!pageAgent) return { error: 'AI provider not configured. Open settings to configure.' };
@@ -1421,10 +1480,10 @@ function setupIPC(): void {
   // um .gguf — tudo pela UI, sem terminal. Assim, IA nova = só digitar o nome (não
   // precisa atualizar o app). NÃO toca o caminho da API/nuvem.
   // Normaliza pra IPv4: no Windows `localhost` pode resolver pra IPv6 `::1`, mas o
-  // Ollama escuta só em `127.0.0.1` → conexão recusada. Forçar 127.0.0.1 elimina isso
-  // (cobre list/pull/delete de uma vez, sem migrar settings salvos do usuário).
-  const ollamaUrl = (b?: string) =>
-    (b || 'http://localhost:11434').replace(/\/$/, '').replace(/(\/\/)localhost(\b|:)/i, '$1127.0.0.1$2');
+  // Ollama escuta só em `127.0.0.1` → conexão recusada. Delega ao mesmo helper do
+  // resto do app para haver uma única regra (ele só reescreve `localhost` nu — um
+  // nome real como `localhost.local` é mDNS e precisa continuar intacto).
+  const ollamaUrl = (b?: string) => normalizeLocalBaseUrl(b || 'http://localhost:11434');
   ipcMain.handle('ollama:list', async (_e, baseUrl?: string) => {
     try {
       const r = await fetch(`${ollamaUrl(baseUrl)}/api/tags`, { signal: AbortSignal.timeout(4000) } as any);
@@ -2146,7 +2205,7 @@ function setupIPC(): void {
 
   // ═══ Cron-Agent: monitores em background ═══
   ipcMain.handle('monitors:list', () => monitorManager?.list() || []);
-  ipcMain.handle('monitors:add', (_e, data: { url: string; condition: string; intervalMin: number }) => monitorManager?.add(data));
+  ipcMain.handle('monitors:add', (_e, data: { url: string; condition: string; intervalMin: number; notify?: Array<'trigger'|'change'|'error'> }) => monitorManager?.add(data));
   ipcMain.handle('monitors:update', (_e, id: string, patch: any) => { monitorManager?.update(id, patch); return true; });
   ipcMain.handle('monitors:remove', (_e, id: string) => { monitorManager?.remove(id); return true; });
   ipcMain.handle('monitors:run-now', async (_e, id: string) => { try { await monitorManager?.runNow(id); } catch {} return true; });
@@ -2605,7 +2664,18 @@ function setupIPC(): void {
         imagePath = screenshotFilename(taskId, 'frame');
         fs.writeFileSync(imagePath, Buffer.from(frame.base64, 'base64'));
       } else {
-        const capture = await captureViewport(wcId, sharedEnsureDebugger, taskId);
+        // Print via CDP: com a janela do Bah coberta por outra, o Windows não desenha a página e
+        // o Page.captureScreenshot espera pra sempre — o agente congelava inteiro (medido: 5 min
+        // parado no passo 1 até a janela voltar pra frente). Com o limite, o passo segue sem OCR
+        // (o catch abaixo já trata como não-fatal); se o print chegar depois, o PNG é apagado.
+        const captureP = captureViewport(wcId, sharedEnsureDebugger, taskId);
+        const capture = await Promise.race([
+          captureP,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('OCR capture timed out (window not painted?)')), 8000)),
+        ]).catch((e) => {
+          captureP.then((c) => { try { fs.unlinkSync(c.imagePath); } catch {} }, () => {});
+          throw e;
+        });
         imagePath = capture.imagePath;
       }
       let ocr;
@@ -3277,6 +3347,7 @@ app.whenReady().then(async () => {
   // isLocal=true (último arg): apiKey vira auth OPCIONAL, não marcador de modo.
   try {
     localEngine = new AIEngine('ollama', '', 'http://localhost:11434', 'qwen3-vl:8b', undefined, true);
+    attachLocalMetrics(localEngine);
     localPageAgent = new PageAgent(localEngine);
     console.log('[HybridRouter] Local engine (Ollama) initialized at http://localhost:11434');
   } catch (e) {

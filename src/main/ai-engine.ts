@@ -5,9 +5,29 @@ import {
   discoverLocalModels as _discoverLocalModels,
   detectRuntimeContext as _detectRuntimeContext,
   applyContextBudget as _applyContextBudget,
+  estimateTokens,
+  LocalRequestError,
   type LocalModelInfo as _LocalModelInfo,
   type LocalProvider as _LocalTransport,
 } from './local-providers';
+import {
+  fetchCancellable, shouldStream, streamKey, sleep,
+  LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
+  CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
+} from './cancellable-fetch';
+import { ThinkingBudget } from './thinking-budget';
+import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
+import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
+
+/** Ollama auto num_ctx: the floor it asks for, and the answer room it sizes the window for. */
+const OLLAMA_NUM_CTX_FLOOR = 16384;
+const OLLAMA_CTX_OUTPUT_RESERVE = 4096;
+
+/** The server used its whole time budget: slow (model loading, prompt too big, partly on CPU),
+ *  not flaky. Resending the same request repeats the wait, so these are never resent in place. */
+function isSlowServer(e: any): boolean {
+  return e instanceof LocalRequestError && (e.code === 'TIMEOUT_FIRST_CHUNK' || e.code === 'TIMEOUT_TOTAL');
+}
 import {
   NO_IMAGE_PROVIDERS,
   RX_IMAGE_REJECTED,
@@ -65,165 +85,6 @@ async function fetchWithTimeout(url: string, opts: any, ms: number, signal?: Abo
     clearTimeout(t);
     if (signal) signal.removeEventListener('abort', onAbort);
   }
-}
-
-// Lê um corpo SSE OpenAI-compatible (stream:true) e emite os deltas conforme chegam.
-// Devolve o texto COMPLETO no fim.
-// Modelos de raciocínio (DeepSeek-V4, Fara…) mandam o pensamento num canal SEPARADO
-// (delta.reasoning_content). Embrulhamos em <think>…</think> pro renderer exibir o
-// chip 💭 — o MESMO padrão do reader NDJSON do Ollama. O retorno (histórico) fica
-// LIMPO: só o content, sem o raciocínio vazado (a UI já mostrou os chips via onDelta).
-// Guarda de inatividade: 30s sem chunk → aborta (stream pendurado não congela o chat).
-async function readSseStream(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
-  const reader = (res.body as any)?.getReader?.();
-  if (!reader) throw new Error('stream unsupported');
-  const decoder = new TextDecoder();
-  let buf = '';
-  let full = '';
-  let thinkOpen = false;
-  const flushThink = () => { try { onDelta('</think>'); } catch {} thinkOpen = false; };
-  const emitThink = (d: string) => {
-    if (!d) return;
-    if (!thinkOpen) { try { onDelta('<think>'); } catch {} thinkOpen = true; }
-    try { onDelta(d); } catch {}
-  };
-  let emitted = 0;
-  // Emit the accumulated content without splitting a surrogate pair (emoji) in half.
-  // The old guard tested target < full.length immediately after target = full.length:
-  // never true, so the pair was still cut in half. Now, when the text ends on a lead
-  // surrogate (0xD800-0xDBFF) with no pair, that char is held back until the next delta
-  // brings the trail. final=true releases whatever is left at end of stream - there the
-  // lead really is orphaned, and showing a broken char beats swallowing text.
-  const emitUpTo = (final = false) => {
-    let target = full.length;
-    if (!final && target > emitted) {
-      const c = full.charCodeAt(target - 1);
-      if (c >= 0xD800 && c <= 0xDBFF) target -= 1;
-    }
-    if (target > emitted) { try { onDelta(full.slice(emitted, target)); } catch {} emitted = target; }
-  };
-  // Cancelamento (botão Parar): o listener de abort do fetch some quando os headers
-  // chegam, então aqui, DURANTE o corpo do stream, cancelamos o reader na mão — sem isto
-  // o Stop no meio do streaming deixava o modelo gerar até o fim e gravava turno-fantasma.
-  const onAbort = () => { try { reader.cancel(); } catch {} };
-  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
-  let stallTimer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error('CANCELLED');
-      // Timer limpo a CADA leitura (senão um stream longo acumula um timer de 30s por chunk).
-      const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
-        Promise.resolve(reader.read()).then(
-          (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
-          (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
-        );
-      });
-      if (chunk.done) break;
-      buf += decoder.decode(chunk.value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') { emitUpTo(true); if (thinkOpen) flushThink(); return full; }
-        try {
-          const j = JSON.parse(payload);
-          const dl = j.choices?.[0]?.delta;
-          const rc = dl?.reasoning_content ?? '';
-          const d = dl?.content ?? '';
-          if (rc) emitThink(rc);
-          if (d) {
-            if (thinkOpen) flushThink();
-            full += d; emitUpTo();
-          }
-        } catch { /* linha parcial/keep-alive — ignora */ }
-      }
-    }
-  } catch (e) {
-    try { await reader.cancel(); } catch {}   // fecha a conexão de verdade (não deixa o socket pendurado)
-    throw e;
-  } finally {
-    if (stallTimer) clearTimeout(stallTimer);
-    if (signal) signal.removeEventListener('abort', onAbort);
-    try { reader.releaseLock?.(); } catch {}
-  }
-  if (signal?.aborted) throw new Error('CANCELLED');   // reader.cancel() resolve done → garante o throw
-  emitUpTo(true);   // stream over: release a held lead surrogate, if any
-  if (thinkOpen) flushThink();   // fecha o bloco de raciocínio que ainda estava aberto
-  return full;
-}
-
-// Lê um corpo de stream do OLLAMA (stream:true): NDJSON — um objeto JSON por linha
-// ({message:{content}} até done:true), NÃO é SSE. Mesmo padrão de robustez do
-// readSseStream: guarda de 30s por chunk + cancel no erro. Modelos de raciocínio
-// (qwen3 etc.) podem mandar o pensamento em message.thinking — embrulhamos em
-// <think>…</think> pra o renderer exibir igual ao caso dos tags inline no content.
-async function readOllamaNdjson(res: Response, onDelta: (d: string) => void, signal?: AbortSignal): Promise<string> {
-  const reader = (res.body as any)?.getReader?.();
-  if (!reader) throw new Error('stream unsupported');
-  const decoder = new TextDecoder();
-  let buf = '';
-  let full = '';
-  let thinkOpen = false;
-  // Same surrogate-pair guard as readSseStream: an emoji can straddle two tokens, and
-  // JSON.parse('"\\ud83d"') yields a lone lead - valid in JS, broken on screen.
-  let pendingLead = '';
-  const safeEmit = (d: string) => {
-    let out = pendingLead + d;
-    pendingLead = '';
-    const last = out.charCodeAt(out.length - 1);
-    if (out.length > 0 && last >= 0xD800 && last <= 0xDBFF) { pendingLead = out.slice(-1); out = out.slice(0, -1); }
-    if (out) { try { onDelta(out); } catch {} }
-  };
-  // End of stream: whatever is still held really is an orphan lead - show it.
-  const flushLead = () => { if (pendingLead) { const q = pendingLead; pendingLead = ''; try { onDelta(q); } catch {} } };
-  const emit = (d: string) => { if (d) { full += d; safeEmit(d); } };
-  // Cancelamento (Parar): cancela o reader na mão — senão o Ollama segue gerando na GPU
-  // até o fim mesmo depois do Stop, e o turno-fantasma vai pro histórico.
-  const onAbort = () => { try { reader.cancel(); } catch {} };
-  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
-  let stallTimer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error('CANCELLED');
-      const chunk = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
-        stallTimer = setTimeout(() => reject(new Error('stream stalled (30s)')), 30000);
-        Promise.resolve(reader.read()).then(
-          (r: any) => { if (stallTimer) clearTimeout(stallTimer); resolve(r); },
-          (e: any) => { if (stallTimer) clearTimeout(stallTimer); reject(e); },
-        );
-      });
-      if (chunk.done) break;
-      buf += decoder.decode(chunk.value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const j = JSON.parse(line);
-          const th = j.message?.thinking ?? '';
-          if (th) { if (!thinkOpen) { emit('<think>'); thinkOpen = true; } emit(th); }
-          const d = j.message?.content ?? '';
-          if (d) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } emit(d); }
-          if (j.done === true) { if (thinkOpen) { emit('</think>'); thinkOpen = false; } flushLead(); return full; }
-        } catch { /* linha parcial — ignora */ }
-      }
-    }
-  } catch (e) {
-    try { await reader.cancel(); } catch {}
-    throw e;
-  } finally {
-    if (stallTimer) clearTimeout(stallTimer);
-    if (signal) signal.removeEventListener('abort', onAbort);
-    try { reader.releaseLock?.(); } catch {}
-  }
-  if (signal?.aborted) throw new Error('CANCELLED');
-  if (thinkOpen) emit('</think>');
-  flushLead();
-  return full;
 }
 
 // Remove o raciocínio (<think>…</think>) de uma resposta de modelo de raciocínio,
@@ -509,6 +370,8 @@ function langSuffix(): string {
   return `\n\nLANGUAGE: Write your "thought", "evaluation", "reason"/report text and ANY message shown to the user in ${LANG_NAMES[engineLang]}, regardless of the page's language. Keep JSON keys, action/tool names and URLs in English.`;
 }
 
+export type AiMetrics = LiveMetrics;
+
 export class AIEngine {
   private provider: AIProvider;
   private apiKey: string;
@@ -569,7 +432,7 @@ export class AIEngine {
       && this.localModelsCacheBase === base
       && Date.now() - this.localModelsCache.at < AIEngine.LOCAL_CACHE_TTL_MS;
     if (fresh) return this.localModelsCache!.models;
-    const d = await _discoverLocalModels(base, this.apiKey || undefined);
+    const d = await _discoverLocalModels(base, this.apiKey || undefined, 8000, this.localTransport());
     this.localModelsCache = { at: Date.now(), models: d.models };
     this.localModelsCacheBase = base;
     return d.models;
@@ -595,15 +458,26 @@ export class AIEngine {
     }
     const modelId = this.provider === 'ollama' ? (this.resolvedOllamaModel || this.ollamaModel) : this.ollamaModel;
     const ck = `${this.baseUrl}::${modelId}`;
+    // What we ask the server to allocate. 'auto' sends nothing (server default), so it can
+    // neither raise nor lower the window.
+    // Ollama only: an OpenAI-compatible server allocates its own window and never sees num_ctx.
+    // numCtxSent is keyed like ck (baseUrl::model); before the first call, auto asks for the floor.
+    const requested = this.provider !== 'ollama'
+      ? undefined
+      : (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
+        ? this.localOpts.ollamaNumCtx
+        : (this.numCtxSent.get(ck) ?? OLLAMA_NUM_CTX_FLOOR);
     const hit = this.runtimeCtxCache.get(ck);
     if (hit && Date.now() - hit.at < AIEngine.LOCAL_CACHE_TTL_MS) {
-      return { totalTokens: hit.tokens ?? FALLBACK, source: hit.source };
+      const w = clampWindow({ runtime: hit.source === 'runtime' ? hit.tokens : undefined, advertised: hit.tokens, requested, fallback: FALLBACK });
+      return { totalTokens: w.tokens, source: w.source };
     }
     try {
       const rc = await _detectRuntimeContext(this.localTransport(), this.baseUrl, modelId, this.apiKey || undefined);
       if (rc.tokens) {
+        const w = clampWindow({ runtime: rc.source === 'runtime' ? rc.tokens : undefined, advertised: rc.tokens, requested, fallback: FALLBACK });
         this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: rc.tokens, source: rc.source });
-        return { totalTokens: rc.tokens, source: rc.source };
+        return { totalTokens: w.tokens, source: w.source };
       }
     } catch { /* runtime unknown - fall through to what discovery already knows */ }
     // Model unloaded (llama.cpp's /props answers 400) or a server with no /api/ps:
@@ -613,13 +487,55 @@ export class AIEngine {
     try {
       const info = (await this.listLocalModels()).find(m => m.id.toLowerCase() === (modelId || '').toLowerCase());
       if (info?.contextTokens && info.contextTokens > 0) {
-        const src = info.contextSource ?? 'configured';
-        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: info.contextTokens, source: src });
-        return { totalTokens: info.contextTokens, source: src };
+        const w = clampWindow({ advertised: info.contextTokens, requested, fallback: FALLBACK });
+        this.runtimeCtxCache.set(ck, { at: Date.now(), tokens: info.contextTokens, source: info.contextSource ?? 'configured' });
+        return { totalTokens: w.tokens, source: w.source };
       }
     } catch { /* discovery unavailable - fall back below */ }
     this.runtimeCtxCache.set(ck, { at: Date.now(), source: 'fallback' });
     return { totalTokens: FALLBACK, source: 'fallback' };
+  }
+
+  /** One context knob, two transports. The custom window the user sets is BOTH the number
+   *  we budget with and the num_ctx we ask Ollama to allocate - they cannot disagree. */
+  private resolveNumCtx(sKey: string, isAgentMode: boolean): number {
+    const explicit = this.localOpts.ollamaNumCtx;
+    const custom = (this.localOpts.contextMode ?? 'auto') === 'custom' ? (this.localOpts.contextTokens ?? 0) : 0;
+    const n = (typeof explicit === 'number' && explicit > 0)
+      ? explicit
+      : custom > 0
+        ? custom
+        : ollamaAutoNumCtx({
+          measuredPromptTokens: this.promptTokens.get(sKey),
+          // Size the window for a typical answer, not the 16k ceiling: measured steps use
+          // <3k output tokens, and every num_ctx increase reloads the model and grows the KV
+          // cache. num_predict is then fitted to whatever room the window leaves.
+          outputTokens: Math.min(OLLAMA_CTX_OUTPUT_RESERVE, this.outputBudget(isAgentMode ? 16384 : 4096)),
+          sent: this.numCtxSent.get(sKey),
+        });
+    this.numCtxSent.set(sKey, n);
+    return n;
+  }
+
+  private async recoverMaxTokens(key: string, previous: number): Promise<number> {
+    // Cloud keeps its historic recovery number; local grows only as far as its window allows.
+    if (!this.isLocal) return 16384;
+    const w = await this.resolveContextBudget().catch(() => ({ totalTokens: 16384, source: 'fallback' }));
+    return recoverOutputBudget({ previous, measuredPromptTokens: this.promptTokens.get(key), window: w.totalTokens });
+  }
+
+  /** Output budget actually sent. Cloud keeps its historic number (byte-identical bodies);
+   *  local honours the user's setting - reasoning tokens live inside this number - defaulting
+   *  to the 16384 hard cap. Measured: median 230, p90 ~600, max 2,869 output tokens, so a
+   *  4096 ceiling was silently cutting long JSON answers (e.g. a 75-track list). */
+  private outputBudget(cfgMax?: number): number {
+    return _outputBudget({ isLocal: this.isLocal, userMax: this.localOpts.maxOutputTokens, cfgMax });
+  }
+
+  /** Mirrors the system text actually sent (same constants, same order) - used to charge the
+   *  window honestly. Keep in sync with the messages composition in the call paths. */
+  private systemPromptText(isAgentMode: boolean): string {
+    return (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
   }
 
   /** Gate + explain in one place. "unsupported" is a known NO from the server;
@@ -833,6 +749,9 @@ export class AIEngine {
     let contextSource: string | undefined;
     let contextTrimmed = false;
     const imageTokens = vision.attached ? estimateImageTokens(vision.width, vision.height) : 0;
+    // The system prompt rides in the same window. Uncounted it is ~6.8k tokens of a 16k
+    // budget silently spent before the observation is even measured.
+    const systemTokens = estimateTokens(this.systemPromptText(true) + command);
     if (this.isLocal && state) {
       try {
         const cb = await this.resolveContextBudget();
@@ -842,6 +761,7 @@ export class AIEngine {
           totalTokens: cb.totalTokens,
           maxOutputTokens: this.localOpts.maxOutputTokens ?? 4096,
           imageTokens,
+          systemTokens,
         });
         state = fitted.text;
         contextTrimmed = fitted.trimmed;
@@ -868,9 +788,13 @@ export class AIEngine {
 
     const t0 = Date.now();
     if (signal?.aborted) throw new Error('CANCELLED');
+    // Local agent steps stream: a delta sink is what turns streaming on, and with it the
+    // first-token/inactivity clocks, the soft thinking budget and live tok/s (emitted by the
+    // call paths). The sink itself discards: the action is parsed from the returned text.
+    const streamSink = this.isLocal ? (_d: string) => {} : undefined;
     const { value: reply, rejected } = await this.withImageFallback(
       [{ role: 'user', content: command + contextNote + visionNote, image: vision.attached ? screenshot : undefined }],
-      msgs => this.callLLM(msgs, true, tier, undefined, signal),
+      msgs => this.callLLM(msgs, true, tier, streamSink, signal),
       () => [{ role: 'user', content: command + contextNote + noImageNote('model_rejected_image') }],
       signal,
     );
@@ -962,9 +886,38 @@ export class AIEngine {
   // (reasoning_content) e — em modo agente — recuperação JSON limitada (vazia / truncada /
   // só-raciocínio → tenta com orçamento maior mantendo JSON; só desliga o response_format
   // com evidência de que o servidor não suporta).
-  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number }): Promise<string> {
-    const streaming = !!onDelta && !isAgentMode;
+  /** Live progress for the UI: a slow local step must read as working, not hung. */
+  onMetrics?: (m: AiMetrics) => void;
+
+  /** One meter per streamed call (cumulative, throttled, rate from the first token). */
+  private liveMeter() {
+    return createLiveMeter(m => this.onMetrics?.(m));
+  }
+
+  // Sticky, per baseUrl::model — learned from the server, not assumed.
+  private streamOptionsRejected = new Set<string>();
+  private streamRejected = new Set<string>();
+  private thinkingKnobRejected = new Set<string>();
+  private stepTokens = new Map<string, number>();
+  /** Measured prompt cost and the num_ctx already asked for (never shrunk). */
+  private promptTokens = new Map<string, number>();
+  private numCtxSent = new Map<string, number>();
+
+  /** Reasoning models must not be pinned to temperature 0 (they loop); the name is the prior,
+   *  reported usage is the proof (see the usage checks in the local paths). */
+  private isReasoningModel(model: string): boolean {
+    const m = (model || '').toLowerCase();
+    if (/not.?think|no.?think|instruct/.test(m)) return false;
+    return /gpt-?oss|gptoss|qwen3(?!-?vl)|deepseek-r1|thinking/.test(m);
+  }
+
+  private async openAICompat(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, cfg?: { model: string; jsonMode: boolean; maxTokens: number; depth: number; noStream?: boolean; noStreamOptions?: boolean; thinkingOff?: boolean; bodyRetry?: number }): Promise<string> {
     const model = cfg?.model || (this.isLocal ? this.ollamaModel : (this.cloudModel || 'gpt-4o'));
+    const bodyRetry = cfg?.bodyRetry ?? 0;
+    // LOCAL streams agent calls as well: a silent 150s step looks hung, and a stream
+    // proves liveness. Cloud agent calls stay non-streaming (bodies are locked).
+    const key = `${this.baseUrl}::${model}`;
+    const streaming = !!onDelta && (!isAgentMode || this.isLocal) && !cfg?.noStream && !this.streamRejected.has(key);
     const jsonMode = cfg?.jsonMode ?? isAgentMode;
     const depth = cfg?.depth ?? 0;
     const maxTokens = cfg?.maxTokens ?? 4096;
@@ -992,13 +945,36 @@ export class AIEngine {
       // JSON estruturado é o DEFAULT do agente (incl. modelos de raciocínio — testado: NOTHINK,
       // Fara e DeepSeek-V4-Flash todos produzem JSON válido com json_object). Desligar é a
       // EXCEÇÃO, só em recuperação com evidência (falha do response_format ou retorno vazio).
-      body.temperature = 0;   // deterministic JSON (medido: mais rápido e estável na rota do llama.cpp)
-      body.max_tokens = maxTokens;
+      // Deterministic JSON on cloud and on local instruct models (measured: faster and more
+      // stable on the llama.cpp route). Thinking models get no temperature at all — vendors
+      // recommend sampling for the reasoning pass and temp 0 is what makes them loop.
+      if (!(this.isLocal && this.isReasoningModel(model))) body.temperature = 0;
+      body.max_tokens = this.outputBudget(maxTokens);
       if (jsonMode) body.response_format = { type: 'json_object' };
     } else {
-      body.max_tokens = 4096;
+      body.max_tokens = this.outputBudget(4096);
     }
-    if (streaming) body.stream = true;
+    // Local: prompt + max_tokens must fit the window (vLLM 400s otherwise; others run out of
+    // window mid-answer). Cloud keeps the number above untouched.
+    if (this.isLocal) {
+      const win = await this.resolveContextBudget().catch(() => null);
+      if (win?.totalTokens) {
+        const promptText = body.messages.map((m: any) => typeof m.content === 'string' ? m.content : (m.content?.[0]?.text ?? '')).join('\n');
+        const images = messages.filter(m => m.image).length;
+        body.max_tokens = fitOutputToWindow({ budget: body.max_tokens, window: win.totalTokens, promptTokens: estimateTokens(promptText, images) });
+      }
+    }
+    if (streaming) {
+      body.stream = true;
+      // Final usage chunk (tokens/sec for the UI). Dropped and remembered if the
+      // server rejects it — verified, not assumed.
+      if (this.isLocal && !cfg?.noStreamOptions && !this.streamOptionsRejected.has(key)) body.stream_options = { include_usage: true };
+    }
+    // Soft thinking budget (local): after a cut, thinking stays off for the run. The knob is
+    // dropped and remembered if the server rejects it; measured usage proves if it worked.
+    if (this.isLocal && cfg?.thinkingOff && !this.thinkingKnobRejected.has(key)) {
+      body.chat_template_kwargs = { ...(body.chat_template_kwargs || {}), enable_thinking: false };
+    }
     // Auth OPCIONAL no modo local (llama.cpp/LM Studio geralmente não pedem chave). Sem chave
     // não mandamos o header — nada de 'Bearer ' vazio/fabricado.
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -1026,17 +1002,34 @@ export class AIEngine {
 
     let lastErr: any = null;
     let res: Response | null = null;
+    // LOCAL only: released once the body is consumed; abandoned (socket dropped) before any
+    // resend, so the server is not still generating while we retry (measured: half speed).
+    let localSettle: (() => void) | undefined;
+    let localAbort: (() => void) | undefined;
+    const release = () => { const s = localSettle; localSettle = undefined; try { s?.(); } catch {} };
+    const abandon = () => { const a = localAbort; localAbort = undefined; release(); try { a?.(); } catch {} };
+    const backoffMs = (n: number) => (n <= 1 ? 2000 : 5000);
     const t0 = Date.now();
+    let attemptStartedAt = t0;   // the first-token clock runs from the request, not the step
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      // Local frio: 300s (carregar GGUF grande). Local quente: 120s. Nuvem: 45s (como antes).
-      const reqTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 45_000;
+      const firstChunkMs = this.isLocal ? LOCAL_FIRST_CHUNK_MS : CLOUD_FIRST_CHUNK_MS;
+      attemptStartedAt = Date.now();
       try {
-        const candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, reqTimeoutMs, signal);
+        let candidate: Response;
+        if (this.isLocal) {
+          const cf = await fetchCancellable(endpoint, { method: 'POST', headers, body: bodyJson }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `local ${model}` });
+          candidate = cf.res;
+          localSettle = cf.settle;
+          localAbort = cf.abort;
+        } else {
+          candidate = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: bodyJson }, firstChunkMs, signal);
+        }
         // Retry 429/5xx transitórios — NÃO 4xx. "Compute error" no llama.cpp = modelo não
         // carregado / OOM: retry não ajuda, para já com mensagem clara.
         if (candidate.status === 429 || candidate.status >= 500) {
           let peek = '';
           try { peek = await candidate.text(); } catch {}
+          release();   // body consumed (or discarded): the socket is ours to free now
           if (this.isLocal && /compute error/i.test(peek)) {
             const fatal: any = new Error(`Local AI compute error for model "${model}" — is that model loaded on the server? ${peek.slice(0, 240)}`);
             fatal.noRetry = true;
@@ -1061,7 +1054,12 @@ export class AIEngine {
         break;
       } catch (e: any) {
         lastErr = e;
+        release();
         if (e?.noRetry || signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        // A local server that took the whole 300s budget is slow, not flaky: resending the same
+        // request twice more is up to 10 more minutes for the same outcome. Surface it; the
+        // step-level retry decides (once, degraded).
+        if (this.isLocal && isSlowServer(e)) throw e;
         // Timeout (local frio incluso) e erros de rede: retry com backoff cancelável.
         if (attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
@@ -1079,34 +1077,123 @@ export class AIEngine {
     if (!res.ok) {
       let errText = '';
       try { errText = await res.text(); } catch {}
+      release();
       // An image rejection ("…image format…") is not a JSON-mode problem: let it surface so
       // withImageFallback() drops the image, instead of retrying with the image still on.
       const imageRejected = messages.some(m => m.image) && RX_IMAGE_REJECTED.test(errText);
-      const unsupportedJson = res.status === 400 && !imageRejected && /response_format|json|format/i.test(errText);
+      if (this.isLocal && streaming && !cfg?.noStreamOptions && /stream_options/i.test(errText)) {
+        this.streamOptionsRejected.add(key);
+        appendLog('[Local] stream_options rejeitado → removendo do corpo');
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStreamOptions: true });
+      }
+      if (this.isLocal && /chat_template_kwargs|enable_thinking/i.test(errText) && !this.thinkingKnobRejected.has(key)) {
+        this.thinkingKnobRejected.add(key);
+        appendLog(`[Local] ${model} rejeitou chat_template_kwargs → nao manda mais esse campo`);
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: false });
+      }
+      const unsupportedJson = res.status === 400 && !imageRejected && !/stream_options/i.test(errText) && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
         appendLog('[OpenAI] 400 em response_format → retry prompt-only (evidência de incompatibilidade)');
-        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: depth + 1 });
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: depth + 1 });
       }
       throw new Error(`OpenAI API error ${res.status}: ${errText.slice(0, 400)}`);
     }
 
-    if (this.isLocal) this.ollamaWarmed = true;
-    if (streaming) return readSseStream(res, onDelta!, signal);
-
-    // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
-    // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
-    let data: any = {};
     try {
-      // Servers that send headers early keep generating while we read the body, so a local
-      // model gets the same budget as the request itself (120s warm / 300s cold). A flat 60s
-      // cut off long answers (e.g. a 75-track JSON) that the header timeout would have allowed.
-      const bodyTimeoutMs = this.isLocal ? (this.ollamaWarmed ? 120_000 : 300_000) : 60_000;
-      const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
-      data = parsed.data;
-    } catch (e: any) {
-      if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
-      throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
-    }
+      if (streaming) {
+        let sawDelta = false;
+        const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        const metrics: { usage?: any; finish?: string } = {};
+        // Soft thinking budget: agent steps only. A chat answer may legitimately think long.
+        const thinking = this.isLocal && isAgentMode ? ThinkingBudget.forStep(this.stepTokens.get(key) ?? 0) : undefined;
+        const live = this.liveMeter();
+        const thinkWrap = (d: string) => { wrap(d); if (this.isLocal) live.add(d); };
+        // Until the first token the clock is what is left of the request's first-chunk budget
+        // (load + prompt processing; keepalives do not count). Cloud keeps its old reader.
+        const firstTokenMs = this.isLocal ? Math.max(1000, LOCAL_FIRST_CHUNK_MS - (Date.now() - attemptStartedAt)) : undefined;
+        try {
+          let text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics, firstTokenMs);
+          if (this.isLocal) live.done(metrics.usage);
+          if (metrics.usage?.completion_tokens) this.stepTokens.set(key, metrics.usage.completion_tokens);
+          if (metrics.usage?.prompt_tokens) this.promptTokens.set(key, metrics.usage.prompt_tokens);
+          const reasoningTok = metrics.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+          if (cfg?.thinkingOff && reasoningTok > 0 && !this.thinkingKnobRejected.has(key)) {
+            // Server accepted the field but kept thinking — remember so we stop pretending.
+            this.thinkingKnobRejected.add(key);
+            appendLog(`[Local] ${model} ignorou enable_thinking:false (usage: ${reasoningTok} reasoning tokens)`);
+          }
+          if (isAgentMode) text = stripReasoningMarkers(text);
+          // Same JSON recovery as the unstreamed path: empty or cut at max_tokens.
+          if (this.isLocal && isAgentMode && jsonMode && (!text || metrics.finish === 'length') && depth === 0) {
+            const bigger = await this.recoverMaxTokens(key, maxTokens);
+            appendLog(`[Local] stream vazio/truncado (finish=${metrics.finish}) → retry com max_tokens=${bigger}`);
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: bigger, depth: 1, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
+          }
+          if (this.isLocal && isAgentMode && jsonMode && !text && depth === 1) {
+            appendLog('[Local] stream ainda vazio com JSON → retry final em prompt-only');
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: 2, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
+          }
+          return text;
+        } catch (e: any) {
+          // Runaway thinking: retry THIS step once with thinking off. The next step thinks again.
+          if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && this.isLocal && !cfg?.thinkingOff) {
+            appendLog(`[Local] thinking longo demais em "${model}" (${e.message}) → este passo sem thinking`);
+            abandon();
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: true });
+          }
+          // A slow server is not a broken stream: no resend in place, and never a reason to
+          // stop streaming for this model.
+          if (this.isLocal && isSlowServer(e)) { abandon(); throw e; }
+          // Nothing delivered yet: resend the whole request (previous socket dropped first).
+          if (this.isLocal && !sawDelta && !signal?.aborted && bodyRetry < 2) {
+            const wait = backoffMs(bodyRetry + 1);
+            appendLog(`[Local] stream falhou antes do 1º delta (${e?.message}) → reenvio ${bodyRetry + 2}/3 em ${wait}ms`);
+            abandon();
+            await sleep(wait);
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff, bodyRetry: bodyRetry + 1 });
+          }
+          // Stream dead before the first delta: remember it and redo unstreamed for the
+          // rest of the run — never worse than before this change.
+          if (this.isLocal && !sawDelta && !signal?.aborted && !cfg?.noStream) {
+            this.streamRejected.add(key);
+            appendLog('[Local] stream falhou antes do 1º delta → sem stream para este modelo');
+            abandon();
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: true, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
+          }
+          if (this.isLocal) abandon();
+          throw e;
+        }
+      }
+
+      // Lê o corpo com timeout PRÓPRIO: o fetchWithTimeout aborta no tempo de HEADERS, mas a
+      // leitura do corpo (res.json) podia pendurar o stream para sempre. Guarda ativa até o fim.
+      let data: any = {};
+      try {
+        // A flat 60s cut off long answers (e.g. a 75-track JSON) the header budget allowed.
+        // Local gets the full non-streaming budget; cloud keeps 60s.
+        const bodyTimeoutMs = this.isLocal ? LOCAL_TOTAL_MS : CLOUD_BODY_MS;
+        const parsed = await this.readJsonWithTimeout(res, bodyTimeoutMs, signal);
+        data = parsed.data;
+        if (data?.usage?.completion_tokens) this.stepTokens.set(key, data.usage.completion_tokens);
+        if (data?.usage?.prompt_tokens) this.promptTokens.set(key, data.usage.prompt_tokens);
+      } catch (e: any) {
+        if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        // The 300s total cap fired: the server is slow, and a resend repeats the wait.
+        if (this.isLocal && (Date.now() - attemptStartedAt >= LOCAL_TOTAL_MS - 2000 || /timed out|abort/i.test(String(e?.message ?? '')))) {
+          abandon();
+          throw new LocalRequestError('TIMEOUT_TOTAL', `local ${model}: no complete answer within ${Math.round(LOCAL_TOTAL_MS / 1000)}s`, true);
+        }
+        // A body that broke for another reason (connection reset, bad bytes) is resent whole,
+        // the previous request dropped first.
+        if (this.isLocal && bodyRetry < 2) {
+          const wait = backoffMs(bodyRetry + 1);
+          appendLog(`[Local] corpo nao veio (${e?.message}) → reenvio ${bodyRetry + 2}/3 em ${wait}ms`);
+          abandon();
+          await sleep(wait);
+          return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff, bodyRetry: bodyRetry + 1 });
+        }
+        throw new Error(`OpenAI-compatible body read failed: ${e?.message ?? e}`);
+      }
 
     const choice = data?.choices?.[0] ?? {};
     const msg = choice?.message ?? {};
@@ -1118,14 +1205,15 @@ export class AIEngine {
     const usage = data?.usage;
 
     // Recuperação JSON: UMA vez com orçamento maior (depth 0 → 1). Se ainda vazio, UMA vez
-    // prompt-only (depth 1 → 2). Não dispara o mesmo POST 16384 duas vezes.
+    // prompt-only (depth 1 → 2). Não dispara o mesmo POST duas vezes.
     if (isAgentMode && jsonMode && (empty || truncated) && depth === 0) {
-      appendLog(`[OpenAI] content vazio/truncado (finish=${finish}, depth=${depth}) → retry com orçamento maior mantendo JSON`);
-      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: 16384, depth: 1 });
+      const bigger = await this.recoverMaxTokens(key, maxTokens);
+      appendLog(`[OpenAI] content vazio/truncado (finish=${finish}, depth=${depth}) → retry com orçamento maior mantendo JSON (max_tokens=${bigger})`);
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: bigger, depth: 1 });
     }
     if (isAgentMode && empty && jsonMode && depth === 1) {
       appendLog('[OpenAI] ainda vazio com JSON → retry final em prompt-only');
-      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: 16384, depth: 2 });
+      return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: 2 });
     }
 
     const latencyMs = Date.now() - t0;
@@ -1133,6 +1221,9 @@ export class AIEngine {
     console.log(`[OpenAI] ← ${res.status} in ${latencyMs}ms finish=${finish} content_len=${text.length} reasoning_len=${reasoning.length}`);
     if (isAgentMode) text = stripReasoningMarkers(text);   // remove marcadores órfãos (Fara) sem quebrar JSON
     return text;
+    } finally {
+      release();   // body consumed on every exit path above
+    }
   }
 
   // Lê o corpo de uma Response com timeout ativo (o fetchWithTimeout para no tempo de headers;
@@ -1501,7 +1592,7 @@ export class AIEngine {
         await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', options: { num_ctx: 512 } }),
+          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', think: false, options: { num_ctx: 512 } }),
         }, 180000);
       } else if (this.provider === 'openai') {
         if (!this.ollamaModel.trim()) return;   // sem modelo escolhido: não inventa um id
@@ -1516,15 +1607,14 @@ export class AIEngine {
       } else {
         return;
       }
-      this.ollamaWarmed = true;
       console.log(`[Local] modelo pronto na VRAM.`);
     } catch (e: any) {
       console.warn('[Local] warmup falhou (servidor ligado?):', e?.message);
     }
   }
-  private ollamaWarmed = false;
 
-  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal): Promise<string> {
+  private async callOllama(messages: Message[], isAgentMode: boolean, onDelta?: (d: string) => void, signal?: AbortSignal, forceNoStream = false, thinkingOff = false, resend = 0): Promise<string> {
+
     const systemMsg = (isAgentMode ? BROWSER_AGENT_SYSTEM_PROMPT : CHAT_ASSISTANT_SYSTEM_PROMPT) + langSuffix() + this.engineIdentity(isAgentMode);
     // Images arrive here only when resolveVision() allowed them (mode + capability gate).
     const resolvedModel = await this.resolveOllama();
@@ -1534,7 +1624,8 @@ export class AIEngine {
     // (Era exatamente o bug do qwen3.) Todos ganham o mesmo tratamento do gpt-oss.
     // qwen3-vl é modelo de VISÃO/instruct (não raciocina antes) → fica de FORA (senão
     // levava think:true, dava 400+retry e perdia o format:json que ele deve receber).
-    const isReasoning = /gpt-?oss|gptoss|qwen3(?!-?vl)|deepseek-r1/.test(resolvedModel.toLowerCase());
+    // Same rule as the compatible path (an "instruct"/"no-think" build is not a thinking model).
+    const isReasoning = this.isReasoningModel(resolvedModel);
     const formatted = messages.map((m, i) => {
       let content = m.content;
       if (isAgentMode && m.role === 'user' && i === messages.length - 1) {
@@ -1551,27 +1642,32 @@ export class AIEngine {
     });
 
     const model = resolvedModel;   // já resolvido acima (usa o que está REALMENTE instalado)
-    // Streaming SÓ no chat (modo agente precisa do JSON inteiro de uma vez).
-    const streaming = !!onDelta && !isAgentMode;
+    const sKey = streamKey(this.baseUrl, model);
+    // Agent mode streams too: a silent 150s step looks hung, and a stream proves liveness.
+    const streaming = shouldStream({ hasDelta: !!onDelta, isAgentMode, isLocal: true, noStream: forceNoStream, rejected: this.streamRejected.has(sKey) });
+    // num_ctx first: num_predict is fitted to the room that window leaves after the prompt.
+    const numCtx = this.resolveNumCtx(sKey, isAgentMode);
+    const promptTokens = estimateTokens([systemMsg, ...formatted.map(x => x.content)].join('\n'), messages.filter(x => x.image).length);
+    const numPredict = fitOutputToWindow({ budget: this.outputBudget(isAgentMode ? 16384 : 4096), window: numCtx, promptTokens });
     const body: any = {
       model,
       messages: [{ role: 'system', content: systemMsg }, ...formatted],
       stream: streaming,
       keep_alive: '15m',     // keep the model hot in VRAM between agent steps
       options: {
+        num_predict: numPredict,   // the output budget, fitted to the window
         // 16k: cabe o DOM + texto da página + histórico E os system prompts maiores dos
         // modelos novos/de raciocínio (o de 8k estourava por poucos tokens num "olá" simples,
         // e o pensamento do modelo também consome contexto durante a geração).
         //
-        // That 16k stays the default for existing setups. 'auto' OMITS num_ctx so the
-        // server keeps whatever it allocated (pinning 16k here would SHRINK a larger
-        // allocation), and an explicit number requests exactly that.
-        ...(this.localOpts.ollamaNumCtx === 'auto'
-          ? {}
-          : { num_ctx: (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
-              ? this.localOpts.ollamaNumCtx
-              : 16384 }),
-        temperature: 0,      // deterministic JSON
+        // Explicit number: request exactly that. 'auto' no longer sends nothing - it asks
+        // for what the measured prompt plus the output budget needs (16k floor, 32k ceil),
+        // because an unknown window is what overflowed the server.
+        // One context knob for both transports: an explicit number means exactly that; a
+        // custom window from the single knob is sent as num_ctx too (so the budget and the
+        // server can never disagree); 'auto' asks for what the measured prompt needs.
+        num_ctx: numCtx,
+        ...(isReasoning ? {} : { temperature: 0 }),   // no temperature for the reasoning pass
       },
     };
     // Modo agente precisa de JSON confiável: força a gramática JSON do Ollama para os
@@ -1584,12 +1680,11 @@ export class AIEngine {
     if (isAgentMode && /qwen|llama|mistral|gemma/.test(m) && !isReasoning) {
       body.format = 'json';
     }
-    // Modelo de raciocínio: pede o pensamento no canal SEPARADO 'thinking' — no agente,
-    // o content vem limpo (só o JSON, raciocínio fora); no chat, o leitor NDJSON embrulha
-    // em <think> pra UI. Se o Ollama não suportar 'think', a retentativa abaixo refaz sem.
-    if (isReasoning) {
-      body.think = true;
-    }
+    // Ask explicitly. Omitting `think` is not off: gemma4 thinks by default and a short
+    // num_predict is then spent entirely in the thinking channel, so content comes back
+    // empty. Reasoning models keep the separate channel; everything else is told not to.
+    // If this server rejects the field, the retry below drops it.
+    body.think = ollamaThink(isReasoning, thinkingOff);
 
     const t0 = Date.now();
     console.log(`[Ollama] → POST /api/chat (model=${model}, isAgent=${isAgentMode})`);
@@ -1597,41 +1692,59 @@ export class AIEngine {
     // 1ª chamada carrega o modelo na VRAM (pode levar minutos num modelo grande/frio); depois
     // fica quente. fetchWithTimeout ABORTA de verdade no estouro (!= Promise.race, que vazava o
     // socket e nunca limpava o timer — deixava o event loop ativo por ate 5 min por request).
-    const timeoutMs = this.ollamaWarmed ? 120_000 : 300_000;
+    const firstChunkMs = LOCAL_FIRST_CHUNK_MS;
     let res: Response;
+    let settle: (() => void) | undefined;
+    let abortFn: (() => void) | undefined;
+    const release = () => { const s = settle; settle = undefined; try { s?.(); } catch {} };
+    // Drop the socket before a resend: otherwise Ollama keeps generating while we retry.
+    const abandon = () => { const a = abortFn; abortFn = undefined; release(); try { a?.(); } catch {} };
     try {
-      res = await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+      const cf = await fetchCancellable(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, timeoutMs, signal);
+      }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model}` });
+      res = cf.res;
+      settle = cf.settle;
+      abortFn = cf.abort;
     } catch (e: any) {
+      release();
       // Estouro de tempo NÃO é falha de conexão. O Ollama respondeu — devagar demais, quase
       // sempre porque o modelo não cabe na VRAM e parte dele roda na CPU (medido: 27B Q6_K =
       // 24 GB numa placa de 16 GB → 10,7 GB na CPU, e a chamada com a página inteira estourava).
       // Embrulhar os dois casos na mesma frase mandava o usuário ligar um Ollama já ligado.
-      if (e?.message === 'CANCELLED') throw e;   // Parar do usuário: repassa intacto
+      if (e instanceof LocalRequestError) {
+        if (e.code === 'CANCELLED') throw e;   // Parar do usuário: repassa intacto
+        if (e.code === 'TIMEOUT_FIRST_CHUNK') throw new LocalRequestError('TIMEOUT_FIRST_CHUNK', `Ollama too slow: ${e.message}`, true, e.detail);
+        if (e.code === 'CONNECTION_FAILED') throw new LocalRequestError('CONNECTION_FAILED', `Ollama connection failed: ${e.message}`, true, e.detail);
+      }
+      if (e?.message === 'CANCELLED') throw e;
       if (/^Request timeout/.test(e?.message || '')) {
         throw new Error(`Ollama too slow: ${e.message}`);
       }
       throw new Error(`Ollama connection failed: ${e.message}`);
     }
-    this.ollamaWarmed = true;  // a partir daqui o modelo está na VRAM → timeout curto
+
 
     console.log(`[Ollama] ← ${res.status} in ${Date.now() - t0}ms`);
     if (!res.ok) {
       const errText = await res.text();
-      // Modelo importado de GGUF cru pode não ter a capability 'thinking' → o Ollama
-      // recusa o think:true. Refaz UMA vez sem ele (ainda streamando; os tags <think>
-      // inline no texto seguem tratados pelo renderer).
-      if (body.think && res.status >= 400 && res.status < 500) {
+      release();
+      // A GGUF import with no thinking capability rejects the field (think true or false).
+      // Retry once without it. Only when the error names the field — a context-length 400
+      // must not be swallowed as a thinking incompatibility.
+      if ('think' in body && res.status >= 400 && res.status < 500 && /think/i.test(errText)) {
         delete body.think;
-        res = await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
+        const retry = await fetchCancellable(`${this.baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
-        }, timeoutMs, signal);
-        if (!res.ok) throw new Error(`Ollama API error ${res.status}: ${(await res.text()).slice(0, 400)}`);
+        }, { firstChunkMs, totalMs: streaming ? undefined : LOCAL_TOTAL_MS, signal, label: `Ollama ${model} (no-think)` });
+        res = retry.res;
+        settle = retry.settle;
+        abortFn = retry.abort;
+        if (!res.ok) { const t = await res.text().catch(() => ''); release(); throw new Error(`Ollama API error ${res.status}: ${t.slice(0, 400)}`); }
       } else {
         throw new Error(`Ollama API error ${res.status}: ${errText.slice(0, 400)}`);
       }
@@ -1639,16 +1752,85 @@ export class AIEngine {
 
     // Chat streamado: NDJSON linha a linha (o fallback do callChatLLM refaz sem stream
     // se der erro antes do 1º delta — mesmo contrato dos provedores de nuvem).
-    if (streaming) return readOllamaNdjson(res, onDelta!, signal);
+    try {
+      if (streaming) {
+        let sawDelta = false;
+        const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
+        const metrics: { usage?: any; finish?: string } = {};
+        // Soft thinking budget: agent steps only. A chat answer may legitimately think long.
+        const thinking = isAgentMode ? ThinkingBudget.forStep(this.stepTokens.get(sKey) ?? 0) : undefined;
+        const live = this.liveMeter();
+        const thinkWrap = (d: string) => { wrap(d); live.add(d); };
+        const firstTokenMs = Math.max(1000, LOCAL_FIRST_CHUNK_MS - (Date.now() - t0));
+        try {
+          let text = await readOllamaNdjson(res, thinkWrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics, firstTokenMs);
+          live.done(metrics.usage);
+          if (metrics.usage?.completion_tokens) this.stepTokens.set(sKey, metrics.usage.completion_tokens);
+          if (metrics.usage?.prompt_tokens) this.promptTokens.set(sKey, metrics.usage.prompt_tokens);
+          if (thinkingOff && (metrics.usage?.reasoning_tokens ?? 0) > 0) {
+            console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.reasoning_tokens} thinking tokens)`);
+          }
+          // The NDJSON reader wraps thinking in <think> for the chat UI; the agent parses JSON only.
+          if (isAgentMode) text = stripReasoningMarkers(text);
+          return text;
+        } catch (e: any) {
+          // Runaway thinking: retry THIS step once with think:false. The next step thinks again.
+          if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && !thinkingOff) {
+            console.log(`[Ollama] thinking longo demais em ${model} (${e.message}) → este passo com think:false`);
+            abandon();
+            return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, true);
+          }
+          // Slow (load / prompt processing past the budget) is not a broken stream: no resend.
+          if (isSlowServer(e)) { abandon(); throw e; }
+          if (!sawDelta && !signal?.aborted && resend < 2) {
+            const wait = resend === 0 ? 2000 : 5000;
+            console.log(`[Ollama] stream falhou antes do 1º delta (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);
+            abandon();
+            await sleep(wait, signal);
+            return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, thinkingOff, resend + 1);
+          }
+          if (!sawDelta && !signal?.aborted && !forceNoStream) {
+            this.streamRejected.add(sKey);
+            console.log('[Ollama] stream falhou antes do 1º delta → sem stream para este modelo');
+            abandon();
+            return this.callOllama(messages, isAgentMode, onDelta, signal, true, thinkingOff);
+          }
+          abandon();
+          throw e;
+        }
+      }
 
-    const data = await res.json();
-    const content = data.message?.content ?? '';
-    if (!content) {
-      console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);
-    }
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch (e: any) {
+        if (signal?.aborted) throw e;
+        // The 300s total cap fired: slow, not flaky - a resend repeats the wait.
+        if (Date.now() - t0 >= LOCAL_TOTAL_MS - 2000 || /abort/i.test(String(e?.message ?? e?.name ?? ''))) {
+          abandon();
+          throw new LocalRequestError('TIMEOUT_TOTAL', `Ollama ${model}: no complete answer within ${Math.round(LOCAL_TOTAL_MS / 1000)}s`, true);
+        }
+        if (resend < 2) {
+          const wait = resend === 0 ? 2000 : 5000;
+          console.log(`[Ollama] corpo nao veio (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);
+          abandon();
+          await sleep(wait, signal);
+          return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, thinkingOff, resend + 1);
+        }
+        throw new LocalRequestError('BAD_JSON', `Ollama body read failed: ${e?.message ?? e}`, true);
+      }
+      if (data?.eval_count) this.stepTokens.set(sKey, data.eval_count);
+      if (data?.prompt_eval_count) this.promptTokens.set(sKey, data.prompt_eval_count);
+      const content = data?.message?.content ?? '';
+      if (!content) {
+        console.warn(`[Ollama] empty content. data=${JSON.stringify(data).slice(0, 300)}`);
+      }
     // Chat não-streamado: se o Ollama separou o pensamento (message.thinking), reanexa
     // como <think> pra UI mostrar o chip 💭. Modo agente fica só com o content (JSON).
-    const th = !isAgentMode ? (data.message?.thinking ?? '') : '';
-    return th ? `<think>${th}</think>${content}` : content;
+      const th = !isAgentMode ? (data.message?.thinking ?? '') : '';
+      return th ? `${content}` : content;
+    } finally {
+      release();   // body consumed or abandoned: free the socket and the clocks
+    }
   }
 }

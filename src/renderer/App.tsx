@@ -1,5 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
+import { AppGuideBar, BeginnerTour } from './components/AppGuide';
+import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
 import TabBar from './components/TabBar';
@@ -24,6 +26,8 @@ import {
 import {
   STICKY_VISION_REASONS,
   VISION_MAX_SIDE,
+  VISION_AGENT_MAX_SIDE,
+  defaultVisionMode,
   VISION_MIN_SIDE,
   base64Head,
   decideAgentShot,
@@ -40,6 +44,7 @@ import {
   detectQuickAction,
   getInitialShortcutAction,
   pointsAtOpenScreen,
+  isTaskDataAction,
   rememberActionForSite,
   rememberObservedSite,
   type QuickAction,
@@ -58,14 +63,18 @@ import {
 import {
   appendAgentRunStep,
   finishAgentRun,
+  setRunError,
   startAgentRun,
   summarizeAction,
   summarizeResult,
 } from './agent-run-logger';
+import { createDeadline } from './task-deadline';
+import { classifySelfEval, nextSelfFailCount } from '../shared/self-eval';
 
 declare global {
   interface Window {
     electronAPI?: {
+    gpuInfo?: () => Promise<any>;
       minimize: () => void;
       maximize: () => void;
       close: () => void;
@@ -85,8 +94,14 @@ declare global {
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
+      onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
-      aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<any>;
+      aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<{
+        action?: any; actions?: any[]; thought?: string; error?: string;
+        /** Machine-readable failure (shared/error-codes.ts) — the renderer decides on this. */
+        errorCode?: string; errorRetryable?: boolean; errorDetail?: Record<string, unknown>;
+        [k: string]: any;
+      }>;
       actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
@@ -174,11 +189,21 @@ export default function App() {
   const store = useTabStore();
   const webviewRefs = useRef<Map<string, Electron.WebviewTag>>(new Map());
   const [agentVisual, setAgentVisual] = useState<AgentVisualState>('idle');
+  // Live tokens/sec from the engine, shown while the agent works.
+  const [liveMetrics, setLiveMetrics] = useState<{ kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean } | null>(null);
   const [ripples, setRipples] = useState<ClickRipple[]>([]);
   const rippleId = useRef(0);
   const activeTabIdRef = useRef(store.activeTabId);
   const userTabRef = useRef(store.activeTabId);   // a aba que o USUÁRIO está vendo (sempre atualizada)
   const taskRunningRef = useRef(false);           // tem uma tarefa do agente rodando agora?
+  // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
+  // never shows on the next step.
+  useEffect(() => {
+    prefetchGpuInfo();
+    if (agentVisual === 'idle') { setLiveMetrics(null); return; }
+    const off = window.electronAPI?.onActionDelta?.((m) => { if (m?.kind) setLiveMetrics(m); });
+    return () => { try { off?.(); } catch {} };
+  }, [agentVisual]);
   useEffect(() => {
     userTabRef.current = store.activeTabId;
     // Enquanto uma tarefa roda, a "aba de trabalho" do agente é controlada pelo PRÓPRIO loop
@@ -464,6 +489,9 @@ export default function App() {
   // que contar passos, e é o único freio que age quando o usuário foi dormir (o botão
   // Parar exige alguém na frente da tela). 0 = desligada, que é o padrão — coerente com
   // o resto: nada limita por precaução, só por escolha explícita.
+  // First-run guide: the bar is a hint until dismissed, the tour is a reopenable dialog.
+  const [showGuide, setShowGuide] = useState<boolean>(() => { try { return localStorage.getItem('guideSeen') !== '1'; } catch { return true; } });
+  const [showTour, setShowTour] = useState<boolean>(() => { try { return localStorage.getItem('tourSeen') !== '1'; } catch { return true; } });
   const [agentTimeLimitMin, setAgentTimeLimitMin] = useState<number>(() => {
     try {
       const v = Number(localStorage.getItem('agentTimeLimitMin'));
@@ -908,7 +936,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
    *  NativeImage is what stops OCR and the model from describing different frames.
    *  The model image is downscaled JPEG (never upscaled); OCR keeps the full-res PNG,
    *  because vision encoders blur small type that Tesseract reads exactly. */
-  const captureFrame = useCallback(async (o: { image: boolean; png: boolean }): Promise<{
+  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean }): Promise<{
     thumb?: string;
     image?: VisionImage;
     png?: string;
@@ -933,7 +961,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           const cssH = vp?.h || wv.clientHeight || size.height;
           // Size off the CSS viewport: up to VISION_MAX_SIDE the screenshot pixels ARE the
           // CSS pixels, so click_at needs no scaling at all. Never upscaled.
-          const scale = Math.min(1, VISION_MAX_SIDE / Math.max(cssW, cssH));
+          // Agent vision frames go up to VISION_AGENT_MAX_SIDE; other paths keep 1280.
+          const cap = o.agentVision ? VISION_AGENT_MAX_SIDE : VISION_MAX_SIDE;
+          const scale = Math.min(1, cap / Math.max(cssW, cssH));
           const w = Math.max(1, Math.round(cssW * scale));
           const h = Math.max(1, Math.round(cssH * scale));
           // PNG aqui, nunca toJPEG(): neste renderer (sandbox) o toJPEG() derruba o processo
@@ -1289,7 +1319,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             }}
             onNewTab={store.addTab}
           />
-          <AgentVisualOverlay state={agentVisual} ripples={ripples} />
+          <AgentVisualOverlay state={agentVisual} ripples={ripples} metrics={agentVisual === 'idle' ? null : liveMetrics} />
           {torrent && (
             <TorrentSheet
               torrent={torrent}
@@ -1322,6 +1352,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               <button className="find-btn" onClick={() => runFind(findText, { findNext: true, forward: true })} title={t('find.next')}>↓</button>
               <button className="find-btn" onClick={closeFind} title={t('find.close')}>✕</button>
             </div>
+          )}
+          {showGuide && (
+            <AppGuideBar
+              onStartTour={() => setShowTour(true)}
+              onDismiss={() => { setShowGuide(false); try { localStorage.setItem('guideSeen', '1'); } catch {} }}
+            />
           )}
           {showGoogleRelogin && (
             <div className="relogin-bar">
@@ -1444,7 +1480,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Vision: mode + how many images this run already sent (token/latency budget).
               // The setting lives with the LOCAL endpoint (Settings → Local AI) and only the local
               // engine carries it; the cloud engine would answer mode_off to every frame we sent.
-              let visionMode: VisionMode = store.localSettings.enabled ? resolveVisionMode(store.localSettings) : 'off';
+              // An explicit choice in Settings wins; otherwise vision needs a GPU that can run it.
+              let visionMode: VisionMode = store.localSettings.enabled
+                ? defaultVisionMode(store.localSettings, gpuInfo())
+                : 'off';
               let imagesSent = 0;
               let lastVisionReason = 'none';
               let prevStepUrl = '';
@@ -1510,6 +1549,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? Infinity
                     : (store.localSettings.enabled ? 20 : 5) * (MAX_STEPS / 25) * 60 * 1000);
               const taskStartedAt = Date.now();
+              // Cuts the step that is RUNNING: main cancels the in-flight request, so the model
+              // stops generating instead of finishing a step nobody asked for any more.
+              const deadline = createDeadline(taskStartedAt, TASK_DEADLINE_MS);
+              let activeActionId = '';   // in-flight request, so the deadline can cancel it
+              const onDeadline = () => { try { window.electronAPI?.actionCancel?.(activeActionId); } catch {} };
+              deadline.signal.addEventListener('abort', onDeadline, { once: true });
               const recentActionHashes: string[] = [];
               // browser-use style: track element identities to mark what's NEW after each action
               const elementKey = (e: { tag?: string; text?: string; aria?: string; backendNodeId?: number }): string =>
@@ -1521,12 +1566,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // observation; if the element vanished, the whole batch is discarded.
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
+              let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
+              let lastActionSummary = '';  // what the previous step did
+              let lastActionOutcome = '';  // what the page looked like after it
+              let selfFailCount = 0;       // consecutive self-reported failures
+              let planShown = false;       // the preview appears once per run, not every step
               // Observation reuse: carry the post-action observation of step N into step N+1
               // when the page hasn't changed — otherwise every step pays the full AXTree
               // observation (2-8s on heavy pages) twice. carriedOcrText rides along so
               // Tesseract isn't re-run on an unchanged page either.
               let carriedObservation: ObservedState | null = null;
               let carriedOcrText = '';
+              // The frame travels with the carried observation: capture + resize + encode costs
+              // ~200-600ms for pixels that are identical when the page did not change.
+              let carriedShot: VisionImage | undefined = undefined;
+              let carriedThumb: string | undefined = undefined;
+              let carriedPng: string | undefined = undefined;
               const withTimeout = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
                 let id: ReturnType<typeof setTimeout>;
                 const t = new Promise<T>(r => { id = setTimeout(() => r(fallback), ms); });
@@ -1549,7 +1604,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const finishRun = (
                 status: 'success' | 'failed' | 'cancelled' | 'max_steps',
                 rawReason?: string,
+                errCtx?: { errorCode?: string; retryable?: boolean },
               ) => {
+                // The code goes to the run log: "failed" with no code tells the user nothing
+                // and tells the next retry nothing.
+                if (errCtx?.errorCode) {
+                  try { setRunError(runLog, errCtx.errorCode, errCtx.retryable === true); } catch {}
+                }
                 // NUNCA terminar sem explicação: um motivo vazio virava "falhou" mudo na tela
                 // (e no histórico), sem o usuário saber o que houve. Se veio vazio/undefined,
                 // usa um texto honesto conforme o desfecho.
@@ -1820,7 +1881,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
-                  if (Date.now() - taskStartedAt > TASK_DEADLINE_MS) {
+                  // Same clock as the in-flight abort, so a human pause never burns the budget.
+                  if (deadline.remainingMs() <= 0 || deadline.fired()) {
                     const done: BrowserAction = { type: 'done', success: false, reason: `Task time limit reached (${Math.round(TASK_DEADLINE_MS / 60000)} min). Stopping to avoid a loop.` };
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
@@ -1850,6 +1912,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? carriedObservation!
                     : await observeFast(wv, observeTimeoutMs);
                   carriedObservation = null;
+                  carriedShot = undefined;
+                  carriedThumb = undefined;
+                  carriedPng = undefined;
                   // Porteiro fechou um aviso de cookie/consent → avisa no feed (uma vez).
                   if (observation?.dismissed) {
                     onProgress({ kind: 'status', message: `🚪 Closed a cookie/consent notice (${observation.dismissed})` });
@@ -1876,7 +1941,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
+                      deadline.suspend();   // a human thinking is not the model being slow
                       await waitForManualHelp(manualHelpNeed, observation.url);
+                      deadline.resume();
                       continue;
                     }
                   }
@@ -1944,7 +2011,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // OCR must read the SAME frame the model gets, so the capture settles first.
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
-                  const frameP = withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach }), 8000, undefined as any);
+                  // Carried observation = same page, so reuse its frame instead of recapturing.
+                  const reuseFrame = observationWasCarried && !!carriedShot;
+                  const frameP = reuseFrame
+                    ? Promise.resolve({ thumb: carriedThumb, image: visionDec.attach ? carriedShot : undefined, png: (ocrWillRun && visionDec.attach) ? carriedPng : undefined })
+                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -1993,7 +2064,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (ocrWcId != null && window.electronAPI?.takeOcr && !commandLooksLikeGoogleLogin) {
                     try {
                       // framePngForOcr = the exact frame the model may get; OCR reads the same one.
-                      const ocrResult = await window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead, framePngForOcr);
+                      // Teto de 25s: o OCR é extra, nunca pode segurar o passo (o main já corta o
+                      // print em 8s e o Tesseract em 15s; isto cobre qualquer outro travamento).
+                      const ocrResult = await withTimeout(window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead, framePngForOcr), 25000, null as any);
                       if (ocrResult?.ocrUsed && ocrResult.ocrText) {
                         ocrText = ocrResult.ocrText;
                         onProgress({ kind: 'status', message: `🔍 Local OCR: ${ocrText.length} chars (conf: ${ocrResult.confidence ?? '?'}%)` });
@@ -2066,6 +2139,27 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
+                    // Judge the last action before choosing the next one. Small models happily
+                    // repeat a click that did nothing; making the judgement an explicit field
+                    // turns that into a signal the loop can act on.
+                    step > 0 ? [
+                      `Previous action: ${lastActionSummary}.`,
+                      `Observed after it: ${lastActionOutcome}.`,
+                      "Set \"evaluation\" to success, failed or unclear followed by why, judged",
+                      "ONLY from what is on the page NOW - not from what you intended.",
+                      "If it failed, do NOT propose the same action again: change target,",
+                      "method, or stop and tell the user what is blocking you.",
+                    ].join(' ') : '',
+                    selfFailCount >= 2 ? 'STUCK: you reported the last ' + selfFailCount + ' actions as failed. Do not repeat them. Pick a different route or emit done with an honest reason.' : '',
+                    // Measured: without this the model narrated the page for steps and clicked nothing.
+                    shotForModel ? [
+                      'A SCREENSHOT of the live page is attached to this request.',
+                      'You are the ACTOR, not the narrator: answer with an ACTION that changes the page.',
+                      'Never answer with a description of the screenshot, and never finish with done',
+                      'unless the user goal is already complete on this page.',
+                      'Click exactly what the image shows: poster art does not open a page, the PLAY (assistir/play) button does.',
+                      'Coordinates use the viewport size stated above.',
+                    ].join(' ') : '',
                     commandRequiresGmailPromotions ? [
                       'DESTRUCTIVE EMAIL SAFETY:',
                       'The user asked to remove/delete emails from Gmail Promotions only.',
@@ -2133,6 +2227,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // request. Without it the late result was dropped here while the GPU
                   // carried on generating.
                   const actionId = `a-${Date.now().toString(36)}-s${step}`;
+                  activeActionId = actionId;
                   const onAbortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
                   if (signal) signal.addEventListener('abort', onAbortStep, { once: true });
                   // Vision: the frame decided above, if the gate allowed it. The main process
@@ -2145,8 +2240,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   let result: any;
                   // Reset every LLM step: a text-only step has no picture to take coordinates from.
                   modelShot = undefined;
+                  // Retry / degrade / pause - LOCAL only (cloud keeps failing fast, as before).
+                  // 1) retry the step, 2) degrade: drop the screenshot, 3) pause and ask the user.
+                  // The engine already resent transport failures; a slow server (the whole 300s
+                  // budget used) gets ONE step retry, not two: each try can cost five minutes.
+                  // Stop always wins: the abort listener stays wired across every try.
+                  const isLocalStep = tier === 'local';
                   try {
-                    result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
+                    for (let tries = 0; ; tries++) {
+                      result = await raceCancel(window.electronAPI?.aiAction(prompt, observedPayload, shotForModel, tier, actionId));
+                      if (!isLocalStep || !result?.error || result?.errorCode === 'CANCELLED' || result?.errorRetryable !== true) break;
+                      const code = String(result?.errorCode ?? 'UNKNOWN');
+                      const maxTries = /^TIMEOUT_(FIRST_CHUNK|TOTAL)$/.test(code) ? 2 : 3;
+                      if (tries + 1 >= maxTries || deadline.fired()) break;
+                      const wait = tries === 0 ? 2000 : 5000;
+                      onProgress({ kind: 'status', message: `⏳ ${code} — retrying step ${step + 1} (${tries + 2}/${maxTries}) in ${wait / 1000}s` });
+                      await raceCancel(new Promise<void>((res2) => setTimeout(res2, wait)));
+                      throwIfCancelled();
+                      // Degrade so the retry is cheaper than the attempt that just failed.
+                      if (tries === 0 && shotForModel) {
+                        shotForModel = undefined;
+                        onProgress({ kind: 'status', message: '📄 retrying without the screenshot' });
+                      }
+                    }
                   } finally {
                     if (signal) signal.removeEventListener('abort', onAbortStep);
                   }
@@ -2162,21 +2278,46 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (STICKY_VISION_REASONS.has(why)) visionMode = 'off';
                   }
                   throwIfCancelled();
+                  // The deadline cancels the in-flight request too; that is the time limit, not
+                  // the user's Stop - go round so the deadline check reports it honestly.
+                  if (result?.error && deadline.fired()) continue;
                   // Cancellation confirmed by main: a clean stop, not a task failure.
-                  if (result?.error && /CANCELLED|TASK_CANCELLED/.test(String(result.error))) throw new Error('TASK_CANCELLED_BY_USER');
+                  if (result?.error && (result?.errorCode === 'CANCELLED' || /CANCELLED|TASK_CANCELLED/.test(String(result.error)))) throw new Error('TASK_CANCELLED_BY_USER');
                   console.log(`[Agent] step ${step + 1} ← result:`, result?.error || `action=${result?.action?.type} engine=${result?._engine}`);
                   if (result?._engine) {
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
                   if (result?.error) {
-                    onProgress({ kind: 'status', message: `Error: ${result.error}` });
-                    finishRun('failed', result.error);
-                    return { error: result.error, thought: thoughts.join('\n'), results: allResults };
+                    // Decide on codes, not prose. Ask the user (max twice per run) before failing.
+                    const code = result?.errorCode ?? 'UNKNOWN';
+                    const retryable = result?.errorRetryable === true;
+                    onProgress({ kind: 'status', message: `Error [${code}${retryable ? ', retries exhausted' : ''}]: ${result.error}` });
+                    if (isLocalStep && localHelpPauses < 2) {
+                      localHelpPauses++;
+                      deadline.suspend();
+                      await waitForManualHelp({
+                        kind: 'local_unavailable',
+                        reason: `${code}: ${result.error}`,
+                        instruction: retryable
+                          ? 'The local model did not answer. Start it (or check its context window), then press Continue — this step runs again. Press Stop to end the task.'
+                          : 'The local model refused this request. Press Stop, or change the model / screenshot setting, then press Continue.'
+                      }, observation.url);
+                      deadline.resume();
+                      throwIfCancelled();
+                      onProgress({ kind: 'status', message: '▶️ continuing after your help' });
+                      step--;   // this step gets another go, with whatever the user fixed
+                      continue;
+                    }
+                    finishRun('failed', result.error, { errorCode: code, retryable });
+                    return { error: result.error, errorCode: code, retryable, thought: thoughts.join('\n'), results: allResults };
                   }
                   // browser-use style: surface the model's self-evaluation of its previous action.
                   if (result?.evaluation && step > 0) {
                     const evalStr = String(result.evaluation);
                     stepEvaluation = evalStr;
+                    // The model judged its own last action. Two in a row means repeating a
+                    // failing route, which is when the loop has to force a change.
+                    selfFailCount = nextSelfFailCount(selfFailCount, classifySelfEval(evalStr));
                     history += `\nSELF-EVAL [step ${step}]: ${evalStr.slice(0, 200)}`;
                     const icon = /^success/i.test(evalStr) ? '✅' : /^fail/i.test(evalStr) ? '❌' : '❓';
                     onProgress({ kind: 'status', message: `${icon} ${evalStr.slice(0, 160)}` });
@@ -2552,6 +2693,44 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = c ?? await window.electronAPI?.realKey?.(wcId, action.key);
                   } else if (action.type === 'plan') {
                     plan = action.steps || [];
+                    // Show the plan before acting on it. The user can approve, rewrite the
+                    // goal in their own words, or stop - all cheaper than 15 steps going the
+                    // wrong way. Once per run: asking every step is nagging.
+                    const previewOn = (() => { try { return localStorage.getItem('planPreview') !== '0'; } catch { return true; } })();
+                    if (previewOn && !planShown && plan.length > 0) {
+                      planShown = true;
+                      const PLAN_AUTORUN_MS = 30000;
+                      const decision = await new Promise<'run' | 'cancel' | string>((resolve) => {
+                        let settled = false;
+                        let autoRun: ReturnType<typeof setTimeout> | null = null;
+                        const hold = () => { if (autoRun) { clearTimeout(autoRun); autoRun = null; } };
+                        const fin = (v: 'run' | 'cancel' | string) => { if (!settled) { settled = true; hold(); resolve(v); } };
+                        // Ninguém mexeu em 30s → executa sozinho. Sem isto a tarefa ficava parada pra
+                        // sempre no cartão quando a pessoa mandava e ia fazer outra coisa — o uso normal
+                        // de um agente. "Mudar o texto" segura a contagem (onHold).
+                        autoRun = setTimeout(() => fin('run'), PLAN_AUTORUN_MS);
+                        signal?.addEventListener('abort', () => fin('cancel'), { once: true });
+                        onProgress({
+                          kind: 'plan_preview',
+                          goal: command,
+                          steps: plan.slice(0, 8).map((st) => String(st)),
+                          autoRunMs: PLAN_AUTORUN_MS,
+                          onApprove: () => fin('run'),
+                          onEdit: (g) => fin(g),
+                          onCancel: () => fin('cancel'),
+                          onHold: hold,
+                        });
+                      });
+                      if (decision === 'cancel') {
+                        finishRun('cancelled', 'Cancelled before acting.');
+                        return { thought: 'Task cancelled before acting.', results: allResults, done: { type: 'done', success: false, reason: 'Cancelled before acting.' } };
+                      }
+                      if (typeof decision === 'string') {
+                        // Rewritten goal: the model re-plans from the user's own wording.
+                        command = decision;
+                        history += '\nGOAL EDITED BY USER: ' + decision.slice(0, 400);
+                      }
+                    }
                     toolResult = { success: true, info: { steps: plan.length } };
                   } else if (action.type === 'store') {
                     memory.push({ key: action.key, value: action.value, source: action.source, ts: Date.now() });
@@ -3509,7 +3688,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const targetForMemory = 'ref' in action
                     ? observation.interactive_elements.find(e => e.id === (action as any).ref)
                     : undefined;
-                  rememberActionForSite({
+                  // Dado da tarefa (store/plan/report) não vira "como usar o site" — ver isTaskDataAction.
+                  if (!isTaskDataAction(action.type)) rememberActionForSite({
                     actionType: action.type,
                     success: toolResult?.success !== false,
                     url: afterObservation.url,
@@ -3529,6 +3709,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   previousStateKey = stateKeyAfter;
                   // Carry the post-action observation into the next step (consumed there if the URL still matches).
                   carriedObservation = afterObservation;
+                  lastActionSummary = formatAction(action).slice(0, 120);
+                  lastActionOutcome = (hadVisibleEffect
+                    ? `page changed: ${afterObservation.title || afterObservation.url}`
+                    : 'page did not change') + (afterObservation.text_sample
+                    ? ` | text: ${String(afterObservation.text_sample).slice(0, 90)}` : '');
+                  // Reuse is only safe when nothing moved: a stale frame makes the model aim at
+                  // pixels that are no longer there.
+                  if (stateKeyAfter === stateKeyBefore && shotForModel) {
+                    carriedShot = shotForModel;
+                    carriedThumb = screenshotAfter;
+                    carriedPng = framePngForOcr;
+                  } else {
+                    carriedShot = undefined;
+                    carriedThumb = undefined;
+                    carriedPng = undefined;
+                  }
                   // Site-initiated downloads triggered by this action (clicking a "baixar"
                   // button fires will-download; the page itself doesn't change). Tell the AI
                   // the click WORKED so it doesn't repeat it, and clear the no-effect penalty.
@@ -3691,6 +3887,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 finishRun('failed', String(err?.message || err || '').trim() || 'Unexpected error while running the task.');
                 throw err;
               } finally {
+                deadline.clear();
                 setAgentVisual('idle');
               }
               } finally {
@@ -3788,6 +3985,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             }}
           />
         </div>
+          {showTour && (
+            <BeginnerTour
+              onClose={() => { setShowTour(false); try { localStorage.setItem('tourSeen', '1'); } catch {} }}
+            />
+          )}
       </div>
 
       {historyOpen && (

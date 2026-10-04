@@ -1,3 +1,4 @@
+import { shouldNotify, normalizeNotifyKinds, type MonitorNotifyKind } from '../shared/monitor-notify';
 // Cron-Agent: monitora páginas em segundo plano (invisível) e avisa quando uma condição
 // em linguagem natural fica verdadeira (ex.: "preço abaixo de R$ 1.500", "voltou ao estoque").
 //
@@ -22,7 +23,11 @@ export interface Monitor {
   lastValue?: string;       // o valor-chave que a IA leu (preço, status…)
   lastNote?: string;        // explicação curta / erro
   triggeredAt?: number;     // última vez que disparou a notificação
+  // What may notify. Default ['trigger'] = the old edge-only behaviour.
+  notify?: MonitorNotifyKind[];
+  lastNotifiedValue?: string;   // baseline for 'change'
 }
+
 
 type AskAI = (prompt: string) => Promise<string>;
 
@@ -60,7 +65,8 @@ export class MonitorManager {
     return /^https?:\/\//i.test(s) ? s : 'https://' + s;
   }
 
-  add(data: { url: string; condition: string; intervalMin: number }): Monitor {
+  add(data: { url: string; condition: string; intervalMin: number; notify?: MonitorNotifyKind[] }): Monitor {
+    const notify = normalizeNotifyKinds(data.notify);
     const m: Monitor = {
       id: 'mon_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       url: this.normalizeUrl(data.url),
@@ -69,6 +75,7 @@ export class MonitorManager {
       enabled: true,
       createdAt: Date.now(),
       lastResult: null,
+      notify: notify.length ? notify : ['trigger'],
     };
     this.monitors.push(m);
     this.save();
@@ -117,23 +124,35 @@ export class MonitorManager {
     if (!m.enabled && !force) return;
     if (this.running.has(id)) return;
     this.running.add(id);
+    // Read before anything is touched: the catch block needs these too.
+    const prev = m.lastResult;
+    const prevValue = m.lastValue || '';
     try {
       const text = await this.fetchPageText(m.url);
       const verdict = await this.evaluate(m, text);
       m.lastRun = Date.now();
       m.lastValue = verdict.value || '';
       m.lastNote = verdict.reason || '';
-      const prev = m.lastResult;
       m.lastResult = verdict.met ? 'met' : 'unmet';
-      // Dispara na BORDA (só quando passa de não-bateu → bateu), pra não spammar a cada ciclo.
-      if (verdict.met && prev !== 'met') {
-        m.triggeredAt = Date.now();
-        this.fireNotification(m);
+      // Rule lives in shared code so it is testable without Electron.
+      const kind = shouldNotify(m.notify || [], {
+        met: verdict.met, prevMet: prev === 'met',
+        value: m.lastValue || '', prevValue, failed: false,
+      });
+      if (kind) {
+        if (kind === 'trigger') m.triggeredAt = Date.now();
+        m.lastNotifiedValue = m.lastValue || '';
+        this.fireNotification(m, kind);
       }
     } catch (e: any) {
       m.lastRun = Date.now();
       m.lastResult = 'error';
       m.lastNote = String(e?.message || e).slice(0, 120);
+      // Same rule, failed flipped in.
+      const kindErr = shouldNotify(m.notify || [], {
+        met: false, prevMet: prev === 'met', value: m.lastValue || '', prevValue, failed: true,
+      });
+      if (kindErr) this.fireNotification(m, kindErr);
     } finally {
       this.running.delete(id);
       this.save();
@@ -205,12 +224,17 @@ export class MonitorManager {
     return parseVerdict(raw);
   }
 
-  private fireNotification(m: Monitor) {
+  private fireNotification(m: Monitor, kind: MonitorNotifyKind = 'trigger') {
+    // The title carries the event: "Bah - monitor" told nobody anything.
+    const title =
+      kind === 'error' ? 'Bah — monitor failed'
+        : kind === 'change' ? 'Bah — value changed'
+          : 'Bah — condition met';
+    const body = kind === 'error'
+      ? `${m.condition}${m.lastNote ? '\n' + m.lastNote : ''}`
+      : `${m.condition}${m.lastValue ? '\n' + m.lastValue : ''}`;
     try {
-      const n = new Notification({
-        title: 'Bah — monitor',
-        body: `${m.condition}${m.lastValue ? '\n' + m.lastValue : ''}`,
-      });
+      const n = new Notification({ title, body });
       // Clique na notificação → abre o Bah direto na página monitorada.
       n.on('click', () => { try { this.openUrl?.(m.url); } catch {} });
       n.show();
