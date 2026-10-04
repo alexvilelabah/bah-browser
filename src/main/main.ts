@@ -2641,7 +2641,18 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         imagePath = screenshotFilename(taskId, 'frame');
         fs.writeFileSync(imagePath, Buffer.from(frame.base64, 'base64'));
       } else {
-        const capture = await captureViewport(wcId, sharedEnsureDebugger, taskId);
+        // Print via CDP: com a janela do Bah coberta por outra, o Windows não desenha a página e
+        // o Page.captureScreenshot espera pra sempre — o agente congelava inteiro (medido: 5 min
+        // parado no passo 1 até a janela voltar pra frente). Com o limite, o passo segue sem OCR
+        // (o catch abaixo já trata como não-fatal); se o print chegar depois, o PNG é apagado.
+        const captureP = captureViewport(wcId, sharedEnsureDebugger, taskId);
+        const capture = await Promise.race([
+          captureP,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('OCR capture timed out (window not painted?)')), 8000)),
+        ]).catch((e) => {
+          captureP.then((c) => { try { fs.unlinkSync(c.imagePath); } catch {} }, () => {});
+          throw e;
+        });
         imagePath = capture.imagePath;
       }
       let ocr;

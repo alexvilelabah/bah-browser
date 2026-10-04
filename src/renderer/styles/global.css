@@ -2058,13 +2058,16 @@ body {
    empurra layout, e some pro sempre quando o usuário diz "entendi". */
 .guide-bar{
   position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:58;
-  display:flex; align-items:center; gap:10px; max-width:min(760px, 92%);
+  display:flex; align-items:center; gap:10px;
+  /* largura do conteúdo, com teto: sem o width, o left:50% faz o navegador espremer
+     a barra na metade da área e o texto vira uma coluna fininha por cima da página */
+  width:max-content; max-width:min(760px, 92%);
   background:var(--bg-tertiary); border:1px solid var(--border);
   border-radius:10px; padding:7px 8px 7px 13px;
   box-shadow:0 10px 28px rgba(0,0,0,0.40); animation:msgIn 0.2s var(--ease);
 }
 .guide-title{ font-size:13px; font-weight:600; color:var(--text-primary); white-space:nowrap; }
-.guide-text{ font-size:12.5px; color:var(--text-secondary); }
+.guide-text{ font-size:12.5px; color:var(--text-secondary); min-width:0; }
 .guide-btn{
   height:28px; padding:0 14px; border:none; border-radius:8px; cursor:pointer; flex:none;
   background:var(--accent); color:#fff; font-size:13px; font-weight:600; font-family:inherit;

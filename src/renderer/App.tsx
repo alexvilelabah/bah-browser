@@ -44,6 +44,7 @@ import {
   detectQuickAction,
   getInitialShortcutAction,
   pointsAtOpenScreen,
+  isTaskDataAction,
   rememberActionForSite,
   rememberObservedSite,
   type QuickAction,
@@ -2063,7 +2064,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (ocrWcId != null && window.electronAPI?.takeOcr && !commandLooksLikeGoogleLogin) {
                     try {
                       // framePngForOcr = the exact frame the model may get; OCR reads the same one.
-                      const ocrResult = await window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead, framePngForOcr);
+                      // Teto de 25s: o OCR é extra, nunca pode segurar o passo (o main já corta o
+                      // print em 8s e o Tesseract em 15s; isto cobre qualquer outro travamento).
+                      const ocrResult = await withTimeout(window.electronAPI.takeOcr(ocrWcId, observation.text_sample, commandLooksLikeImageTextRead, framePngForOcr), 25000, null as any);
                       if (ocrResult?.ocrUsed && ocrResult.ocrText) {
                         ocrText = ocrResult.ocrText;
                         onProgress({ kind: 'status', message: `🔍 Local OCR: ${ocrText.length} chars (conf: ${ocrResult.confidence ?? '?'}%)` });
@@ -3676,7 +3679,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const targetForMemory = 'ref' in action
                     ? observation.interactive_elements.find(e => e.id === (action as any).ref)
                     : undefined;
-                  rememberActionForSite({
+                  // Dado da tarefa (store/plan/report) não vira "como usar o site" — ver isTaskDataAction.
+                  if (!isTaskDataAction(action.type)) rememberActionForSite({
                     actionType: action.type,
                     success: toolResult?.success !== false,
                     url: afterObservation.url,
