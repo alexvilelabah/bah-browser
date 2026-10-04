@@ -560,7 +560,9 @@ body {
 
 /* SETTINGS */
 .settings-panel {
-  padding:14px 16px;
+  /* Sem padding embaixo: quem dá o respiro final é o .settings-footer (fixo, com fundo),
+     senão sobrava uma faixa abaixo do Salvar onde o texto aparecia rolando. */
+  padding:14px 16px 0;
   border-bottom:1px solid var(--border);
   display:flex;flex-direction:column;gap:10px;
   background:var(--bg-primary);
@@ -600,10 +602,17 @@ body {
   font-size:12.5px;font-weight:700;cursor:pointer;
   transition:opacity 0.2s;letter-spacing:0.3px;
   font-family:inherit;
-  /* PRESO no rodapé do painel (sticky): o Salvar fica SEMPRE visível, mesmo com a
-     lista de modelos gigante rolando — era o botão "que some" que confundia geral. */
-  position:sticky;bottom:0;z-index:2;
-  flex:none;margin-top:8px;
+  flex:none;
+}
+/* Rodapé PRESO no painel (sticky): o Salvar fica SEMPRE visível, mesmo com a lista de
+   modelos gigante rolando — era o botão "que some" que confundia geral. O fundo próprio
+   cobre o que rola por baixo (antes o texto aparecia espremido embaixo do botão). */
+.settings-footer {
+  position:sticky; bottom:0; z-index:2;
+  flex:none; display:flex; flex-direction:column; gap:8px;
+  margin:0 -16px; padding:10px 16px 14px;
+  background:var(--bg-tertiary);
+  border-top:1px solid var(--border);
 }
 .save-settings:hover:not(:disabled){opacity:0.88;}
 .save-settings:disabled{background:var(--bg-tertiary);border-color:var(--border);color:var(--text-secondary);cursor:default;}
@@ -1854,6 +1863,7 @@ body {
 .mm-status.ok { color:#9ad7a8; border-color:rgba(120,180,130,0.4); background:rgba(120,180,130,0.08); }
 .mm-status.off { color:#e0b567; border-color:rgba(224,181,103,0.4); background:rgba(224,181,103,0.08); }
 .mm-status.none { color:#e0a5a5; border-color:rgba(224,120,120,0.4); background:rgba(224,120,120,0.08); }
+.mm-status-btns { display:flex; gap:6px; flex-wrap:wrap; }
 .model-mgr .mm-head { display:flex; align-items:center; justify-content:space-between; font-size:11.5px; font-weight:600; color:var(--text-secondary); }
 .mm-refresh { border:none; background:transparent; color:var(--text-muted); cursor:pointer; font-size:14px; padding:0 4px; }
 .mm-refresh:hover { color:var(--accent); }
@@ -1899,9 +1909,19 @@ body {
    100% width, turning it into a stray bar floating in the middle of the panel. */
 .mm-imp label { display:flex; flex-direction:column; gap:3px; margin-top:8px; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em; }
 .mm-imp select { width:100%; margin-top:2px; }
-.mm-imp .mm-hint { margin-top:6px; text-transform:none; letter-spacing:0; }
-.mm-check { flex-direction:row !important; align-items:center; gap:7px; text-transform:none !important; letter-spacing:0 !important; font-size:12px !important; font-weight:600; color:var(--text-primary); cursor:pointer; }
-.mm-check input[type=checkbox] { width:15px; height:15px; flex:0 0 auto; margin:0; accent-color:var(--accent); cursor:pointer; }
+.mm-imp .mm-help { margin-top:5px; }
+/* No .mm-imp todo botão vira pílula cheia; o "Detectar" é um link no meio do texto. */
+.mm-imp .mm-link { background:none; padding:0; border-radius:0; color:var(--accent); font-size:inherit; }
+/* Caixinha de marcar: caixa e título na MESMA linha, explicação embaixo em letra normal.
+   Sem isto o rótulo herdava a coluna + MAIÚSCULAS do .settings-panel label: a caixa
+   ficava sozinha no meio e o texto vinha picotado em pedaços com borda. */
+.mm-check { flex-direction:row !important; align-items:flex-start; gap:9px; text-transform:none !important; letter-spacing:0 !important; font-size:12.5px !important; font-weight:600; line-height:1.35; color:var(--text-primary); cursor:pointer; }
+.mm-check input[type=checkbox] { width:16px; height:16px; flex:0 0 auto; margin:1px 0 0; padding:0; accent-color:var(--accent); cursor:pointer; }
+.mm-check-txt { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.mm-check-txt small { font-size:11px; font-weight:400; line-height:1.45; color:var(--text-muted); }
+/* Texto de ajuda de um campo: solto, sem caixa (a caixa parecia mais um campo pra
+   preencher) e sem herdar o MAIÚSCULO do rótulo onde fica dentro dele. */
+.mm-help { font-size:11px; font-weight:400; line-height:1.45; color:var(--text-muted); text-transform:none; letter-spacing:0; }
 /* Import .gguf: card visível (não some no fundo) — caixa com borda, legível. */
 .mm-imp-open { background:var(--bg-tertiary); border:1px solid var(--border); border-radius:10px; padding:8px 10px; }
 .mm-imp-open summary { font-size:12.5px; color:var(--text-primary); }

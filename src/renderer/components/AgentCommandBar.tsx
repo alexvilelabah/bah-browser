@@ -1123,7 +1123,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       setModels(enriched);
       // Se o local está ATIVO num modelo que não existe mais (servidor rodando + lista sem ele),
       // desliga o local — o "IA ativa" para de mostrar um modelo fantasma e volta pra nuvem/grátis.
-      if (running && localSettings.enabled && localSettings.model && !list.some((m: any) => m.name === localSettings.model)) {
+      // Só no Ollama e só com a lista lida de verdade: lá a lista é o que está INSTALADO. Num
+      // servidor OpenAI-compatible (llama.cpp, Strata, LM Studio) ela é só o que está CARREGADO
+      // agora — vazia com o modelo descarregado — e isto desligava a IA Local da pessoa só por
+      // abrir as Configurações.
+      if (!compat && r?.ok && running && localSettings.enabled && localSettings.model && !list.some((m: any) => m.name === localSettings.model)) {
         setLocalCfg(p => ({ ...p, enabled: false }));
         onLocalSettingsChange({ ...localSettings, enabled: false });
       }
@@ -1449,7 +1453,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     <option value="ollama">Ollama</option>
                     <option value="openai-compatible">llama.cpp / OpenAI-compatible</option>
                   </select>
-                  <small className="mm-hint">{isLocalCompat() ? t('set.compatHint') : t('set.localSmall')}</small>
+                  <small className="mm-help">{isLocalCompat() ? t('set.compatHint') : t('set.localSmall')}</small>
                 </label>
                 {isLocalCompat() && (
                   <label>
@@ -1465,15 +1469,16 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     onChange={e => setLocalCfg(p => ({ ...p, baseUrl: e.target.value }))}
                     placeholder={isLocalCompat() ? 'http://localhost:8080' : 'http://localhost:11434'} />
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {/* Caixinha na mesma linha do título, explicação logo abaixo em letra normal. */}
+                <label className="mm-check">
                   <input type="checkbox" checked={!!localCfg.warmup}
                     onChange={e => setLocalCfg(p => ({ ...p, warmup: e.target.checked }))} />
-                  <span>{t('set.warmupLocal')}<small className="mm-hint"> — {t('set.warmupHint')}</small></span>
+                  <span className="mm-check-txt">{t('set.warmupLocal')}<small>{t('set.warmupHint')}</small></span>
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <label className="mm-check">
                   <input type="checkbox" defaultChecked={(() => { try { return localStorage.getItem('planPreview') !== '0'; } catch { return true; } })()}
                     onChange={e => { try { localStorage.setItem('planPreview', e.target.checked ? '1' : '0'); } catch {} }} />
-                  <span>{t('set.planPreview')}<small className="mm-hint"> {"—"} {t('set.planPreviewHint')}</small></span>
+                  <span className="mm-check-txt">{t('set.planPreview')}<small>{t('set.planPreviewHint')}</small></span>
                 </label>
                 <details className="mm-imp">
                   <summary>{t('set.localAdvanced')}</summary>
@@ -1493,18 +1498,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                         placeholder="32768" />
                     </label>
                   )}
-                  <div className="mm-hint">
+                  <div className="mm-help">
                     <button type="button" className="mm-link" onClick={detectLocalContext} disabled={localTesting || !localCfg.model}>{t('set.ctxDetect')}</button>
                     {ctxInfo ? <span> · {ctxInfo}</span> : null}
                   </div>
-                  <div className="mm-hint">{t('set.ctxMergedHint')}</div>
+                  <div className="mm-help">{t('set.ctxMergedHint')}</div>
                   <label>
                     {t('set.maxOut')}
                     <input type="number" min={256} step={512} value={localCfg.maxOutputTokens || ''}
                       onChange={e => setLocalCfg(p => ({ ...p, maxOutputTokens: Math.max(0, Number(e.target.value) || 0) || undefined }))}
                       placeholder="4096" />
                   </label>
-                  <div className="mm-hint">{t('set.maxOutHint')}</div>
+                  <div className="mm-help">{t('set.maxOutHint')}</div>
                   <label>
                     {t('set.vision')}
                     <select value={resolveVisionMode(localCfg)}
@@ -1514,7 +1519,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       <option value="always">{t('set.visionAlways')}</option>
                     </select>
                   </label>
-                  <div className="mm-hint">{t('set.visionHint')}</div>
+                  <div className="mm-help">{t('set.visionHint')}</div>
                 </details>
                 <div className="model-mgr">
                   {isLocalCompat() ? (
@@ -1522,11 +1527,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                       <span>{compatUp === null ? t('mm.checking')
                         : compatUp === true ? `✓ ${t('set.compatRunning')}`
                         : t('set.compatOff')}</span>
-                      {compatUp === false && (
-                        <button className="mm-recheck" onClick={refreshModels}>{t('mm.recheck')}</button>
-                      )}
-                      <button className="mm-recheck" onClick={testLocalConnection} disabled={localTesting}>{t('set.testConn')}</button>
-                      <button className="mm-recheck" onClick={testLocalModel} disabled={localTesting || !localCfg.model}>{t('set.testModel')}</button>
+                      {/* Botões num grupo só: se não couberem ao lado do texto, descem juntos. */}
+                      <span className="mm-status-btns">
+                        {compatUp === false && (
+                          <button className="mm-recheck" onClick={refreshModels}>{t('set.compatRecheck')}</button>
+                        )}
+                        <button className="mm-recheck" onClick={testLocalConnection} disabled={localTesting}>{t('set.testConn')}</button>
+                        <button className="mm-recheck" onClick={testLocalModel} disabled={localTesting || !localCfg.model}>{t('set.testModel')}</button>
+                      </span>
                     </div>
                   ) : (
                     <div className={`mm-status ${ollamaUp === true ? 'ok' : ollamaInstalled === false ? 'none' : ollamaUp === false ? 'off' : ''}`}>
@@ -1548,7 +1556,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                     {(isLocalCompat() ? compatUp === true : ollamaUp === true) && <button className="mm-refresh" onClick={refreshModels} title={t('mm.refresh')}>↻</button>}
                   </div>
                   {models.length === 0 ? (
-                    <div className="mm-empty">{!isLocalCompat() && ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
+                    // Servidor OpenAI-compatible não baixa modelo pelo Bah — "baixe um abaixo" não vale lá.
+                    <div className="mm-empty">{isLocalCompat()
+                      ? (compatUp === true ? t('set.compatEmpty') : t('set.compatEmptyOff'))
+                      : ollamaUp === false ? t('mm.emptyNoOllama') : t('mm.empty')}</div>
                   ) : (
                     <div className="mm-list">
                       {models.map(m => (
@@ -1630,21 +1641,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </div>
             </div>
           )}
-          {settingsDirty && (
-            <div className="mm-hint unsaved">⚠️ {t('set.unsavedHint')}</div>
-          )}
-          <button className={`save-settings ${settingsDirty ? 'dirty' : ''} ${savedFlash ? 'saved' : ''}`}
-            disabled={!settingsDirty}
-            onClick={async () => {
-            // Salva e MANTÉM o painel aberto (não fecha) — assim o "IA ativa" lá em cima
-            // muda na hora e a pessoa VÊ que aplicou. Fecha só pela engrenagem/✕.
-            await onSettingsChange(settings);
-            await onLocalSettingsChange(localCfg);
-            setSavedFlash(true);
-            setTimeout(() => setSavedFlash(false), 1800);
-          }}>
-            {savedFlash ? `✓ ${t('set.saved')}` : t('settings.save')}
-          </button>
+          {/* Rodapé fixo com fundo próprio: o conteúdo rola POR BAIXO do Salvar, em vez de
+              aparecer espremido na faixa entre o botão e a borda do painel. */}
+          <div className="settings-footer">
+            {settingsDirty && (
+              <div className="mm-hint unsaved">⚠️ {t('set.unsavedHint')}</div>
+            )}
+            <button className={`save-settings ${settingsDirty ? 'dirty' : ''} ${savedFlash ? 'saved' : ''}`}
+              disabled={!settingsDirty}
+              onClick={async () => {
+              // Salva e MANTÉM o painel aberto (não fecha) — assim o "IA ativa" lá em cima
+              // muda na hora e a pessoa VÊ que aplicou. Fecha só pela engrenagem/✕.
+              await onSettingsChange(settings);
+              await onLocalSettingsChange(localCfg);
+              setSavedFlash(true);
+              setTimeout(() => setSavedFlash(false), 1800);
+            }}>
+              {savedFlash ? `✓ ${t('set.saved')}` : t('settings.save')}
+            </button>
+          </div>
         </div>
       )}
 
