@@ -1114,11 +1114,34 @@ function attachContextMenu(wc: Electron.WebContents): void {
 // Aqui no principal o nativeImage tem Buffer, então a conversão pra JPEG (bem menor que o PNG
 // numa página com foto) acontece antes de o print ir pro modelo. Mesmo tamanho em pixels —
 // o click_at continua valendo. Qualquer falha devolve o original, que também é aceito.
+// Print de uma cor só = janela coberta por outra (o Chromium não desenha a página e o print
+// sai preto). Amostra ~2000 pixels; qualquer variação real (texto, logo, foto) passa do limite.
+function isBlankFrame(ni: Electron.NativeImage): boolean {
+  try {
+    const bmp = ni.toBitmap();   // BGRA
+    if (bmp.length < 16) return false;
+    const step = Math.max(4, Math.floor(bmp.length / 4 / 2000) * 4);
+    let min = 255, max = 0;
+    for (let i = 0; i + 2 < bmp.length; i += step) {
+      const lum = (bmp[i] + bmp[i + 1] + bmp[i + 2]) / 3;
+      if (lum < min) min = lum;
+      if (lum > max) max = lum;
+      if (max - min > 12) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function visionImageToJpeg(img?: VisionImage): VisionImage | undefined {
   if (!img?.dataUrl || !/^data:image\/png;base64,/i.test(img.dataUrl)) return img;
   try {
     const ni = nativeImage.createFromDataURL(img.dataUrl);
     if (ni.isEmpty()) return img;
+    // Mandar o print preto confundia o modelo ("a imagem, que não consigo ver") e ele chegou a
+    // inventar URL. Sem print, ele recebe o aviso honesto de que não há imagem neste passo.
+    if (isBlankFrame(ni)) return undefined;
     const buf = ni.toJPEG(82);
     return { ...img, dataUrl: `data:image/jpeg;base64,${buf.toString('base64')}`, bytes: buf.length };
   } catch {
