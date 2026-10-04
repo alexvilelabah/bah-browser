@@ -369,6 +369,14 @@ export function outputBudget(o: { isLocal: boolean; userMax?: number; cfgMax?: n
   return Math.min(cap, Math.max(o.cfgMax ?? 0, user || cap));
 }
 
+/** Whether to send Ollama `think`. Newer models think unless told not to (measured on
+ *  gemma4:12b: 510 thinking tokens and 8s before a 31-token JSON action; a 256 cap
+ *  produced no content at all). On only for a reasoning model we have not throttled.
+ *  Off otherwise — omitting the field is not the same as off. */
+export function ollamaThink(isReasoning: boolean, suppressed: boolean): boolean {
+  return isReasoning && !suppressed;
+}
+
 /** num_ctx for Ollama 'auto'. Sending nothing leaves the window unknown to both sides; this
  *  asks for what the measured prompt plus the output budget actually needs, between 16384 and
  *  32768, and never shrinks (lowering num_ctx reallocates - and reloads - the model). */

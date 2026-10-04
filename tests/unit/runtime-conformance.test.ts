@@ -12,7 +12,7 @@ import http from 'node:http';
 import {
   normalizeBaseUrl, chatCompletionsUrl, modelsUrl,
   discoverLocalModels, detectRuntimeContext, testLocalConnection,
-  advertisedContextTokens, ollamaAutoNumCtx, outputBudget, clampWindow,
+  advertisedContextTokens, ollamaAutoNumCtx, ollamaThink, outputBudget, clampWindow,
   applyContextBudget, estimateTokens,
 } from '../../src/main/local-providers.ts';
 
@@ -83,6 +83,12 @@ test('ollama answers without a context field, and nothing is invented', async ()
     const ctx = await detectRuntimeContext('ollama', s.url, 'qwen3.5:4b', undefined, 4000);
     assert.equal(ctx.source, 'unknown');
   } finally { s.close(); }
+});
+
+test('ollama think is explicit: on only for a reasoning model we have not cut', () => {
+  assert.equal(ollamaThink(true, false), true);
+  assert.equal(ollamaThink(true, true), false, 'a throttled reasoning model is told to stop');
+  assert.equal(ollamaThink(false, false), false, 'omitting the field is not off — gemma4 thinks by default');
 });
 
 test('ollama auto context stays in bounds and never shrinks', () => {

@@ -16,7 +16,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
-import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, recoverOutputBudget } from './local-providers';
+import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget } from './local-providers';
 import { readSseStream, readOllamaNdjson } from './stream-readers';
 import {
   NO_IMAGE_PROVIDERS,
@@ -1551,7 +1551,7 @@ export class AIEngine {
         await fetchWithTimeout(`${this.baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', options: { num_ctx: 512 } }),
+          body: JSON.stringify({ model, messages: [{ role: 'user', content: 'oi' }], stream: false, keep_alive: '30m', think: false, options: { num_ctx: 512 } }),
         }, 180000);
       } else if (this.provider === 'openai') {
         if (!this.ollamaModel.trim()) return;   // sem modelo escolhido: não inventa um id
@@ -1634,14 +1634,11 @@ export class AIEngine {
     if (isAgentMode && /qwen|llama|mistral|gemma/.test(m) && !isReasoning) {
       body.format = 'json';
     }
-    // Modelo de raciocínio: pede o pensamento no canal SEPARADO 'thinking' — no agente,
-    // o content vem limpo (só o JSON, raciocínio fora); no chat, o leitor NDJSON embrulha
-    // em <think> pra UI. Se o Ollama não suportar 'think', a retentativa abaixo refaz sem.
-    if (isReasoning) {
-      // Sticky: once thinking has been cut in this run it stays off (the app can lift it by
-      // marking the run stuck). Proven via usage below, not assumed.
-      body.think = thinkingOff || this.isThinkingThrottled(model) ? false : true;
-    }
+    // Ask explicitly. Omitting `think` is not off: gemma4 thinks by default and a short
+    // num_predict is then spent entirely in the thinking channel, so content comes back
+    // empty. Reasoning models keep the separate channel; everything else is told not to.
+    // If this server rejects the field, the retry below drops it.
+    body.think = ollamaThink(isReasoning, thinkingOff || this.isThinkingThrottled(model));
 
     const t0 = Date.now();
     console.log(`[Ollama] → POST /api/chat (model=${model}, isAgent=${isAgentMode})`);
@@ -1688,10 +1685,10 @@ export class AIEngine {
     if (!res.ok) {
       const errText = await res.text();
       release();
-      // Modelo importado de GGUF cru pode não ter a capability 'thinking' → o Ollama
-      // recusa o think:true. Refaz UMA vez sem ele (ainda streamando; os tags <think>
-      // inline no texto seguem tratados pelo renderer).
-      if (body.think && res.status >= 400 && res.status < 500) {
+      // A GGUF import with no thinking capability rejects the field (think true or false).
+      // Retry once without it. Only when the error names the field — a context-length 400
+      // must not be swallowed as a thinking incompatibility.
+      if ('think' in body && res.status >= 400 && res.status < 500 && /think/i.test(errText)) {
         delete body.think;
         const retry = await fetchCancellable(`${this.baseUrl}/api/chat`, {
           method: 'POST',
