@@ -19,7 +19,9 @@ export type ThinkingCut = 'THINKING_BUDGET' | 'REPEATING';
 export function detectRepeat(text: string): boolean {
   if (text.length < 240) return false;
   const tail = text.slice(-1200);
-  for (let p = 8; p <= 200; p++) {
+  // Up to 400 chars: the 1200-char tail holds three copies, so a looping paragraph counts
+  // too, not only a looping sentence.
+  for (let p = 8; p <= 400; p++) {
     const b = tail.slice(-p);
     if (b.trim().length < p * 0.5) continue;   // whitespace runs don't count
     if (tail.endsWith(b + b + b)) return true;

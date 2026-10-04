@@ -60,7 +60,9 @@ function getWorker(lang: string): Promise<any> {
     const tessdata = localTessdataDir();
     // langPath local = ler do disco sem rede; gzip:false porque os arquivos sao raw.
     const opts: Record<string, unknown> = { logger: () => {}, errorHandler: () => {} };
-    if (tessdata) { opts.langPath = tessdata; opts.gzip = false; }
+    // cacheMethod 'none': the packs are already on disk; the default would also copy ~7 MB
+    // of traineddata into whatever directory the app was started from.
+    if (tessdata) { opts.langPath = tessdata; opts.gzip = false; opts.cacheMethod = 'none'; }
     w = createWorker(lang, 1, opts);
     workerCache.set(lang, w);
     // If creation fails, drop it so the next call retries cleanly.

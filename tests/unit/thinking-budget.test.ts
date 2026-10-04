@@ -36,3 +36,10 @@ test('elapsed cap scales with the last step and is bounded', () => {
   assert.ok(ThinkingBudget.forStep(999_999).msCap <= 600_000);
   assert.equal(ThinkingBudget.forStep(999_999).charsCap, Math.round(THINKING_TOKENS_SOFT * 3.5));
 });
+
+test('a looping paragraph (period > 200 chars) is caught too', () => {
+  const para = 'Let me reconsider the filter codes for YouTube live search, the sp parameter might be EgJAAQ or EgIQAQ, I need to verify which one applies to live streams before I navigate there, and I should also double check whether the results page needs the hl parameter. ';
+  assert.ok(para.length > 200 && para.length <= 400);
+  assert.equal(detectRepeat('start. ' + para.repeat(3)), true);
+  assert.equal(detectRepeat('start. ' + para + para.slice(0, 120)), false, 'one copy plus a fragment is not a loop');
+});
