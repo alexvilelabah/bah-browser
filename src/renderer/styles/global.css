@@ -2136,6 +2136,7 @@ body {
 }
 .plan-head{ font-size:12.5px; font-weight:700; color:var(--text-primary); margin-bottom:4px; }
 .plan-goal{ font-size:12px; color:var(--text-secondary); line-height:1.45; margin-bottom:6px; }
+.plan-auto{ font-size:12px; color:var(--text-secondary); margin:6px 0 2px; }
 .plan-steps{ margin:0 0 8px; padding-left:20px; display:flex; flex-direction:column; gap:3px; }
 .plan-steps li{ font-size:12px; color:var(--text-primary); line-height:1.4; }
 .plan-textarea{

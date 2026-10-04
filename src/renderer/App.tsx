@@ -2699,17 +2699,26 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const previewOn = (() => { try { return localStorage.getItem('planPreview') !== '0'; } catch { return true; } })();
                     if (previewOn && !planShown && plan.length > 0) {
                       planShown = true;
+                      const PLAN_AUTORUN_MS = 30000;
                       const decision = await new Promise<'run' | 'cancel' | string>((resolve) => {
                         let settled = false;
-                        const fin = (v: 'run' | 'cancel' | string) => { if (!settled) { settled = true; resolve(v); } };
+                        let autoRun: ReturnType<typeof setTimeout> | null = null;
+                        const hold = () => { if (autoRun) { clearTimeout(autoRun); autoRun = null; } };
+                        const fin = (v: 'run' | 'cancel' | string) => { if (!settled) { settled = true; hold(); resolve(v); } };
+                        // Ninguém mexeu em 30s → executa sozinho. Sem isto a tarefa ficava parada pra
+                        // sempre no cartão quando a pessoa mandava e ia fazer outra coisa — o uso normal
+                        // de um agente. "Mudar o texto" segura a contagem (onHold).
+                        autoRun = setTimeout(() => fin('run'), PLAN_AUTORUN_MS);
                         signal?.addEventListener('abort', () => fin('cancel'), { once: true });
                         onProgress({
                           kind: 'plan_preview',
                           goal: command,
                           steps: plan.slice(0, 8).map((st) => String(st)),
+                          autoRunMs: PLAN_AUTORUN_MS,
                           onApprove: () => fin('run'),
                           onEdit: (g) => fin(g),
                           onCancel: () => fin('cancel'),
+                          onHold: hold,
                         });
                       });
                       if (decision === 'cancel') {

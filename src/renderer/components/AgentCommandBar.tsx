@@ -26,7 +26,7 @@ export type AgentProgressEvent =
   | { kind: 'status'; message: string }
   | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
   | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void }
-  | { kind: 'plan_preview'; goal: string; steps: string[]; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void }
+  | { kind: 'plan_preview'; goal: string; steps: string[]; autoRunMs?: number; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void; onHold?: () => void }
   | { kind: 'thought'; message: string }
   | { kind: 'action'; action: BrowserAction }
   | { kind: 'result'; action: BrowserAction; result: any }
@@ -508,7 +508,20 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const abortRef = useRef<AbortController | null>(null);
   const manualContinueRef = useRef<(() => void) | null>(null);
   const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void } | null>(null);
-  const planCbRef = useRef<{ approve: () => void; edit: (goal: string) => void; cancel: () => void } | null>(null);
+  const planCbRef = useRef<{ approve: () => void; edit: (goal: string) => void; cancel: () => void; hold?: () => void } | null>(null);
+  // Quando o cartão do plano se executa sozinho (App.tsx); null = contagem parada.
+  const [planAutoAt, setPlanAutoAt] = useState<number | null>(null);
+  const [planNow, setPlanNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!planAutoAt) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setPlanNow(now);
+      // A execução em si já disparou no App; aqui só some com o cartão.
+      if (now >= planAutoAt) { planCbRef.current = null; setPlanPreview(null); setPlanEditing(false); setPlanAutoAt(null); }
+    }, 500);
+    return () => clearInterval(id);
+  }, [planAutoAt]);
   const feedRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const idRef = useRef(0);
@@ -612,8 +625,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           setManualHelp({ message: event.message, instruction: event.instruction });
           push({ kind: 'help', message: event.message, instruction: event.instruction });
         } else if (event.kind === 'plan_preview') {
-          planCbRef.current = { approve: event.onApprove, edit: event.onEdit, cancel: event.onCancel };
+          planCbRef.current = { approve: event.onApprove, edit: event.onEdit, cancel: event.onCancel, hold: event.onHold };
           setPlanPreview({ goal: event.goal, steps: event.steps });
+          setPlanNow(Date.now());
+          setPlanAutoAt(event.autoRunMs ? Date.now() + event.autoRunMs : null);
           setPlanDraft(event.goal);
           setPlanEditing(false);
         } else if (event.kind === 'confirm') {
@@ -1732,6 +1747,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           <ol className="plan-steps">
             {planPreview.steps.map((st, i) => <li key={i}>{st}</li>)}
           </ol>
+          {planAutoAt && !planEditing && (
+            <div className="plan-auto">{t('plan.autoRun').replace('{s}', String(Math.max(0, Math.ceil((planAutoAt - planNow) / 1000))))}</div>
+          )}
           {planEditing && (
             <textarea
               className="plan-textarea"
@@ -1743,7 +1761,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           )}
           <div className="plan-actions">
             {!planEditing && (
-              <button className="plan-btn" onClick={() => setPlanEditing(true)}>{t('plan.edit')}</button>
+              <button className="plan-btn" onClick={() => { setPlanEditing(true); planCbRef.current?.hold?.(); setPlanAutoAt(null); }}>{t('plan.edit')}</button>
             )}
             {planEditing ? (
               <button className="plan-btn primary" onClick={runPlanEdited}>{t('plan.runEdited')}</button>

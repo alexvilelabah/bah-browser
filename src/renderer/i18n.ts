@@ -340,6 +340,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'plan.runEdited': 'Run with my wording',
     'plan.cancel': 'Stop',
     'plan.editPh': 'Say what you actually want, in your own words…',
+    'plan.autoRun': 'Runs on its own in {s}s if you leave it.',
 
     'set.planPreview': 'Show the plan before acting',
     'set.planPreviewHint': 'You can approve, reword or stop',
@@ -661,6 +662,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'plan.runEdited': 'Executar do meu jeito',
     'plan.cancel': 'Parar',
     'plan.editPh': 'Escreva o que você quer, com suas palavras…',
+    'plan.autoRun': 'Começa sozinho em {s}s se você não mexer.',
     'set.planPreview': 'Mostrar o plano antes de agir',
     'set.planPreviewHint': 'Você aprova, muda o texto ou para',
   },
@@ -981,6 +983,7 @@ const dict: Record<Lang, Record<string, string>> = {
     'plan.runEdited': 'Ejecutar a mi modo',
     'plan.cancel': 'Parar',
     'plan.editPh': 'Escribe lo que quieres, con tus palabras…',
+    'plan.autoRun': 'Empieza solo en {s}s si no lo tocas.',
     'set.planPreview': 'Mostrar el plan antes de actuar',
     'set.planPreviewHint': 'Apruebas, cambias el texto o paras',
   },
