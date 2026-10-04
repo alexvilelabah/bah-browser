@@ -136,7 +136,7 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
 // context_length). llama.cpp-only extras (load status, modalities) come from
 // /v1/models itself. Never throws: returns { ok:false, models:[], error }.
 
-export async function discoverLocalModels(baseUrl: string, apiKey?: string, timeoutMs = 8000): Promise<LocalDiscovery> {
+export async function discoverLocalModels(baseUrl: string, apiKey?: string, timeoutMs = 8000, transport?: LocalProvider): Promise<LocalDiscovery> {
   const base = normalizeBaseUrl(baseUrl);
   if (!base) return { ok: false, models: [], error: 'empty base URL' };
   let v1: any = null;
@@ -148,8 +148,10 @@ export async function discoverLocalModels(baseUrl: string, apiKey?: string, time
   }
   // Optional Ollama enrichment — failure here must not fail discovery (a
   // llama.cpp server has no /api/tags at all).
+  // Skipped when the user chose an OpenAI-compatible server: /api/* is Ollama's namespace,
+  // and on someone else's server it is a stray request at best. Unknown transport probes both.
   let tags: any[] = [];
-  try {
+  if (transport !== 'openai-compatible') try {
     const t = await fetchJson(`${base}/api/tags`, { headers: authHeaders(apiKey) }, Math.min(timeoutMs, 4000));
     if (Array.isArray(t?.models)) tags = t.models;
   } catch { /* not an Ollama server — fine */ }

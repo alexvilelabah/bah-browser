@@ -432,7 +432,7 @@ export class AIEngine {
       && this.localModelsCacheBase === base
       && Date.now() - this.localModelsCache.at < AIEngine.LOCAL_CACHE_TTL_MS;
     if (fresh) return this.localModelsCache!.models;
-    const d = await _discoverLocalModels(base, this.apiKey || undefined);
+    const d = await _discoverLocalModels(base, this.apiKey || undefined, 8000, this.localTransport());
     this.localModelsCache = { at: Date.now(), models: d.models };
     this.localModelsCacheBase = base;
     return d.models;

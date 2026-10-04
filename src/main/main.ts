@@ -1235,9 +1235,9 @@ function setupIPC(): void {
   // default, and listing models must never touch anyone's VRAM.
   const localTransportOf = (p?: string): LocalProvider =>
     p === 'openai-compatible' ? 'openai-compatible' : 'ollama';
-  ipcMain.handle('local:discover', async (_e, _provider: string, baseUrl?: string, authKey?: string) => {
+  ipcMain.handle('local:discover', async (_e, provider: string, baseUrl?: string, authKey?: string) => {
     try {
-      const d = await discoverLocalModels(normalizeLocalBaseUrl(baseUrl), authKey, 8000);
+      const d = await discoverLocalModels(normalizeLocalBaseUrl(baseUrl), authKey, 8000, provider ? localTransportOf(provider) : undefined);
       return { ok: d.ok, models: d.models, error: d.error };
     } catch (e: any) { return { ok: false, models: [], error: String(e?.message ?? e) }; }
   });
