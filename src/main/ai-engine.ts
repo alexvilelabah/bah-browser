@@ -16,8 +16,18 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget } from './thinking-budget';
-import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget } from './local-providers';
-import { readSseStream, readOllamaNdjson } from './stream-readers';
+import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
+import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
+
+/** Ollama auto num_ctx: the floor it asks for, and the answer room it sizes the window for. */
+const OLLAMA_NUM_CTX_FLOOR = 16384;
+const OLLAMA_CTX_OUTPUT_RESERVE = 4096;
+
+/** The server used its whole time budget: slow (model loading, prompt too big, partly on CPU),
+ *  not flaky. Resending the same request repeats the wait, so these are never resent in place. */
+function isSlowServer(e: any): boolean {
+  return e instanceof LocalRequestError && (e.code === 'TIMEOUT_FIRST_CHUNK' || e.code === 'TIMEOUT_TOTAL');
+}
 import {
   NO_IMAGE_PROVIDERS,
   RX_IMAGE_REJECTED,
@@ -360,13 +370,7 @@ function langSuffix(): string {
   return `\n\nLANGUAGE: Write your "thought", "evaluation", "reason"/report text and ANY message shown to the user in ${LANG_NAMES[engineLang]}, regardless of the page's language. Keep JSON keys, action/tool names and URLs in English.`;
 }
 
-export interface AiMetrics {
-  kind: 'thinking' | 'answer';
-  estTokens: number;
-  tokPerSec: number;
-  elapsedMs: number;
-  exact: boolean;
-}
+export type AiMetrics = LiveMetrics;
 
 export class AIEngine {
   private provider: AIProvider;
@@ -456,9 +460,13 @@ export class AIEngine {
     const ck = `${this.baseUrl}::${modelId}`;
     // What we ask the server to allocate. 'auto' sends nothing (server default), so it can
     // neither raise nor lower the window.
-    const requested = (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
-      ? this.localOpts.ollamaNumCtx
-      : this.numCtxSent.get(modelId);
+    // Ollama only: an OpenAI-compatible server allocates its own window and never sees num_ctx.
+    // numCtxSent is keyed like ck (baseUrl::model); before the first call, auto asks for the floor.
+    const requested = this.provider !== 'ollama'
+      ? undefined
+      : (typeof this.localOpts.ollamaNumCtx === 'number' && this.localOpts.ollamaNumCtx > 0)
+        ? this.localOpts.ollamaNumCtx
+        : (this.numCtxSent.get(ck) ?? OLLAMA_NUM_CTX_FLOOR);
     const hit = this.runtimeCtxCache.get(ck);
     if (hit && Date.now() - hit.at < AIEngine.LOCAL_CACHE_TTL_MS) {
       const w = clampWindow({ runtime: hit.source === 'runtime' ? hit.tokens : undefined, advertised: hit.tokens, requested, fallback: FALLBACK });
@@ -499,7 +507,10 @@ export class AIEngine {
         ? custom
         : ollamaAutoNumCtx({
           measuredPromptTokens: this.promptTokens.get(sKey),
-          outputTokens: this.outputBudget(isAgentMode ? 16384 : 4096),
+          // Size the window for a typical answer, not the 16k ceiling: measured steps use
+          // <3k output tokens, and every num_ctx increase reloads the model and grows the KV
+          // cache. num_predict is then fitted to whatever room the window leaves.
+          outputTokens: Math.min(OLLAMA_CTX_OUTPUT_RESERVE, this.outputBudget(isAgentMode ? 16384 : 4096)),
           sent: this.numCtxSent.get(sKey),
         });
     this.numCtxSent.set(sKey, n);
@@ -777,9 +788,13 @@ export class AIEngine {
 
     const t0 = Date.now();
     if (signal?.aborted) throw new Error('CANCELLED');
+    // Local agent steps stream: a delta sink is what turns streaming on, and with it the
+    // first-token/inactivity clocks, the soft thinking budget and live tok/s (emitted by the
+    // call paths). The sink itself discards: the action is parsed from the returned text.
+    const streamSink = this.isLocal ? (_d: string) => {} : undefined;
     const { value: reply, rejected } = await this.withImageFallback(
       [{ role: 'user', content: command + contextNote + visionNote, image: vision.attached ? screenshot : undefined }],
-      msgs => this.callLLM(msgs, true, tier, undefined, signal),
+      msgs => this.callLLM(msgs, true, tier, streamSink, signal),
       () => [{ role: 'user', content: command + contextNote + noImageNote('model_rejected_image') }],
       signal,
     );
@@ -873,36 +888,20 @@ export class AIEngine {
   // com evidência de que o servidor não suporta).
   /** Live progress for the UI: a slow local step must read as working, not hung. */
   onMetrics?: (m: AiMetrics) => void;
-  private lastMetricsAt = 0;
 
-  /** Estimated from characters until the usage chunk arrives, exact afterwards. */
-  private emitMetrics(kind: 'thinking' | 'answer', chars: number, t0: number, exact = false, usage?: any): void {
-    const now = Date.now();
-    if (!exact && now - this.lastMetricsAt < 1000) return;
-    this.lastMetricsAt = now;
-    const estTokens = exact ? Math.round(usage?.completion_tokens ?? 0) : Math.round(chars / 3.5);
-    const secs = Math.max(0.001, (now - t0) / 1000);
-    try { this.onMetrics?.({ kind, estTokens, tokPerSec: Math.round(estTokens / secs), elapsedMs: now - t0, exact }); } catch {}
+  /** One meter per streamed call (cumulative, throttled, rate from the first token). */
+  private liveMeter() {
+    return createLiveMeter(m => this.onMetrics?.(m));
   }
 
   // Sticky, per baseUrl::model — learned from the server, not assumed.
   private streamOptionsRejected = new Set<string>();
   private streamRejected = new Set<string>();
   private thinkingKnobRejected = new Set<string>();
-  private slowThinking = new Set<string>();
   private stepTokens = new Map<string, number>();
   /** Measured prompt cost and the num_ctx already asked for (never shrunk). */
   private promptTokens = new Map<string, number>();
   private numCtxSent = new Map<string, number>();
-
-  /** The app marks a stuck run so thinking comes back on. */
-  noteStuck(model: string): void {
-    this.slowThinking.delete(streamKey(this.baseUrl, model));
-  }
-
-  isThinkingThrottled(model: string): boolean {
-    return this.slowThinking.has(streamKey(this.baseUrl, model));
-  }
 
   /** Reasoning models must not be pinned to temperature 0 (they loop); the name is the prior,
    *  reported usage is the proof (see the usage checks in the local paths). */
@@ -955,6 +954,16 @@ export class AIEngine {
     } else {
       body.max_tokens = this.outputBudget(4096);
     }
+    // Local: prompt + max_tokens must fit the window (vLLM 400s otherwise; others run out of
+    // window mid-answer). Cloud keeps the number above untouched.
+    if (this.isLocal) {
+      const win = await this.resolveContextBudget().catch(() => null);
+      if (win?.totalTokens) {
+        const promptText = body.messages.map((m: any) => typeof m.content === 'string' ? m.content : (m.content?.[0]?.text ?? '')).join('\n');
+        const images = messages.filter(m => m.image).length;
+        body.max_tokens = fitOutputToWindow({ budget: body.max_tokens, window: win.totalTokens, promptTokens: estimateTokens(promptText, images) });
+      }
+    }
     if (streaming) {
       body.stream = true;
       // Final usage chunk (tokens/sec for the UI). Dropped and remembered if the
@@ -1001,8 +1010,10 @@ export class AIEngine {
     const abandon = () => { const a = localAbort; localAbort = undefined; release(); try { a?.(); } catch {} };
     const backoffMs = (n: number) => (n <= 1 ? 2000 : 5000);
     const t0 = Date.now();
+    let attemptStartedAt = t0;   // the first-token clock runs from the request, not the step
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const firstChunkMs = this.isLocal ? LOCAL_FIRST_CHUNK_MS : CLOUD_FIRST_CHUNK_MS;
+      attemptStartedAt = Date.now();
       try {
         let candidate: Response;
         if (this.isLocal) {
@@ -1045,6 +1056,10 @@ export class AIEngine {
         lastErr = e;
         release();
         if (e?.noRetry || signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
+        // A local server that took the whole 300s budget is slow, not flaky: resending the same
+        // request twice more is up to 10 more minutes for the same outcome. Surface it; the
+        // step-level retry decides (once, degraded).
+        if (this.isLocal && isSlowServer(e)) throw e;
         // Timeout (local frio incluso) e erros de rede: retry com backoff cancelável.
         if (attempt < MAX_ATTEMPTS) {
           const wait = 800 * Math.pow(2, attempt - 1);
@@ -1088,27 +1103,47 @@ export class AIEngine {
       if (streaming) {
         let sawDelta = false;
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
-        const metrics: { usage?: any } = {};
-        const thinking = this.isLocal ? ThinkingBudget.forStep(this.stepTokens.get(key) ?? 0) : undefined;
-        const thinkWrap = (d: string) => { wrap(d); if (this.isLocal) this.emitMetrics('thinking', d.length, t0); };
+        const metrics: { usage?: any; finish?: string } = {};
+        // Soft thinking budget: agent steps only. A chat answer may legitimately think long.
+        const thinking = this.isLocal && isAgentMode ? ThinkingBudget.forStep(this.stepTokens.get(key) ?? 0) : undefined;
+        const live = this.liveMeter();
+        const thinkWrap = (d: string) => { wrap(d); if (this.isLocal) live.add(d); };
+        // Until the first token the clock is what is left of the request's first-chunk budget
+        // (load + prompt processing; keepalives do not count). Cloud keeps its old reader.
+        const firstTokenMs = this.isLocal ? Math.max(1000, LOCAL_FIRST_CHUNK_MS - (Date.now() - attemptStartedAt)) : undefined;
         try {
-          const text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics);
-          if (this.isLocal) this.emitMetrics('answer', text.length, t0, !!metrics.usage?.completion_tokens, metrics.usage);
+          let text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics, firstTokenMs);
+          if (this.isLocal) live.done(metrics.usage);
           if (metrics.usage?.completion_tokens) this.stepTokens.set(key, metrics.usage.completion_tokens);
+          if (metrics.usage?.prompt_tokens) this.promptTokens.set(key, metrics.usage.prompt_tokens);
           const reasoningTok = metrics.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
           if (cfg?.thinkingOff && reasoningTok > 0 && !this.thinkingKnobRejected.has(key)) {
             // Server accepted the field but kept thinking — remember so we stop pretending.
             this.thinkingKnobRejected.add(key);
             appendLog(`[Local] ${model} ignorou enable_thinking:false (usage: ${reasoningTok} reasoning tokens)`);
           }
+          if (isAgentMode) text = stripReasoningMarkers(text);
+          // Same JSON recovery as the unstreamed path: empty or cut at max_tokens.
+          if (this.isLocal && isAgentMode && jsonMode && (!text || metrics.finish === 'length') && depth === 0) {
+            const bigger = await this.recoverMaxTokens(key, maxTokens);
+            appendLog(`[Local] stream vazio/truncado (finish=${metrics.finish}) → retry com max_tokens=${bigger}`);
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: true, maxTokens: bigger, depth: 1, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
+          }
+          if (this.isLocal && isAgentMode && jsonMode && !text && depth === 1) {
+            appendLog('[Local] stream ainda vazio com JSON → retry final em prompt-only');
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode: false, maxTokens: await this.recoverMaxTokens(key, maxTokens), depth: 2, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
+          }
           return text;
         } catch (e: any) {
+          // Runaway thinking: retry THIS step once with thinking off. The next step thinks again.
           if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && this.isLocal && !cfg?.thinkingOff) {
-            this.slowThinking.add(key);
-            appendLog(`[Local] thinking longo demais em "${model}" → thinking desligado nesta sessao`);
+            appendLog(`[Local] thinking longo demais em "${model}" (${e.message}) → este passo sem thinking`);
             abandon();
             return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: true });
           }
+          // A slow server is not a broken stream: no resend in place, and never a reason to
+          // stop streaming for this model.
+          if (this.isLocal && isSlowServer(e)) { abandon(); throw e; }
           // Nothing delivered yet: resend the whole request (previous socket dropped first).
           if (this.isLocal && !sawDelta && !signal?.aborted && bodyRetry < 2) {
             const wait = backoffMs(bodyRetry + 1);
@@ -1123,8 +1158,9 @@ export class AIEngine {
             this.streamRejected.add(key);
             appendLog('[Local] stream falhou antes do 1º delta → sem stream para este modelo');
             abandon();
-            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: true, noStreamOptions: cfg?.noStreamOptions });
+            return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: true, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
           }
+          if (this.isLocal) abandon();
           throw e;
         }
       }
@@ -1142,8 +1178,13 @@ export class AIEngine {
         if (data?.usage?.prompt_tokens) this.promptTokens.set(key, data.usage.prompt_tokens);
       } catch (e: any) {
         if (signal?.aborted || /CANCELLED/.test(String(e?.message || ''))) throw e;
-        // THE original killer: a body timeout used to be final — the retry loop had already
-        // exited at the headers. Now the whole request is resent (previous one dropped first).
+        // The 300s total cap fired: the server is slow, and a resend repeats the wait.
+        if (this.isLocal && (Date.now() - attemptStartedAt >= LOCAL_TOTAL_MS - 2000 || /timed out|abort/i.test(String(e?.message ?? '')))) {
+          abandon();
+          throw new LocalRequestError('TIMEOUT_TOTAL', `local ${model}: no complete answer within ${Math.round(LOCAL_TOTAL_MS / 1000)}s`, true);
+        }
+        // A body that broke for another reason (connection reset, bad bytes) is resent whole,
+        // the previous request dropped first.
         if (this.isLocal && bodyRetry < 2) {
           const wait = backoffMs(bodyRetry + 1);
           appendLog(`[Local] corpo nao veio (${e?.message}) → reenvio ${bodyRetry + 2}/3 em ${wait}ms`);
@@ -1583,7 +1624,8 @@ export class AIEngine {
     // (Era exatamente o bug do qwen3.) Todos ganham o mesmo tratamento do gpt-oss.
     // qwen3-vl é modelo de VISÃO/instruct (não raciocina antes) → fica de FORA (senão
     // levava think:true, dava 400+retry e perdia o format:json que ele deve receber).
-    const isReasoning = /gpt-?oss|gptoss|qwen3(?!-?vl)|deepseek-r1/.test(resolvedModel.toLowerCase());
+    // Same rule as the compatible path (an "instruct"/"no-think" build is not a thinking model).
+    const isReasoning = this.isReasoningModel(resolvedModel);
     const formatted = messages.map((m, i) => {
       let content = m.content;
       if (isAgentMode && m.role === 'user' && i === messages.length - 1) {
@@ -1603,13 +1645,17 @@ export class AIEngine {
     const sKey = streamKey(this.baseUrl, model);
     // Agent mode streams too: a silent 150s step looks hung, and a stream proves liveness.
     const streaming = shouldStream({ hasDelta: !!onDelta, isAgentMode, isLocal: true, noStream: forceNoStream, rejected: this.streamRejected.has(sKey) });
+    // num_ctx first: num_predict is fitted to the room that window leaves after the prompt.
+    const numCtx = this.resolveNumCtx(sKey, isAgentMode);
+    const promptTokens = estimateTokens([systemMsg, ...formatted.map(x => x.content)].join('\n'), messages.filter(x => x.image).length);
+    const numPredict = fitOutputToWindow({ budget: this.outputBudget(isAgentMode ? 16384 : 4096), window: numCtx, promptTokens });
     const body: any = {
       model,
       messages: [{ role: 'system', content: systemMsg }, ...formatted],
       stream: streaming,
       keep_alive: '15m',     // keep the model hot in VRAM between agent steps
       options: {
-        num_predict: this.outputBudget(isAgentMode ? 16384 : 4096),   // the budget we computed, actually sent
+        num_predict: numPredict,   // the output budget, fitted to the window
         // 16k: cabe o DOM + texto da página + histórico E os system prompts maiores dos
         // modelos novos/de raciocínio (o de 8k estourava por poucos tokens num "olá" simples,
         // e o pensamento do modelo também consome contexto durante a geração).
@@ -1620,7 +1666,7 @@ export class AIEngine {
         // One context knob for both transports: an explicit number means exactly that; a
         // custom window from the single knob is sent as num_ctx too (so the budget and the
         // server can never disagree); 'auto' asks for what the measured prompt needs.
-        num_ctx: this.resolveNumCtx(sKey, isAgentMode),
+        num_ctx: numCtx,
         ...(isReasoning ? {} : { temperature: 0 }),   // no temperature for the reasoning pass
       },
     };
@@ -1638,7 +1684,7 @@ export class AIEngine {
     // num_predict is then spent entirely in the thinking channel, so content comes back
     // empty. Reasoning models keep the separate channel; everything else is told not to.
     // If this server rejects the field, the retry below drops it.
-    body.think = ollamaThink(isReasoning, thinkingOff || this.isThinkingThrottled(model));
+    body.think = ollamaThink(isReasoning, thinkingOff);
 
     const t0 = Date.now();
     console.log(`[Ollama] → POST /api/chat (model=${model}, isAgent=${isAgentMode})`);
@@ -1710,25 +1756,32 @@ export class AIEngine {
       if (streaming) {
         let sawDelta = false;
         const wrap = (d: string) => { sawDelta = true; try { onDelta!(d); } catch {} };
-        const metrics: { usage?: any } = {};
-        const thinking = ThinkingBudget.forStep(this.stepTokens.get(sKey) ?? 0);
-        const thinkWrap = (d: string) => { wrap(d); this.emitMetrics('thinking', d.length, t0); };
+        const metrics: { usage?: any; finish?: string } = {};
+        // Soft thinking budget: agent steps only. A chat answer may legitimately think long.
+        const thinking = isAgentMode ? ThinkingBudget.forStep(this.stepTokens.get(sKey) ?? 0) : undefined;
+        const live = this.liveMeter();
+        const thinkWrap = (d: string) => { wrap(d); live.add(d); };
+        const firstTokenMs = Math.max(1000, LOCAL_FIRST_CHUNK_MS - (Date.now() - t0));
         try {
-          const text = await readOllamaNdjson(res, thinkWrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics);
-          this.emitMetrics('answer', text.length, t0, !!metrics.usage?.eval_count, { completion_tokens: metrics.usage?.eval_count });
-          if (metrics.usage?.eval_count) this.stepTokens.set(sKey, metrics.usage.eval_count);
+          let text = await readOllamaNdjson(res, thinkWrap, signal, LOCAL_INACTIVITY_MS, thinking, metrics, firstTokenMs);
+          live.done(metrics.usage);
+          if (metrics.usage?.completion_tokens) this.stepTokens.set(sKey, metrics.usage.completion_tokens);
           if (metrics.usage?.prompt_tokens) this.promptTokens.set(sKey, metrics.usage.prompt_tokens);
-          if ((thinkingOff || this.isThinkingThrottled(model)) && (metrics.usage?.thinking_count ?? 0) > 0) {
-            console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.thinking_count} thinking tokens)`);
+          if (thinkingOff && (metrics.usage?.reasoning_tokens ?? 0) > 0) {
+            console.log(`[Ollama] ${model} ignorou think:false (${metrics.usage.reasoning_tokens} thinking tokens)`);
           }
+          // The NDJSON reader wraps thinking in <think> for the chat UI; the agent parses JSON only.
+          if (isAgentMode) text = stripReasoningMarkers(text);
           return text;
         } catch (e: any) {
+          // Runaway thinking: retry THIS step once with think:false. The next step thinks again.
           if (e instanceof LocalRequestError && e.code === 'THINKING_BUDGET' && !thinkingOff) {
-            this.slowThinking.add(sKey);
-            console.log(`[Ollama] thinking longo demais em ${model} → think:false nesta sessao`);
+            console.log(`[Ollama] thinking longo demais em ${model} (${e.message}) → este passo com think:false`);
             abandon();
             return this.callOllama(messages, isAgentMode, onDelta, signal, forceNoStream, true);
           }
+          // Slow (load / prompt processing past the budget) is not a broken stream: no resend.
+          if (isSlowServer(e)) { abandon(); throw e; }
           if (!sawDelta && !signal?.aborted && resend < 2) {
             const wait = resend === 0 ? 2000 : 5000;
             console.log(`[Ollama] stream falhou antes do 1º delta (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);
@@ -1742,6 +1795,7 @@ export class AIEngine {
             abandon();
             return this.callOllama(messages, isAgentMode, onDelta, signal, true, thinkingOff);
           }
+          abandon();
           throw e;
         }
       }
@@ -1751,6 +1805,11 @@ export class AIEngine {
         data = await res.json();
       } catch (e: any) {
         if (signal?.aborted) throw e;
+        // The 300s total cap fired: slow, not flaky - a resend repeats the wait.
+        if (Date.now() - t0 >= LOCAL_TOTAL_MS - 2000 || /abort/i.test(String(e?.message ?? e?.name ?? ''))) {
+          abandon();
+          throw new LocalRequestError('TIMEOUT_TOTAL', `Ollama ${model}: no complete answer within ${Math.round(LOCAL_TOTAL_MS / 1000)}s`, true);
+        }
         if (resend < 2) {
           const wait = resend === 0 ? 2000 : 5000;
           console.log(`[Ollama] corpo nao veio (${e?.message}) → reenvio ${resend + 2}/3 em ${wait}ms`);

@@ -8,13 +8,21 @@ import { fileURLToPath } from 'node:url';
 
 const rd = (p: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', p), 'utf8');
 
-test('engine reports metrics, throttled, exact once usage arrives', () => {
+// The meter's behaviour is tested in stream-clocks.test.ts; here only the wiring.
+test('engine reports metrics from both local streamed paths', () => {
   const src = rd('src/main/ai-engine.ts');
   assert.ok(/onMetrics\?: \(m: AiMetrics\) => void/.test(src), 'engine must expose onMetrics');
-  assert.ok(/if \(!exact && now - this\.lastMetricsAt < 1000\) return;/.test(src), 'must be throttled to ~1/s, not per token');
-  assert.ok(/emitMetrics\('thinking'/.test(src), 'thinking deltas must report');
-  assert.ok(/emitMetrics\('answer'/.test(src), 'the answer must report');
-  assert.ok(/exact: boolean/.test(src), 'the UI must know when a number is only an estimate');
+  assert.equal((src.match(/const live = this\.liveMeter\(\);/g) || []).length, 2, 'compat and Ollama both meter');
+  assert.equal((src.match(/live\.done\(metrics\.usage\)/g) || []).length, 2, 'both report the final, exact numbers');
+});
+
+// Streaming turns on only when a delta sink is passed. The agent path passed none, so local
+// agent steps never streamed: no first-token clock, no thinking budget, no live tok/s.
+test('local agent steps pass a stream sink (cloud passes none)', () => {
+  const src = rd('src/main/ai-engine.ts');
+  const gen = src.slice(src.indexOf('async generateAction('), src.indexOf('private async callLLM('));
+  assert.ok(/const streamSink = this\.isLocal \? \(_d: string\) => \{\} : undefined;/.test(gen), 'sink must exist for local only');
+  assert.ok(/this\.callLLM\(msgs, true, tier, streamSink, signal\)/.test(gen), 'the agent call must pass it');
 });
 
 test('the metric crosses the IPC boundary on a documented channel', () => {

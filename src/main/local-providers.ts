@@ -369,6 +369,15 @@ export function outputBudget(o: { isLocal: boolean; userMax?: number; cfgMax?: n
   return Math.min(cap, Math.max(o.cfgMax ?? 0, user || cap));
 }
 
+/** The output budget that fits: prompt + max_tokens must stay inside the window. vLLM rejects
+ *  the request outright when it does not (400 "maximum context length"); llama.cpp and Ollama
+ *  run out of window mid-answer. The floor keeps a usable reply even on a tight window -
+ *  if the prompt really leaves less than that, the server's overflow error is the honest result. */
+export function fitOutputToWindow(o: { budget: number; window: number; promptTokens: number; margin?: number; floor?: number }): number {
+  const room = o.window - o.promptTokens - (o.margin ?? 512);
+  return Math.max(o.floor ?? 1024, Math.min(o.budget, room));
+}
+
 /** Whether to send Ollama `think`. Newer models think unless told not to (measured on
  *  gemma4:12b: 510 thinking tokens and 8s before a 31-token JSON action; a 256 cap
  *  produced no content at all). On only for a reasoning model we have not throttled.
