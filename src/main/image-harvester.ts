@@ -8,6 +8,7 @@
 // limpa .part em erro/abort (corrige o caso "oversize"), usa stream.pipeline e limita a
 // concorrência por host (educado + evita bloqueio). Mesmo resultado, mais seguro.
 // ─────────────────────────────────────────────────────────────────────────────
+import { getDownloadDir } from './download-dir';
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -110,7 +111,7 @@ export async function harvestDownload(
   const clean = Array.from(new Set((urls || []).filter(u => /^https?:\/\//i.test(u)))).slice(0, MAX_URLS);
   if (clean.length === 0) return { success: false, saved: 0, error: 'No image URL to download.' };
 
-  const dir = path.join(app.getPath('downloads'), slugify(theme));
+  const dir = path.join(getDownloadDir(), slugify(theme));
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e: any) {
     return { success: false, saved: 0, error: `Could not create the folder: ${e?.message ?? e}` };
   }
@@ -165,7 +166,7 @@ export async function generateImages(
   const clean = (prompt || '').trim();
   if (clean.length < 2) return { success: false, saved: 0, error: 'Empty image prompt.' };
   const n = Math.min(Math.max(count || 1, 1), 4);
-  const dir = path.join(app.getPath('downloads'), slugify(clean));
+  const dir = path.join(getDownloadDir(), slugify(clean));
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e: any) {
     return { success: false, saved: 0, error: `Could not create the folder: ${e?.message ?? e}` };
   }

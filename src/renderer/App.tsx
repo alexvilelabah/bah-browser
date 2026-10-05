@@ -125,7 +125,11 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => void;
+      getDownloadEngine?: () => Promise<DlEngineSettings>;
+      setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
+      setDownloadDir?: (dir: string | null) => Promise<string>;
+      chooseDownloadDir?: () => Promise<string | null>;
       pauseDownload?: (id: string) => Promise<any>;
       resumeDownload?: (id: string) => Promise<any>;
       cancelDownload?: (id: string) => Promise<any>;
@@ -375,6 +379,9 @@ export default function App() {
     try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
     try { window.electronAPI?.setYoutubeSkipAds?.(localStorage.getItem('ytSkipAds') !== '0'); } catch {}   // aplica a pref de pular anúncio salva
     try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}   // botão "Baixar" no YouTube
+    // Gerenciador de downloads: preferências salvas + a pasta escolhida (vazia = Downloads).
+    try { window.electronAPI?.setDownloadEngine?.(loadDlEngine()); } catch {}
+    try { window.electronAPI?.setDownloadDir?.(localStorage.getItem('dlDir') || null)?.then(d => { if (d) setDlDir(d); }); } catch {}
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
@@ -389,6 +396,9 @@ export default function App() {
           ...existing,
           id: info.id ?? existing?.id,
           kind: info.kind ?? existing?.kind,
+          engine: info.engine ?? existing?.engine,
+          connections: done ? undefined : (info.connections ?? existing?.connections),
+          map: done ? undefined : (info.map ?? existing?.map),
           filename: info.filename ?? existing?.filename ?? 'download',
           path: info.path ?? existing?.path,
           url: info.url ?? existing?.url,
@@ -566,8 +576,29 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ id?: string; kind?: string; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
+  // Gerenciador de downloads (Downloads → ⚙): várias conexões, igual ao IDM Caseiro.
+  const [dlSettingsOpen, setDlSettingsOpen] = useState(false);
+  const [dlEngine, setDlEngine] = useState<DlEngineSettings>(() => loadDlEngine());
+  const [dlDir, setDlDir] = useState<string>('');
+  const updateDlEngine = useCallback((patch: Partial<DlEngineSettings>) => {
+    setDlEngine(prev => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem('dlEngine', JSON.stringify(next)); } catch {}
+      window.electronAPI?.setDownloadEngine?.(next);
+      return next;
+    });
+  }, []);
+  const chooseDlDir = useCallback(async () => {
+    const dir = await window.electronAPI?.chooseDownloadDir?.();
+    if (dir) { setDlDir(dir); try { localStorage.setItem('dlDir', dir); } catch {} }
+  }, []);
+  const resetDlDir = useCallback(async () => {
+    try { localStorage.removeItem('dlDir'); } catch {}
+    const dir = await window.electronAPI?.setDownloadDir?.(null);
+    if (dir) setDlDir(dir);
+  }, []);
   const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
@@ -1148,7 +1179,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
         <div className="menu-wrap">
           <button
             className={`menu-btn${downloads.some(d => d.state === 'started' || d.state === 'progress') ? ' dl-active' : ''}`}
-            onClick={() => setDownloadsOpen(o => !o)}
+            onClick={() => { setDownloadsOpen(o => !o); setDlSettingsOpen(false); }}
             title={t('downloads.open')}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
@@ -1158,10 +1189,53 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               <div className="menu-overlay" onClick={() => setDownloadsOpen(false)} />
               <div className="menu-panel downloads-panel">
                 <div className="dl-head">
-                  <span>⬇️ {t('downloads.title')}</span>
-                  {downloads.length > 0 && <button className="history-clear" onClick={() => setDownloads([])}>{t('downloads.clear')}</button>}
+                  <span>⬇️ {dlSettingsOpen ? t('dlset.title') : t('downloads.title')}</span>
+                  <span className="dl-head-actions">
+                    {!dlSettingsOpen && downloads.length > 0 && <button className="history-clear" onClick={() => setDownloads([])}>{t('downloads.clear')}</button>}
+                    {/* Engrenagem: configurações do gerenciador (várias conexões, pasta, tentativas). */}
+                    <button className={`dl-gear${dlSettingsOpen ? ' on' : ''}`} title={dlSettingsOpen ? t('dlset.back') : t('dlset.open')} onClick={() => setDlSettingsOpen(o => !o)}>
+                      {dlSettingsOpen ? '✕' : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                      )}
+                    </button>
+                  </span>
                 </div>
-                {downloads.length === 0 ? (
+                {dlSettingsOpen ? (
+                  <div className="dl-settings">
+                    <label className="dl-set-switch">
+                      <input type="checkbox" checked={dlEngine.enabled} onChange={e => updateDlEngine({ enabled: e.target.checked })} />
+                      <span className="dl-set-txt">{t('dlset.enabled')}<small>{t('dlset.enabledHint')}</small></span>
+                    </label>
+                    <label className={`dl-set-row${dlEngine.enabled ? '' : ' off'}`}>
+                      <span>{t('dlset.connections')}</span>
+                      <select value={dlEngine.connections} disabled={!dlEngine.enabled} onChange={e => updateDlEngine({ connections: Number(e.target.value) })}>
+                        {[1, 2, 4, 8, 16, 32].map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </label>
+                    <div className="dl-set-row dl-set-col">
+                      <span>{t('dlset.folder')}</span>
+                      <div className="dl-dir-line">
+                        <span className="dl-dir-path" title={dlDir}>{dlDir || '…'}</span>
+                        <button className="dl-set-btn" onClick={chooseDlDir}>{t('dlset.change')}</button>
+                        {dlDir && <button className="dl-set-btn dl-set-icon" title={t('media.openFolderTitle')} onClick={() => window.electronAPI?.revealInFolder?.(dlDir)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>}
+                      </div>
+                      {!!localStorage.getItem('dlDir') && <button className="dl-set-link" onClick={resetDlDir}>{t('dlset.resetFolder')}</button>}
+                    </div>
+                    <details className="dl-set-adv">
+                      <summary>{t('dlset.advanced')}</summary>
+                      <label className="dl-set-row"><span>{t('dlset.retries')}</span>
+                        <input type="number" min={0} max={30} value={dlEngine.maxRetries} onChange={e => updateDlEngine({ maxRetries: Number(e.target.value) })} /></label>
+                      <label className="dl-set-row"><span>{t('dlset.minSegment')}</span>
+                        <input type="number" min={0.25} max={64} step={0.25} value={dlEngine.minSegmentMB} onChange={e => updateDlEngine({ minSegmentMB: Number(e.target.value) })} /></label>
+                      <label className="dl-set-row"><span>{t('dlset.connectTimeout')}</span>
+                        <input type="number" min={3} max={120} value={dlEngine.connectTimeoutS} onChange={e => updateDlEngine({ connectTimeoutS: Number(e.target.value) })} /></label>
+                      <label className="dl-set-row"><span>{t('dlset.readTimeout')}</span>
+                        <input type="number" min={5} max={300} value={dlEngine.readTimeoutS} onChange={e => updateDlEngine({ readTimeoutS: Number(e.target.value) })} /></label>
+                      <small className="dl-set-hint">{t('dlset.advancedHint')}</small>
+                    </details>
+                    <button className="dl-set-link" onClick={() => updateDlEngine({ ...DL_ENGINE_DEFAULTS })}>{t('dlset.defaults')}</button>
+                  </div>
+                ) : downloads.length === 0 ? (
                   <div className="history-empty">{t('downloads.empty')}</div>
                 ) : (
                   <ul className="dl-list">
@@ -1184,11 +1258,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           {active && d.totalBytes ? (
                             <div className="dl-bar"><div className="dl-bar-fill" style={{ width: pct + '%' }} /></div>
                           ) : null}
+                          {/* Mapa do arquivo (igual ao IDM Caseiro): cada fatia pinta o que já baixou. */}
+                          {active && d.engine && d.map && d.map.length > 1 ? (
+                            <div className="dl-map" title={t('dl.mapTitle')}>
+                              {d.map.map(([a, , w], k) => <span key={k} style={{ left: (a * 100) + '%', width: Math.max(0, (w - a) * 100) + '%' }} />)}
+                            </div>
+                          ) : null}
                           <div className="dl-row2">
                             <span className="dl-meta">
                               {fmtSize(d.bytes)}{d.totalBytes ? ' / ' + fmtSize(d.totalBytes) : ''}
                               {active && !d.paused && d.speedBps ? ' · ' + fmtSpeed(d.speedBps) : ''}
                               {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
+                              {active && !d.paused && d.engine && d.connections ? ` · ${d.connections} ${t('dl.conns')}` : ''}
                             </span>
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
@@ -1200,9 +1281,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               )}
                               {d.id && active && <button title={t('dl.cancel')} onClick={() => d.kind === 'video' ? window.electronAPI?.cancelVideoDownload?.(d.id!) : window.electronAPI?.cancelDownload?.(d.id!)}>✕</button>}
                               {(d.state === 'failed' || d.state === 'cancelled') && <button title={t('dl.retry')} onClick={() => d.kind === 'video' ? window.electronAPI?.retryVideoDownload?.(d.id || '') : window.electronAPI?.retryDownload?.(d.id || '', d.url)}>↻</button>}
-                              {d.state === 'completed' && d.path && <button title={t('dl.openFile')} onClick={() => window.electronAPI?.openFile?.(d.path!)}>📂</button>}
-                              {d.path && <button title={t('media.openFolderTitle')} onClick={() => window.electronAPI?.revealInFolder?.(d.path!)}>🗂</button>}
-                              {d.url && <button title={t('dl.copyUrl')} onClick={() => { try { navigator.clipboard.writeText(d.url!); } catch {} }}>🔗</button>}
+                              {/* Ícones que dizem o que fazem: seta "abrir" = abre o arquivo; pasta = mostra
+                                  na pasta; elo = copia o link. (Antes o 📂 abria o ARQUIVO e o 🗂 não parecia nada.) */}
+                              {d.state === 'completed' && d.path && <button title={t('dl.openFile')} onClick={() => window.electronAPI?.openFile?.(d.path!)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg></button>}
+                              {d.path && <button title={t('dl.showInFolder')} onClick={() => window.electronAPI?.revealInFolder?.(d.path!)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>}
+                              {d.url && <button title={t('dl.copyUrl')} onClick={() => { try { navigator.clipboard.writeText(d.url!); } catch {} }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>}
                             </span>
                           </div>
                         </li>
@@ -1251,6 +1334,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">⬇️</span>
                   <span className="menu-label">{t('menu.ytDlButton')}</span>
                   <span className={`menu-switch ${ytDlButton ? 'on' : ''}`}>{ytDlButton ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setDownloadsOpen(true); setDlSettingsOpen(true); }} title={t('menu.dlManagerTitle')}>
+                  <span className="menu-ic">⚙️</span>
+                  <span className="menu-label">{t('menu.dlManager')}</span>
+                  <span className={`menu-switch ${dlEngine.enabled ? 'on' : ''}`}>{dlEngine.enabled ? `${dlEngine.connections}×` : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
@@ -4077,6 +4165,13 @@ function fmtSpeed(bps?: number): string {
 function fmtEta(s?: number): string {
   if (s == null) return '';
   return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60}s` : `${s}s`;
+}
+
+// Preferências do gerenciador de downloads (Downloads → ⚙) — as mesmas do IDM Caseiro.
+interface DlEngineSettings { enabled: boolean; connections: number; maxRetries: number; minSegmentMB: number; connectTimeoutS: number; readTimeoutS: number }
+const DL_ENGINE_DEFAULTS: DlEngineSettings = { enabled: true, connections: 8, maxRetries: 6, minSegmentMB: 1, connectTimeoutS: 10, readTimeoutS: 20 };
+function loadDlEngine(): DlEngineSettings {
+  try { return { ...DL_ENGINE_DEFAULTS, ...JSON.parse(localStorage.getItem('dlEngine') || '{}') }; } catch { return { ...DL_ENGINE_DEFAULTS }; }
 }
 
 // Textos do botão "Baixar" que o main injeta nas páginas com vídeo — no idioma da UI.

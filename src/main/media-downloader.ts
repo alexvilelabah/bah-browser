@@ -11,6 +11,7 @@ import path from 'path';
 import https from 'https';
 import { StringDecoder } from 'string_decoder';
 import { selectorArgs } from './video-formats';
+import { getDownloadDir } from './download-dir';
 
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
 // Build estático do ffmpeg (Windows). Vem num .zip → descompactamos com o Expand-Archive
@@ -532,7 +533,7 @@ export async function downloadVideo(
     ? await ensureJsRuntime((m) => onProgress({ state: 'preparing', title: m })).catch(() => null)
     : null;
   if (opts.signal?.aborted) return { success: false, error: 'cancelled', cancelled: true };
-  const outDir = app.getPath('downloads');
+  const outDir = getDownloadDir();
   const resTag = opts.resolution && !opts.audioOnly ? ` (${opts.resolution}p)` : '';
   // Título da página vira nome de arquivo: tira o que o Windows não aceita e escapa o %
   // (o -o do yt-dlp é um template — "100%" viraria campo).

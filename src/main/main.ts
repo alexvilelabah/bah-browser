@@ -38,6 +38,7 @@ import * as os from 'os';
 import { OVERLAY_DISMISS_SCRIPT } from './overlay-script';
 import { decidePopup, decideAuthPopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
+import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupTorrentManager } from './torrent-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
@@ -2090,7 +2091,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       if (!target) return { success: false };
       // GUARD: só revela dentro de pastas que o app de fato usa (Downloads/userData/temp).
       // Bloqueia pedir pra abrir um caminho arbitrário do sistema. Nunca executa arquivo.
-      const roots = [app.getPath('downloads'), app.getPath('userData'), os.tmpdir()];
+      const roots = [...downloadRoots(), app.getPath('userData'), os.tmpdir()];
       if (!isInsideAllowedRoot(target, roots)) {
         console.warn('[shell:reveal] bloqueado (fora das pastas permitidas):', target);
         return { success: false, error: 'Path outside the allowed folders.' };
@@ -2415,7 +2416,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // browser with "ask where to save" off) and notify the renderer so the agent
   // KNOWS the click worked (otherwise it sees "no page change" and assumes failure).
   function uniqueDownloadPath(base: string): string {
-    const dir = app.getPath('downloads');
+    const dir = getDownloadDir();
     const safe = base.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'download.bin';
     let target = path.join(dir, safe);
     for (let i = 1; fs.existsSync(target) && i < 100; i++) {
@@ -2543,7 +2544,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         .replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
       if (!/\.[a-z0-9]{2,5}$/i.test(base) && extFromType) base += extFromType;
       if (!/\.[a-z0-9]{2,5}$/i.test(base)) base += '.bin';
-      const dir = app.getPath('downloads');
+      const dir = getDownloadDir();
       let target = path.join(dir, base);
       // Never overwrite: suffix (1), (2)...
       for (let i = 1; fs.existsSync(target) && i < 100; i++) {

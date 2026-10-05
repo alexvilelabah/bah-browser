@@ -288,6 +288,30 @@ body {
   display:flex; align-items:center; justify-content:center;
 }
 .dl-actions button:hover{ background:rgba(255,255,255,0.10); color:var(--text-secondary); }
+/* Mapa do arquivo (motor de várias conexões): faixa fina, cada fatia pinta o que já baixou. */
+.dl-map{ position:relative; height:4px; background:rgba(255,255,255,0.07); border-radius:2px; overflow:hidden; }
+.dl-map span{ position:absolute; top:0; bottom:0; background:#5fb87a; opacity:0.85; }
+/* Cabeçalho com a engrenagem + tela de configuração do gerenciador */
+.dl-head-actions{ display:flex; align-items:center; gap:4px; }
+.dl-gear{ display:flex; align-items:center; justify-content:center; width:26px; height:26px; border:none; border-radius:7px; background:transparent; color:var(--text-muted); cursor:pointer; font-size:13px; }
+.dl-gear:hover, .dl-gear.on{ background:rgba(255,255,255,0.10); color:var(--text-primary); }
+.dl-settings{ display:flex; flex-direction:column; gap:10px; padding:4px 10px 10px; max-height:420px; overflow-y:auto; }
+.dl-set-switch{ display:flex; align-items:flex-start; gap:9px; cursor:pointer; }
+.dl-set-switch input{ width:16px; height:16px; margin:2px 0 0; flex:0 0 auto; accent-color:var(--accent); cursor:pointer; }
+.dl-set-txt{ display:flex; flex-direction:column; gap:3px; font-size:12.5px; font-weight:600; color:var(--text-primary); }
+.dl-set-txt small{ font-size:11px; font-weight:400; line-height:1.45; color:var(--text-muted); }
+.dl-set-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; color:var(--text-secondary); }
+.dl-set-row.off{ opacity:0.5; }
+.dl-set-row select, .dl-set-row input{ width:84px; height:28px; padding:0 8px; border-radius:8px; border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-primary); font:inherit; font-size:12px; }
+.dl-set-col{ flex-direction:column; align-items:stretch; gap:5px; }
+.dl-dir-line{ display:flex; align-items:center; gap:6px; }
+.dl-dir-path{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; color:var(--text-primary); background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; padding:5px 8px; direction:rtl; text-align:left; }
+.dl-set-btn{ flex:0 0 auto; height:28px; padding:0 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-secondary); cursor:pointer; font-size:12px; }
+.dl-set-btn:hover{ border-color:var(--accent); color:var(--text-primary); }
+.dl-set-link{ align-self:flex-start; background:none; border:none; padding:0; color:var(--accent); cursor:pointer; font-size:11.5px; text-decoration:underline; }
+.dl-set-adv summary{ cursor:pointer; font-size:12px; font-weight:600; color:var(--text-secondary); padding:2px 0; }
+.dl-set-adv[open]{ display:flex; flex-direction:column; gap:8px; }
+.dl-set-hint{ font-size:11px; line-height:1.45; color:var(--text-muted); }
 
 /* 🔍 Badge de zoom flutuante (aparece e some, estilo Chrome) */
 .zoom-badge{
@@ -1764,6 +1788,14 @@ body {
   background:var(--bg-hover); color:var(--text-muted);
 }
 .agent-side-panel-host .composer-shortcuts.on .composer-onoff { background:var(--accent,#c96442); color:#fff; }
+/* A linha de baixo do chat não pode empurrar o Enviar pra fora da caixa. Com a IA Local
+   ligada entra o botão de atalhos; em painel estreito ele fica só com o raio + LIG/DESL
+   (o nome continua na dica do mouse) e, no limite, ainda encolhe em vez de transbordar. */
+.agent-side-panel-host .composer-bar { container-type:inline-size; min-width:0; }
+.agent-side-panel-host .composer-shortcuts { flex:0 1 auto; min-width:0; overflow:hidden; }
+@container (max-width: 420px) {
+  .agent-side-panel-host .composer-shortcuts .composer-limit-val { display:none; }
+}
 .agent-side-panel-host .composer-limit-menu { min-width:150px; }
 .agent-side-panel-host .composer-limit-menu button.on { background:var(--bg-hover); color:var(--text-primary); font-weight:600; }
 .agent-side-panel-host .composer-plus-menu button {
@@ -2173,4 +2205,4 @@ body {
 }
 .plan-btn:hover{ filter:brightness(1.12); }
 .plan-btn.primary{ background:var(--accent); border-color:transparent; color:#fff; }
-.plan-btn.ghost{ background:transparent; color:var(--text-secondary); }
+.plan-btn.ghost{ background:transparent; color:var(--text-secondary); }.dl-set-icon{ display:flex; align-items:center; justify-content:center; padding:0 8px; }

@@ -106,7 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
     ipcRenderer.invoke('images:search', query, minWidth, count),
-  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string }) => void) => {
+  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:download-event', listener);
     return () => ipcRenderer.removeListener('agent:download-event', listener);
@@ -127,6 +127,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:torrent-event', listener);
     return () => ipcRenderer.removeListener('agent:torrent-event', listener);
   },
+  // Gerenciador de downloads (várias conexões): preferências e pasta dos downloads.
+  getDownloadEngine: () => ipcRenderer.invoke('download:get-engine'),
+  setDownloadEngine: (settings: Record<string, unknown>) => ipcRenderer.invoke('download:set-engine', settings),
+  setDownloadDir: (dir: string | null) => ipcRenderer.invoke('download:set-dir', dir),
+  chooseDownloadDir: () => ipcRenderer.invoke('download:choose-dir'),
   pauseDownload: (id: string) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id: string) => ipcRenderer.invoke('download:resume', id),
   cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),
