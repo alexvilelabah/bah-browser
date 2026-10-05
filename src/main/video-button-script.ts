@@ -26,6 +26,8 @@ export interface VideoButtonLabels {
   done: string;
   failed: string;
   reveal: string;      // mostrar na pasta
+  video: string;       // "Vídeo" (opção sem resolução conhecida / achada no tráfego)
+  drm: string;         // vídeo protegido contra cópia
   dec: string;         // separador decimal do idioma ("," ou ".")
 }
 
@@ -43,6 +45,8 @@ export const DEFAULT_VIDEO_BUTTON_LABELS: VideoButtonLabels = {
   done: 'Downloaded',
   failed: 'Download failed',
   reveal: 'Show in folder',
+  video: 'Video',
+  drm: 'This video is copy-protected (DRM), so it can\'t be downloaded.',
   dec: '.',
 };
 
@@ -58,9 +62,8 @@ export function sanitizeVideoButtonLabels(raw: unknown): VideoButtonLabels {
   return out;
 }
 
-const CSS = `
-.bah-dl{position:absolute;top:12px;right:12px;z-index:70;font-family:Roboto,Arial,sans-serif;transition:opacity .25s ease;}
-.html5-video-player.ytp-autohide .bah-dl:not(.bah-open){opacity:0;pointer-events:none;}
+// Visual da pílula e da lista (o script dos outros sites reaproveita, dentro do shadow DOM).
+export const MENU_CSS = `
 .bah-dl-btn{display:flex;align-items:center;gap:6px;height:32px;padding:0 13px 0 10px;border:1px solid rgba(255,255,255,.28);border-radius:16px;background:rgba(0,0,0,.45);color:#fff;font:500 13px/1 Roboto,Arial,sans-serif;cursor:pointer;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);opacity:.88;transition:opacity .15s,background .15s;}
 .bah-dl-btn:hover,.bah-open .bah-dl-btn{opacity:1;background:rgba(0,0,0,.72);}
 .bah-dl-btn svg{width:16px;height:16px;flex:none;}
@@ -74,9 +77,17 @@ const CSS = `
 .bah-dl-msg{padding:8px 10px;max-width:260px;font:400 13px/1.4 Roboto,Arial,sans-serif;color:rgba(255,255,255,.88);}
 .bah-dl-msg.err{color:#ffb4b4;}
 .bah-dl-msg.ok{color:#b9f6c8;}
+`;
+
+// No YouTube a pílula mora DENTRO do player e some junto com os controles dele — menos
+// antes do play (unstarted-mode): o player embutido em outro site esconde os controles
+// até a pessoa dar play, e o botão sumia junto.
+const CSS = `
+.bah-dl{position:absolute;top:12px;right:12px;z-index:70;font-family:Roboto,Arial,sans-serif;transition:opacity .25s ease;}
+.html5-video-player.ytp-autohide:not(.unstarted-mode) .bah-dl:not(.bah-open){opacity:0;pointer-events:none;}
 .bah-dl.bah-dl-short{top:24px;right:auto;left:50%;transform:translateX(-50%);}
 .bah-dl-short .bah-dl-menu{right:auto;left:50%;transform:translateX(-50%);}
-`;
+` + MENU_CSS;
 
 /** Gera o script com os textos no idioma da interface (JSON-escapados, sem injeção). */
 export function buildVideoButtonScript(labels: VideoButtonLabels): string {
@@ -92,7 +103,7 @@ export function buildVideoButtonScript(labels: VideoButtonLabels): string {
       try {
         var u = new URL(location.href);
         if (u.pathname === '/watch') { var v = u.searchParams.get('v'); return v && /^[A-Za-z0-9_-]{11}$/.test(v) ? v : null; }
-        var m = /^\\/(shorts|live)\\/([A-Za-z0-9_-]{11})/.exec(u.pathname);
+        var m = /^\\/(shorts|live|embed)\\/([A-Za-z0-9_-]{11})/.exec(u.pathname);
         return m ? m[2] : null;
       } catch(e){ return null; }
     };

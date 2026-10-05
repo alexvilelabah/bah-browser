@@ -931,7 +931,7 @@ function createWindow(): void {
       // (ex.: usuário saiu do vídeo com o anúncio ainda tocando, sem dar tempo do 'YTAD:0' sair).
       stopYtSkipPolling(wc.id);
       if (ytSkipAdsOn) wc.executeJavaScript(YT_SKIP_AD_SCRIPT).catch(() => {});
-      // Botão "Baixar" em cima do vídeo (só põe nas páginas do YouTube; se desligado, nada).
+      // Botão "Baixar" em cima dos vídeos (YouTube e qualquer site; se desligado, nada).
       videoButton?.inject(wc);
     });
     // Sinal do YT_SKIP_AD_SCRIPT: liga/desliga o poller pesado só enquanto o anúncio dura.
@@ -941,9 +941,13 @@ function createWindow(): void {
       const message: string = event?.message ?? '';
       if (message === 'YTAD:1') { console.log('[YTSkip] ad ON, poller started'); if (ytSkipAdsOn) startYtSkipPolling(wc); }
       else if (message === 'YTAD:0') { console.log('[YTSkip] ad OFF, poller stopped'); stopYtSkipPolling(wc.id); }
-      else if (message.startsWith('BAHDL:')) videoButton?.onPageMessage(wc, message.slice(6));
+      else if (message.startsWith('BAHDL:')) videoButton?.onPageMessage(wc, message.slice(6), event?.frame);
     });
     wc.once('destroyed', () => stopYtSkipPolling(wc.id));
+    // Vídeo dentro de iframe (player embutido em notícia/blog) também ganha o botão "Baixar".
+    wc.on('did-frame-finish-load', (_e, isMainFrame, frameProcessId, frameRoutingId) => {
+      if (!isMainFrame) videoButton?.injectFrame(wc, frameProcessId, frameRoutingId);
+    });
     attachContextMenu(wc);
     // Ctrl + roda do mouse = zoom (igual ao Chrome). O Chromium dispara 'zoom-changed'
     // com a direção quando o mouse está sobre a página; aplicamos no próprio webContents
@@ -2435,6 +2439,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     getMainWindow: () => mainWindow,
     msSinceGesture: (wcId) => Date.now() - (lastGesture.get(wcId) ?? -1e9),
   });
+  // Estilo IDM: anota os vídeos/streams que as abas carregam (pros sites que o yt-dlp não conhece).
+  videoButton.attachSniffer(session.fromPartition('persist:browser'));
   // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads + trava de exe.
   torrentManager = setupTorrentManager({
     getMainWindow: () => mainWindow,

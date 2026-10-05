@@ -325,7 +325,15 @@ const isYoutubeTarget = (url: string) => /^ytsearch\d*:/i.test(url) || /^https?:
  * Usa o motor de JS se já estiver pronto; se não, lista sem ele (a lista vem igual) e
  * deixa o motor se preparando em segundo plano pro download que vem depois.
  */
-export async function fetchVideoInfo(url: string): Promise<{ ok: boolean; info?: any; error?: string }> {
+/** Cookies do site (arquivo Netscape), Referer da página e o User-Agent do Bah. */
+export interface SiteAccess { cookiesFile?: string; referer?: string; userAgent?: string }
+const siteArgs = (a: SiteAccess = {}): string[] => [
+  ...(a.cookiesFile ? ['--cookies', a.cookiesFile] : []),
+  ...(a.referer ? ['--referer', a.referer] : []),
+  ...(a.userAgent ? ['--user-agent', a.userAgent] : []),
+];
+
+export async function fetchVideoInfo(url: string, access?: SiteAccess & { firstOnly?: boolean }): Promise<{ ok: boolean; info?: any; error?: string }> {
   let bin: string;
   try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, error: `yt-dlp unavailable: ${e?.message ?? e}` }; }
   const rt = readyJsRuntime();
@@ -334,7 +342,10 @@ export async function fetchVideoInfo(url: string): Promise<{ ok: boolean; info?:
     const out: Buffer[] = [];
     let errTail = '';
     let done = false;
-    const child = spawn(bin, ['-J', '--no-playlist', '--no-warnings', '--no-color', ...jsRuntimeArgs(rt), url], { windowsHide: true });
+    // firstOnly: página com dezenas de vídeos (playlist do g1, carrossel) → só o 1º é lido;
+    // sem isso o -J extrai TODOS e passa de um minuto.
+    const child = spawn(bin, ['-J', '--no-playlist', '--no-warnings', '--no-color', ...(access?.firstOnly ? ['--playlist-items', '1'] : []),
+      ...jsRuntimeArgs(rt), ...siteArgs(access), url], { windowsHide: true });
     const finish = (r: { ok: boolean; info?: any; error?: string }) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
     const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: 'timeout reading the video' }); }, 60_000);
     child.stdout.on('data', (d: Buffer) => out.push(d));
@@ -492,7 +503,11 @@ export interface VideoDownloadProgress {
  */
 export async function downloadVideo(
   url: string,
-  opts: { audioOnly?: boolean; count?: number; quality?: 'best' | 'low'; resolution?: number; niceNames?: boolean; signal?: AbortSignal },
+  opts: SiteAccess & {
+    audioOnly?: boolean; count?: number; quality?: 'best' | 'low'; resolution?: number; niceNames?: boolean; signal?: AbortSignal;
+    titleOverride?: string;   // stream sem título bom ("index.m3u8") → nome do arquivo = título da página
+    firstOnly?: boolean;      // post com várias mídias: só a primeira (a mesma da lista)
+  },
   onProgress: (p: VideoDownloadProgress) => void,
 ): Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; cancelled?: boolean; partials?: string[] }> {
   // Accept a real URL OR a yt-dlp search target ("ytsearch1:..."), which lets us
@@ -519,13 +534,20 @@ export async function downloadVideo(
   if (opts.signal?.aborted) return { success: false, error: 'cancelled', cancelled: true };
   const outDir = app.getPath('downloads');
   const resTag = opts.resolution && !opts.audioOnly ? ` (${opts.resolution}p)` : '';
-  const outTmpl = path.join(outDir, opts.niceNames ? `%(title).150B${resTag} [%(id)s].%(ext)s` : '%(title).120B [%(id)s].%(ext)s');
+  // Título da página vira nome de arquivo: tira o que o Windows não aceita e escapa o %
+  // (o -o do yt-dlp é um template — "100%" viraria campo).
+  const pageTitle = (opts.titleOverride || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 150).replace(/%/g, '%%');
+  const outTmpl = path.join(outDir, pageTitle ? `${pageTitle}${resTag}.%(ext)s`
+    : opts.niceNames ? `%(title).150B${resTag} [%(id)s].%(ext)s` : '%(title).120B [%(id)s].%(ext)s');
 
   // Seleção de formato/áudio — compartilhada por TODAS as rotas.
   const fmtArgs: string[] = [...jsRuntimeArgs(jsRuntime)];
   if (ffmpegDir) fmtArgs.push('--ffmpeg-location', ffmpegDir);
   if (opts.audioOnly) {
-    fmtArgs.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+    // Faixa só de áudio quando existe (YouTube). Stream com áudio colado no vídeo (HLS de
+    // site comum) não tem: aí baixa até 480p — o áudio é o mesmo AAC e o download cai de
+    // ~450 MB (1080p) pra ~60 MB.
+    fmtArgs.push('-f', 'ba/b[height<=480]/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0');
   } else if (opts.resolution) {
     fmtArgs.push(...selectorArgs(opts.resolution, !!ffmpegDir));
   } else if (opts.quality === 'low') {
@@ -550,6 +572,8 @@ export async function downloadVideo(
       + '|%(progress.downloaded_bytes)s|%(progress.total_bytes,progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.format_id)s',
     '-o', outTmpl,
     '--print', 'after_move:filepath',
+    ...siteArgs(opts),
+    ...(opts.firstOnly ? ['--playlist-items', '1'] : []),
     ...fmtArgs,
   ];
 

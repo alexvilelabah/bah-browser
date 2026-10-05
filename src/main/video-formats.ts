@@ -23,7 +23,7 @@ export interface VideoChoices {
 
 const YT_ID = /^[A-Za-z0-9_-]{11}$/;
 
-/** Id do vídeo de uma página do YouTube (watch, shorts, live, youtu.be) — ou null. */
+/** Id do vídeo de uma página do YouTube (watch, shorts, live, embed, youtu.be) — ou null. */
 export function youtubeVideoId(raw: string): string | null {
   let u: URL;
   try { u = new URL(raw); } catch { return null; }
@@ -32,14 +32,26 @@ export function youtubeVideoId(raw: string): string | null {
   let id: string | null = null;
   if (host === 'youtu.be') {
     id = u.pathname.split('/')[1] || null;
-  } else if (host === 'youtube.com' || host === 'www.youtube.com' || host === 'm.youtube.com') {
+  } else if (host === 'youtube.com' || host === 'www.youtube.com' || host === 'm.youtube.com' || host === 'www.youtube-nocookie.com') {
     if (u.pathname === '/watch') id = u.searchParams.get('v');
     else {
-      const m = /^\/(shorts|live)\/([^/?#]+)/.exec(u.pathname);
+      // /embed/ é o player do YouTube dentro de outro site (iframe de notícia, blog…).
+      const m = /^\/(shorts|live|embed)\/([^/?#]+)/.exec(u.pathname);
       if (m) id = m[2];
     }
   }
   return id && YT_ID.test(id) ? id : null;
+}
+
+/**
+ * Post com vários vídeos (carrossel do Instagram, tweet com 2 vídeos) vem como "playlist":
+ * usa a primeira mídia que tem formatos — a mesma que o download pega (--playlist-items 1).
+ */
+export function pickMediaEntry(info: any): any {
+  if (info && !Array.isArray(info.formats) && Array.isArray(info.entries)) {
+    return info.entries.find((e: any) => e && Array.isArray(e.formats) && e.formats.length) || info.entries[0] || info;
+  }
+  return info;
 }
 
 export function youtubeWatchUrl(id: string): string {
@@ -77,9 +89,13 @@ function acodecRank(acodec: string): number {
   return 1;
 }
 const protoRank = (p: unknown) => (p === 'https' || p === 'http' ? 2 : 1);
-const sizeOf = (f: any): number | undefined => {
+// Tamanho informado; sem ele (HLS da Globo, por exemplo), estima pela taxa × duração —
+// a mesma conta do "~44 MiB" que o yt-dlp mostra.
+const sizeOf = (f: any, duration?: number): number | undefined => {
   const n = Number(f?.filesize ?? f?.filesize_approx);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  if (Number.isFinite(n) && n > 0) return n;
+  const tbr = Number(f?.tbr);
+  return Number.isFinite(tbr) && tbr > 0 && duration && duration > 0 ? Math.round(tbr * 125 * duration) : undefined;   // kbit/s → bytes
 };
 const hasCodec = (c: unknown) => typeof c === 'string' && c !== 'none';
 
@@ -96,7 +112,10 @@ function resHint(res: number): string | undefined {
 const MP3_BYTES_PER_SEC = 245_000 / 8;
 
 /** Lista de escolhas (maior resolução primeiro, MP3 no fim) a partir do JSON do yt-dlp. */
-export function buildVideoChoices(info: any): VideoChoices {
+export function buildVideoChoices(rawInfo: any): VideoChoices {
+  const info = pickMediaEntry(rawInfo);
+  const duration = Number(info?.duration);
+  const secs = Number.isFinite(duration) && duration > 0 ? duration : undefined;
   const formats: any[] = Array.isArray(info?.formats) ? info.formats : [];
 
   // Áudio que entra junto no MP4: a faixa padrão (language_preference mais alta), sem a
@@ -107,12 +126,14 @@ export function buildVideoChoices(info: any): VideoChoices {
     .filter(f => Number(f.language_preference ?? 0) === topLang)
     .sort((a, b) => acodecRank(b.acodec) - acodecRank(a.acodec)
       || Number(b.abr ?? b.tbr ?? 0) - Number(a.abr ?? a.tbr ?? 0))[0];
-  const audioBytes = bestAudio ? sizeOf(bestAudio) : undefined;
+  const audioBytes = bestAudio ? sizeOf(bestAudio, secs) : undefined;
 
   // Vídeo: agrupa por lado menor e escolhe, em cada altura, o formato que o yt-dlp vai baixar.
   const byRes = new Map<number, any[]>();
   for (const f of formats) {
-    if (!hasCodec(f.vcodec)) continue;
+    // vcodec 'none' = só áudio. Codec desconhecido (null, comum fora do YouTube) com
+    // largura/altura ainda é vídeo.
+    if (f.vcodec === 'none') continue;
     const w = Number(f.width), h = Number(f.height);
     if (!(w > 0 && h > 0)) continue;
     const res = Math.min(w, h);
@@ -123,12 +144,12 @@ export function buildVideoChoices(info: any): VideoChoices {
 
   const choices: VideoChoice[] = [];
   for (const res of Array.from(byRes.keys()).sort((a, b) => b - a)) {
-    const pick = byRes.get(res)!.sort((a, b) => vcodecRank(b.vcodec) - vcodecRank(a.vcodec)
+    const pick = byRes.get(res)!.sort((a, b) => vcodecRank(String(b.vcodec ?? '')) - vcodecRank(String(a.vcodec ?? ''))
       || protoRank(b.protocol) - protoRank(a.protocol)
       || Number(b.fps ?? 0) - Number(a.fps ?? 0)
       || Number(b.tbr ?? 0) - Number(a.tbr ?? 0))[0];
     const fps = Math.round(Number(pick.fps ?? 0));
-    const vBytes = sizeOf(pick);
+    const vBytes = sizeOf(pick, secs);
     // Formato que já traz áudio não ganha outra faixa de áudio na soma.
     const total = vBytes === undefined ? undefined
       : vBytes + (hasCodec(pick.acodec) ? 0 : (audioBytes ?? 0));
@@ -142,7 +163,16 @@ export function buildVideoChoices(info: any): VideoChoices {
     });
   }
 
-  const duration = Number(info?.duration);
+  // Formatos sem largura/altura (link direto, stream genérico): uma opção só, "Vídeo" na
+  // melhor qualidade (o download usa o padrão bv*+ba/b).
+  if (choices.length === 0) {
+    const videos = formats.filter(f => f && f.vcodec !== 'none');
+    if (videos.length > 0) {
+      const sizes = videos.map(f => sizeOf(f, secs)).filter((n): n is number => n !== undefined);
+      choices.push({ key: 'best', kind: 'video', label: '', approxBytes: sizes.length ? Math.max(...sizes) : undefined });
+    }
+  }
+
   if (audios.length > 0 || choices.length > 0) {
     choices.push({
       key: 'mp3',
@@ -154,7 +184,7 @@ export function buildVideoChoices(info: any): VideoChoices {
 
   return {
     id: String(info?.id ?? ''),
-    title: String(info?.title ?? ''),
+    title: String(info?.title ?? rawInfo?.title ?? ''),
     duration: Number.isFinite(duration) ? duration : undefined,
     choices,
   };

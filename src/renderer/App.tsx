@@ -442,7 +442,7 @@ export default function App() {
   const toggleYtSkipAds = useCallback(() => {
     setYtSkipAds(v => { const n = !v; try { localStorage.setItem('ytSkipAds', n ? '1' : '0'); } catch {} window.electronAPI?.setYoutubeSkipAds?.(n); return n; });
   }, []);
-  // Botão "Baixar" semitransparente em cima do vídeo do YouTube (estilo IDM). Padrão LIGADO.
+  // Botão "Baixar" semitransparente em cima dos vídeos — YouTube e qualquer site (estilo IDM). Padrão LIGADO.
   const [ytDlButton, setYtDlButton] = useState<boolean>(() => { try { return localStorage.getItem('ytDlButton') !== '0'; } catch { return true; } });
   const toggleYtDlButton = useCallback(() => {
     setYtDlButton(v => { const n = !v; try { localStorage.setItem('ytDlButton', n ? '1' : '0'); } catch {} window.electronAPI?.setYoutubeDlButton?.(n, ytDlLabels()); return n; });
@@ -625,7 +625,7 @@ export default function App() {
   useEffect(() => onLangChange(() => {
     forceI18n(n => n + 1);
     window.electronAPI?.setUILanguage?.(getLang());
-    // O botão "Baixar" do YouTube fala o idioma da UI: manda os textos novos.
+    // O botão "Baixar" dos vídeos fala o idioma da UI: manda os textos novos.
     try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}
   }), []);
 
@@ -4079,9 +4079,9 @@ function fmtEta(s?: number): string {
   return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60}s` : `${s}s`;
 }
 
-// Textos do botão "Baixar" que o main injeta nas páginas do YouTube — no idioma da UI.
+// Textos do botão "Baixar" que o main injeta nas páginas com vídeo — no idioma da UI.
 function ytDlLabels(): Record<string, string> {
-  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'dec'];
+  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'video', 'drm', 'dec'];
   return Object.fromEntries(keys.map(k => [k, t(`ytdl.${k}`)]));
 }
 
