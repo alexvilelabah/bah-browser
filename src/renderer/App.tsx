@@ -111,6 +111,9 @@ declare global {
       torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
       setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
+      setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
+      cancelVideoDownload?: (id: string) => Promise<any>;
+      retryVideoDownload?: (id: string) => Promise<any>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -122,7 +125,7 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string }) => void) => void;
       pauseDownload?: (id: string) => Promise<any>;
       resumeDownload?: (id: string) => Promise<any>;
       cancelDownload?: (id: string) => Promise<any>;
@@ -371,6 +374,7 @@ export default function App() {
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
     try { window.electronAPI?.setYoutubeSkipAds?.(localStorage.getItem('ytSkipAds') !== '0'); } catch {}   // aplica a pref de pular anúncio salva
+    try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}   // botão "Baixar" no YouTube
     offs.push(window.electronAPI?.onSafeBrowsingBlock?.((info) => {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
@@ -384,6 +388,7 @@ export default function App() {
         const merged = {
           ...existing,
           id: info.id ?? existing?.id,
+          kind: info.kind ?? existing?.kind,
           filename: info.filename ?? existing?.filename ?? 'download',
           path: info.path ?? existing?.path,
           url: info.url ?? existing?.url,
@@ -436,6 +441,11 @@ export default function App() {
   const [ytSkipAds, setYtSkipAds] = useState<boolean>(() => { try { return localStorage.getItem('ytSkipAds') !== '0'; } catch { return true; } });
   const toggleYtSkipAds = useCallback(() => {
     setYtSkipAds(v => { const n = !v; try { localStorage.setItem('ytSkipAds', n ? '1' : '0'); } catch {} window.electronAPI?.setYoutubeSkipAds?.(n); return n; });
+  }, []);
+  // Botão "Baixar" semitransparente em cima do vídeo do YouTube (estilo IDM). Padrão LIGADO.
+  const [ytDlButton, setYtDlButton] = useState<boolean>(() => { try { return localStorage.getItem('ytDlButton') !== '0'; } catch { return true; } });
+  const toggleYtDlButton = useCallback(() => {
+    setYtDlButton(v => { const n = !v; try { localStorage.setItem('ytDlButton', n ? '1' : '0'); } catch {} window.electronAPI?.setYoutubeDlButton?.(n, ytDlLabels()); return n; });
   }, []);
   // "Deixar a IA dirigir" (modo Comet): DESLIGA os atalhos determinísticos e todo comando
   // vira tarefa do agente — a IA observa a página e decide CADA passo. Padrão OFF (os
@@ -556,7 +566,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ id?: string; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ id?: string; kind?: string; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
@@ -612,7 +622,12 @@ export default function App() {
 
   // Troca de idioma re-renderiza a UI SEM recarregar a página (o menu não fecha).
   const [, forceI18n] = useState(0);
-  useEffect(() => onLangChange(() => { forceI18n(n => n + 1); window.electronAPI?.setUILanguage?.(getLang()); }), []);
+  useEffect(() => onLangChange(() => {
+    forceI18n(n => n + 1);
+    window.electronAPI?.setUILanguage?.(getLang());
+    // O botão "Baixar" do YouTube fala o idioma da UI: manda os textos novos.
+    try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}
+  }), []);
 
   // Detecta a home do Google (nova aba) → barra de endereço mostra o placeholder em vez da URL.
   const isGoogleHome = (u?: string) => !!u && /^https?:\/\/(www\.)?google\.[a-z.]+\/(webhp|\?|$)/i.test(u);
@@ -1176,13 +1191,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
                             </span>
                             <span className="dl-actions">
-                              {d.id && active && (
+                              {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
+                                  e tentar de novo vão pro job de vídeo, não pro download comum. */}
+                              {d.id && active && d.kind !== 'video' && (
                                 (d.paused || d.state === 'queued')
                                   ? <button title={t('dl.resume')} onClick={() => window.electronAPI?.resumeDownload?.(d.id!)}>▶</button>
                                   : <button title={t('dl.pause')} onClick={() => window.electronAPI?.pauseDownload?.(d.id!)}>⏸</button>
                               )}
-                              {d.id && active && <button title={t('dl.cancel')} onClick={() => window.electronAPI?.cancelDownload?.(d.id!)}>✕</button>}
-                              {(d.state === 'failed' || d.state === 'cancelled') && <button title={t('dl.retry')} onClick={() => window.electronAPI?.retryDownload?.(d.id || '', d.url)}>↻</button>}
+                              {d.id && active && <button title={t('dl.cancel')} onClick={() => d.kind === 'video' ? window.electronAPI?.cancelVideoDownload?.(d.id!) : window.electronAPI?.cancelDownload?.(d.id!)}>✕</button>}
+                              {(d.state === 'failed' || d.state === 'cancelled') && <button title={t('dl.retry')} onClick={() => d.kind === 'video' ? window.electronAPI?.retryVideoDownload?.(d.id || '') : window.electronAPI?.retryDownload?.(d.id || '', d.url)}>↻</button>}
                               {d.state === 'completed' && d.path && <button title={t('dl.openFile')} onClick={() => window.electronAPI?.openFile?.(d.path!)}>📂</button>}
                               {d.path && <button title={t('media.openFolderTitle')} onClick={() => window.electronAPI?.revealInFolder?.(d.path!)}>🗂</button>}
                               {d.url && <button title={t('dl.copyUrl')} onClick={() => { try { navigator.clipboard.writeText(d.url!); } catch {} }}>🔗</button>}
@@ -1229,6 +1246,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">👻</span>
                   <span className="menu-label">{t('menu.ytSkipAds')}</span>
                   <span className={`menu-switch ${ytSkipAds ? 'on' : ''}`}>{ytSkipAds ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleYtDlButton()} title={t('menu.ytDlButtonTitle')}>
+                  <span className="menu-ic">⬇️</span>
+                  <span className="menu-label">{t('menu.ytDlButton')}</span>
+                  <span className={`menu-switch ${ytDlButton ? 'on' : ''}`}>{ytDlButton ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
@@ -4045,6 +4067,7 @@ function youtubeWatchId(u: string): string | null {
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
 function fmtSize(b?: number): string {
   if (!b) return '';
+  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';   // vídeo 4K passa de 1 GB
   return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
 }
 function fmtSpeed(bps?: number): string {
@@ -4054,6 +4077,12 @@ function fmtSpeed(bps?: number): string {
 function fmtEta(s?: number): string {
   if (s == null) return '';
   return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60}s` : `${s}s`;
+}
+
+// Textos do botão "Baixar" que o main injeta nas páginas do YouTube — no idioma da UI.
+function ytDlLabels(): Record<string, string> {
+  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'dec'];
+  return Object.fromEntries(keys.map(k => [k, t(`ytdl.${k}`)]));
 }
 
 function isSearchResultHost(url: string): boolean {

@@ -5,15 +5,31 @@
 // Nota: download de mídia é função comum de navegador (uso pessoal / direitos
 // autorais por conta do usuário). O usuário dirige; nós só executamos a ferramenta.
 import { app } from 'electron';
-import { spawn, execFile } from 'child_process';
+import { spawn, execFile, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
+import { StringDecoder } from 'string_decoder';
+import { selectorArgs } from './video-formats';
 
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
 // Build estático do ffmpeg (Windows). Vem num .zip → descompactamos com o Expand-Archive
 // nativo do Windows (sem dependência nova). Usado pra mesclar 1080p+ e extrair mp3.
 const FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip';
+// Motor de JavaScript que o yt-dlp exige pro YouTube desde 2025 (sem ele: "HTTP Error 403"
+// no download). Deno é o recomendado pelo próprio yt-dlp: roda o código do YouTube SEM
+// acesso a arquivos nem rede. Single .exe dentro do .zip.
+const DENO_URL = 'https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip';
+
+// O yt-dlp.exe é "onefile" do PyInstaller: o processo que o Node abre só desempacota e
+// lança um FILHO que faz o trabalho. child.kill() derruba só o primeiro e o filho segue
+// baixando sozinho (o X de cancelar parecia só pausar). No Windows, derruba a árvore toda.
+function killTree(child: ChildProcess): void {
+  if (process.platform === 'win32' && child.pid) {
+    try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); return; } catch {}
+  }
+  try { child.kill(); } catch {}
+}
 
 function binDir(): string {
   const d = path.join(app.getPath('userData'), 'bin');
@@ -222,6 +238,117 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
   return ffmpegEnsurePromise;
 }
 
+// ── Motor de JavaScript do yt-dlp (Deno): o YouTube manda um desafio em JS que o yt-dlp
+// precisa resolver; sem motor, a lista de formatos até vem, mas o download dá 403. ──
+export interface JsRuntime { name: 'deno' | 'node'; path: string }
+const denoExePath = () => path.join(binDir(), 'deno.exe');
+
+// Versão do motor (deno 2.5.1 / v24.1.0) — null se não roda.
+function runtimeVersion(bin: string): Promise<[number, number, number] | null> {
+  return new Promise((resolve) => {
+    let out = ''; let done = false;
+    const finish = (v: [number, number, number] | null) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const child = spawn(bin, ['--version'], { windowsHide: true });
+      child.stdout.on('data', (d) => { out += d.toString(); });
+      child.on('error', () => finish(null));
+      child.on('close', () => {
+        const m = /(\d+)\.(\d+)\.(\d+)/.exec(out);
+        finish(m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null);
+      });
+      setTimeout(() => { try { child.kill(); } catch {} finish(null); }, 15_000);
+    } catch { finish(null); }
+  });
+}
+const atLeast = (v: [number, number, number] | null, min: [number, number, number]) =>
+  !!v && (v[0] - min[0] || v[1] - min[1] || v[2] - min[2]) >= 0;
+// Mínimos que o yt-dlp aceita (wiki EJS): Deno 2.3, Node 22.
+const DENO_MIN: [number, number, number] = [2, 3, 0];
+const NODE_MIN: [number, number, number] = [22, 0, 0];
+
+function whereExe(name: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(process.platform === 'win32' ? 'where' : 'which', [name], { windowsHide: true }, (err, stdout) => {
+      const first = !err && stdout ? stdout.split(/\r?\n/).find(Boolean) : undefined;
+      resolve(first ? first.trim() : null);
+    });
+  });
+}
+
+let jsRuntimeResolved: JsRuntime | null = null;
+let jsRuntimePromise: Promise<JsRuntime | null> | null = null;
+/** O motor já pronto (sem esperar download) — pra listar formatos sem travar a 1ª vez. */
+export function readyJsRuntime(): JsRuntime | null { return jsRuntimeResolved; }
+/**
+ * Garante um motor: o Deno que já baixamos → Deno do sistema → baixa o Deno (só Windows,
+ * ~43 MB, 1ª vez) → último recurso, Node do sistema. FAIL-SAFE: null = segue sem motor
+ * (YouTube pode falhar, outros sites seguem normais).
+ */
+export function ensureJsRuntime(onStatus?: (msg: string) => void): Promise<JsRuntime | null> {
+  if (jsRuntimeResolved) return Promise.resolve(jsRuntimeResolved);
+  if (jsRuntimePromise) return jsRuntimePromise;
+  jsRuntimePromise = (async (): Promise<JsRuntime | null> => {
+    const own = denoExePath();
+    if (fs.existsSync(own) && atLeast(await runtimeVersion(own), DENO_MIN)) return { name: 'deno', path: own };
+    const sysDeno = await whereExe('deno');
+    if (sysDeno && atLeast(await runtimeVersion(sysDeno), DENO_MIN)) return { name: 'deno', path: sysDeno };
+    if (process.platform === 'win32') {
+      const zip = path.join(binDir(), 'deno-dl.zip');
+      const extractDir = path.join(binDir(), 'deno-extract');
+      try {
+        onStatus?.('Preparing the YouTube engine (first time, ~43MB)…');
+        await downloadToFile(DENO_URL, zip);
+        if (!(await expandZipWindows(zip, extractDir))) throw new Error('failed to unzip');
+        const exe = findFileRecursive(extractDir, 'deno.exe');
+        if (!exe) throw new Error('deno.exe not found in the package');
+        fs.copyFileSync(exe, own);
+        if (!atLeast(await runtimeVersion(own), DENO_MIN)) { try { fs.unlinkSync(own); } catch {} throw new Error('downloaded deno is invalid'); }
+        return { name: 'deno', path: own };
+      } catch {
+        /* cai pro Node do sistema, se houver */
+      } finally {
+        try { fs.rmSync(zip, { force: true }); } catch {}
+        try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+    const sysNode = await whereExe('node');
+    if (sysNode && atLeast(await runtimeVersion(sysNode), NODE_MIN)) return { name: 'node', path: sysNode };
+    return null;
+  })().then((r) => { jsRuntimeResolved = r; jsRuntimePromise = null; return r; });
+  return jsRuntimePromise;
+}
+const jsRuntimeArgs = (rt: JsRuntime | null): string[] => rt ? ['--js-runtimes', `${rt.name}:${rt.path}`] : [];
+const isYoutubeTarget = (url: string) => /^ytsearch\d*:/i.test(url) || /^https?:\/\/([a-z0-9-]+\.)*(youtube\.com|youtu\.be)\//i.test(url);
+
+/**
+ * JSON completo do vídeo (`yt-dlp -J`): título, duração e a lista de formatos — sem baixar.
+ * Usa o motor de JS se já estiver pronto; se não, lista sem ele (a lista vem igual) e
+ * deixa o motor se preparando em segundo plano pro download que vem depois.
+ */
+export async function fetchVideoInfo(url: string): Promise<{ ok: boolean; info?: any; error?: string }> {
+  let bin: string;
+  try { bin = await ensureYtDlp(); } catch (e: any) { return { ok: false, error: `yt-dlp unavailable: ${e?.message ?? e}` }; }
+  const rt = readyJsRuntime();
+  if (!rt && isYoutubeTarget(url)) ensureJsRuntime().catch(() => {});
+  return new Promise((resolve) => {
+    const out: Buffer[] = [];
+    let errTail = '';
+    let done = false;
+    const child = spawn(bin, ['-J', '--no-playlist', '--no-warnings', '--no-color', ...jsRuntimeArgs(rt), url], { windowsHide: true });
+    const finish = (r: { ok: boolean; info?: any; error?: string }) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
+    const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: 'timeout reading the video' }); }, 60_000);
+    child.stdout.on('data', (d: Buffer) => out.push(d));
+    child.stderr.on('data', (d: Buffer) => { errTail = (errTail + d.toString()).slice(-600); });
+    child.on('error', (e) => finish({ ok: false, error: String((e as any)?.message ?? e) }));
+    child.on('close', (code) => {
+      if (code !== 0) return finish({ ok: false, error: errTail.split(/\r?\n/).filter(Boolean).pop() || `yt-dlp exited with code ${code}` });
+      // -J sai em ASCII (\uXXXX), então título com acento chega certo.
+      try { finish({ ok: true, info: JSON.parse(Buffer.concat(out).toString('utf8')) }); }
+      catch { finish({ ok: false, error: 'unreadable video info' }); }
+    });
+  });
+}
+
 /**
  * Resolve uma busca → o 1º VÍDEO DE VERDADE (pula Shorts via filtro de duração) SEM
  * baixar nada. Usado pelo "open_video": "mostre um vídeo de X" → abre esse vídeo tocando.
@@ -348,17 +475,26 @@ export interface VideoDownloadProgress {
   error?: string;
   speed?: string;
   eta?: string;
+  // Números crus da parte que está baixando (vídeo OU áudio — `part` é o format_id).
+  bytes?: number;
+  totalBytes?: number;
+  speedBps?: number;
+  etaSec?: number;
+  part?: string;
 }
 
 /**
  * Baixa um vídeo. Resolve com o caminho final. Reporta progresso via onProgress.
  * audioOnly extrai mp3 (precisa de ffmpeg).
+ * resolution: baixa NAQUELA resolução (lado menor, ex. 1080) — botão "Baixar" do YouTube.
+ * niceNames: nome de arquivo com o título de verdade (acentos/espaços) + a resolução.
+ * signal: cancelar mata o yt-dlp; `partials` volta com os arquivos pela metade pra apagar.
  */
 export async function downloadVideo(
   url: string,
-  opts: { audioOnly?: boolean; count?: number; quality?: 'best' | 'low' } ,
+  opts: { audioOnly?: boolean; count?: number; quality?: 'best' | 'low'; resolution?: number; niceNames?: boolean; signal?: AbortSignal },
   onProgress: (p: VideoDownloadProgress) => void,
-): Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }> {
+): Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; cancelled?: boolean; partials?: string[] }> {
   // Accept a real URL OR a yt-dlp search target ("ytsearch1:..."), which lets us
   // find+download the top result without touching the YouTube UI (bulletproof).
   if (!/^https?:\/\//i.test(url) && !/^ytsearch\d*:/i.test(url)) return { success: false, error: 'Invalid URL or search.' };
@@ -376,14 +512,22 @@ export async function downloadVideo(
   const ffmpegDir = needFfmpeg
     ? await ensureFfmpeg((m) => onProgress({ state: 'preparing', title: m }))
     : await findFfmpegDir();
+  // YouTube sem motor de JS = 403 no download. Fail-safe: sem motor, tenta mesmo assim.
+  const jsRuntime = isYoutubeTarget(url)
+    ? await ensureJsRuntime((m) => onProgress({ state: 'preparing', title: m })).catch(() => null)
+    : null;
+  if (opts.signal?.aborted) return { success: false, error: 'cancelled', cancelled: true };
   const outDir = app.getPath('downloads');
-  const outTmpl = path.join(outDir, '%(title).120B [%(id)s].%(ext)s');
+  const resTag = opts.resolution && !opts.audioOnly ? ` (${opts.resolution}p)` : '';
+  const outTmpl = path.join(outDir, opts.niceNames ? `%(title).150B${resTag} [%(id)s].%(ext)s` : '%(title).120B [%(id)s].%(ext)s');
 
   // Seleção de formato/áudio — compartilhada por TODAS as rotas.
-  const fmtArgs: string[] = [];
+  const fmtArgs: string[] = [...jsRuntimeArgs(jsRuntime)];
   if (ffmpegDir) fmtArgs.push('--ffmpeg-location', ffmpegDir);
   if (opts.audioOnly) {
     fmtArgs.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+  } else if (opts.resolution) {
+    fmtArgs.push(...selectorArgs(opts.resolution, !!ffmpegDir));
   } else if (opts.quality === 'low') {
     // Só quando o usuário PEDE baixa resolução ("use vídeos de baixa resolução").
     fmtArgs.push('-f', ffmpegDir ? 'bv*[height<=480]+ba/b[height<=480]/b' : 'w[ext=mp4]/worst');
@@ -397,10 +541,13 @@ export async function downloadVideo(
 
   // Flags base de toda rota. allowPlaylist=false adiciona --no-playlist (pega 1 vídeo mesmo
   // que a URL aponte tb pra uma playlist); a rota de playlist precisa da travessia LIGADA.
+  // Nome bonito (niceNames) troca o --restrict-filenames por --encoding utf-8: sem isso o
+  // yt-dlp imprime o caminho em cp1252 e "VIOLÃO" chegaria quebrado.
   const baseArgs = (allowPlaylist: boolean): string[] => [
     ...(allowPlaylist ? [] : ['--no-playlist']),
-    '--no-part', '--restrict-filenames', '--no-color', '--progress',
-    '--progress-template', 'DLPROG:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
+    '--no-part', ...(opts.niceNames ? ['--encoding', 'utf-8'] : ['--restrict-filenames']), '--no-color', '--progress',
+    '--progress-template', 'DLPROG:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s'
+      + '|%(progress.downloaded_bytes)s|%(progress.total_bytes,progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.format_id)s',
     '-o', outTmpl,
     '--print', 'after_move:filepath',
     ...fmtArgs,
@@ -410,6 +557,7 @@ export async function downloadVideo(
   const isSearch = /^ytsearch\d*:/i.test(url);
   const query = isSearch ? url.replace(/^ytsearch\d*:/i, '').trim() : '';
   const DURATION = 'duration >= 60 & duration <= 1200';       // pula Shorts (<1min) e mixes (>20min)
+  const partials: string[] = [];   // arquivos que o yt-dlp abriu (pra limpar se cancelar/falhar)
 
   // ── Um disparo do yt-dlp: spawn + parse de progresso/saída → { ok, paths, title } ──
   // priorCount: quantas já vieram em disparos anteriores (só pro rótulo "i/N").
@@ -418,7 +566,7 @@ export async function downloadVideo(
     runArgs: string[],
     priorCount: number,
     expect: number,
-  ): Promise<{ ok: boolean; paths: string[]; title: string; err?: string }> =>
+  ): Promise<{ ok: boolean; paths: string[]; title: string; err?: string; cancelled?: boolean }> =>
     new Promise((resolve) => {
       const paths: string[] = [];
       const startedAt = Date.now();
@@ -427,31 +575,50 @@ export async function downloadVideo(
       let stderrTail = '';
       let seenMerge = false;
       const child = spawn(bin, runArgs, { windowsHide: true });
+      // Cancelar (botão ✕ em Downloads): derruba a árvore e só responde quando o processo
+      // morreu de fato — aí os arquivos pela metade já estão soltos pra quem chamou apagar.
+      let aborted = false;
+      const cancelledResult = () => ({ ok: false, paths, title, err: 'cancelled', cancelled: true });
+      const onAbort = () => {
+        aborted = true;
+        killTree(child);
+        setTimeout(() => resolve(cancelledResult()), 5000);   // rede de segurança se o 'close' não vier
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
       // Sem deadline o yt-dlp pode travar pra sempre (vídeo bloqueado/rede parada) e prender a fila.
       // 2 min SEM nenhuma saída = travado → mata (download lento mas em progresso não dispara).
       const idleKill = setInterval(() => {
         if (Date.now() - lastActivity > 120000) {
           clearInterval(idleKill);
-          try { child.kill(); } catch {}
+          killTree(child);
           resolve({ ok: false, paths, title, err: 'yt-dlp stalled (no output for 2 min) — canceled' });
         }
       }, 15000);
+      const num = (s: string | undefined) => { const n = parseFloat(String(s ?? '')); return Number.isFinite(n) ? n : undefined; };
 
       const handleLine = (raw: string) => {
+        if (aborted) return;   // depois do cancelar, nada de "progresso" ressuscitando a barra
         const line = raw.trim();
         if (!line) return;
         lastActivity = Date.now();
-        const m = line.match(/DLPROG:\s*([\d.]+)%\|([^|]*)\|(.*)$/);
+        const m = line.match(/DLPROG:\s*([\d.]+)%\|([^|]*)\|([^|]*)(?:\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*))?$/);
         if (m) {
           const done = priorCount + paths.length + 1;
           const label = count > 1 ? `${title} (${Math.min(done, count)}/${count})` : title;
-          onProgress({ state: 'downloading', percent: parseFloat(m[1]), speed: m[2].trim(), eta: m[3].trim(), title: label });
+          onProgress({
+            state: 'downloading', percent: parseFloat(m[1]), speed: m[2].trim(), eta: m[3].trim(), title: label,
+            bytes: num(m[4]), totalBytes: num(m[5]), speedBps: num(m[6]), etaSec: num(m[7]), part: m[8]?.trim() || undefined,
+          });
           return;
         }
         if (/\[Merger\]|\[ExtractAudio\]|Merging formats/i.test(line) && !seenMerge) {
           seenMerge = true;
           onProgress({ state: 'merging', percent: 99, title });
         }
+        // Arquivos que o yt-dlp começou a escrever (pedaços e o MP4 juntado): se cancelar ou
+        // falhar, quem chamou apaga — com --no-part eles ficariam pela metade em Downloads.
+        const dest = line.match(/Destination: (.+)$/) || line.match(/Merging formats into "(.+)"$/);
+        if (dest && !partials.includes(dest[1].trim())) partials.push(dest[1].trim());
         const t = line.match(/Destination: .*[\\/](.+?) \[/);
         if (t) { title = t[1]; seenMerge = false; }
         if (/^[A-Za-z]:[\\/].+\.\w{2,4}$/.test(line) && !paths.includes(line)) paths.push(line);
@@ -460,9 +627,11 @@ export async function downloadVideo(
       const leftovers: Array<() => void> = [];
       const mkSink = () => {
         let buf = '';
-        leftovers.push(() => { if (buf) handleLine(buf); buf = ''; });
+        // Decodificador por fluxo: um acento partido entre dois pedaços não vira "�".
+        const dec = new StringDecoder('utf8');
+        leftovers.push(() => { buf += dec.end(); if (buf) handleLine(buf); buf = ''; });
         return (d: Buffer) => {
-          buf += d.toString();
+          buf += dec.write(d);
           let mm;
           while ((mm = buf.match(/[\r\n]/))) {
             handleLine(buf.slice(0, mm.index));
@@ -474,9 +643,11 @@ export async function downloadVideo(
       const stderrSink = mkSink();
       child.stderr.on('data', (d) => { stderrTail = (stderrTail + d.toString()).slice(-800); stderrSink(d); });
 
-      child.on('error', (e) => { clearInterval(idleKill); resolve({ ok: false, paths, title, err: String((e as any)?.message ?? e) }); });
+      child.on('error', (e) => { clearInterval(idleKill); opts.signal?.removeEventListener('abort', onAbort); resolve({ ok: false, paths, title, err: String((e as any)?.message ?? e) }); });
       child.on('close', (code) => {
         clearInterval(idleKill);
+        opts.signal?.removeEventListener('abort', onAbort);
+        if (aborted) return resolve(cancelledResult());
         // 101 = MaxDownloadsReached (do nosso --max-downloads): isso é SUCESSO.
         if (code === 0 || code === 101) {
           leftovers.forEach(fl => { try { fl(); } catch {} });
@@ -502,6 +673,7 @@ export async function downloadVideo(
     });
 
   // ── Orquestração das rotas (com rede de segurança) ───────────────────────────
+  const cancelled = () => !!opts.signal?.aborted;
   const all: string[] = [];
   const addPaths = (ps: string[]) => { for (const p of ps) if (!all.includes(p)) all.push(p); };
   let lastErr = '';
@@ -525,7 +697,7 @@ export async function downloadVideo(
 
   // ROTA 2 — busca de vídeos (ytsearch). É o CASO NORMAL (1 música / nomeada) e também o
   // FALLBACK automático: roda quando ainda falta música (playlist falhou ou trouxe menos).
-  if (all.length < count && isSearch) {
+  if (all.length < count && isSearch && !cancelled()) {
     const need = count - all.length;
     const pool = Math.min(need * 3 + 8, 60);   // poço largo: o filtro de duração pula Shorts/mixes
     const searchArgs = [...baseArgs(false)];
@@ -538,7 +710,7 @@ export async function downloadVideo(
   }
 
   // ROTA DIRETA — URL real (página de vídeo / aba atual): baixa esse vídeo (igual antes).
-  if (all.length === 0 && !isSearch) {
+  if (all.length === 0 && !isSearch && !cancelled()) {
     const r = await runYtDlp([...baseArgs(false), url], 0, count);
     addPaths(r.paths);
     if (!r.ok) lastErr = r.err || lastErr;
@@ -546,6 +718,7 @@ export async function downloadVideo(
 
   try { fs.unlinkSync(archive); } catch {}
 
+  if (cancelled()) return { success: false, error: 'cancelled', cancelled: true, partials };
   if (all.length > 0) {
     const first = all[0];
     const name = path.basename(first);
@@ -553,5 +726,5 @@ export async function downloadVideo(
     return { success: true, path: first, paths: all, title: name };
   }
   onProgress({ state: 'failed', error: lastErr || 'Nothing was downloaded.' });
-  return { success: false, error: lastErr || 'Nothing was downloaded.' };
+  return { success: false, error: lastErr || 'Nothing was downloaded.', partials };
 }
