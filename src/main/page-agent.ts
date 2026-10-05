@@ -400,7 +400,13 @@ export function validateAction(a: AgentAction): string | null {
     case 'new_tab': return httpUrl(a.url) ? null : `new_tab needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'download': return httpUrl(a.url) ? null : `download needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'download_video':
-      return (httpUrl(a.url) || nonEmpty(a.query)) ? null : 'download_video needs "url" or "query"';
+      // Sem url nem query = o vídeo da ABA ABERTA — é o que o prompt manda ("omit both to
+      // grab the currently open tab") e o que o executor faz (usa a URL da aba). Recusar isso
+      // deixava a IA local sem saída em "baixe esse vídeo". Só a url que veio e não é http(s)
+      // é ordem quebrada.
+      if (nonEmpty(a.query)) return null;
+      if (a.url != null && String(a.url).trim() !== '' && !httpUrl(a.url)) return `download_video "url" must be http(s), got ${JSON.stringify((a as any).url)}`;
+      return null;
     case 'switch_tab': return finiteInt(a.tab) ? null : 'switch_tab needs a finite non-negative integer "tab"';
     case 'close_tab': return finiteInt(a.tab) ? null : 'close_tab needs a finite non-negative integer "tab"';
     case 'wait':

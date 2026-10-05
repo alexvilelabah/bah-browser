@@ -2397,7 +2397,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (result?._engine) {
                     onProgress({ kind: 'status', message: `${tierIcon} → engine: ${result._engine}` });
                   }
-                  if (result?.error) {
+                  // Resposta malformada do modelo (ação inválida/JSON quebrado) não é "modelo fora
+                  // do ar": segue pro re-pergunta automático (até 3x, com a causa) mais abaixo, em
+                  // vez de parar pedindo ajuda com "start your server" / "o modelo recusou".
+                  const formatError = /Invalid or missing action|Invalid action from model|did not return valid structured JSON/i.test(String(result?.error || ''));
+                  if (result?.error && !formatError) {
                     // Decide on codes, not prose. Ask the user (max twice per run) before failing.
                     const code = result?.errorCode ?? 'UNKNOWN';
                     const retryable = result?.errorRetryable === true;

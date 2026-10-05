@@ -118,6 +118,8 @@ let localWarmupOn = false;
 // Rótulo amigável do backend local (Ollama nativo vs OpenAI-compatible) pros erros de IA
 // falarem a linguagem certa — não adianta mandar "start Ollama" pra quem usa llama.cpp.
 const localBackendIsCompat = () => localEngine?.getProvider() === 'openai';
+// Resposta do modelo que não deu pra executar (o renderer re-pergunta até 3x com a causa).
+const isModelFormatError = (msg: string) => /Invalid or missing action|Invalid action from model|did not return valid structured JSON/i.test(msg || '');
 // Pular anúncio do YouTube sozinho (fantasma) — padrão LIGADO, como o adblock. Lido no
 // dom-ready de cada webview (ver YT_SKIP_AD_SCRIPT); não persiste em disco no main, quem
 // reaplica no boot é o renderer via localStorage (mesmo molde do torrentSeed).
@@ -1413,6 +1415,10 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // O conselho tem que bater com a CAUSA. "Start Ollama" quando ele respondeu (só
   // devagar) manda consertar o que não está quebrado — e esconde o que está.
   const localFailureAdvice = (msg: string): string => {
+    // Resposta malformada do modelo (ação inválida / JSON quebrado) NÃO é servidor fora do
+    // ar — o renderer pede de novo ao modelo explicando o erro. Dizer "start your server"
+    // aqui mandava a pessoa consertar o que não está quebrado.
+    if (isModelFormatError(msg)) return msg;
     const start = localBackendIsCompat()
       ? 'start your OpenAI-compatible server (llama.cpp/LM Studio/vLLM), load/select a model in settings.'
       : 'start Ollama and select a model in settings.';
