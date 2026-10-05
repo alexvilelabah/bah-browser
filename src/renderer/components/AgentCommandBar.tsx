@@ -184,6 +184,10 @@ interface Props {
   agentTimeLimitMin?: number;   // trava de tempo por tarefa em minutos (0 = desligada)
   onAgentTimeLimitChange?: (n: number) => void;
   onToggleAgentDrive?: () => void;   // liga/desliga a ajuda de script (só faz efeito no modo local)
+  /** Mensagem mandada com a tarefa rodando: a IA para de pensar, lê e decide (true = aceita). */
+  onInterject?: (msg: string) => boolean;
+  /** Mensagens que chegaram com a tarefa já terminando (a IA não leu) — esvazia a fila. */
+  takeUnreadInterjections?: () => string[];
   /** Gera 2–3 perguntas curtas SOBRE a página aberta (painel vazio). Stateless, não entra na conversa. */
   onSuggestQuestions?: () => Promise<string[]>;
   agentDrive?: boolean;   // modo "Deixar a IA dirigir": tudo vira tarefa do agente, sem atalhos
@@ -202,7 +206,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -232,6 +236,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // Placeholder "vivo": 3 frases neutras vão sendo digitadas e apagadas
   // (saudação + open source + bloqueador embutido).
   const [ph, setPh] = useState('');
+  const [followUp, setFollowUp] = useState<string | null>(null);   // ver o finally do runAgent
   // Janela escondida (minimizada / mandada pra bandeja)? O Chromium estrangula timers de página
   // escondida, mas NÃO quando a janela está só sem foco — e este componente segue montado mesmo
   // com o painel fechado ('collapsed' é só display:none, pra tarefa em andamento sobreviver).
@@ -654,7 +659,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         push({ kind: 'report', text: result.thought.split('\n').slice(-3).join('\n') });
         notifyDone(result.thought);
       }
-      if (!result.error) setInput('');
+      // Só limpa se a caixa ainda tem o pedido: o que a pessoa começou a digitar durante a
+      // tarefa (a caixa fica livre) não some quando ela termina.
+      if (!result.error) setInput((cur) => (cur.trim() === cmd.trim() ? '' : cur));
     } catch (e: any) {
       // Erro inesperado do loop NÃO pode sumir mudo: mostra no feed (exceto cancelamento
       // pelo botão Parar, que é intencional e já tem o próprio fluxo).
@@ -670,8 +677,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       setPlanEditing(false);
       setPendingConfirm(null);
       confirmActionsRef.current = null;
+      // Mensagem mandada quando a IA já estava terminando (não chegou a ler): vira o próximo
+      // pedido, logo em seguida — como numa conversa. Depois do Parar ela volta pra caixa:
+      // o Parar é o freio, nada roda sozinho depois dele.
+      const unread = takeUnreadInterjections?.() ?? [];
+      if (unread.length > 0) {
+        if (abortController.signal.aborted) setInput((cur) => (cur.trim() ? cur : unread.join('\n')));
+        else setFollowUp(unread.join('\n'));
+      }
     }
   };
+
+  // Pedido que chegou no fim da tarefa anterior: roda assim que a barra fica livre. O efeito
+  // usa o runAgent desta renderização, não o de uma antiga.
+  useEffect(() => {
+    if (followUp === null || loading || chatLoading || busyRef.current) return;
+    const cmd = followUp;
+    setFollowUp(null);
+    void runAgent(cmd, { skipPush: true });
+  }, [followUp, loading, chatLoading]);
 
   const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
     busyRef.current = true;
@@ -1017,6 +1041,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
+    // Tarefa do agente rodando e a pessoa mudou de ideia: a mensagem vai PRA tarefa (a IA
+    // para o que está pensando, lê e decide — ajustar, mudar de rumo ou encerrar). Se a
+    // tarefa estava parada em "Preciso de você", a resposta da pessoa conta como continuar.
+    if (loading && !chatLoading && onInterject) {
+      if (manualContinueRef.current) handleContinueAfterManualHelp();
+      if (onInterject(msg)) { push({ kind: 'chat-user', text: msg }); setInput(''); }
+      return;
+    }
     // busyRef é a trava SÍNCRONA (state demora um render); cobre duplo-Enter e a
     // janela da classificação — sem ela dava pra disparar duas execuções simultâneas.
     if (loading || chatLoading || busyRef.current) return;
@@ -1795,6 +1827,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button type="button" className="composer-attach-x" onClick={() => setAttachedDoc(null)} title={t('composer.removeAttach')}>✕</button>
           </div>
         )}
+        {/* Com a tarefa do agente rodando a caixa fica LIVRE: dá pra mudar de ideia no meio (a
+            mensagem vai pra IA, que lê e decide). Durante a resposta do chat continua travada. */}
         <textarea
           ref={inputRef}
           data-testid="agent-command-input"
@@ -1803,8 +1837,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
-          placeholder={attachedDoc ? t('composer.phFile') : imageMode ? t('composer.phImage') : ph}
-          disabled={loading || chatLoading}
+          placeholder={attachedDoc ? t('composer.phFile') : imageMode ? t('composer.phImage') : (loading && onInterject) ? t('composer.phInterject') : ph}
+          disabled={chatLoading || (loading && !onInterject)}
         />
         <div className="composer-bar">
           <div className="composer-plus-wrap" ref={plusWrapRef}>
@@ -1954,9 +1988,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               {t('feed.continue')}
             </button>
           ) : (loading || chatLoading) ? (
-            <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title={t('composer.stopTask')}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-            </button>
+            <>
+              {/* Com a tarefa rodando e texto na caixa: Enviar (a IA lê e decide) ao lado do Parar. */}
+              {loading && !chatLoading && onInterject && input.trim() && (
+                <button data-testid="agent-interject" onClick={handleSubmit} className="composer-send" title={t('composer.interject')}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                </button>
+              )}
+              <button data-testid="agent-stop" onClick={handleStop} className="composer-send stop" title={t('composer.stopTask')}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              </button>
+            </>
           ) : (
             <button data-testid="agent-run" onClick={handleSubmit} disabled={!input.trim() || chatLoading} className="composer-send" title={t('composer.send')}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>

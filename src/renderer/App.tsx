@@ -203,6 +203,22 @@ export default function App() {
   const activeTabIdRef = useRef(store.activeTabId);
   const userTabRef = useRef(store.activeTabId);   // a aba que o USUÁRIO está vendo (sempre atualizada)
   const taskRunningRef = useRef(false);           // tem uma tarefa do agente rodando agora?
+  // Mudou de ideia no meio: mensagem enviada com a tarefa rodando entra AQUI. O passo em
+  // andamento é cortado (a IA para de pensar na hora — llama.cpp/Ollama param quando a
+  // conexão cai) e o laço refaz o passo com a mensagem no histórico. A IA decide o resto:
+  // continuar ajustado, mudar de rumo ou encerrar (nada de palavra-chave: "para" também é
+  // "para mim"). O Stop continua sendo o freio de verdade.
+  const interjectRef = useRef<{ running: boolean; queue: string[]; abortStep: (() => void) | null }>({ running: false, queue: [], abortStep: null });
+  const interjectToAgent = useCallback((msg: string): boolean => {
+    const r = interjectRef.current;
+    if (!r.running || !msg.trim()) return false;
+    r.queue.push(msg.trim());
+    try { r.abortStep?.(); } catch {}
+    return true;
+  }, []);
+  const takeUnreadInterjections = useCallback((): string[] => (
+    interjectRef.current.running ? [] : interjectRef.current.queue.splice(0)
+  ), []);
   // Live tokens/sec from the engine (ai:action-delta). Cleared on idle so a stale number
   // never shows on the next step.
   useEffect(() => {
@@ -1503,6 +1519,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               try { localStorage.setItem('agentMaxSteps', String(n)); } catch {}
             }}
             onToggleAgentDrive={toggleAgentDrive}
+            onInterject={interjectToAgent}
+            takeUnreadInterjections={takeUnreadInterjections}
             agentTimeLimitMin={agentTimeLimitMin}
             onAgentTimeLimitChange={(n) => {
               setAgentTimeLimitMin(n);
@@ -1545,6 +1563,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const runLog = startAgentRun(command);
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
               taskRunningRef.current = true;   // a partir daqui, trocas MANUAIS de aba não mexem na aba do agente
+              interjectRef.current = { running: true, queue: [], abortStep: null };
               // Suspende o bypass do adblock enquanto o agente trabalha: senão ele lê os
               // anúncios do YouTube/Google como se fossem conteúdo e age no anúncio errado.
               try { await window.electronAPI?.adblockSetAgentBusy?.(true); } catch {}
@@ -1997,6 +2016,23 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     finishRun('failed', done.reason);
                     return { thought: thoughts.join('\n\n') || done.reason, results: allResults, done };
                   }
+                  // Mensagens que o usuário mandou com a tarefa rodando: viram parte do PEDIDO (o
+                  // GOAL no topo do prompt), não só uma linha no meio do histórico. Testado: só no
+                  // histórico, o modelo local trocou g1→UOL e dois passos depois voltou pro g1 do
+                  // GOAL original. A IA adapta, muda de rumo ou encerra — decisão dela.
+                  if (interjectRef.current.queue.length > 0) {
+                    const oldGoal = `GOAL: ${command}`;
+                    for (const u of interjectRef.current.queue.splice(0)) {
+                      const msg = u.replace(/"/g, "'").slice(0, 600);
+                      command = `${command}\nUSER UPDATE, sent while you were working - the user's NEWEST wish; where it conflicts with the request above, the update wins: "${msg}"`;
+                      history += `\n\nUSER UPDATE (sent while you were working): "${msg}". This is the user's NEWEST wish and wins over the earlier request wherever they conflict - follow it from this step on. If it asks to stop or cancel the whole task, finish now with done.`;
+                    }
+                    // Troca o GOAL do topo. (Se o plano reescreveu o pedido antes, o GOAL do topo é
+                    // outro texto e não acha — aí a linha no histórico basta.)
+                    const at = history.indexOf(oldGoal);
+                    if (at >= 0) history = history.slice(0, at) + `GOAL: ${command}` + history.slice(at + oldGoal.length);
+                    onProgress({ kind: 'status', message: `↪ ${t('agent.interjected')}` });
+                  }
                   // Etapa 6: prune unbounded history to keep token usage and memory in check
                   if (history.length > 8000) history = `GOAL: ${command}\n...[older steps trimmed]...\n` + history.slice(-6000);
                   const wv = getActiveWebview();
@@ -2338,6 +2374,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // carried on generating.
                   const actionId = `a-${Date.now().toString(36)}-s${step}`;
                   activeActionId = actionId;
+                  interjectRef.current.abortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
                   const onAbortStep = () => { try { window.electronAPI?.actionCancel?.(actionId); } catch {} };
                   if (signal) signal.addEventListener('abort', onAbortStep, { once: true });
                   // Vision: the frame decided above, if the gate allowed it. The main process
@@ -2376,6 +2413,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } finally {
                     if (signal) signal.removeEventListener('abort', onAbortStep);
                   }
+                  interjectRef.current.abortStep = null;
+                  // Mensagem nova do usuário chegou ENQUANTO a IA pensava (o pedido foi cortado por
+                  // isso, ou terminou junto): a resposta é de ANTES da mudança — descarta e refaz o
+                  // passo, que começa pondo a mensagem no pedido. O Parar ganha de tudo.
+                  if (interjectRef.current.queue.length > 0) { throwIfCancelled(); step--; continue; }
                   if (result?.vision?.attached && shotForModel) {
                     imagesSent++;   // only frames the model really received count against the budget
                     // Main measured the encoded size; that is the space the model's x,y live in.
@@ -4008,6 +4050,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // tarefa acabou (sucesso, erro OU cancelamento): solta o freio e a aba do
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
+                // O que chegou depois do último passo (a IA já tinha decidido terminar) fica na
+                // fila: a barra pega e roda como o próximo pedido — mensagem nunca some.
+                interjectRef.current = { running: false, queue: interjectRef.current.queue, abortStep: null };
                 activeTabIdRef.current = userTabRef.current;
                 // Devolve o bypass pro humano (player do YouTube volta a funcionar).
                 try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
