@@ -10,6 +10,12 @@
 // final chunk; the per-step calibration happens from that final usage.
 export const THINKING_TOKENS_SOFT = 8192;      // reasoning tokens with no content
 export const THINKING_SECONDS_SOFT = 240;       // thinking elapsed with no content
+// Teto de pensamento pedido AO SERVIDOR em cada passo do agente local (campo
+// reasoning_budget_tokens; o Strata obedece e responde ao bater no teto). Necessário porque com
+// response_format JSON o Strata segura a resposta inteira até o fim — o corte daqui de baixo
+// nunca vê o pensamento chegar. Medido: um passo pensou 13 mil tokens (5 min), a repetição
+// mais 5. 4096 ≈ 1,5 min a 43 tok/s; passos normais pensam bem menos e não sentem.
+export const LOCAL_SERVER_THINK_TOKENS = 4096;
 const CHARS_PER_TOKEN = 3.5;                    // rough, for the mid-stream estimate
 
 export type ThinkingCut = 'THINKING_BUDGET' | 'REPEATING';

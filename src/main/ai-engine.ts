@@ -15,7 +15,7 @@ import {
   LOCAL_FIRST_CHUNK_MS, LOCAL_TOTAL_MS, LOCAL_INACTIVITY_MS,
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
-import { ThinkingBudget } from './thinking-budget';
+import { ThinkingBudget, LOCAL_SERVER_THINK_TOKENS } from './thinking-budget';
 import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
 import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
 
@@ -898,6 +898,7 @@ export class AIEngine {
   private streamOptionsRejected = new Set<string>();
   private streamRejected = new Set<string>();
   private thinkingKnobRejected = new Set<string>();
+  private budgetKnobRejected = new Set<string>();   // servidores que recusaram reasoning_budget_tokens
   private stepTokens = new Map<string, number>();
   /** Measured prompt cost and the num_ctx already asked for (never shrunk). */
   private promptTokens = new Map<string, number>();
@@ -974,6 +975,11 @@ export class AIEngine {
     // dropped and remembered if the server rejects it; measured usage proves if it worked.
     if (this.isLocal && cfg?.thinkingOff && !this.thinkingKnobRejected.has(key)) {
       body.chat_template_kwargs = { ...(body.chat_template_kwargs || {}), enable_thinking: false };
+    }
+    // Teto de pensamento NO SERVIDOR (agente local) — ver LOCAL_SERVER_THINK_TOKENS. Quem não
+    // conhece o campo ignora; quem recusar, para de receber (abaixo, no tratamento do erro).
+    if (this.isLocal && isAgentMode && !cfg?.thinkingOff && !this.budgetKnobRejected.has(key)) {
+      body.reasoning_budget_tokens = LOCAL_SERVER_THINK_TOKENS;
     }
     // Auth OPCIONAL no modo local (llama.cpp/LM Studio geralmente não pedem chave). Sem chave
     // não mandamos o header — nada de 'Bearer ' vazio/fabricado.
@@ -1090,6 +1096,11 @@ export class AIEngine {
         this.thinkingKnobRejected.add(key);
         appendLog(`[Local] ${model} rejeitou chat_template_kwargs → nao manda mais esse campo`);
         return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: false });
+      }
+      if (this.isLocal && /reasoning_budget_tokens/i.test(errText) && !this.budgetKnobRejected.has(key)) {
+        this.budgetKnobRejected.add(key);
+        appendLog(`[Local] ${model} rejeitou reasoning_budget_tokens → nao manda mais esse campo`);
+        return this.openAICompat(messages, isAgentMode, onDelta, signal, { model, jsonMode, maxTokens, depth, noStream: cfg?.noStream, noStreamOptions: cfg?.noStreamOptions, thinkingOff: cfg?.thinkingOff });
       }
       const unsupportedJson = res.status === 400 && !imageRejected && !/stream_options/i.test(errText) && /response_format|json|format/i.test(errText);
       if (isAgentMode && jsonMode && unsupportedJson) {
