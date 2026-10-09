@@ -894,6 +894,34 @@ export class AIEngine {
     return createLiveMeter(m => this.onMetrics?.(m));
   }
 
+  // Servidores sem GET /status (só o Strata tem): aprendido na primeira tentativa.
+  private statusUnsupported = new Set<string>();
+  /** Strata com response_format JSON segura a resposta inteira e só manda keep-alive: sem
+   *  delta, o contador "IA escrevendo… tok" ficava parado por minutos e parecia travado
+   *  ("não sei se tá criando o jogo"). Enquanto nenhum delta chega, o progresso vem do próprio
+   *  servidor — fase, tokens gerados e tok/s. Para no primeiro delta ou quando o pedido acaba. */
+  private pollServerProgress(sawDelta: () => boolean): () => void {
+    const base = this.baseUrl;
+    if (!base || this.statusUnsupported.has(base)) return () => {};
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const t0 = Date.now();
+    const tick = async () => {
+      if (stopped || sawDelta()) return;
+      try {
+        const r = await fetch(new URL('/status', base).toString(), { signal: AbortSignal.timeout(2000) });
+        const j: any = r.ok ? await r.json().catch(() => null) : null;
+        if (typeof j?.generated !== 'number') { this.statusUnsupported.add(base); return; }
+        if (!stopped && !sawDelta() && j.busy && j.generated > 0) {
+          this.onMetrics?.({ kind: j.phase === 'thinking' ? 'thinking' : 'answer', estTokens: j.generated, tokPerSec: Math.round(Number(j.tokens_per_s) || 0), elapsedMs: Date.now() - t0, exact: true });
+        }
+      } catch { /* lento ou fora do ar: tenta de novo no próximo */ }
+      if (!stopped) timer = setTimeout(tick, 1500);
+    };
+    timer = setTimeout(tick, 1500);
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }
+
   // Sticky, per baseUrl::model — learned from the server, not assumed.
   private streamOptionsRejected = new Set<string>();
   private streamRejected = new Set<string>();
@@ -1122,8 +1150,9 @@ export class AIEngine {
         // Until the first token the clock is what is left of the request's first-chunk budget
         // (load + prompt processing; keepalives do not count). Cloud keeps its old reader.
         const firstTokenMs = this.isLocal ? Math.max(1000, LOCAL_FIRST_CHUNK_MS - (Date.now() - attemptStartedAt)) : undefined;
+        const stopPoll = this.isLocal && isAgentMode ? this.pollServerProgress(() => sawDelta) : () => {};
         try {
-          let text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics, firstTokenMs);
+          let text = await readSseStream(res, thinkWrap, signal, this.isLocal ? LOCAL_INACTIVITY_MS : CLOUD_INACTIVITY_MS, thinking, metrics, firstTokenMs).finally(stopPoll);
           if (this.isLocal) live.done(metrics.usage);
           if (metrics.usage?.completion_tokens) this.stepTokens.set(key, metrics.usage.completion_tokens);
           if (metrics.usage?.prompt_tokens) this.promptTokens.set(key, metrics.usage.prompt_tokens);
