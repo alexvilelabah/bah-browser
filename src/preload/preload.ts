@@ -132,6 +132,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setDownloadEngine: (settings: Record<string, unknown>) => ipcRenderer.invoke('download:set-engine', settings),
   setDownloadDir: (dir: string | null) => ipcRenderer.invoke('download:set-dir', dir),
   chooseDownloadDir: () => ipcRenderer.invoke('download:choose-dir'),
+  // Medidor do computador (barra de cima): liga/desliga a medição e recebe os números a cada 2 s.
+  hwWatch: (on: boolean) => ipcRenderer.invoke('hw:watch', on),
+  onHwStats: (cb: (s: any) => void) => {
+    const listener = (_e: any, s: any) => cb(s);
+    ipcRenderer.on('hw:stats', listener);
+    return () => ipcRenderer.removeListener('hw:stats', listener);
+  },
   pauseDownload: (id: string) => ipcRenderer.invoke('download:pause', id),
   resumeDownload: (id: string) => ipcRenderer.invoke('download:resume', id),
   cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),

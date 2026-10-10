@@ -86,6 +86,28 @@ body {
   height:28px;padding:0 11px;margin:0 8px 0 4px;flex:none;
 }
 .top-bar .top-bar-ai svg{width:18px;height:18px;}
+/* Medidor do computador (CPU · RAM · GPU), colado à esquerda do botão IA. Números pequenos e
+   discretos; amarelo/vermelho só quando a RAM enche ou a placa esquenta. O botão "‹" desliga
+   (para de medir) e fica um "desligado" pra ligar de novo. */
+.top-bar .hw-mon{
+  -webkit-app-region:no-drag; align-self:center; flex:none;
+  display:flex; align-items:center; gap:10px; height:26px; padding:0 2px 0 10px; margin-left:6px;
+  font-size:11px; color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.top-bar .hw-mon b{font-weight:600; color:var(--text-secondary); margin-right:4px; letter-spacing:.02em;}
+.top-bar .hw-mon .warn{color:#e8a33d;}
+.top-bar .hw-mon .hot{color:#ff6b6b;}
+.top-bar .hw-off-btn{
+  border:none; background:transparent; color:var(--text-muted); cursor:pointer;
+  width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+}
+.top-bar .hw-off-btn:hover{background:var(--bg-hover); color:var(--text-primary);}
+.top-bar .hw-mon.hw-off{
+  gap:5px; padding:0 9px; border:1px solid var(--border); border-radius:999px; background:transparent; cursor:pointer;
+}
+.top-bar .hw-mon.hw-off:hover{background:var(--bg-hover); color:var(--text-primary);}
+@media (max-width: 1100px){ .top-bar .hw-mon .hw-gpu-extra{display:none;} }
+@media (max-width: 900px){ .top-bar .hw-mon .hw-ram{display:none;} }
 .win-btn:hover{background:var(--bg-hover);color:var(--text-primary);}
 .win-btn.close:hover{background:#e81123;color:#fff;}
 

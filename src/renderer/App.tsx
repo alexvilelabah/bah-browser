@@ -7,6 +7,7 @@ import { useTabStore } from './store';
 import TabBar from './components/TabBar';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
+import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
@@ -1157,6 +1158,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onNew={store.addTab}
           />
         </div>
+        <HwMonitor />
         <button
           className={`ai-toggle top-bar-ai ${store.sidebarOpen ? 'active' : ''}`}
           onClick={() => store.setSidebarOpen(!store.sidebarOpen)}

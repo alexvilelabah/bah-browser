@@ -251,6 +251,10 @@ const dict: Record<Lang, Record<string, string>> = {
     // Top bar / menu / footer / tabs
     'ai.toggle': 'Open/close the agent panel (AI)',
     'ai.short': 'AI',
+    'hw.title': 'Computer use right now (updates every 2 s). CPU = processor · RAM = memory · GPU = graphics card: use · card memory · temperature',
+    'hw.turnOff': 'Turn the meter off (it stops measuring)',
+    'hw.turnOn': 'Turn on the computer meter (CPU, memory, graphics card)',
+    'hw.off': 'off',
     'menu.adblockTitle': 'Native ad blocker (on/off)',
     'menu.hwAccel': 'Hardware acceleration',
     'menu.hwAccelTitle': 'Turn OFF if new tabs load blank/white (weak or old GPU). Restart to apply.',
@@ -619,6 +623,10 @@ const dict: Record<Lang, Record<string, string>> = {
     // Barra superior / menu / rodapé / abas
     'ai.toggle': 'Abrir/fechar o painel do agente (IA)',
     'ai.short': 'IA',
+    'hw.title': 'Uso do computador agora (atualiza a cada 2 s). CPU = processador · RAM = memória · GPU = placa de vídeo: uso · memória da placa · temperatura',
+    'hw.turnOff': 'Desligar o medidor (para de medir)',
+    'hw.turnOn': 'Ligar o medidor do computador (CPU, memória, placa de vídeo)',
+    'hw.off': 'desligado',
     'menu.adblockTitle': 'Bloqueador de anúncios nativo (liga/desliga)',
     'menu.hwAccel': 'Aceleração de hardware',
     'menu.hwAccelTitle': 'DESLIGUE se abas novas abrem em branco (GPU fraca ou antiga). Reinicie pra aplicar.',
@@ -985,6 +993,10 @@ const dict: Record<Lang, Record<string, string>> = {
     // Barra superior / menú / pie / pestañas
     'ai.toggle': 'Abrir/cerrar el panel del agente (IA)',
     'ai.short': 'IA',
+    'hw.title': 'Uso de la computadora ahora (se actualiza cada 2 s). CPU = procesador · RAM = memoria · GPU = tarjeta gráfica: uso · memoria de la tarjeta · temperatura',
+    'hw.turnOff': 'Apagar el medidor (deja de medir)',
+    'hw.turnOn': 'Encender el medidor de la computadora (CPU, memoria, tarjeta gráfica)',
+    'hw.off': 'apagado',
     'menu.adblockTitle': 'Bloqueador de anuncios nativo (encender/apagar)',
     'menu.hwAccel': 'Aceleración de hardware',
     'menu.hwAccelTitle': 'APÁGALA si las pestañas nuevas salen en blanco (GPU débil o antigua). Reinicia para aplicar.',
