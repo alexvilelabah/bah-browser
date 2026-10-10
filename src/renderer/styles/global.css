@@ -91,10 +91,11 @@ body {
    (para de medir) e fica um "desligado" pra ligar de novo. */
 .top-bar .hw-mon{
   -webkit-app-region:no-drag; align-self:center; flex:none;
-  display:flex; align-items:center; gap:10px; height:26px; padding:0 0 0 10px; margin:0 12px 0 6px;
-  font-size:11px; color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap;
+  display:flex; align-items:center; gap:12px; height:26px; padding:0 0 0 10px; margin:0 12px 0 6px;
+  font-size:12.5px; color:var(--text-primary); font-variant-numeric:tabular-nums; white-space:nowrap;
 }
-.top-bar .hw-mon b{font-weight:600; color:var(--text-secondary); margin-right:4px; letter-spacing:.02em;}
+/* Números claros (o que importa); os rótulos CPU/RAM/GPU menores e apagados. */
+.top-bar .hw-mon b{font-weight:600; font-size:10.5px; color:var(--text-muted); margin-right:4px; letter-spacing:.03em;}
 .top-bar .hw-mon .warn{color:#e8a33d;}
 .top-bar .hw-mon .hot{color:#ff6b6b;}
 /* O "‹" sozinho parecia um pedaço de letra colado no botão IA: agora é um botão de verdade,

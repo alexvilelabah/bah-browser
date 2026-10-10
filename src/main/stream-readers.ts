@@ -247,7 +247,9 @@ export function createLiveMeter(send: (m: LiveMetrics) => void, now: () => numbe
       const exact = !!usage?.completion_tokens;
       const tokens = exact ? Math.round(usage.completion_tokens) : Math.round(chars / 3.5);
       const genSecs = firstAt ? Math.max(0.001, (t - firstAt) / 1000) : 0;
-      const tps = Number(usage?.generation_tokens_per_second) || (genSecs ? tokens / genSecs : 0);
+      // Resposta que chegou de uma vez (servidor que segura o JSON, ex.: Strata) não tem tempo
+      // de geração medível aqui: sem o número do próprio servidor, não inventa ("96000 tok/s").
+      const tps = Number(usage?.generation_tokens_per_second) || (genSecs >= 0.5 ? tokens / genSecs : 0);
       emit({ kind: 'answer', estTokens: tokens, tokPerSec: Math.round(tps), elapsedMs: t - t0, exact });
     },
   };

@@ -48,7 +48,7 @@ export default function AgentVisualOverlay({ state, ripples, metrics }: Props) {
             <span className="agent-status-dot" />
             <span className="agent-status-text">
               {metrics
-                ? `${metrics.kind === 'answer' ? t('overlay.writing') : t('overlay.thinking')}… ${metrics.estTokens} tok · ${metrics.tokPerSec} tok/s`
+                ? `${metrics.kind === 'answer' ? t('overlay.writing') : t('overlay.thinking')}… ${metrics.estTokens} tok${metrics.tokPerSec > 0 ? ` · ${metrics.tokPerSec} tok/s` : ''}`
                 : STATE_LABEL[state]}
             </span>
           </div>
