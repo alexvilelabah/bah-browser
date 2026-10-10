@@ -50,7 +50,7 @@ export default function HwMonitor() {
         </span>
       )}
       <button type="button" className="hw-off-btn" data-testid="hw-turn-off" onClick={() => setOn(false)} title={t('hw.turnOff')} aria-label={t('hw.turnOff')}>
-        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M7.5 2.5L4 6l3.5 3.5" /></svg>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 2.5L4 6l3.5 3.5" /></svg>
       </button>
     </div>
   );
