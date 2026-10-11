@@ -51,6 +51,10 @@
 
 > ⚠️ O Windows mostra uma tela azul *"protegeu seu PC"* (o app ainda não tem assinatura digital paga). Clique em **Mais informações → Executar assim mesmo** — é normal em apps novos de código aberto. (As atualizações seguintes entram sem esse aviso.)
 
+**🍎 macOS:** na [mesma página de release](https://github.com/alexvilelabah/bah-browser/releases/latest), pegue o `Bah-*-arm64.dmg` (Apple Silicon: M1 em diante) ou o `Bah-*-x64.dmg` (Intel). Abra e arraste o **Bah** pra Aplicativos.
+
+> ⚠️ O build de Mac ainda não é assinado nem notarizado pela Apple, então na 1ª abertura aparece que o Bah *"está danificado e não pode ser aberto"*. Rode `xattr -cr /Applications/Bah.app` no Terminal uma vez e depois abra o Bah normalmente. Ainda não há atualização automática no macOS: baixe o `.dmg` novo pra atualizar. Pra melhor qualidade ao baixar vídeos, instale o ffmpeg (`brew install ffmpeg`).
+
 **👨‍💻 Quero mexer no código:** clone e rode — veja [Como rodar](#como-rodar) abaixo.
 
 ---
