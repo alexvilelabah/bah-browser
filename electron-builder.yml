@@ -57,6 +57,10 @@ mac:
   target:
     - dmg
   icon: build/icon.png
+# Arquitetura SEMPRE no nome (o padrão do electron-builder omite o "x64"), pra Apple Silicon
+# e Intel não colidirem quando os dois .dmg sobem pra mesma release.
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage

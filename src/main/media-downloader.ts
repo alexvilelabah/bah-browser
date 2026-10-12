@@ -13,14 +13,32 @@ import { StringDecoder } from 'string_decoder';
 import { selectorArgs } from './video-formats';
 import { getDownloadDir } from './download-dir';
 
-const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
+const IS_WIN = process.platform === 'win32';
+const EXE = IS_WIN ? '.exe' : '';
+// Binário do yt-dlp certo pra cada SO. No macOS o yt-dlp_macos é universal (Apple Silicon
+// + Intel) — o .exe que baixávamos antes nem roda lá.
+function ytDlpAsset(): string {
+  if (IS_WIN) return 'yt-dlp.exe';
+  if (process.platform === 'darwin') return 'yt-dlp_macos';
+  return process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux';
+}
+const YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytDlpAsset()}`;
 // Build estático do ffmpeg (Windows). Vem num .zip → descompactamos com o Expand-Archive
 // nativo do Windows (sem dependência nova). Usado pra mesclar 1080p+ e extrair mp3.
 const FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip';
 // Motor de JavaScript que o yt-dlp exige pro YouTube desde 2025 (sem ele: "HTTP Error 403"
 // no download). Deno é o recomendado pelo próprio yt-dlp: roda o código do YouTube SEM
-// acesso a arquivos nem rede. Single .exe dentro do .zip.
-const DENO_URL = 'https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip';
+// acesso a arquivos nem rede. Binário único dentro do .zip (um por SO/arquitetura).
+function denoAsset(): string | null {
+  if (IS_WIN) return 'deno-x86_64-pc-windows-msvc.zip';
+  const arch = process.arch === 'arm64' ? 'aarch64' : process.arch === 'x64' ? 'x86_64' : null;
+  if (!arch) return null;
+  if (process.platform === 'darwin') return `deno-${arch}-apple-darwin.zip`;
+  if (process.platform === 'linux') return `deno-${arch}-unknown-linux-gnu.zip`;
+  return null;
+}
+const DENO_ASSET = denoAsset();
+const DENO_URL = DENO_ASSET ? `https://github.com/denoland/deno/releases/latest/download/${DENO_ASSET}` : null;
 
 // O yt-dlp.exe é "onefile" do PyInstaller: o processo que o Node abre só desempacota e
 // lança um FILHO que faz o trabalho. child.kill() derruba só o primeiro e o filho segue
@@ -38,7 +56,27 @@ function binDir(): string {
   return d;
 }
 function ytDlpPath(): string {
-  return path.join(binDir(), 'yt-dlp.exe');
+  return path.join(binDir(), `yt-dlp${EXE}`);
+}
+
+// macOS/Linux: o arquivo baixado chega sem permissão de execução.
+function makeExecutable(file: string): void {
+  if (!IS_WIN) { try { fs.chmodSync(file, 0o755); } catch {} }
+}
+
+// Apps abertos pelo Finder/Dock no macOS herdam um PATH mínimo (/usr/bin:/bin:...), sem o
+// Homebrew — o `which` não acha o ffmpeg/deno/node que o usuário instalou com brew.
+const EXTRA_BIN_DIRS = IS_WIN ? [] : ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin'];
+
+function whereExe(name: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(IS_WIN ? 'where' : 'which', [name], { windowsHide: true }, (err, stdout) => {
+      const first = !err && stdout ? stdout.split(/\r?\n/).find(Boolean) : undefined;
+      if (first) return resolve(first.trim());
+      const extra = EXTRA_BIN_DIRS.map((d) => path.join(d, name)).find((p) => fs.existsSync(p));
+      resolve(extra || null);
+    });
+  });
 }
 
 // Follow redirects (GitHub releases redirect to a CDN) and stream to disk.
@@ -123,6 +161,7 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
   onStatus?.('Preparing the video download engine (first time)…');
   ensurePromise = downloadToFile(YTDLP_URL, p)
     .then(async () => {
+      makeExecutable(p);
       // recém-baixado = última versão; confere que NÃO veio corrompido antes de confiar
       if (!(await validateYtDlp(p))) {
         try { fs.unlinkSync(p); } catch {}
@@ -137,23 +176,17 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
 
 // ── ffmpeg: detecta (baixado por nós OU do sistema) e, se faltar, baixa+descompacta ──
 // Necessário pra mesclar 1080p+ (vídeo+áudio separados) e pra extrair mp3.
-const ffmpegExePath = () => path.join(binDir(), 'ffmpeg.exe');
+const ffmpegExePath = () => path.join(binDir(), `ffmpeg${EXE}`);
 let ffmpegDirCache: string | null | undefined;
 
 export function findFfmpegDir(): Promise<string | null> {
   if (ffmpegDirCache !== undefined) return Promise.resolve(ffmpegDirCache);
-  // 1) já baixamos antes? (userData/bin/ffmpeg.exe)
+  // 1) já baixamos antes? (userData/bin/ffmpeg.exe — só no Windows)
   try { if (fs.existsSync(ffmpegExePath())) { ffmpegDirCache = binDir(); return Promise.resolve(ffmpegDirCache); } } catch {}
-  // 2) ffmpeg do sistema (PATH)?
-  return new Promise((resolve) => {
-    execFile('where', ['ffmpeg'], { windowsHide: true }, (err, stdout) => {
-      if (!err && stdout) {
-        const first = stdout.split(/\r?\n/).find(Boolean);
-        if (first) { ffmpegDirCache = path.dirname(first.trim()); return resolve(ffmpegDirCache); }
-      }
-      ffmpegDirCache = null;
-      resolve(null);
-    });
+  // 2) ffmpeg do sistema (PATH, ou Homebrew no macOS)?
+  return whereExe('ffmpeg').then((exe) => {
+    ffmpegDirCache = exe ? path.dirname(exe) : null;
+    return ffmpegDirCache;
   });
 }
 
@@ -185,15 +218,19 @@ function validateFfmpeg(bin: string): Promise<boolean> {
   });
 }
 
-// Descompacta o .zip com o Expand-Archive nativo do Windows (sem lib nova).
-function expandZipWindows(zip: string, outDir: string): Promise<boolean> {
+// Descompacta o .zip com a ferramenta nativa do SO (sem lib nova): Expand-Archive no
+// Windows, ditto no macOS, unzip no Linux.
+function expandZip(zip: string, outDir: string): Promise<boolean> {
   return new Promise((resolve) => {
     try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
     const ps = `Expand-Archive -LiteralPath ${JSON.stringify(zip)} -DestinationPath ${JSON.stringify(outDir)} -Force`;
+    const [cmd, args]: [string, string[]] = IS_WIN ? ['powershell', ['-NoProfile', '-NonInteractive', '-Command', ps]]
+      : process.platform === 'darwin' ? ['/usr/bin/ditto', ['-x', '-k', zip, outDir]]
+      : ['unzip', ['-o', '-q', zip, '-d', outDir]];
     let done = false;
     const finish = (ok: boolean) => { if (!done) { done = true; resolve(ok); } };
     try {
-      const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true });
+      const child = spawn(cmd, args, { windowsHide: true });
       child.on('error', () => finish(false));
       child.on('close', (code) => finish(code === 0));
       setTimeout(() => { try { child.kill(); } catch {} finish(false); }, 120_000);
@@ -208,7 +245,8 @@ let ffmpegEnsurePromise: Promise<string | null> | null = null;
 export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<string | null> {
   const existing = await findFfmpegDir();
   if (existing) return existing;
-  if (process.platform !== 'win32') return null; // outros SO: usa o do sistema (já tentado)
+  // Outros SO: só o do sistema (já tentado acima). No macOS: `brew install ffmpeg`.
+  if (!IS_WIN) return null;
   if (ffmpegEnsurePromise) return ffmpegEnsurePromise;
   ffmpegEnsurePromise = (async () => {
     const zip = path.join(binDir(), 'ffmpeg-dl.zip');
@@ -217,7 +255,7 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
       onStatus?.('Preparing the video/audio converter (first time, ~80MB)…');
       await downloadToFile(FFMPEG_URL, zip);
       onStatus?.('Extracting ffmpeg…');
-      if (!(await expandZipWindows(zip, extractDir))) throw new Error('failed to unzip');
+      if (!(await expandZip(zip, extractDir))) throw new Error('failed to unzip');
       const exe = findFileRecursive(extractDir, 'ffmpeg.exe');
       if (!exe) throw new Error('ffmpeg.exe not found in the package');
       fs.copyFileSync(exe, ffmpegExePath());
@@ -242,7 +280,7 @@ export async function ensureFfmpeg(onStatus?: (msg: string) => void): Promise<st
 // ── Motor de JavaScript do yt-dlp (Deno): o YouTube manda um desafio em JS que o yt-dlp
 // precisa resolver; sem motor, a lista de formatos até vem, mas o download dá 403. ──
 export interface JsRuntime { name: 'deno' | 'node'; path: string }
-const denoExePath = () => path.join(binDir(), 'deno.exe');
+const denoExePath = () => path.join(binDir(), `deno${EXE}`);
 
 // Versão do motor (deno 2.5.1 / v24.1.0) — null se não roda.
 function runtimeVersion(bin: string): Promise<[number, number, number] | null> {
@@ -267,22 +305,13 @@ const atLeast = (v: [number, number, number] | null, min: [number, number, numbe
 const DENO_MIN: [number, number, number] = [2, 3, 0];
 const NODE_MIN: [number, number, number] = [22, 0, 0];
 
-function whereExe(name: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(process.platform === 'win32' ? 'where' : 'which', [name], { windowsHide: true }, (err, stdout) => {
-      const first = !err && stdout ? stdout.split(/\r?\n/).find(Boolean) : undefined;
-      resolve(first ? first.trim() : null);
-    });
-  });
-}
-
 let jsRuntimeResolved: JsRuntime | null = null;
 let jsRuntimePromise: Promise<JsRuntime | null> | null = null;
 /** O motor já pronto (sem esperar download) — pra listar formatos sem travar a 1ª vez. */
 export function readyJsRuntime(): JsRuntime | null { return jsRuntimeResolved; }
 /**
- * Garante um motor: o Deno que já baixamos → Deno do sistema → baixa o Deno (só Windows,
- * ~43 MB, 1ª vez) → último recurso, Node do sistema. FAIL-SAFE: null = segue sem motor
+ * Garante um motor: o Deno que já baixamos → Deno do sistema → baixa o Deno (Windows,
+ * macOS e Linux, ~43 MB, 1ª vez) → último recurso, Node do sistema. FAIL-SAFE: null = segue sem motor
  * (YouTube pode falhar, outros sites seguem normais).
  */
 export function ensureJsRuntime(onStatus?: (msg: string) => void): Promise<JsRuntime | null> {
@@ -293,16 +322,17 @@ export function ensureJsRuntime(onStatus?: (msg: string) => void): Promise<JsRun
     if (fs.existsSync(own) && atLeast(await runtimeVersion(own), DENO_MIN)) return { name: 'deno', path: own };
     const sysDeno = await whereExe('deno');
     if (sysDeno && atLeast(await runtimeVersion(sysDeno), DENO_MIN)) return { name: 'deno', path: sysDeno };
-    if (process.platform === 'win32') {
+    if (DENO_URL) {
       const zip = path.join(binDir(), 'deno-dl.zip');
       const extractDir = path.join(binDir(), 'deno-extract');
       try {
         onStatus?.('Preparing the YouTube engine (first time, ~43MB)…');
         await downloadToFile(DENO_URL, zip);
-        if (!(await expandZipWindows(zip, extractDir))) throw new Error('failed to unzip');
-        const exe = findFileRecursive(extractDir, 'deno.exe');
-        if (!exe) throw new Error('deno.exe not found in the package');
+        if (!(await expandZip(zip, extractDir))) throw new Error('failed to unzip');
+        const exe = findFileRecursive(extractDir, `deno${EXE}`);
+        if (!exe) throw new Error('deno not found in the package');
         fs.copyFileSync(exe, own);
+        makeExecutable(own);
         if (!atLeast(await runtimeVersion(own), DENO_MIN)) { try { fs.unlinkSync(own); } catch {} throw new Error('downloaded deno is invalid'); }
         return { name: 'deno', path: own };
       } catch {

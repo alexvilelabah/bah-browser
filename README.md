@@ -55,6 +55,10 @@
 
 > 🛡️ **Windows blocks Bah and there's no "Run anyway" button?** If the installer — or an update — simply refuses to open, your PC has **Smart App Control** turned on. It's a stricter Windows 11 protection that blocks every app without a digital signature, and Microsoft offers [no way to allow a single app](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions). Until Bah is code-signed, the only option is to turn it off: **Windows Security → App & browser control → Smart App Control settings → Off**. Your antivirus (Microsoft Defender) keeps running, new apps still get the usual *"protected your PC"* check, and recent Windows updates let you turn Smart App Control back on later without reinstalling Windows.
 
+**🍎 macOS:** from the [same release page](https://github.com/alexvilelabah/bah-browser/releases/latest), get `Bah-*-arm64.dmg` (Apple Silicon: M1 and newer) or `Bah-*-x64.dmg` (Intel). Open it and drag **Bah** into Applications.
+
+> ⚠️ The Mac build isn't signed or notarized by Apple yet, so the first launch says Bah *"is damaged and can't be opened"*. Run `xattr -cr /Applications/Bah.app` in Terminal once, then open Bah normally. There's no auto-update on macOS yet: download the new `.dmg` to update. For best video quality when downloading, install ffmpeg (`brew install ffmpeg`).
+
 **👨‍💻 I want to hack on the code:** clone and run it — see [Running it](#running-it) below.
 
 ---

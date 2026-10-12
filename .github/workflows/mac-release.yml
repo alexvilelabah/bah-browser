@@ -1,0 +1,71 @@
+name: macOS release (.dmg)
+
+# Anexa o .dmg do macOS (Apple Silicon E Intel) em cada release publicada — a mesma
+# release do instalador do Windows. Sem assinatura/notarização da Apple (ver o README:
+# `xattr -cr /Applications/Bah.app` na 1ª abertura).
+#
+# Não mexe no auto-update: só sobem os .dmg (sem latest-mac.yml), e o app não procura
+# atualização no macOS (setupAutoUpdater sai cedo fora do Windows).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da release que recebe os .dmg (ex.: v1.8.10)'
+        required: true
+
+permissions:
+  contents: write   # gh release upload
+
+jobs:
+  dmg:
+    # As pre-releases de teste (v*-macos-test / v*-linux-test) têm fluxo próprio.
+    if: github.event_name == 'workflow_dispatch' || !endsWith(github.event.release.tag_name, '-test')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # O electronDist do electron-builder.yml usa o Electron (castLabs) que o npm
+          # baixou → cada arquitetura compila no Mac da própria arquitetura.
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+    steps:
+      - name: Checkout (na tag da release)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Mesmo motivo do mac-test.yml: o package-lock aponta o Electron da castLabs via git+ssh.
+      - name: Buscar dependências de git via HTTPS (não SSH)
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      - name: Instalar dependências do projeto
+        run: npm ci || npm install
+
+      - name: Build (renderer + main)
+        run: npm run build
+
+      - name: Gerar .dmg (${{ matrix.arch }})
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # sem certificado da Apple: não procurar
+        run: npx --yes electron-builder --mac dmg --${{ matrix.arch }} --publish never
+
+      - name: Anexar o .dmg na release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          ls -l release/*.dmg
+          gh release upload "$TAG" release/*.dmg --clobber

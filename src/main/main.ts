@@ -300,6 +300,17 @@ function sleepMs(ms: number): Promise<void> {
 
 function findSystemBrowser(): { name: string; exe: string } | null {
   const env = process.env;
+  // macOS: o executável fica dentro do .app (em /Applications ou ~/Applications).
+  if (process.platform === 'darwin') {
+    const roots = ['/Applications', path.join(os.homedir(), 'Applications')];
+    const apps = [
+      { name: 'Google Chrome', app: 'Google Chrome' },
+      { name: 'Microsoft Edge', app: 'Microsoft Edge' },
+      { name: 'Brave', app: 'Brave Browser' },
+    ];
+    const macCandidates = apps.flatMap((a) => roots.map((r) => ({ name: a.name, exe: path.join(r, `${a.app}.app`, 'Contents', 'MacOS', a.app) })));
+    return macCandidates.find(c => fs.existsSync(c.exe)) || null;
+  }
   const candidates = [
     { name: 'Google Chrome', exe: path.join(env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe') },
     { name: 'Google Chrome', exe: path.join(env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe') },
@@ -1523,13 +1534,20 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       return { ok: r.ok, error: r.ok ? undefined : `status ${r.status}` };
     } catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
   });
-  // Estado do Ollama pra UI: rodando? instalado? (instalado = responde OU o .exe existe no caminho padrão).
+  // Executável do Ollama no caminho padrão do instalador (Windows: %LOCALAPPDATA%; macOS: o
+  // .app ou o Homebrew — app aberto pelo Finder não tem o Homebrew no PATH). '' = não achou.
+  const ollamaInstalledExe = (): string => {
+    const candidates = process.platform === 'darwin'
+      ? ['/Applications/Ollama.app/Contents/Resources/ollama', path.join(os.homedir(), 'Applications', 'Ollama.app', 'Contents', 'Resources', 'ollama'), '/opt/homebrew/bin/ollama', '/usr/local/bin/ollama']
+      : process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe')] : [];
+    return candidates.find((c) => fs.existsSync(c)) || '';
+  };
+  // Estado do Ollama pra UI: rodando? instalado? (instalado = responde OU o executável existe no caminho padrão).
   ipcMain.handle('ollama:status', async (_e, baseUrl?: string) => {
     const base = ollamaUrl(baseUrl);
     let running = false;
     try { running = (await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) } as any)).ok; } catch {}
-    const localApp = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe') : '';
-    const installed = running || !!(localApp && fs.existsSync(localApp));
+    const installed = running || !!ollamaInstalledExe();
     return { running, installed };
   });
   // Garante o Ollama RODANDO: se já responde, ok; senão tenta SUBIR sozinho
@@ -1539,9 +1557,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     const base = ollamaUrl(baseUrl);
     const ping = async () => { try { const r = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) } as any); return r.ok; } catch { return false; } };
     if (await ping()) return { ok: true, already: true };
-    // Acha o executável: caminho padrão do instalador no Windows, senão PATH.
-    const localApp = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe') : '';
-    const exe = (localApp && fs.existsSync(localApp)) ? localApp : 'ollama';
+    // Acha o executável: caminho padrão do instalador, senão PATH.
+    const exe = ollamaInstalledExe() || 'ollama';
     let spawnErr = '';
     try {
       // CREATE_NO_WINDOW (0x08000000): no Windows, `detached:true` num .exe de console abre
