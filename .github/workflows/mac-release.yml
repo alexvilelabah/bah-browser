@@ -65,6 +65,12 @@ jobs:
       - name: Instalar dependências do projeto
         run: npm ci || npm install
 
+      # O pacote do Electron (castLabs 42) não baixa o binário na instalação: só no 1º uso.
+      # Sem isso o electron-builder acha a pasta vazia ("corrupted Electron dist") — o
+      # mac-test.yml só passava porque o smoke test (`npx electron .`) baixava antes.
+      - name: Baixar o Electron (castLabs)
+        run: node node_modules/electron/install.js
+
       - name: Build (renderer + main)
         run: npm run build
 
