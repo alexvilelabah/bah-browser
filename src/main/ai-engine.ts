@@ -16,6 +16,7 @@ import {
   CLOUD_FIRST_CHUNK_MS, CLOUD_BODY_MS, CLOUD_INACTIVITY_MS,
 } from './cancellable-fetch';
 import { ThinkingBudget, LOCAL_SERVER_THINK_TOKENS } from './thinking-budget';
+import { chooseDeepSeekModel, isModelMissingError, DEEPSEEK_FLASH_IDS } from './deepseek-models';
 import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
 import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
 
@@ -1384,25 +1385,25 @@ export class AIEngine {
     } catch (e) {
       console.warn('[DeepSeek] /models probe failed (timeout/error), assuming defaults');
       // Fallback nunca deve oferecer o v4-pro (lento/inutilizável) como caminho rápido —
-      // assume flash + chat, que são os modelos rápidos conhecidos.
-      this.deepseekModelsCache = new Set(['deepseek-v4-flash', 'deepseek-chat']);
+      // assume só os nomes do flash (o atual e o antigo).
+      this.deepseekModelsCache = new Set(DEEPSEEK_FLASH_IDS);
       this.deepseekModelsCacheAt = Date.now();
       return this.deepseekModelsCache;
     }
   }
 
+  // Flash que a API respondeu "esse modelo não existe" — não tenta de novo nesta sessão.
+  private deepseekDeadModels = new Set<string>();
+
   private async pickDeepSeekModel(): Promise<string> {
     const available = await this.fetchDeepSeekModels();
     // deepseek-v4-pro roda em "thinking mode" e é lentíssimo (~545s medido) — estoura o
-    // deadline de 5 min do agente, nunca completa no loop interativo. Por isso a ORDEM é:
-    // flash (rápido) → deepseek-chat (rápido, conhecido) → v4-pro só em último caso absoluto.
-    // (Antes o chat vinha DEPOIS do v4-pro, então com flash ausente o agente caía no modelo
-    // lento e travava — corrigido.)
+    // deadline de 5 min do agente, nunca completa no loop interativo. Por isso é sempre
+    // Flash: 'deepseek-flash' (nome atual) → 'deepseek-v4-flash' (antigo) → Pro só se
+    // nenhum Flash existir. A regra está em deepseek-models.ts (com testes).
     // 'deepseek-chat' saiu da cadeia: é apelido DEPRECADO do v4-flash e a DeepSeek
     // remove o nome em 24/07/2026 — depender dele viraria 404 do nada.
-    const chain = ['deepseek-v4-flash', 'deepseek-v4-pro'];
-    for (const id of chain) if (available.has(id)) return id;
-    return 'deepseek-v4-flash';
+    return chooseDeepSeekModel(available, this.deepseekDeadModels);
   }
 
   private async callDeepSeek(messages: Message[], isAgentMode: boolean, tier: 'flash' | 'pro' = 'pro', onDelta?: (d: string) => void, signal?: AbortSignal): Promise<any> {
@@ -1418,7 +1419,7 @@ export class AIEngine {
     let model = await this.pickDeepSeekModel();
     const useFlash = model.includes('flash');
     // 🧠 MAESTRO: o tier 'pro' chega só nos momentos de "travou" (loop / ações sem
-    // efeito). Aí ligamos o MODO PENSANTE (chain-of-thought) no MESMO deepseek-v4-flash,
+    // efeito). Aí ligamos o MODO PENSANTE (chain-of-thought) no MESMO flash,
     // em vez de trocar pro v4-pro (lento e ~3× mais caro). Todo o resto roda na voz
     // rápida (não-pensante, ~0,6s). É o segundo instrumento da orquestra, usado raro.
     const useThinking = isAgentMode && tier === 'pro';
@@ -1542,11 +1543,14 @@ export class AIEngine {
         if (retry.ok) { res = retry; }
         else throw new Error(`DeepSeek API error ${retry.status} (${model}): ${(await retry.text()).slice(0, 400)}`);
       } else {
-      // Flash failed (404/model_not_found) → mark unavailable and retry on pro
-      if (useFlash && (res.status === 404 || errText.includes('model') || errText.includes('not found'))) {
-        console.warn(`[DeepSeek] ${model} failed → falling back to pro`);
-        if (this.deepseekModelsCache) this.deepseekModelsCache.delete('deepseek-v4-flash');
-        return this.callDeepSeek(messages, isAgentMode, 'pro', onDelta, signal);
+      // Esse Flash não existe (404 / model_not_found) → marca e tenta o próximo nome, no
+      // MESMO tier (antes ia pro 'pro' = pensando à toa). Só erro de "modelo não existe":
+      // antes qualquer erro com a palavra "model" (ex.: limite de contexto) derrubava o Flash.
+      if (useFlash && isModelMissingError(res.status, errText)) {
+        console.warn(`[DeepSeek] ${model} not available → trying the next model`);
+        this.deepseekDeadModels.add(model);
+        if (this.deepseekModelsCache) this.deepseekModelsCache.delete(model);
+        return this.callDeepSeek(messages, isAgentMode, tier, onDelta, signal);
       }
       if (res.status === 401) {
         throw new Error('Invalid or missing DeepSeek API key. Open the agent settings (sidebar) and paste your key starting with "sk-".');
