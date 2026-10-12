@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag da release que recebe os .dmg (ex.: v1.8.10)'
+        description: 'Tag da release que recebe os .dmg (ex.: v1.8.12 — tags antigas não têm o suporte a Mac)'
         required: true
 
 permissions:
@@ -41,11 +41,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          # O token NÃO fica gravado no .git/config enquanto os scripts de instalação do npm
+          # rodam (passo seguinte) — um pacote ruim não acha ele ali pra mexer na release.
+          persist-credentials: false
 
-      - name: Node 20
+      # Tag de antes do suporte a Mac (v1.8.11 ou anterior) geraria um .dmg sem os consertos
+      # de Mac e com o nome errado — para aqui em vez de anexar isso na release.
+      - name: A tag tem o suporte a Mac?
+        run: |
+          test -f .github/workflows/mac-release.yml || { echo "A tag $TAG é de antes do suporte a Mac — use uma tag mais nova."; exit 1; }
+
+      # Node 22: o Electron da castLabs, o @electron/get e o @electron/fuses pedem Node >= 22.12
+      # (no Node 20 só passavam com aviso).
+      - name: Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # Mesmo motivo do mac-test.yml: o package-lock aponta o Electron da castLabs via git+ssh.
       - name: Buscar dependências de git via HTTPS (não SSH)
@@ -68,4 +79,4 @@ jobs:
         run: |
           set -e
           ls -l release/*.dmg
-          gh release upload "$TAG" release/*.dmg --clobber
+          gh release upload "$TAG" release/*.dmg --clobber --repo "$GITHUB_REPOSITORY"

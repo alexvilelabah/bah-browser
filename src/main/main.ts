@@ -638,6 +638,27 @@ function makeDomainMatcher(host: string): (cookieDomain: string) => boolean {
   };
 }
 
+// macOS: fechar a última janela NÃO encerra o Chrome (ele fica no Dock), então o 'exit'
+// nunca chega e o login ficava esperando o prazo inteiro (8 ou 5 min). Lá, "nenhuma aba
+// aberta" (depois de já ter tido alguma) conta como "fechou a janela". Fora do Mac: sempre
+// false — o Windows segue só pelo 'exit', como antes.
+function makeMacWindowClosedCheck(port: number): () => Promise<boolean> {
+  let sawPage = false;
+  let emptyPolls = 0;
+  return async () => {
+    if (process.platform !== 'darwin') return false;
+    try {
+      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`, 1200);
+      const pages = (Array.isArray(targets) ? targets : []).filter((t: any) => t?.type === 'page').length;
+      if (pages > 0) { sawPage = true; emptyPolls = 0; return false; }
+      // Duas leituras seguidas sem aba: um instante vazio (troca de aba) não encerra o login.
+      return sawPage && ++emptyPolls >= 2;
+    } catch {
+      return false;   // porta morta = processo saiu → o 'exit' cuida
+    }
+  };
+}
+
 // Abre o navegador do sistema NO site pedido, o usuário loga, e o Bah importa os cookies
 // daquele domínio. Perfil PERSISTENTE (system-login-profile) → logins acumulam entre sites e
 // re-login fica instantâneo. Detecta o fim do login por cookie httpOnly novo no domínio OU
@@ -701,11 +722,13 @@ async function loginToSiteWithSystemBrowser(rawUrl: string): Promise<{ ok: boole
   //    fechar — por isso guardamos o snapshot em vez de tentar ler no fechamento.
   let lastMine: any[] = [];
   const deadline = Date.now() + 8 * 60_000;
+  const macWindowClosed = makeMacWindowClosedCheck(port);
   while (Date.now() < deadline && !exited) {
     try {
       const mine = (await getChromeDebugCookies(port)).filter(c => domainMatches(c.domain));
       if (mine.length) lastMine = mine;
     } catch {}
+    if (await macWindowClosed()) break;   // Mac: janela fechada, Chrome ainda vivo → fecha abaixo
     await sleepMs(2000);
   }
 
@@ -783,7 +806,14 @@ async function loginWithSystemBrowser(opts?: { fresh?: boolean }): Promise<{ ok:
   //    quando alguma aba chegou no myaccount (o "continue" do loginUrl): sessão viva passa
   //    direto pra lá; sessão morta para no accounts.google.com e a janela fica esperando.
   const deadline = Date.now() + 5 * 60_000;
+  const macWindowClosed = makeMacWindowClosedCheck(port);
   while (Date.now() < deadline) {
+    if (!exited && await macWindowClosed()) {
+      // Mac: a janela fechou mas o Chrome segue aberto e segura o perfil — encerra de vez
+      // pra cair no MESMO caminho do Windows (importar do perfil) logo abaixo.
+      await closeLoginBrowser();
+      for (let i = 0; i < 25 && !exited; i++) await sleepMs(200);
+    }
     if (exited) {
       // usuário fechou a janela na mão → tenta importar do perfil por garantia
       const after = await importGoogleCookiesFromBrowserProfile(browser, profileDir);
@@ -3192,9 +3222,9 @@ function sweepOldScreenshots(): void {
 function setupAutoUpdater(): void {
   if (!app.isPackaged) return;
   // Só o Windows tem canal de atualização: a release "Latest" carrega o latest.yml que o
-  // electron-updater procura. Linux/macOS saem como pre-release manual e experimental, e
-  // pre-release nunca é a "Latest" — lá o updater só acha 404 e despeja um stack trace a
-  // cada boot. Quem usa AppImage/dmg troca de versão na mão, de propósito.
+  // electron-updater procura. O .dmg do Mac sobe na MESMA release (mac-release.yml), mas SEM
+  // latest-mac.yml — lá o updater só acharia 404 e despejaria um stack trace a cada boot. O
+  // Linux sai como pre-release de teste. Quem usa AppImage/dmg troca de versão na mão.
   if (process.platform !== 'win32') return;
   try {
     autoUpdater.autoDownload = true;

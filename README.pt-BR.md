@@ -51,9 +51,9 @@
 
 > ⚠️ O Windows mostra uma tela azul *"protegeu seu PC"* (o app ainda não tem assinatura digital paga). Clique em **Mais informações → Executar assim mesmo** — é normal em apps novos de código aberto. (As atualizações seguintes entram sem esse aviso.)
 
-**🍎 macOS:** na [mesma página de release](https://github.com/alexvilelabah/bah-browser/releases/latest), pegue o `Bah-*-arm64.dmg` (Apple Silicon: M1 em diante) ou o `Bah-*-x64.dmg` (Intel). Abra e arraste o **Bah** pra Aplicativos.
+**🍎 macOS (novo, a partir da v1.8.12):** na [mesma página de download](https://github.com/alexvilelabah/bah-browser/releases/latest), baixe o `Bah-*-arm64.dmg` se o seu Mac for Apple Silicon (M1 em diante) ou o `Bah-*-x64.dmg` se for Intel (dá pra ver no menu Apple → Sobre Este Mac). Abra o arquivo e arraste o **Bah** pra pasta Aplicativos.
 
-> ⚠️ O build de Mac ainda não é assinado nem notarizado pela Apple, então na 1ª abertura aparece que o Bah *"está danificado e não pode ser aberto"*. Rode `xattr -cr /Applications/Bah.app` no Terminal uma vez e depois abra o Bah normalmente. Ainda não há atualização automática no macOS: baixe o `.dmg` novo pra atualizar. Pra melhor qualidade ao baixar vídeos, instale o ffmpeg (`brew install ffmpeg`).
+> ⚠️ A versão de Mac é nova e ainda não tem assinatura nem notarização da Apple, então, na primeira vez que você abrir, o macOS geralmente diz que o Bah *"está danificado e não pode ser aberto"* — ele não está danificado, é só a falta da assinatura. Abra o Terminal, rode `xattr -cr /Applications/Bah.app` e depois abra o Bah normalmente. Ainda não tem atualização automática no Mac: pra atualizar, baixe o `.dmg` novo, substitua o app e rode o comando `xattr` de novo. Pra baixar vídeos (no YouTube, em qualquer qualidade) e músicas em MP3, instale o ffmpeg pelo [Homebrew](https://brew.sh) (`brew install ffmpeg`). Sem ele, só o download de áudio funciona, no formato original (geralmente M4A). Netflix, Prime Video e Disney+ ainda não tocam na versão de Mac.
 
 **👨‍💻 Quero mexer no código:** clone e rode — veja [Como rodar](#como-rodar) abaixo.
 

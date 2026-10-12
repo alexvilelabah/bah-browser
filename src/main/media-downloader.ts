@@ -47,8 +47,20 @@ function killTree(child: ChildProcess): void {
   if (process.platform === 'win32' && child.pid) {
     try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); return; } catch {}
   }
+  // macOS/Linux: o yt-dlp roda num grupo de processos só dele (spawnOpts → detached) — mata
+  // o grupo inteiro, senão o ffmpeg que ele abriu (juntando vídeo+áudio) segue rodando sozinho.
+  if (!IS_WIN && child.pid) {
+    try { process.kill(-child.pid, 'SIGTERM'); return; } catch {}
+  }
   try { child.kill(); } catch {}
 }
+
+// Opções de spawn dos processos que o killTree derruba. No Windows, as MESMAS de sempre.
+const spawnOpts = IS_WIN ? { windowsHide: true } : { windowsHide: true, detached: true };
+
+// Linha do `--print after_move:filepath` = caminho final do arquivo. No Windows começa com
+// "C:\"; no macOS/Linux com "/".
+const FINAL_PATH_RE = IS_WIN ? /^[A-Za-z]:[\\/].+\.\w{2,4}$/ : /^\/.+\.\w{2,4}$/;
 
 function binDir(): string {
   const d = path.join(app.getPath('userData'), 'bin');
@@ -185,8 +197,11 @@ export function findFfmpegDir(): Promise<string | null> {
   try { if (fs.existsSync(ffmpegExePath())) { ffmpegDirCache = binDir(); return Promise.resolve(ffmpegDirCache); } } catch {}
   // 2) ffmpeg do sistema (PATH, ou Homebrew no macOS)?
   return whereExe('ffmpeg').then((exe) => {
-    ffmpegDirCache = exe ? path.dirname(exe) : null;
-    return ffmpegDirCache;
+    const dir = exe ? path.dirname(exe) : null;
+    // macOS/Linux: "não tem" não fica guardado — a pessoa pode rodar `brew install ffmpeg`
+    // com o Bah aberto e o próximo download já usa. (No Windows o Bah baixa o ffmpeg sozinho.)
+    if (dir || IS_WIN) ffmpegDirCache = dir;
+    return dir;
   });
 }
 
@@ -376,7 +391,7 @@ export async function fetchVideoInfo(url: string, access?: SiteAccess & { firstO
     // firstOnly: página com dezenas de vídeos (playlist do g1, carrossel) → só o 1º é lido;
     // sem isso o -J extrai TODOS e passa de um minuto.
     const child = spawn(bin, ['-J', '--no-playlist', '--no-warnings', '--no-color', ...(access?.firstOnly ? ['--playlist-items', '1'] : []),
-      ...jsRuntimeArgs(rt), ...siteArgs(access), url], { windowsHide: true });
+      ...jsRuntimeArgs(rt), ...siteArgs(access), url], spawnOpts);
     const finish = (r: { ok: boolean; info?: any; error?: string }) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
     const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: 'timeout reading the video' }); }, 60_000);
     child.stdout.on('data', (d: Buffer) => out.push(d));
@@ -527,7 +542,7 @@ export interface VideoDownloadProgress {
 
 /**
  * Baixa um vídeo. Resolve com o caminho final. Reporta progresso via onProgress.
- * audioOnly extrai mp3 (precisa de ffmpeg).
+ * audioOnly extrai mp3 (com ffmpeg) ou, sem ffmpeg, salva o áudio como veio (geralmente m4a).
  * resolution: baixa NAQUELA resolução (lado menor, ex. 1080) — botão "Baixar" do YouTube.
  * niceNames: nome de arquivo com o título de verdade (acentos/espaços) + a resolução.
  * signal: cancelar mata o yt-dlp; `partials` volta com os arquivos pela metade pra apagar.
@@ -578,7 +593,10 @@ export async function downloadVideo(
     // Faixa só de áudio quando existe (YouTube). Stream com áudio colado no vídeo (HLS de
     // site comum) não tem: aí baixa até 480p — o áudio é o mesmo AAC e o download cai de
     // ~450 MB (1080p) pra ~60 MB.
-    fmtArgs.push('-f', 'ba/b[height<=480]/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0');
+    if (ffmpegDir) fmtArgs.push('-f', 'ba/b[height<=480]/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0');
+    // Sem ffmpeg (Mac sem `brew install ffmpeg`, ou o download do ffmpeg falhou) não dá pra
+    // virar mp3 — antes o download inteiro falhava no fim. Agora salva o áudio como veio (m4a).
+    else fmtArgs.push('-f', 'ba[ext=m4a]/ba/b[height<=480]/b');
   } else if (opts.resolution) {
     fmtArgs.push(...selectorArgs(opts.resolution, !!ffmpegDir));
   } else if (opts.quality === 'low') {
@@ -629,7 +647,7 @@ export async function downloadVideo(
       let title = '';
       let stderrTail = '';
       let seenMerge = false;
-      const child = spawn(bin, runArgs, { windowsHide: true });
+      const child = spawn(bin, runArgs, spawnOpts);
       // Cancelar (botão ✕ em Downloads): derruba a árvore e só responde quando o processo
       // morreu de fato — aí os arquivos pela metade já estão soltos pra quem chamou apagar.
       let aborted = false;
@@ -653,7 +671,10 @@ export async function downloadVideo(
 
       const handleLine = (raw: string) => {
         if (aborted) return;   // depois do cancelar, nada de "progresso" ressuscitando a barra
-        const line = raw.trim();
+        // O yt-dlp põe um "apaga a linha" (\x1b[K) na frente do caminho do --print, mesmo com
+        // --no-color — sem tirar isso o caminho final nunca era reconhecido e tudo dependia da
+        // varredura da pasta (um vídeo que já estava em Downloads dava "Nothing was downloaded.").
+        const line = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
         if (!line) return;
         lastActivity = Date.now();
         const m = line.match(/DLPROG:\s*([\d.]+)%\|([^|]*)\|([^|]*)(?:\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*))?$/);
@@ -676,7 +697,7 @@ export async function downloadVideo(
         if (dest && !partials.includes(dest[1].trim())) partials.push(dest[1].trim());
         const t = line.match(/Destination: .*[\\/](.+?) \[/);
         if (t) { title = t[1]; seenMerge = false; }
-        if (/^[A-Za-z]:[\\/].+\.\w{2,4}$/.test(line) && !paths.includes(line)) paths.push(line);
+        if (FINAL_PATH_RE.test(line) && !paths.includes(line)) paths.push(line);
       };
 
       const leftovers: Array<() => void> = [];
@@ -711,7 +732,7 @@ export async function downloadVideo(
             // arquivos de mídia criados depois que ESTE disparo começou são deste disparo.
             try {
               fs.readdirSync(outDir)
-                .filter(f => /\.(mp3|mp4|m4a|webm|mkv|opus)$/i.test(f))
+                .filter(f => /\.(mp3|mp4|m4a|webm|mkv|opus|aac|ogg|flac|wav)$/i.test(f))
                 .map(f => ({ p: path.join(outDir, f), t: fs.statSync(path.join(outDir, f)).mtimeMs }))
                 .filter(x => x.t >= startedAt - 2000)
                 .sort((a, b) => b.t - a.t)
