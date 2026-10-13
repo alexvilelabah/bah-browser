@@ -195,6 +195,8 @@ const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 const CHROME_SEC_CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR}"`;
 const BROWSER_PARTITION = 'persist:browser';
 const GOOGLE_LOGIN_PARTITION = 'persist:google-login';
+// Quanto silêncio antes de apagar o ícone de som da aba (pausa de fala não pisca o ícone).
+const AUDIO_OFF_DELAY_MS = 3000;
 
 // Shared ensureDebugger used by CDP handlers AND the hybrid pipeline
 // NOTE: only attaches + enables Accessibility — exactly as the original.
@@ -959,11 +961,24 @@ function createWindow(): void {
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
     // Indicador de som na aba (igual ao Chrome). O Chromium avisa quando a aba passa a
-    // EMITIR áudio de verdade — vídeo mudo não conta, e mutar/pausar derruba na hora.
-    // Só avisa o renderer (que acha a aba dona pelo wcId); não mexe em som/autoplay.
+    // EMITIR áudio de verdade — vídeo mudo não conta. Só avisa o renderer (que acha a aba
+    // dona pelo wcId); não mexe em som/autoplay.
+    // O aviso cru liga/desliga a cada pausa da fala (o ícone piscava no YouTube). O Chrome
+    // segura o ícone uns segundos depois do silêncio; aqui também: acende na hora, apaga só
+    // se ficar AUDIO_OFF_DELAY_MS em silêncio.
+    let audioOn = false;
+    let audioOffTimer: NodeJS.Timeout | null = null;
+    const sendAudio = (audible: boolean) => {
+      if (audible === audioOn) return;
+      audioOn = audible;
+      mainWindow?.webContents.send('tab-audio', { wcId: wc.id, audible });
+    };
     wc.on('audio-state-changed', (e) => {
-      mainWindow?.webContents.send('tab-audio', { wcId: wc.id, audible: e.audible });
+      if (audioOffTimer) { clearTimeout(audioOffTimer); audioOffTimer = null; }
+      if (e.audible) sendAudio(true);
+      else audioOffTimer = setTimeout(() => { audioOffTimer = null; sendAudio(false); }, AUDIO_OFF_DELAY_MS);
     });
+    wc.once('destroyed', () => { if (audioOffTimer) clearTimeout(audioOffTimer); });
     // Inject stealth script before each navigation to mask Electron/automation signals
     wc.on('dom-ready', () => {
       if (!/accounts\.google\.com|accounts-google\.com/i.test(wc.getURL())) {
