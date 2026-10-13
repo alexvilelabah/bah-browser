@@ -27,7 +27,7 @@ import {
 import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
-import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos } from './media-downloader';
+import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, type VideoDownloadProgress } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
 import { fetchTranscript } from './transcript';
 import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
@@ -2427,9 +2427,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     // FILA (lane 'download'): um download pesado por vez.
     return enqueueJob('download', async () => {
       try {
-        return await downloadVideo(url, { audioOnly: !!audioOnly, count: n, quality }, (p) => {
-          mainWindow?.webContents.send('agent:video-progress', p);
-        });
+        const onProgress = (p: VideoDownloadProgress) => { mainWindow?.webContents.send('agent:video-progress', p); };
+        const opts = { audioOnly: !!audioOnly, count: n, quality };
+        // Pelo botão de vídeo: o download da IA aparece na lista de Downloads (barra, ✕, ↻).
+        return videoButton
+          ? await videoButton.agentDownload(url, opts, onProgress)
+          : await downloadVideo(url, opts, onProgress);
       } catch (e: any) {
         return { success: false, error: String(e?.message ?? e) };
       }
