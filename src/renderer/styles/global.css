@@ -207,7 +207,7 @@ body {
   transition:all 0.15s;
 }
 .nav-buttons button:hover:not(:disabled){background:var(--bg-hover);color:var(--text-primary);}
-.nav-buttons button:disabled{opacity:0.25;cursor:default;}
+.nav-buttons button:disabled{opacity:0.38;cursor:default;}   /* igual ao Chrome: apagado, mas visível */
 
 .url-input-wrapper{flex:1;position:relative;}
 .url-input {
@@ -1134,7 +1134,7 @@ body {
   width:34px;
   height:34px;
   border-radius:9999px;
-  color:#808b9c;
+  color:#c7cad1;   /* claro como no Chrome escuro (o cinza #808b9c quase sumia) */
   background:transparent;
 }
 
