@@ -68,8 +68,14 @@ jobs:
       # O pacote do Electron (castLabs 42) não baixa o binário na instalação: só no 1º uso.
       # Sem isso o electron-builder acha a pasta vazia ("corrupted Electron dist") — o
       # mac-test.yml só passava porque o smoke test (`npx electron .`) baixava antes.
+      # Até 3 tentativas: na v1.8.13 o runner Intel deu "fetch failed" (rede) logo aqui.
       - name: Baixar o Electron (castLabs)
-        run: node node_modules/electron/install.js
+        run: |
+          for i in 1 2 3; do
+            node node_modules/electron/install.js && break
+            echo "Falhou (tentativa $i) — tentando de novo em 15 s"; sleep 15
+          done
+          test -d node_modules/electron/dist/Electron.app
 
       - name: Build (renderer + main)
         run: npm run build
