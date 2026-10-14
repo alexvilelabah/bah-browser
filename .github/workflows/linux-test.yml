@@ -28,10 +28,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Node 20
+      - name: Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # O Electron aqui é o fork da castLabs (Widevine/DRM), que vem do GitHub, e o
       # package-lock grava a URL como git+ssh://. O runner não tem chave SSH pro GitHub,
@@ -51,8 +51,6 @@ jobs:
       - name: Build (renderer + main)
         run: npm run build
 
-      - name: Recompilar módulos nativos para o Electron
-        run: npx --yes @electron/rebuild -f || true
 
       - name: Smoke test (abre headless e confirma que não crasha)
         run: |

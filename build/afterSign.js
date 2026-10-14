@@ -24,6 +24,10 @@ exports.default = async function afterSign(context) {
     execFileSync(py, ['-m', 'castlabs_evs.vmp', 'verify-pkg', appOutDir], { stdio: 'inherit' });
     console.log('[afterSign] VMP assinado e VERIFICADO — Netflix/Prime/Disney+ liberados.');
   } catch {
+    // Build de RELEASE do Windows (BAH_REQUIRE_VMP=1): sem a assinatura o instalador NÃO
+    // pode sair — quem atualizasse perderia o Netflix (E100). Fora isso (CI, contribuidores)
+    // segue sem DRM, como antes.
+    if (process.env.BAH_REQUIRE_VMP === '1') throw new Error('[afterSign] VMP não assinado — release abortada (faça o login do castLabs e rode de novo)');
     console.warn('[afterSign] VMP não assinado — Netflix/Prime/Disney+ vão dar E100 neste build.');
     console.warn('            Habilitar: pip install castlabs-evs && python -m castlabs_evs.account signup');
   }

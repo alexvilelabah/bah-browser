@@ -888,6 +888,9 @@ function createWindow(): void {
     permission === 'media' ? wc === mainWindow?.webContents : true);
 
   mainWindow.once('ready-to-show', () => { try { mainWindow?.show(); } catch {} });
+  // Rede de segurança: no 44.4.x o 'ready-to-show' às vezes não vinha e a janela nunca
+  // aparecia (corrigido no 44.5.1). Se em 5 s ainda estiver escondida, mostra assim mesmo.
+  setTimeout(() => { try { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show(); } catch {} }, 5000);
 
   const rendererPath = path.join(__dirname, '..', 'renderer', 'index.html');
   const isDev = !app.isPackaged && !require('fs').existsSync(rendererPath);
@@ -933,7 +936,8 @@ function createWindow(): void {
   });
 
   // Forward renderer console messages to main process logs (visible in terminal + file)
-  mainWindow.webContents.on('console-message', (_e, level, message) => {
+  mainWindow.webContents.on('console-message', (e: any) => {
+    const message: string = e?.message ?? '';   // 44: os argumentos soltos (level, message…) estão obsoletos
     if (message.startsWith('[Agent]') || message.startsWith('[DeepSeek]')) {
       console.log(`[renderer] ${message}`);
       try {
@@ -1159,7 +1163,8 @@ function attachContextMenu(wc: Electron.WebContents): void {
       if (template.length) template.push({ type: 'separator' });
       template.push({
         label: mt('ctx.copyLink'),
-        click: () => clipboard.writeText(params.linkURL),
+        // 44: clipboard.writeText virou assíncrono (devolve Promise).
+        click: async () => { try { await clipboard.writeText(params.linkURL); } catch {} },
       });
     }
 
@@ -2131,10 +2136,13 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       return { ok: false, name, error: 'Could not read this file — it may be corrupted or in an unsupported format.' };
     }
   }
+  // 43+: sem defaultPath o diálogo abre SEMPRE em Downloads — lembramos a última pasta usada.
+  let lastDocDir: string | undefined;
   ipcMain.handle('file:pick-extract', async () => {
     if (process.env.E2E_DOC_PATH) return extractTextFromFile(process.env.E2E_DOC_PATH);   // test seam (no native dialog)
     const r = await dialog.showOpenDialog(mainWindow!, {
       title: 'Pick a document',
+      defaultPath: lastDocDir,
       properties: ['openFile'],
       filters: [
         { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'text', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml', 'ini', 'srt', 'vtt'] },
@@ -2142,6 +2150,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       ],
     });
     if (r.canceled || !r.filePaths[0]) return null;
+    lastDocDir = path.dirname(r.filePaths[0]);
     return extractTextFromFile(r.filePaths[0]);
   });
 

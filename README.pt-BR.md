@@ -51,7 +51,7 @@
 
 > ⚠️ O Windows mostra uma tela azul *"protegeu seu PC"* (o app ainda não tem assinatura digital paga). Clique em **Mais informações → Executar assim mesmo** — é normal em apps novos de código aberto. (As atualizações seguintes entram sem esse aviso.)
 
-**🍎 macOS (novo, a partir da v1.8.12):** na [mesma página de download](https://github.com/alexvilelabah/bah-browser/releases/latest), baixe o `Bah-*-arm64.dmg` se o seu Mac for Apple Silicon (M1 em diante) ou o `Bah-*-x64.dmg` se for Intel (dá pra ver no menu Apple → Sobre Este Mac). Abra o arquivo e arraste o **Bah** pra pasta Aplicativos.
+**🍎 macOS (novo, a partir da v1.8.12):** na [mesma página de download](https://github.com/alexvilelabah/bah-browser/releases/latest), baixe o `Bah-*-arm64.dmg` se o seu Mac for Apple Silicon (M1 em diante) ou o `Bah-*-x64.dmg` se for Intel (dá pra ver no menu Apple → Sobre Este Mac). Abra o arquivo e arraste o **Bah** pra pasta Aplicativos. Precisa do macOS 13 (Ventura) ou mais novo.
 
 > ⚠️ A versão de Mac é nova e ainda não tem assinatura nem notarização da Apple, então, na primeira vez que você abrir, o macOS geralmente diz que o Bah *"está danificado e não pode ser aberto"* — ele não está danificado, é só a falta da assinatura. Abra o Terminal, rode `xattr -cr /Applications/Bah.app` e depois abra o Bah normalmente. Ainda não tem atualização automática no Mac: pra atualizar, baixe o `.dmg` novo, substitua o app e rode o comando `xattr` de novo. Pra baixar vídeos (no YouTube, em qualquer qualidade) e músicas em MP3, instale o ffmpeg pelo [Homebrew](https://brew.sh) (`brew install ffmpeg`). Sem ele, só o download de áudio funciona, no formato original (geralmente M4A). Netflix, Prime Video e Disney+ ainda não tocam na versão de Mac.
 
@@ -80,7 +80,7 @@
 
 | Camada | Tecnologia |
 |---|---|
-| Shell do navegador | **Electron 42** + Chromium |
+| Shell do navegador | **Electron 44** + Chromium |
 | UI | **React 19** + **TypeScript** + Vite |
 | IA (nuvem) | **DeepSeek** (recomendado) · **Mistral** · **NVIDIA NIM** |
 | IA (local) | **Ollama** |
