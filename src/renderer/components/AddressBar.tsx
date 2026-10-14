@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
 import { t } from '../i18n';
+import { permKindLabel, hostOf } from './PermissionPrompt';
 
 interface Props {
   url: string;
@@ -116,6 +117,39 @@ export default function AddressBar({
   // Indicador de segurança (cadeado) — só pra páginas reais http/https; vazio na nova aba.
   const sec = /^https:\/\//i.test(url) ? 'secure' : /^http:\/\//i.test(url) ? 'insecure' : '';
 
+  // Clique no cadeado: as permissões que ESTE site tem guardadas (câmera, microfone…) e
+  // "Redefinir" — pra desfazer um "Bloquear"/"Permitir" dado sem querer.
+  const [siteInfo, setSiteInfo] = useState<null | { origin: string; perms: Record<string, 'allow' | 'block'> }>(null);
+  const siteInfoRef = useRef<HTMLDivElement>(null);
+  const urlOrigin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
+  useEffect(() => { setSiteInfo(null); }, [urlOrigin]);   // outro site → fecha (mudar só o #/caminho não)
+  useEffect(() => {
+    if (!siteInfo) return;
+    const close = (e: MouseEvent) => { if (!siteInfoRef.current?.contains(e.target as Node)) setSiteInfo(null); };
+    const esc = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setSiteInfo(null); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+  }, [siteInfo]);
+  const toggleSiteInfo = async () => {
+    if (siteInfo) { setSiteInfo(null); return; }
+    const r = await window.electronAPI?.listSitePermissions?.(url);
+    setSiteInfo(r && r.origin ? r : { origin: '', perms: {} });
+  };
+  const resetSitePerms = async () => {
+    await window.electronAPI?.resetSitePermissions?.(url);
+    setSiteInfo(s => (s ? { ...s, perms: {} } : s));
+  };
+  const setSitePerm = async (kind: string, value: 'allow' | 'block' | null) => {
+    const r = await window.electronAPI?.setSitePermission?.(url, kind, value);
+    if (r?.ok) setSiteInfo(s => (s ? { ...s, perms: r.perms || {} } : s));
+  };
+  // As 4 de sempre aparecem mesmo sem resposta guardada (pra dar pra liberar a localização
+  // do Maps, por exemplo); as outras só quando o site já pediu.
+  const siteKinds = siteInfo
+    ? Array.from(new Set(['camera', 'microphone', 'geolocation', 'notifications', ...Object.keys(siteInfo.perms)]))
+    : [];
+
   return (
     <div className="address-bar">
       {/* Ícones cheios de 20px, como os do Chrome (Material Icons) — os de linha fina de 16px
@@ -140,11 +174,45 @@ export default function AddressBar({
 
       <div className={`url-input-wrapper${sec ? ' has-sec' : ''}`}>
         {sec && (
-          <span className={`url-sec ${sec}`} title={sec === 'secure' ? t('addr.secure') : t('addr.insecure')}>
+          <button type="button" className={`url-sec ${sec}`} title={sec === 'secure' ? t('addr.secure') : t('addr.insecure')}
+            aria-haspopup="dialog" aria-expanded={!!siteInfo}
+            onMouseDown={e => e.stopPropagation()} onClick={toggleSiteInfo}>
             {sec === 'secure'
               ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
               : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12.01" y2="8"/><line x1="12" y1="12" x2="12" y2="16"/></svg>}
-          </span>
+          </button>
+        )}
+        {/* Clique na página (a aba não avisa o documento do Bah) também fecha o painel. */}
+        {siteInfo && <div className="site-info-scrim" onMouseDown={() => setSiteInfo(null)} />}
+        {siteInfo && (
+          <div className="site-info" ref={siteInfoRef} role="dialog" aria-label={t('perm.siteTitle')}>
+            <div className="site-info-host">{siteInfo.origin ? hostOf(siteInfo.origin) : url}</div>
+            <div className="site-info-sec">{sec === 'secure' ? t('addr.secure') : t('addr.insecure')}</div>
+            <div className="site-info-title">{t('perm.siteTitle')}</div>
+            {siteInfo.origin && (
+              <>
+                <ul className="site-info-list">
+                  {siteKinds.map(k => {
+                    const v = siteInfo.perms[k];
+                    return (
+                      <li key={k}>
+                        <span>{permKindLabel(k)}</span>
+                        <select className={`site-info-state ${v || 'ask'}`} value={v || 'ask'}
+                          onChange={e => setSitePerm(k, e.target.value === 'ask' ? null : e.target.value as 'allow' | 'block')}>
+                          <option value="ask">{t('perm.askOpt')}</option>
+                          <option value="allow">{t('perm.allow')}</option>
+                          <option value="block">{t('perm.block')}</option>
+                        </select>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {Object.keys(siteInfo.perms).length > 0 && (
+                  <button type="button" className="site-info-reset" onClick={resetSitePerms}>{t('perm.reset')}</button>
+                )}
+              </>
+            )}
+          </div>
         )}
         <input
           ref={inputRef}

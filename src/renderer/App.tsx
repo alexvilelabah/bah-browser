@@ -13,6 +13,7 @@ import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
+import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
 import MonitorsPanel from './components/MonitorsPanel';
 import {
   BrowserAction,
@@ -106,6 +107,12 @@ declare global {
       actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string) => void) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
+      onSitePermissionAsk?: (cb: (p: SitePermAsk) => void) => (() => void);
+      onSitePermissionCancel?: (cb: (id: string) => void) => (() => void);
+      answerSitePermission?: (id: string, answer: 'allow' | 'block' | 'dismiss') => Promise<any>;
+      listSitePermissions?: (url: string) => Promise<{ origin: string; perms: Record<string, 'allow' | 'block'> }>;
+      setSitePermission?: (url: string, kind: string, value: 'allow' | 'block' | null) => Promise<{ ok: boolean; perms?: Record<string, 'allow' | 'block'> }>;
+      resetSitePermissions?: (url: string) => Promise<any>;
       torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
       torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
@@ -240,6 +247,12 @@ export default function App() {
   // num ref pra switch_tab/close_tab/contexto do modelo lerem o estado atual, não o velho.
   const tabsRef = useRef(store.tabs);
   useEffect(() => { tabsRef.current = store.tabs; }, [store.tabs]);
+  // Perguntas de permissão dos sites esperando resposta (cada uma presa à sua aba).
+  const [permAsks, setPermAsks] = useState<Array<SitePermAsk & { tabId: string }>>([]);
+  const answerPerm = useCallback((id: string, answer: 'allow' | 'block' | 'dismiss') => {
+    setPermAsks(prev => prev.filter(a => a.id !== id));
+    window.electronAPI?.answerSitePermission?.(id, answer);
+  }, []);
   // Site-initiated downloads (will-download no main) — drenados pelo loop do agente
   // para a IA saber que o clique em "baixar" realmente produziu um arquivo.
   const downloadEventsRef = useRef<Array<{ state: string; filename: string; path?: string; bytes?: number; reason?: string }>>([]);
@@ -372,6 +385,20 @@ export default function App() {
       for (const [tabId, wv] of webviewRefs.current) {
         try { if ((wv as any).getWebContentsId?.() === wcId) { store.updateTab(tabId, { audible }); return; } } catch {}
       }
+    }) as any);
+    // Site pediu câmera/microfone/localização…: a pergunta fica presa à aba dona e aparece
+    // quando ela estiver na frente. Pedido de aba escondida (busca rápida, monitor) → nega.
+    offs.push(window.electronAPI?.onSitePermissionAsk?.((ask) => {
+      let owner = '';
+      for (const [tabId, wv] of webviewRefs.current) {
+        try { if ((wv as any).getWebContentsId?.() === ask.wcId) { owner = tabId; break; } } catch {}
+      }
+      const tab = tabsRef.current.find(x => x.id === owner);
+      if (!tab || tab.hidden) { window.electronAPI?.answerSitePermission?.(ask.id, 'dismiss'); return; }
+      setPermAsks(prev => [...prev, { ...ask, tabId: owner }]);
+    }) as any);
+    offs.push(window.electronAPI?.onSitePermissionCancel?.((id) => {
+      setPermAsks(prev => prev.filter(a => a.id !== id));
     }) as any);
     // Torrent: o main manda 'open' quando intercepta magnet/.torrent → abre o card e busca
     // a metadata; 'stats' atualiza peers/progresso ao vivo; save-done/erro atualizam a linha.
@@ -1447,6 +1474,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             }}
             onNewTab={store.addTab}
           />
+          <PermissionPrompt ask={permAsks.find(a => a.tabId === store.activeTabId)} onAnswer={answerPerm} />
           <AgentVisualOverlay state={agentVisual} ripples={ripples} metrics={agentVisual === 'idle' ? null : liveMetrics} />
           {torrent && (
             <TorrentSheet

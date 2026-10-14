@@ -233,6 +233,43 @@ body {
 }
 .url-sec.secure{ color:#5fb87a; }    /* cadeado verde discreto */
 .url-sec.insecure{ color:#e0a050; }  /* aviso âmbar */
+button.url-sec{ pointer-events:auto; background:transparent; border:none; padding:0; border-radius:6px; cursor:pointer; z-index:2; }
+button.url-sec:hover{ background:rgba(255,255,255,0.08); }
+
+/* Clique no cadeado: permissões guardadas deste site + "Redefinir" */
+.site-info-scrim{ position:fixed; inset:0; z-index:59; background:transparent; }
+.site-info{
+  position:absolute; top:calc(100% + 6px); left:0; z-index:60; width:300px;
+  background:#2b2b29; border:1px solid var(--hairline); border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,0.45); padding:14px 14px 12px; color:var(--text-primary); font-size:13px;
+}
+.site-info-host{ font-weight:600; font-size:14px; word-break:break-all; }
+.site-info-sec{ color:var(--text-muted); font-size:12px; margin:2px 0 10px; }
+.site-info-title{ font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px; }
+.site-info-list{ list-style:none; margin:0 0 10px; padding:0; }
+.site-info-list li{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid rgba(255,255,255,0.06); }
+.site-info-state{ background:#1f1e1d; color:var(--text-primary); border:1px solid var(--hairline); border-radius:8px; padding:3px 6px; font-size:12.5px; cursor:pointer; }
+.site-info-state.allow{ color:#5fb87a; }
+.site-info-state.block{ color:#e07a6a; }
+.site-info-reset{ background:transparent; border:1px solid var(--hairline); color:var(--text-primary); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:12.5px; }
+.site-info-reset:hover{ background:rgba(255,255,255,0.08); }
+
+/* Pergunta de permissão do site (câmera, microfone…) — balão no canto da aba, como no Chrome */
+.perm-prompt{
+  position:absolute; top:10px; left:12px; z-index:62; width:320px;   /* acima das barras de aviso (58/60) */
+  background:#2b2b29; border:1px solid var(--hairline); border-radius:14px;
+  box-shadow:0 12px 34px rgba(0,0,0,0.5); padding:16px 16px 14px; color:var(--text-primary); font-size:13.5px;
+}
+.perm-site{ font-weight:600; font-size:14.5px; padding-right:22px; word-break:break-all; }
+.perm-list{ margin:8px 0 14px; padding-left:18px; color:var(--text-primary); }
+.perm-list li{ margin:3px 0; }
+.perm-actions{ display:flex; justify-content:flex-end; gap:8px; }
+.perm-actions button{ border-radius:999px; padding:7px 16px; font-size:13px; cursor:pointer; border:1px solid var(--hairline); background:transparent; color:var(--text-primary); }
+.perm-actions .perm-allow{ background:var(--accent); border-color:var(--accent); color:#fff; }
+.perm-actions button:hover:not(:disabled){ filter:brightness(1.1); }
+.perm-actions button:disabled{ opacity:.55; cursor:default; }
+.perm-x{ position:absolute; top:8px; right:8px; width:26px; height:26px; border:none; border-radius:999px; background:transparent; color:var(--text-muted); cursor:pointer; }
+.perm-x:hover{ background:rgba(255,255,255,0.08); color:var(--text-primary); }
 .url-input-wrapper.has-sec .url-input{ padding-left:34px; }
 
 /* 🔮 Autocomplete da barra (sugestões de histórico + favoritos) */

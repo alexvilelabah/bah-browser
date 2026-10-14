@@ -33,6 +33,7 @@
     "mammoth": "^1.12.0",
     "pdf-parse": "^2.4.5",
     "tesseract.js": "^7.0.0",
+    "tldts-experimental": "^7.4.5",
     "twemoji-colr-font": "^15.0.3",
     "uuid": "^11.1.0",
     "webtorrent": "^3.0.16"

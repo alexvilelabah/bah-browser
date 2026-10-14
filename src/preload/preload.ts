@@ -85,6 +85,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('tab-audio', listener);
     return () => ipcRenderer.removeListener('tab-audio', listener);
   },
+  // Site pedindo câmera/microfone/localização…: o main pergunta pela tela e espera a resposta.
+  onSitePermissionAsk: (cb: (p: { id: string; wcId: number; origin: string; kinds: string[]; external?: string }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('site-permission:ask', listener);
+    return () => ipcRenderer.removeListener('site-permission:ask', listener);
+  },
+  onSitePermissionCancel: (cb: (id: string) => void) => {
+    const listener = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('site-permission:cancel', listener);
+    return () => ipcRenderer.removeListener('site-permission:cancel', listener);
+  },
+  answerSitePermission: (id: string, answer: 'allow' | 'block' | 'dismiss') => ipcRenderer.invoke('site-permission:answer', id, answer),
+  listSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:list', url),
+  setSitePermission: (url: string, kind: string, value: 'allow' | 'block' | null) => ipcRenderer.invoke('site-permission:set', url, kind, value),
+  resetSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:reset', url),
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),

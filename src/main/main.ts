@@ -40,6 +40,8 @@ import { decidePopup, decideAuthPopup } from './popup-shield';
 import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
+import { setupSitePermissions } from './site-permissions';
+import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
@@ -238,11 +240,11 @@ async function flushBrowserState(): Promise<void> {
 
 function isGoogleCookie(cookie: Electron.Cookie): boolean {
   const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
-  return domain.endsWith('google.com') ||
-    domain.endsWith('google.com.br') ||
-    domain.endsWith('youtube.com') ||
-    domain.endsWith('googleusercontent.com') ||
-    domain.endsWith('gstatic.com');
+  // Com o ponto na frente: "fakegoogle.com" NÃO é do Google (era — e no login sincronizado
+  // esses cookies eram apagados/copiados junto).
+  const isOf = (site: string) => domain === site || domain.endsWith('.' + site);
+  return isOf('google.com') || isOf('google.com.br') || isOf('youtube.com') ||
+    isOf('googleusercontent.com') || isOf('gstatic.com');
 }
 
 function cookieUrl(cookie: Electron.Cookie): string | null {
@@ -629,17 +631,6 @@ async function copyAllCdpCookies(cdpCookies: any[], target: Electron.Session): P
   return copied;
 }
 
-// Casa cookies de um domínio-alvo: o próprio host, o registrable domain aproximado (eTLD+1
-// pelos 2 últimos rótulos) e seus subdomínios. Aproximação boa o bastante pra sites comuns.
-function makeDomainMatcher(host: string): (cookieDomain: string) => boolean {
-  const h = host.replace(/^www\./, '').toLowerCase();
-  const base = h.split('.').slice(-2).join('.');
-  return (cookieDomain: string) => {
-    const d = String(cookieDomain || '').replace(/^\./, '').toLowerCase();
-    return !!d && (d === h || d === base || d.endsWith('.' + base));
-  };
-}
-
 // macOS: fechar a última janela NÃO encerra o Chrome (ele fica no Dock), então o 'exit'
 // nunca chega e o login ficava esperando o prazo inteiro (8 ou 5 min). Lá, "nenhuma aba
 // aberta" (depois de já ter tido alguma) conta como "fechou a janela". Fora do Mac: sempre
@@ -672,9 +663,9 @@ async function loginToSiteWithSystemBrowser(rawUrl: string): Promise<{ ok: boole
   let target: URL;
   try { target = new URL(rawUrl); } catch { return { ok: false, error: 'Invalid URL.' }; }
   if (!/^https?:$/.test(target.protocol)) return { ok: false, error: 'Open a normal website first (http/https).' };
-  const host = target.hostname.replace(/^www\./, '');
-  const base = host.split('.').slice(-2).join('.');
-  const domainMatches = makeDomainMatcher(host);
+  // Endereço inteiro (com "www."): em www.gov.br o site é www.gov.br, não todo .gov.br.
+  const base = siteOf(target.hostname);   // "mercadolivre.com.br", não "com.br" (cookie-domain.ts)
+  const domainMatches = makeDomainMatcher(target.hostname);
 
   const profileDir = path.join(app.getPath('userData'), 'system-login-profile');
   fs.mkdirSync(profileDir, { recursive: true });
@@ -886,8 +877,9 @@ function createWindow(): void {
   });
 
   // Microfone PRA NOSSA UI (recurso de voz → Whisper local). Sem isto o getUserMedia
-  // falha calado no Electron. Só a janela do app (confiável) ganha 'media'; os SITES no
-  // <webview> usam outra sessão (partition persist:browser) e seguem SEM microfone.
+  // falha calado no Electron. Só a janela do app (confiável) ganha 'media'. Os SITES no
+  // <webview> usam outra sessão (partition persist:browser), com as regras próprias de
+  // site-permissions.ts (o Bah pergunta antes de liberar câmera/microfone).
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback) => {
     if (permission === 'media') return callback(wc === mainWindow?.webContents);
     callback(true);   // demais permissões da própria UI: mantém o permissivo de antes
@@ -2508,6 +2500,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   downloadManager.attach(session.defaultSession);
   // Medidor do computador na barra de cima (CPU, RAM, placa de vídeo) — só mede quando ligado e visível.
   setupHwMonitor({ getMainWindow: () => mainWindow });
+  // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
+  // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
+  setupSitePermissions({
+    getMainWindow: () => mainWindow,
+    sessions: [session.fromPartition(BROWSER_PARTITION), session.fromPartition(GOOGLE_LOGIN_PARTITION)],
+  });
   // Botão "Baixar" em cima do vídeo do YouTube: escolhe a resolução e o download entra na
   // mesma lista de Downloads. Baixar exige clique de verdade recente naquela aba.
   videoButton = setupVideoButton({
@@ -3086,12 +3084,21 @@ const STEALTH_SCRIPT = `
     if (!window.chrome.loadTimes) window.chrome.loadTimes = function() { return { commitLoadTime: Date.now()/1000, finishDocumentLoadTime: Date.now()/1000, finishLoadTime: Date.now()/1000, firstPaintTime: Date.now()/1000, navigationType: 'Other', requestTime: Date.now()/1000-1, startLoadTime: Date.now()/1000, wasFetchedViaSpdy: true, wasNpnNegotiated: true, npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false, connectionInfo: 'h2' }; };
     if (!window.chrome.app) window.chrome.app = { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } };
 
-    // 5. Permissions API
+    // 5. Permissions API — o Bah só sabe responder "liberado/negado" (site-permissions.ts), e
+    //    diz "negado" pra o que a pessoa AINDA NÃO respondeu. Aqui esse "negado" vira "vai
+    //    perguntar" ('prompt'), como no Chrome — senão o site acha que foi bloqueado e nem pede.
+    //    (Bloqueado de verdade: o site pede e o Bah nega na hora.)
     const origQuery = navigator.permissions && navigator.permissions.query;
     if (origQuery) {
-      navigator.permissions.query = (params) => params && params.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission, onchange: null })
-        : origQuery.call(navigator.permissions, params);
+      const ASKABLE = { notifications: 1, geolocation: 1, camera: 1, microphone: 1, 'clipboard-read': 1, midi: 1, 'idle-detection': 1, 'window-management': 1 };
+      navigator.permissions.query = function (params) {
+        return origQuery.call(navigator.permissions, params).then((st) => {
+          if (st && st.state === 'denied' && params && ASKABLE[params.name]) {
+            try { Object.defineProperty(st, 'state', { get: () => 'prompt', configurable: true }); } catch {}
+          }
+          return st;
+        });
+      };
     }
 
     // 6. WebGL vendor — pretend to be a real GPU
@@ -3127,10 +3134,16 @@ const STEALTH_SCRIPT = `
       // Make sure HTMLIFrameElement.prototype.contentWindow is OK (real)
     } catch {}
 
-    // 10. Notification.permission — bot pages return 'denied' inconsistently
+    // 10. Notification.permission: 'granted' só quando a pessoa liberou de verdade; senão
+    //     'default' (o site pede e o Bah pergunta) — nunca o 'denied' que o Bah usa pra quem
+    //     ainda não respondeu. (Antes era SEMPRE 'default': um "Permitir" nunca aparecia pro site.)
     if (window.Notification) {
       try {
-        Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+        const realPerm = Object.getOwnPropertyDescriptor(Notification, 'permission');
+        Object.defineProperty(Notification, 'permission', {
+          get: () => { try { return realPerm && realPerm.get && realPerm.get.call(Notification) === 'granted' ? 'granted' : 'default'; } catch (e) { return 'default'; } },
+          configurable: true,
+        });
       } catch {}
     }
 
