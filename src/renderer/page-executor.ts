@@ -485,6 +485,10 @@ function shorten(value: string, max = 80): string {
   return value.length > max ? `${value.slice(0, max - 1)}...` : value;
 }
 
+// Campo de senha nunca entra no que a IA lê: o texto de um elemento cai no `value` quando não há
+// rótulo — num type=password isso seria a senha (digitada ou preenchida pelo Bah). Também conta como
+// senha: autocomplete current/new-password, nome/id de senha e o data-bah-pw que o preload das senhas
+// põe quando o "olhinho" do site troca o campo pra type=text. Vale aqui e no label()/secret().
 const OBSERVE_SCRIPT = `
 (function() {
   const selector = 'a,button,input,textarea,select,[contenteditable="true"],[role=textbox],[role=button],[role=link],[tabindex]:not([tabindex="-1"])';
@@ -493,7 +497,8 @@ const OBSERVE_SCRIPT = `
     const style = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && r.bottom >= 0 && r.right >= 0 && r.top <= innerHeight && r.left <= innerWidth;
   };
-  const textFor = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').replace(/\\s+/g, ' ').trim();
+  const secret = (el) => { try { const ac = String(el.getAttribute('autocomplete') || '').toLowerCase(); return el.type === 'password' || el.hasAttribute('data-bah-pw') || ac.indexOf('current-password') >= 0 || ac.indexOf('new-password') >= 0 || /passw|pwd|senha|contrase/i.test(String(el.name || '') + ' ' + String(el.id || '')); } catch (e) { return false; } };
+  const textFor = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || (secret(el) ? '' : el.value) || '').replace(/\\s+/g, ' ').trim();
   const elements = Array.from(document.querySelectorAll(selector))
     .filter(isVisible)
     .slice(0, 200)
@@ -501,7 +506,7 @@ const OBSERVE_SCRIPT = `
       const r = el.getBoundingClientRect();
       const ariaLabel = el.getAttribute('aria-label') || '';
       const innerText = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-      const text = (innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').slice(0, 120);
+      const text = (innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || (secret(el) ? '' : el.value) || '').slice(0, 120);
       const pressed = el.getAttribute('aria-pressed');
       const checked = el.getAttribute('aria-checked');
       return {
@@ -556,8 +561,9 @@ window.__browserTools = window.__browserTools || {
       + (hit.getAttribute && hit.getAttribute('aria-label') ? ' [' + hit.getAttribute('aria-label').slice(0, 40) + ']' : '');
     return { ok: false, covering: desc };
   },
+  secret: (el) => { try { const ac = String(el.getAttribute('autocomplete') || '').toLowerCase(); return el.type === 'password' || el.hasAttribute('data-bah-pw') || ac.indexOf('current-password') >= 0 || ac.indexOf('new-password') >= 0 || /passw|pwd|senha|contrase/i.test(String(el.name || '') + ' ' + String(el.id || '')); } catch (e) { return false; } },
   label(el) {
-    return (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').replace(/\\s+/g, ' ').trim();
+    return (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || (this.secret(el) ? '' : el.value) || '').replace(/\\s+/g, ' ').trim();
   },
   fireClick(el) {
     el.scrollIntoView({ block: 'center', inline: 'center' });

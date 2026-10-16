@@ -16,6 +16,10 @@ import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
+import PasswordSavePrompt from './components/PasswordSavePrompt';
+import PasswordSuggest from './components/PasswordSuggest';
+import PasswordsPanel from './components/PasswordsPanel';
+import type { PasswordsBridge, PwOffer, PwSuggest } from '../shared/password-types';
 import MonitorsPanel from './components/MonitorsPanel';
 import ClearDataDialog, { type ClearChoice } from './components/ClearDataDialog';
 import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange } from '../shared/clear-data';
@@ -151,6 +155,7 @@ declare global {
       listSitePermissions?: (url: string) => Promise<{ origin: string; perms: Record<string, 'allow' | 'block'> }>;
       setSitePermission?: (url: string, kind: string, value: 'allow' | 'block' | null) => Promise<{ ok: boolean; perms?: Record<string, 'allow' | 'block'> }>;
       resetSitePermissions?: (url: string) => Promise<any>;
+      passwords?: PasswordsBridge;
       getExtensionsState?: () => Promise<ExtensionInfo[]>;
       onExtensionsState?: (cb: (list: ExtensionInfo[]) => void) => (() => void);
       onExtensionOpenTab?: (cb: (p: { reqId: number; url: string; active: boolean }) => void) => (() => void);
@@ -332,6 +337,29 @@ export default function App() {
     setPermAsks(prev => prev.filter(a => a.id !== id));
     window.electronAPI?.answerSitePermission?.(id, answer);
   }, []);
+  // Senhas salvas: o balão "Salvar senha?" (preso à aba do login) e a lista de contas em cima do
+  // campo. A senha nunca chega aqui — só site, usuário e tamanho (main/password-manager.ts).
+  const [pwOffers, setPwOffers] = useState<Array<PwOffer & { tabId: string }>>([]);
+  const [pwSuggest, setPwSuggest] = useState<(PwSuggest & { tabId: string }) | null>(null);
+  const [passwordsOpen, setPasswordsOpen] = useState<{ query?: string } | null>(null);
+  const answerPwOffer = useCallback(async (id: string, answer: 'save' | 'never' | 'dismiss', username?: string) => {
+    const r = await window.electronAPI?.passwords?.answerOffer(id, answer, username).catch(() => undefined);
+    // Gravar falhou: o balão fica (com o aviso) pra pessoa tentar de novo.
+    if (answer === 'save' && r && !r.ok && r.error === 'write-failed') return false;
+    setPwOffers(prev => prev.filter(o => o.id !== id));
+    return true;
+  }, []);
+  const revealPwOffer = useCallback(async (id: string) => {
+    const r = await window.electronAPI?.passwords?.revealOffer(id).catch(() => undefined);
+    return r && r.ok ? r.password : null;
+  }, []);
+  const closePwSuggest = useCallback(() => setPwSuggest(null), []);
+  const pickPwSuggest = useCallback((suggestId: string, entryId: string) => {
+    setPwSuggest(null);
+    void window.electronAPI?.passwords?.fill(suggestId, entryId).catch(() => {});
+  }, []);
+  // Trocou de aba: a lista era do campo da outra.
+  useEffect(() => { setPwSuggest(cur => (cur && cur.tabId !== store.activeTabId ? null : cur)); }, [store.activeTabId]);
   // Site-initiated downloads (will-download no main) — drenados pelo loop do agente
   // para a IA saber que o clique em "baixar" realmente produziu um arquivo.
   const downloadEventsRef = useRef<Array<{ state: string; filename: string; path?: string; bytes?: number; reason?: string }>>([]);
@@ -518,6 +546,28 @@ export default function App() {
     offs.push(window.electronAPI?.onSitePermissionCancel?.((id) => {
       setPermAsks(prev => prev.filter(a => a.id !== id));
     }) as any);
+    // Senhas: a aba dona pelo webContents. Aba escondida (trabalho da IA, busca rápida) nunca
+    // pergunta nem mostra a lista; a anônima o main já nem manda pergunta.
+    const pwOwner = (wcId: number) => {
+      for (const [tabId, wv] of webviewRefs.current) {
+        try { if ((wv as any).getWebContentsId?.() === wcId) return tabsRef.current.find(x => x.id === tabId); } catch {}
+      }
+      return undefined;
+    };
+    const pw = window.electronAPI?.passwords;
+    offs.push(pw?.onOffer((offer) => {
+      const tab = pwOwner(offer.wcId);
+      if (!tab || tab.hidden || tab.incognito) { void pw.answerOffer(offer.id, 'dismiss').catch(() => {}); return; }
+      // Uma pergunta por aba: a nova (outro login na mesma aba) toma o lugar.
+      setPwOffers(prev => [...prev.filter(o => o.tabId !== tab.id), { ...offer, tabId: tab.id }]);
+    }));
+    offs.push(pw?.onOfferCancel((id) => setPwOffers(prev => prev.filter(o => o.id !== id))));
+    offs.push(pw?.onSuggest((s) => {
+      const tab = pwOwner(s.wcId);
+      if (!tab || tab.hidden || tab.id !== userTabRef.current) return;
+      setPwSuggest({ ...s, tabId: tab.id });
+    }));
+    offs.push(pw?.onSuggestHide(({ wcId }) => setPwSuggest(cur => (cur && cur.wcId === wcId ? null : cur))));
     // Torrent: o main manda 'open' quando intercepta magnet/.torrent → abre o card e busca
     // a metadata; 'stats' atualiza peers/progresso ao vivo; save-done/erro atualizam a linha.
     offs.push(window.electronAPI?.onTorrentEvent?.((info) => {
@@ -1758,6 +1808,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🧹</span>
                   <span className="menu-label">{t('menu.clearData')}</span>
                 </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setPasswordsOpen({}); }} title={t('pw.menuTitle')}>
+                  <span className="menu-ic">🔑</span>
+                  <span className="menu-label">{t('pw.menu')}</span>
+                </button>
                 {/* Entrar no Google / neste site trazem os cookies pro perfil NORMAL: numa aba anônima
                     não fariam sentido (e misturariam as duas) — ficam apagados, com o porquê. */}
                 <button className="menu-item" disabled={activeIncognito} onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.googleLoginTitle')}>
@@ -1872,6 +1926,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {/* Aba anônima que ainda não abriu nada: a explicação (desenhada aqui, sem internet). */}
           {activeIncognito && isIncognitoBlank(store.activeTab.url) && <IncognitoPage />}
           <PermissionPrompt ask={permAsks.find(a => a.tabId === store.activeTabId)} onAnswer={answerPerm} />
+          <PasswordSavePrompt offer={pwOffers.find(o => o.tabId === store.activeTabId)} onAnswer={answerPwOffer} onReveal={revealPwOffer} />
+          {pwSuggest && pwSuggest.tabId === store.activeTabId && (
+            <PasswordSuggest
+              suggest={pwSuggest}
+              getWebview={() => webviewRefs.current.get(pwSuggest.tabId) as unknown as HTMLElement | undefined}
+              onPick={(entryId) => pickPwSuggest(pwSuggest.id, entryId)}
+              onManage={() => { const host = pwSuggest.host; setPwSuggest(null); setPasswordsOpen({ query: host }); }}
+              onClose={closePwSuggest}
+            />
+          )}
           <AgentVisualOverlay state={agentVisual} ripples={ripples} metrics={agentVisual === 'idle' ? null : liveMetrics} />
           {torrent && (
             <TorrentSheet
@@ -4621,6 +4685,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
         </div>
       )}
       {clearDataOpen && <ClearDataDialog onClose={closeClearData} sitesInRange={sitesInRange} onClear={runClearData} />}
+      {/* ⋮ → Senhas (ou "Gerenciar senhas…" da lista em cima do campo, já filtrado pelo site). */}
+      {passwordsOpen && <PasswordsPanel initialQuery={passwordsOpen.query} onClose={() => setPasswordsOpen(null)} />}
       {/* dead second AgentCommandBar removed */}
     </div>
   );

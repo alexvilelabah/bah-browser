@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { VisionImage } from '../shared/vision';
+import type { PasswordsBridge } from '../shared/password-types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Window controls
@@ -122,6 +123,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:list', url),
   setSitePermission: (url: string, kind: string, value: 'allow' | 'block' | null) => ipcRenderer.invoke('site-permission:set', url, kind, value),
   resetSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:reset', url),
+  // Senhas salvas (main/password-manager.ts). A tela nunca recebe senha guardada nem cifrada: só o
+  // site, o usuário e o tamanho. Revelar/copiar a guardada passam pela confirmação do main.
+  passwords: ((): PasswordsBridge => {
+    const on = <T>(channel: string, cb: (p: T) => void) => {
+      const listener = (_e: unknown, p: T) => cb(p);
+      ipcRenderer.on(channel, listener);
+      return () => { ipcRenderer.removeListener(channel, listener); };
+    };
+    return {
+      state: () => ipcRenderer.invoke('passwords:state'),
+      onChanged: (cb) => on('passwords:changed', () => cb()),
+      onOffer: (cb) => on('passwords:offer', cb),
+      onOfferCancel: (cb) => on('passwords:offer-cancel', cb),
+      answerOffer: (id, answer, username) => ipcRenderer.invoke('passwords:offer-answer', id, answer, username),
+      revealOffer: (id) => ipcRenderer.invoke('passwords:offer-reveal', id),
+      onSuggest: (cb) => on('passwords:suggest', cb),
+      onSuggestHide: (cb) => on('passwords:suggest-hide', cb),
+      fill: (suggestId, entryId) => ipcRenderer.invoke('passwords:fill', suggestId, entryId),
+      setOfferToSave: (v) => ipcRenderer.invoke('passwords:set-offer', v),
+      reveal: (id) => ipcRenderer.invoke('passwords:reveal', id),
+      copy: (id, what) => ipcRenderer.invoke('passwords:copy', id, what),
+      update: (id, patch) => ipcRenderer.invoke('passwords:update', id, patch),
+      remove: (id) => ipcRenderer.invoke('passwords:delete', id),
+      removeNever: (origin) => ipcRenderer.invoke('passwords:never-remove', origin),
+      importCsv: () => ipcRenderer.invoke('passwords:import'),
+      exportCsv: () => ipcRenderer.invoke('passwords:export'),
+      lock: () => ipcRenderer.send('passwords:lock'),
+    };
+  })(),
   // Extensões do Chrome: botões na barra (ícone, badge), clique, remover, loja, opções.
   getExtensionsState: () => ipcRenderer.invoke('extensions:get-state'),
   onExtensionsState: (cb: (list: any[]) => void) => {

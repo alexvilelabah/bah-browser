@@ -41,6 +41,8 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { setupPasswordManager } from './password-manager';
+import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
@@ -103,6 +105,22 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'bm.dlg.import': 'Import favorites from an HTML file', 'bm.dlg.export': 'Export favorites',
     'bm.dlg.filter': 'Favorites file (HTML)', 'bm.dlg.all': 'All files',
     'bm.export.title': 'Bookmarks', 'bm.export.toolbar': 'Bookmarks bar',
+    // Senhas salvas (password-manager.ts): confirmação, importar/exportar.
+    'pw.auth.title': 'Saved passwords', 'pw.auth.noUser': 'no username',
+    'pw.auth.show': 'Show the saved password for {user} on {site}?', 'pw.auth.copy': 'Copy the saved password for {user} on {site}?', 'pw.auth.edit': 'Edit the saved password for {user} on {site}?',
+    'pw.auth.detail': 'For the next minute Bah will not ask again, for this password only. Make sure nobody else is looking at your screen.',
+    'pw.auth.touchid.show': 'show the saved password for {user} on {site}', 'pw.auth.touchid.copy': 'copy the saved password for {user} on {site}',
+    'pw.auth.touchid.edit': 'edit the saved password for {user} on {site}', 'pw.auth.touchid.export': 'export all your saved passwords',
+    'pw.auth.ok': 'Continue', 'pw.cancel': 'Cancel',
+    'pw.export.title': 'Export passwords', 'pw.export.message': 'Export all your saved passwords to a file?',
+    'pw.export.detail': 'The file will have ALL your saved passwords in plain text, unprotected. Anyone who gets the file (or any program on this computer) can read them. Save it somewhere only you can reach and delete it as soon as you are done.',
+    'pw.export.go': 'Export', 'pw.export.dlg': 'Save passwords as a CSV file', 'pw.export.file': 'Bah Passwords.csv', 'pw.csv.filter': 'CSV file',
+    'pw.import.dlg': 'Import passwords from a CSV file', 'pw.import.title': 'Import passwords',
+    'pw.import.done': 'Imported: {added}. Already saved: {dup}. Kept the saved one (different password): {conflicts}. Skipped (not a website or incomplete): {invalid}.',
+    'pw.import.deleteCsv': 'Now delete the CSV file: it has your passwords in plain text, and anyone who opens it can read them.',
+    'pw.import.trash': 'Move the CSV to the trash', 'pw.import.keep': 'Keep the file',
+    'pw.import.none': 'No passwords found in this file. Use the CSV exported by Chrome, Edge or another password manager (columns url, username and password).',
+    'pw.import.tooBig': 'This file is too big for a password list (limit: 5 MB).',
     'mnu.clearData': 'Clear browsing data…',
     'mnu.print': 'Print…', 'pdf.dlg.title': 'Save as PDF', 'pdf.dlg.filter': 'PDF document', 'pdf.fallbackName': 'page',
     'pdf.dlg.replace': '{name} already exists. Do you want to replace it?', 'pdf.dlg.replaceYes': 'Replace', 'pdf.dlg.replaceNo': 'Cancel',
@@ -145,6 +163,22 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'bm.dlg.import': 'Importar favoritos de um arquivo HTML', 'bm.dlg.export': 'Exportar favoritos',
     'bm.dlg.filter': 'Arquivo de favoritos (HTML)', 'bm.dlg.all': 'Todos os arquivos',
     'bm.export.title': 'Favoritos', 'bm.export.toolbar': 'Barra de favoritos',
+    // Senhas salvas (password-manager.ts): confirmação, importar/exportar.
+    'pw.auth.title': 'Senhas salvas', 'pw.auth.noUser': 'sem nome de usuário',
+    'pw.auth.show': 'Mostrar a senha salva de {user} em {site}?', 'pw.auth.copy': 'Copiar a senha salva de {user} em {site}?', 'pw.auth.edit': 'Editar a senha salva de {user} em {site}?',
+    'pw.auth.detail': 'No próximo minuto o Bah não pergunta de novo, só para esta senha. Confira se ninguém está olhando a sua tela.',
+    'pw.auth.touchid.show': 'mostrar a senha salva de {user} em {site}', 'pw.auth.touchid.copy': 'copiar a senha salva de {user} em {site}',
+    'pw.auth.touchid.edit': 'editar a senha salva de {user} em {site}', 'pw.auth.touchid.export': 'exportar todas as suas senhas salvas',
+    'pw.auth.ok': 'Continuar', 'pw.cancel': 'Cancelar',
+    'pw.export.title': 'Exportar senhas', 'pw.export.message': 'Exportar todas as suas senhas salvas para um arquivo?',
+    'pw.export.detail': 'O arquivo vai ter TODAS as suas senhas salvas em texto puro, sem proteção nenhuma. Qualquer pessoa que pegar o arquivo (ou qualquer programa deste computador) consegue ler. Salve num lugar só seu e apague assim que terminar.',
+    'pw.export.go': 'Exportar', 'pw.export.dlg': 'Salvar as senhas num arquivo CSV', 'pw.export.file': 'Senhas do Bah.csv', 'pw.csv.filter': 'Arquivo CSV',
+    'pw.import.dlg': 'Importar senhas de um arquivo CSV', 'pw.import.title': 'Importar senhas',
+    'pw.import.done': 'Importadas: {added}. Já estavam salvas: {dup}. Mantive a salva (senha diferente): {conflicts}. Puladas (não é site ou está incompleta): {invalid}.',
+    'pw.import.deleteCsv': 'Agora apague o arquivo CSV: ele tem as suas senhas em texto puro, e qualquer pessoa que abrir consegue ler.',
+    'pw.import.trash': 'Mandar o CSV para a Lixeira', 'pw.import.keep': 'Manter o arquivo',
+    'pw.import.none': 'Nenhuma senha encontrada neste arquivo. Use o CSV exportado pelo Chrome, pelo Edge ou por outro gerenciador de senhas (colunas url, username e password).',
+    'pw.import.tooBig': 'Este arquivo é grande demais para uma lista de senhas (limite: 5 MB).',
     'mnu.clearData': 'Limpar dados de navegação…',
     'mnu.print': 'Imprimir…', 'pdf.dlg.title': 'Salvar como PDF', 'pdf.dlg.filter': 'Documento PDF', 'pdf.fallbackName': 'pagina',
     'pdf.dlg.replace': '{name} já existe. Deseja substituí-lo?', 'pdf.dlg.replaceYes': 'Substituir', 'pdf.dlg.replaceNo': 'Cancelar',
@@ -187,6 +221,22 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'bm.dlg.import': 'Importar favoritos de un archivo HTML', 'bm.dlg.export': 'Exportar favoritos',
     'bm.dlg.filter': 'Archivo de favoritos (HTML)', 'bm.dlg.all': 'Todos los archivos',
     'bm.export.title': 'Favoritos', 'bm.export.toolbar': 'Barra de favoritos',
+    // Senhas salvas (password-manager.ts): confirmação, importar/exportar.
+    'pw.auth.title': 'Contraseñas guardadas', 'pw.auth.noUser': 'sin nombre de usuario',
+    'pw.auth.show': '¿Mostrar la contraseña guardada de {user} en {site}?', 'pw.auth.copy': '¿Copiar la contraseña guardada de {user} en {site}?', 'pw.auth.edit': '¿Editar la contraseña guardada de {user} en {site}?',
+    'pw.auth.detail': 'Durante el próximo minuto, Bah no volverá a preguntar, solo para esta contraseña. Asegúrate de que nadie esté mirando tu pantalla.',
+    'pw.auth.touchid.show': 'mostrar la contraseña guardada de {user} en {site}', 'pw.auth.touchid.copy': 'copiar la contraseña guardada de {user} en {site}',
+    'pw.auth.touchid.edit': 'editar la contraseña guardada de {user} en {site}', 'pw.auth.touchid.export': 'exportar todas tus contraseñas guardadas',
+    'pw.auth.ok': 'Continuar', 'pw.cancel': 'Cancelar',
+    'pw.export.title': 'Exportar contraseñas', 'pw.export.message': '¿Exportar todas tus contraseñas guardadas a un archivo?',
+    'pw.export.detail': 'El archivo tendrá TODAS tus contraseñas guardadas en texto sin cifrar, sin ninguna protección. Cualquier persona que obtenga el archivo (o cualquier programa de este equipo) puede leerlas. Guárdalo en un lugar solo tuyo y bórralo en cuanto termines.',
+    'pw.export.go': 'Exportar', 'pw.export.dlg': 'Guardar las contraseñas en un archivo CSV', 'pw.export.file': 'Contraseñas de Bah.csv', 'pw.csv.filter': 'Archivo CSV',
+    'pw.import.dlg': 'Importar contraseñas de un archivo CSV', 'pw.import.title': 'Importar contraseñas',
+    'pw.import.done': 'Importadas: {added}. Ya estaban guardadas: {dup}. Se mantuvo la guardada (contraseña distinta): {conflicts}. Omitidas (no es un sitio web o está incompleta): {invalid}.',
+    'pw.import.deleteCsv': 'Ahora borra el archivo CSV: tiene tus contraseñas en texto sin cifrar y cualquiera que lo abra puede leerlas.',
+    'pw.import.trash': 'Enviar el CSV a la papelera', 'pw.import.keep': 'Conservar el archivo',
+    'pw.import.none': 'No se encontraron contraseñas en este archivo. Usa el CSV exportado por Chrome, Edge u otro gestor de contraseñas (columnas url, username y password).',
+    'pw.import.tooBig': 'Este archivo es demasiado grande para una lista de contraseñas (límite: 5 MB).',
     'mnu.clearData': 'Borrar datos de navegación…',
     'mnu.print': 'Imprimir…', 'pdf.dlg.title': 'Guardar como PDF', 'pdf.dlg.filter': 'Documento PDF', 'pdf.fallbackName': 'pagina',
     'pdf.dlg.replace': '{name} ya existe. ¿Desea reemplazarlo?', 'pdf.dlg.replaceYes': 'Reemplazar', 'pdf.dlg.replaceNo': 'Cancelar',
@@ -234,6 +284,8 @@ let localEngine: AIEngine | null = null;
 let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
 let videoButton: ReturnType<typeof setupVideoButton> | null = null;
 let faviconCache: ReturnType<typeof setupFaviconCache> | null = null;
+// Senhas salvas: o main avisa quando a IA digita numa aba (o que ela digita nunca vira "Salvar senha?").
+let passwordManager: ReturnType<typeof setupPasswordManager> | null = null;
 let localPageAgent: PageAgent | null = null;
 // Espelho do modo IA Local do renderer (store.localSettings.enabled). O main precisa saber
 // pra trabalhos em BACKGROUND (monitores) respeitarem "local não vaza pra nuvem" — o chat
@@ -1030,6 +1082,9 @@ function createWindow(): void {
       nodeIntegration: false,
       webviewTag: true,
       v8CacheOptions: 'bypassHeatCheck',   // bytecode da UI compila 1x e reusa (boot mais rápido)
+      // Bah instalado: sem DevTools na PRÓPRIA tela (F12, Ctrl+Shift+I e "Inspecionar" abririam um console
+      // com o preload da tela — e com ele o cofre). As páginas das abas seguem com "Inspecionar".
+      devTools: !app.isPackaged,
     },
   });
 
@@ -1091,9 +1146,9 @@ function createWindow(): void {
     mainWindow = null;
   });
 
-  // F12 toggles DevTools
+  // F12 toggles DevTools (só no Bah de desenvolvimento — o instalado não tem DevTools na própria tela)
   mainWindow.webContents.on('before-input-event', (_e, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12') {
+    if (!app.isPackaged && input.type === 'keyDown' && input.key === 'F12') {
       mainWindow?.webContents.toggleDevTools();
     }
   });
@@ -1381,7 +1436,8 @@ function attachContextMenu(wc: Electron.WebContents): void {
     if (wc.getType() === 'webview' && wc.hostWebContents === mainWindow?.webContents && !hasSelection && !isEditable && !params.linkURL && params.mediaType === 'none') {
       template.push({ label: mt('mnu.print'), accelerator: 'CmdOrCtrl+P', click: () => mainWindow?.webContents.send('app:shortcut', 'print') });
     }
-    template.push({ label: mt('ctx.inspect'), click: () => wc.inspectElement(params.x, params.y) });
+    // Inspecionar: a página de uma aba sempre; a tela do próprio Bah, só no de desenvolvimento.
+    if (!app.isPackaged || wc !== mainWindow?.webContents) template.push({ label: mt('ctx.inspect'), click: () => wc.inspectElement(params.x, params.y) });
 
     Menu.buildFromTemplate(template).popup({ window: mainWindow ?? undefined });
   });
@@ -1478,16 +1534,24 @@ function setupIPC(): void {
   // em texto puro SÓ na memória; no disco (localStorage) vai cifrada. Fallback: texto puro
   // se o cofre não estiver disponível (ex.: Linux sem keyring) — nunca quebra o app.
   ipcMain.handle('secure:encrypt', (_e, t: string) => {
+    // Texto com a marca das senhas salvas (password-rules.ts): a tela não fabrica "senha cifrada".
+    if (isTaggedSecret(t)) return '';
     try {
       if (!t || !safeStorage.isEncryptionAvailable()) return t;
       return 'enc:' + safeStorage.encryptString(t).toString('base64');
     } catch { return t; }
   });
   ipcMain.on('secure:decrypt-sync', (e, t: string) => {
+    // Só a tela do Bah decifra: os preloads das abas (senhas, extensões) também falam com o main,
+    // e nada vindo de uma aba pode abrir o cofre do sistema por aqui.
+    if (!mainWindow || e.sender !== mainWindow.webContents) { e.returnValue = ''; return; }
     try {
-      e.returnValue = (typeof t === 'string' && t.startsWith('enc:'))
+      const plain = (typeof t === 'string' && t.startsWith('enc:'))
         ? safeStorage.decryptString(Buffer.from(t.slice(4), 'base64'))
         : t;
+      // Senha salva (o mesmo cofre, com a marca): este caminho NUNCA devolve — só o gerenciador de
+      // senhas abre, depois da confirmação (senão o DevTools leria o passwords.json e decifraria aqui).
+      e.returnValue = isTaggedSecret(plain) ? '' : plain;
     } catch { e.returnValue = t; }
   });
 
@@ -2069,6 +2133,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   ipcMain.handle('input:type', async (_e, wcId: number, text: string) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { success: false, error: 'webContents not found' };
+    passwordManager?.noteAgentInput(wcId);   // tecla da IA nunca vira "Salvar senha?"
     try {
       wc.focus();
       typingAbort = false;
@@ -2091,6 +2156,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         if (/[\s.,!?;:]/.test(ch) && Math.random() < 0.35) d += rnd(120, 300);
         await sleepMs(d);
       }
+      passwordManager?.noteAgentInput(wcId);
       return { success: !typingAbort, aborted: typingAbort, info: { typed } };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
@@ -2100,6 +2166,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   ipcMain.handle('input:key', async (_e, wcId: number, key: string) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { success: false, error: 'webContents not found' };
+    passwordManager?.noteAgentInput(wcId);
     try {
       wc.focus();
       wc.sendInputEvent({ type: 'keyDown', keyCode: key } as any);
@@ -2780,6 +2847,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     sessions: [session.fromPartition(BROWSER_PARTITION), session.fromPartition(GOOGLE_LOGIN_PARTITION)],
     // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
     privateSessions: [incognitoSession()],
+  });
+  // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
+  // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
+  // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.
+  passwordManager = setupPasswordManager({
+    getMainWindow: () => mainWindow,
+    t: mt,
+    browserSession: session.fromPartition(BROWSER_PARTITION),
+    privateSession: incognitoSession(),
   });
   // Botão "Baixar" em cima do vídeo do YouTube: escolhe a resolução e o download entra na
   // mesma lista de Downloads. Baixar exige clique de verdade recente naquela aba.
@@ -3740,7 +3816,8 @@ app.whenReady().then(async () => {
         { label: mt('mnu.moveTabRight'), accelerator: 'Control+Shift+PageDown', click: () => sendSc('move-tab-right') },
         ...tabNumberItems,
         { type: 'separator' },
-        { role: 'toggleDevTools' },
+        // DevTools da tela do Bah só no de desenvolvimento (no instalado, o atalho abriria o console da tela).
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' as const }]),
         { role: 'togglefullscreen' },
       ],
     },
