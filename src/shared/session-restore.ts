@@ -1,8 +1,8 @@
 // session-restore.ts — regras PURAS do "Continuar de onde parou" (⋮ → Ao abrir o Bah), igual ao
 // Chrome. Sem React, sem DOM, sem electron: o renderer (renderer/session.ts) e os testes
 // (tests/unit/session-restore.test.ts) usam a MESMA conta.
-//  • O que salvar: as abas da barra (nunca as escondidas, de trabalho do agente), na ordem da
-//    barra, com endereço, nome e se é fixada — e qual é a ativa. Só http/https: about:blank, data:,
+//  • O que salvar: as abas da barra (nunca as escondidas, de trabalho do agente, nem as anônimas),
+//    na ordem da barra, com endereço, nome e se é fixada — e qual é a ativa. Só http/https: about:blank, data:,
 //    file: (tabelas do Bah), chrome://, chrome-extension://, o player de torrent do próprio Bah
 //    (porta que muda a cada vez) e endereço com usuário:senha não voltam. Teto de abas e de texto.
 //  • A ativa depois de filtrar: se ela mesma não volta, assume a vizinha que sobrou (direita,
@@ -28,7 +28,7 @@ export interface SessionTab { url: string; title: string; pinned?: boolean }
 /** active = posição da ativa em tabs; -1 só quando não sobrou aba nenhuma. */
 export interface SavedSession { tabs: SessionTab[]; active: number }
 /** O que interessa de uma aba viva do renderer. */
-export interface SessionSource { id: string; url: string; title?: string; pinned?: boolean; hidden?: boolean }
+export interface SessionSource { id: string; url: string; title?: string; pinned?: boolean; hidden?: boolean; incognito?: boolean }
 
 /** Escolha salva → 'restore' ou o padrão (qualquer outra coisa, inclusive nada salvo). */
 export function normalizeStartupMode(raw: unknown): StartupMode {
@@ -81,11 +81,12 @@ function build(list: readonly unknown[], activePos: number): SavedSession {
   return { tabs: order.map(i => tabs[i]), active: order.indexOf(active) };
 }
 
-/** O que gravar: as abas da barra (sem as escondidas), na ordem, e qual é a ativa. */
+/** O que gravar: as abas da barra (sem as escondidas), na ordem, e qual é a ativa. Aba anônima
+ *  nunca vai pro disco — mas fica na conta da posição: se ela é a ativa, assume a vizinha. */
 export function sessionToSave(tabs: readonly SessionSource[], activeId: string): SavedSession {
   const strip = tabs.filter(t => !t.hidden);
   return build(
-    strip.map(t => ({ url: t.url, title: t.title, pinned: t.pinned })),
+    strip.map(t => (t.incognito ? null : { url: t.url, title: t.title, pinned: t.pinned })),
     strip.findIndex(t => t.id === activeId),
   );
 }

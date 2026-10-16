@@ -49,6 +49,7 @@ import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
 import { setupPagePrint } from './page-print';
 import { setupClearBrowsingData } from './clear-browsing-data';
+import { incognitoSession, isIncognitoWc, wipeIncognitoSession, setPrivateAi, isPrivateAi } from './incognito-session';
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
@@ -66,8 +67,9 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
   en: {
     'ctx.copy': 'Copy', 'ctx.cut': 'Cut', 'ctx.paste': 'Paste', 'ctx.selectAll': 'Select all',
     'ctx.copyLink': 'Copy link address', 'ctx.reload': 'Reload', 'ctx.inspect': 'Inspect',
-    'ctx.searchFor': 'Search {engine} for “{text}”',
+    'ctx.searchFor': 'Search {engine} for “{text}”', 'ctx.openIncognito': 'Open link in incognito tab',
     'mnu.navigate': 'Navigate', 'mnu.newTab': 'New tab', 'mnu.closeTab': 'Close tab', 'mnu.reopenTab': 'Reopen tab',
+    'mnu.newIncognito': 'New incognito tab',
     'mnu.focusUrl': 'Focus address bar', 'mnu.reload': 'Reload', 'mnu.reloadF5': 'Reload (F5)',
     'mnu.back': 'Back', 'mnu.forward': 'Forward', 'mnu.bookmark': 'Add bookmark', 'mnu.find': 'Find in page',
     'mnu.zoomIn': 'Zoom in', 'mnu.zoomOut': 'Zoom out', 'mnu.zoomReset': 'Reset zoom', 'mnu.history': 'History', 'mnu.downloads': 'Downloads',
@@ -106,8 +108,9 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
   pt: {
     'ctx.copy': 'Copiar', 'ctx.cut': 'Recortar', 'ctx.paste': 'Colar', 'ctx.selectAll': 'Selecionar tudo',
     'ctx.copyLink': 'Copiar endereço do link', 'ctx.reload': 'Recarregar', 'ctx.inspect': 'Inspecionar',
-    'ctx.searchFor': 'Pesquisar no {engine} por “{text}”',
+    'ctx.searchFor': 'Pesquisar no {engine} por “{text}”', 'ctx.openIncognito': 'Abrir link em aba anônima',
     'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nova aba', 'mnu.closeTab': 'Fechar aba', 'mnu.reopenTab': 'Reabrir aba',
+    'mnu.newIncognito': 'Nova aba anônima',
     'mnu.focusUrl': 'Focar endereço', 'mnu.reload': 'Recarregar', 'mnu.reloadF5': 'Recarregar (F5)',
     'mnu.back': 'Voltar', 'mnu.forward': 'Avançar', 'mnu.bookmark': 'Favoritar', 'mnu.find': 'Buscar na página',
     'mnu.zoomIn': 'Aumentar zoom', 'mnu.zoomOut': 'Diminuir zoom', 'mnu.zoomReset': 'Zoom normal', 'mnu.history': 'Histórico', 'mnu.downloads': 'Downloads',
@@ -146,8 +149,9 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
   es: {
     'ctx.copy': 'Copiar', 'ctx.cut': 'Cortar', 'ctx.paste': 'Pegar', 'ctx.selectAll': 'Seleccionar todo',
     'ctx.copyLink': 'Copiar dirección del enlace', 'ctx.reload': 'Recargar', 'ctx.inspect': 'Inspeccionar',
-    'ctx.searchFor': 'Buscar “{text}” en {engine}',
+    'ctx.searchFor': 'Buscar “{text}” en {engine}', 'ctx.openIncognito': 'Abrir enlace en una pestaña de incógnito',
     'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nueva pestaña', 'mnu.closeTab': 'Cerrar pestaña', 'mnu.reopenTab': 'Reabrir pestaña',
+    'mnu.newIncognito': 'Nueva pestaña de incógnito',
     'mnu.focusUrl': 'Enfocar la dirección', 'mnu.reload': 'Recargar', 'mnu.reloadF5': 'Recargar (F5)',
     'mnu.back': 'Atrás', 'mnu.forward': 'Adelante', 'mnu.bookmark': 'Añadir a favoritos', 'mnu.find': 'Buscar en la página',
     'mnu.zoomIn': 'Acercar', 'mnu.zoomOut': 'Alejar', 'mnu.zoomReset': 'Restablecer zoom', 'mnu.history': 'Historial', 'mnu.downloads': 'Descargas',
@@ -1082,6 +1086,8 @@ function createWindow(): void {
     const message: string = e?.message ?? '';   // 44: os argumentos soltos (level, message…) estão obsoletos
     if (message.startsWith('[Agent]') || message.startsWith('[DeepSeek]')) {
       console.log(`[renderer] ${message}`);
+      // IA numa aba anônima: os passos dela (endereços, o que digitou) não vão pro agent.log.
+      if (isPrivateAi()) return;
       try {
         const logPath = path.join(app.getPath('userData'), 'agent.log');
         fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
@@ -1095,6 +1101,9 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
+    // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
+    const incognito = isIncognitoWc(wc);
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
@@ -1147,7 +1156,7 @@ function createWindow(): void {
       if (!isMainFrame) videoButton?.injectFrame(wc, frameProcessId, frameRoutingId);
     });
     // Ícone que a aba mostrou → cache dos ícones dos favoritos (só guarda se o site é favorito).
-    wc.on('page-favicon-updated', (_e, favicons) => faviconCache?.notePageFavicons(wc.getURL(), favicons));
+    if (!incognito) wc.on('page-favicon-updated', (_e, favicons) => faviconCache?.notePageFavicons(wc.getURL(), favicons));
     attachContextMenu(wc);
     // Ctrl + roda do mouse = zoom (igual ao Chrome). O Chromium dispara 'zoom-changed'
     // com a direção quando o mouse está sobre a página; aplicamos no próprio webContents
@@ -1224,7 +1233,8 @@ function createWindow(): void {
       }
       recent.push(now);
       popupTimes.set(wc.id, recent);
-      mainWindow?.webContents.send('open-new-tab', stripTrackingParams(url));
+      // Popup de aba anônima vira aba anônima (nunca escapa pra sessão normal).
+      mainWindow?.webContents.send('open-new-tab', stripTrackingParams(url), incognito ? { incognito: true } : undefined);
       return { action: 'deny' };
     });
     // A janela de login NÃO é um <webview> e não passa por 'did-attach-webview' — nasce
@@ -1244,9 +1254,10 @@ function createWindow(): void {
         win.webContents.on('did-navigate', mostrarOrigem);
         attachContextMenu(win.webContents);
         win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-        // Só vale como login se a janela ficar na MESMA sessão das abas — é lá que o
-        // cookie precisa cair. Se divergir, o login "funciona" e não vale nada.
-        if (win.webContents.session !== session.fromPartition(BROWSER_PARTITION)) {
+        // Só vale como login se a janela ficar na MESMA sessão da aba que a abriu — é lá que o
+        // cookie precisa cair (a da aba anônima fica na sessão anônima, só na memória). Se
+        // divergir, o login "funciona" e não vale nada.
+        if (win.webContents.session !== wc.session) {
           console.warn('[Popup] janela de login em sessão divergente:', String(det?.url || '').slice(0, 80));
         }
         // Enquanto a janela de login viver, o bloqueador passa a decidir pelo host DELA.
@@ -1308,6 +1319,8 @@ function attachContextMenu(wc: Electron.WebContents): void {
     const query = (params.selectionText || '').replace(/\s+/g, ' ').trim();
     const inBah = !!mainWindow && !mainWindow.isDestroyed()
       && (wc === mainWindow.webContents || wc.hostWebContents === mainWindow.webContents);
+    // Página de aba anônima: o que ela abre (pesquisa da seleção) nasce anônimo também.
+    const fromIncognito = isIncognitoWc(wc);
     if (query && inBah) {
       // No Windows o "&" do rótulo vira atalho sublinhado; "&&" mostra o "&" de verdade.
       const amp = (x: string) => (process.platform === 'win32' ? x.replace(/&/g, '&&') : x);
@@ -1315,13 +1328,21 @@ function attachContextMenu(wc: Electron.WebContents): void {
         label: mt('ctx.searchFor', { engine: amp(engineName(searchEngine)), text: amp(selectionLabel(query)) }),
         click: () => {
           const url = buildSearchUrl(searchEngine, query, { googleLocale: searchGoogleLocale });
-          try { mainWindow?.webContents.send('open-new-tab', url); } catch {}
+          try { mainWindow?.webContents.send('open-new-tab', url, fromIncognito ? { incognito: true } : undefined); } catch {}
         },
       });
     }
 
     if (params.linkURL) {
       if (template.length) template.push({ type: 'separator' });
+      // "Abrir link em aba anônima" (o Chrome abre numa janela anônima): só link de site, só nas
+      // abas e na interface do Bah (a janela de login não tem barra de abas).
+      if (/^https?:\/\//i.test(params.linkURL) && inBah) {
+        template.push({
+          label: mt('ctx.openIncognito'),
+          click: () => { try { mainWindow?.webContents.send('open-new-tab', stripTrackingParams(params.linkURL), { incognito: true }); } catch {} },
+        });
+      }
       template.push({
         label: mt('ctx.copyLink'),
         // 44: clipboard.writeText virou assíncrono (devolve Promise).
@@ -2457,12 +2478,27 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
 
   // Preconnect preditivo (estilo Chrome): quando o autocomplete da barra completa um
   // domínio, abrimos o socket ANTES do Enter — a navegação já encontra a conexão pronta.
-  ipcMain.handle('net:preconnect', (_e, url: string) => {
+  // Aba anônima ativa: o socket abre na sessão anônima (nada de pista do site na sessão normal).
+  ipcMain.handle('net:preconnect', (_e, url: string, incognito?: boolean) => {
     try {
       if (!/^https?:\/\//i.test(url)) return false;
-      session.fromPartition(BROWSER_PARTITION).preconnect({ url, numSockets: 1 });
+      (incognito === true ? incognitoSession() : session.fromPartition(BROWSER_PARTITION)).preconnect({ url, numSockets: 1 });
       return true;
     } catch { return false; }
+  });
+
+  // ═══ Aba anônima ═══
+  // A última aba anônima fechou (o renderer decide: shared/incognito.ts): zera a sessão anônima.
+  // A próxima aba anônima espera isto terminar antes de nascer.
+  ipcMain.handle('incognito:wipe', async (e) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return false;
+    await wipeIncognitoSession();
+    return true;
+  });
+  // A IA começou/terminou uma tarefa numa aba anônima (agent.log e tabelas de resultado ficam de fora).
+  ipcMain.on('incognito:private-ai', (e, on: unknown) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    setPrivateAi(on === true);
   });
 
   // ═══ Cron-Agent: monitores em background ═══
@@ -2532,7 +2568,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         return { success: false, error: 'Invalid spec (columns/rows required).' };
       }
       spec.rows = spec.rows.slice(0, 200);
-      return openDataView(spec);
+      // IA numa aba anônima: a tabela abre direto da memória (nada em userData/views).
+      return openDataView(spec, { inMemory: isPrivateAi() });
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
     }
@@ -2689,6 +2726,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   downloadManager.attach(session.fromPartition('persist:browser'));
   downloadManager.attach(session.defaultSession);
+  // Download de aba anônima também vai pro disco e pro painel (igual ao Chrome).
+  downloadManager.attach(incognitoSession());
   // Medidor do computador na barra de cima (CPU, RAM, placa de vídeo) — só mede quando ligado e visível.
   setupHwMonitor({ getMainWindow: () => mainWindow });
   // Favoritos: importar do Chrome/Edge ou de arquivo HTML, exportar pra HTML (só arquivos; a lista é do renderer).
@@ -2715,6 +2754,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   setupSitePermissions({
     getMainWindow: () => mainWindow,
     sessions: [session.fromPartition(BROWSER_PARTITION), session.fromPartition(GOOGLE_LOGIN_PARTITION)],
+    // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
+    privateSessions: [incognitoSession()],
   });
   // Botão "Baixar" em cima do vídeo do YouTube: escolhe a resolução e o download entra na
   // mesma lista de Downloads. Baixar exige clique de verdade recente naquela aba.
@@ -2725,6 +2766,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   // Estilo IDM: anota os vídeos/streams que as abas carregam (pros sites que o yt-dlp não conhece).
   videoButton.attachSniffer(session.fromPartition('persist:browser'));
+  videoButton.attachSniffer(incognitoSession());   // aba anônima também (a lista fica só na memória)
   // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads + trava de exe.
   torrentManager = setupTorrentManager({
     getMainWindow: () => mainWindow,
@@ -2864,13 +2906,19 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   ]);
   let userAdblockPref = loadAdblockPref();  // user toggle (baseline), persistido em disco
   let actuallyEnabled = userAdblockPref;    // current actual state (bate com setupAdblock)
-  const persistSession = session.fromPartition('persist:browser');
+  // As abas normais e as anônimas: o mesmo bloqueador, ligado/desligado junto (o bypass é pelo
+  // site da aba ativa, seja ela qual for).
+  const tabSessions = [session.fromPartition('persist:browser'), incognitoSession()];
 
   function applyAdblockState(targetEnabled: boolean) {
     if (!blocker) return;
     if (targetEnabled === actuallyEnabled) return;
-    if (targetEnabled) blocker.enableBlockingInSession(persistSession);
-    else blocker.disableBlockingInSession(persistSession);
+    for (const ses of tabSessions) {
+      try {
+        if (targetEnabled) blocker.enableBlockingInSession(ses);
+        else if (blocker.isBlockingEnabled(ses)) blocker.disableBlockingInSession(ses);
+      } catch (e) { console.warn('[Adblock] liga/desliga falhou:', e); }
+    }
     actuallyEnabled = targetEnabled;
   }
 
@@ -2960,33 +3008,36 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       const { captureViewport, screenshotFilename } = await import('./page-capture');
       const { runOCR } = await import('./ocr-engine');
       const taskId = `ocr_${Date.now()}`;
-      let imagePath: string;
+      // Aba anônima: o print nem passa pelo disco — o OCR lê direto da memória.
+      const inMemory = isIncognitoWc(webContents.fromId(wcId));
+      let imagePath: string | Buffer;
       const frame = splitDataUrl(frameDataUrl);
       if (frame && /^image\/(png|jpeg|webp)$/.test(frame.mime)) {
         // Same frame the model will see — OCR reads it off disk, no second capture.
-        imagePath = screenshotFilename(taskId, 'frame');
-        fs.writeFileSync(imagePath, Buffer.from(frame.base64, 'base64'));
+        const buf = Buffer.from(frame.base64, 'base64');
+        if (inMemory) imagePath = buf;
+        else { imagePath = screenshotFilename(taskId, 'frame'); fs.writeFileSync(imagePath, buf); }
       } else {
         // Print via CDP: com a janela do Bah coberta por outra, o Windows não desenha a página e
         // o Page.captureScreenshot espera pra sempre — o agente congelava inteiro (medido: 5 min
         // parado no passo 1 até a janela voltar pra frente). Com o limite, o passo segue sem OCR
         // (o catch abaixo já trata como não-fatal); se o print chegar depois, o PNG é apagado.
-        const captureP = captureViewport(wcId, sharedEnsureDebugger, taskId);
+        const captureP = captureViewport(wcId, sharedEnsureDebugger, taskId, { toDisk: !inMemory });
         const capture = await Promise.race([
           captureP,
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('OCR capture timed out (window not painted?)')), 8000)),
         ]).catch((e) => {
-          captureP.then((c) => { try { fs.unlinkSync(c.imagePath); } catch {} }, () => {});
+          captureP.then((c) => { if (c.imagePath) { try { fs.unlinkSync(c.imagePath); } catch {} } }, () => {});
           throw e;
         });
-        imagePath = capture.imagePath;
+        imagePath = inMemory ? Buffer.from(capture.base64, 'base64') : capture.imagePath;
       }
       let ocr;
       try {
         ocr = await runOCR(imagePath);
       } finally {
         // No image to cloud, no image left on disk — delete the temp PNG right away.
-        try { fs.unlinkSync(imagePath); } catch {}
+        if (typeof imagePath === 'string') { try { fs.unlinkSync(imagePath); } catch {} }
       }
 
       return {
@@ -3097,8 +3148,12 @@ async function setupAdblock(): Promise<void> {
       };
     }
     const persistSession = session.fromPartition('persist:browser');
-    // Respeita a preferência salva: só liga se o usuário não tiver desligado.
-    if (loadAdblockPref()) blocker.enableBlockingInSession(persistSession);
+    // Respeita a preferência salva: só liga se o usuário não tiver desligado. As abas anônimas
+    // (sessão só na memória) ganham o mesmo bloqueador.
+    if (loadAdblockPref()) {
+      blocker.enableBlockingInSession(persistSession);
+      blocker.enableBlockingInSession(incognitoSession());
+    }
 
     console.log('[Adblock] Engine ready (EasyList + EasyPrivacy + cosmetic + cookie/annoyance lists)');
   } catch (e) {
@@ -3540,6 +3595,10 @@ app.whenReady().then(async () => {
   session.defaultSession.setUserAgent(CHROME_UA);
   const persistSession = session.fromPartition('persist:browser');
   persistSession.setUserAgent(CHROME_UA);
+  // Abas anônimas: sessão só na memória (shared/incognito.ts), com a mesma cara de Chrome das
+  // normais (User-Agent, idioma e client hints abaixo). Criada já aqui, antes da 1ª aba anônima.
+  const privateSession = incognitoSession();
+  privateSession.setUserAgent(CHROME_UA);
   // NOTA sobre DRM: NÃO é preciso handler de 'protectedMediaIdentifier' aqui. Medido com
   // uma página de teste de EME: pedir `distinctiveIdentifier: required` falha com
   // NotSupportedError — mas falha IGUAL no Chrome de verdade (onde a Netflix funciona),
@@ -3572,6 +3631,7 @@ app.whenReady().then(async () => {
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
   persistSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
+  privateSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
 
   // Remove restrictive CSP headers so webview can load any site
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -3619,6 +3679,8 @@ app.whenReady().then(async () => {
       label: mt('mnu.navigate'),
       submenu: [
         { label: mt('mnu.newTab'), accelerator: 'CmdOrCtrl+T', click: () => sendSc('new-tab') },
+        // Nova aba anônima: o atalho do Chrome pra janela anônima (Ctrl+Shift+N / ⇧⌘N), com a página focada também.
+        { label: mt('mnu.newIncognito'), accelerator: 'CmdOrCtrl+Shift+N', click: () => sendSc('new-incognito-tab') },
         { label: mt('mnu.closeTab'), accelerator: 'CmdOrCtrl+W', click: () => sendSc('close-tab') },
         { label: mt('mnu.reopenTab'), accelerator: 'CmdOrCtrl+Shift+T', click: () => sendSc('reopen-tab') },
         { type: 'separator' },

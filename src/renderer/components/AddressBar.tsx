@@ -3,6 +3,7 @@ import { t } from '../i18n';
 import { permKindLabel, hostOf } from './PermissionPrompt';
 import SiteIcon from './SiteIcon';
 import { getSearchEngine, searchEngineName } from '../search-engine';
+import IncognitoIcon from './IncognitoIcon';
 
 interface Props {
   url: string;
@@ -16,12 +17,13 @@ interface Props {
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   getSuggestions?: (q: string) => Array<{ url: string; title: string; display: string; prefix: boolean }>;
+  incognito?: boolean;   // a aba ativa é anônima: selo "Anônima", cadeado sem respostas guardadas
 }
 
 export default function AddressBar({
   url, isLoading, canGoBack, canGoForward,
   onNavigate, onBack, onForward, onReload,
-  isBookmarked, onToggleBookmark, getSuggestions,
+  isBookmarked, onToggleBookmark, getSuggestions, incognito,
 }: Props) {
   const [input, setInput] = useState(url);
   const [sugg, setSugg] = useState<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
@@ -46,7 +48,7 @@ export default function AddressBar({
       const last = preconnectRef.current.get(host) || 0;
       if (Date.now() - last < 60000) return;
       preconnectRef.current.set(host, Date.now());
-      (window as any).electronAPI?.preconnect?.(u);
+      (window as any).electronAPI?.preconnect?.(u, !!incognito);   // anônima: socket na sessão anônima
     } catch {}
   };
 
@@ -136,6 +138,9 @@ export default function AddressBar({
   }, [siteInfo]);
   const toggleSiteInfo = async () => {
     if (siteInfo) { setSiteInfo(null); return; }
+    // Aba anônima: nada deste site é guardado (nem lido do perfil pra mudar aqui) — o painel só
+    // explica. Mudar uma escolha aqui gravaria o site no arquivo de permissões.
+    if (incognito) { setSiteInfo({ origin: urlOrigin, perms: {} }); return; }
     const r = await window.electronAPI?.listSitePermissions?.(url);
     setSiteInfo(r && r.origin ? r : { origin: '', perms: {} });
   };
@@ -175,7 +180,7 @@ export default function AddressBar({
         </button>
       </div>
 
-      <div className={`url-input-wrapper${sec ? ' has-sec' : ''}`}>
+      <div className={`url-input-wrapper${sec ? ' has-sec' : ''}${incognito ? ' incognito' : ''}`}>
         {sec && (
           <button type="button" className={`url-sec ${sec}`} title={sec === 'secure' ? t('addr.secure') : t('addr.insecure')}
             aria-haspopup="dialog" aria-expanded={!!siteInfo}
@@ -192,7 +197,8 @@ export default function AddressBar({
             <div className="site-info-host">{siteInfo.origin ? hostOf(siteInfo.origin) : url}</div>
             <div className="site-info-sec">{sec === 'secure' ? t('addr.secure') : t('addr.insecure')}</div>
             <div className="site-info-title">{t('perm.siteTitle')}</div>
-            {siteInfo.origin && (
+            {incognito && <div className="site-info-incog">{t('perm.incognitoSite')}</div>}
+            {siteInfo.origin && !incognito && (
               <>
                 <ul className="site-info-list">
                   {siteKinds.map(k => {
@@ -241,6 +247,13 @@ export default function AddressBar({
             <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
           </svg>
         </button>
+        {/* Selo da aba anônima, à direita dentro da barra (como o "Anônima" do Chrome). */}
+        {incognito && (
+          <span className="incog-pill" title={t('incog.pillTitle')}>
+            <IncognitoIcon size={15} />
+            <span>{t('incog.pill')}</span>
+          </span>
+        )}
         {showSugg && (
           <ul className="omni-suggest">
             {sugg.map((s, i) => (

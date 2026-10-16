@@ -7,6 +7,8 @@ import { bootPlan, sessionTitle } from '../shared/session-restore';
 import { getStartupMode, loadSavedSession, noteSession, watchSessionClose } from './session';
 import { newTabUrl } from './search-engine';
 import type { VisionMode } from '../shared/vision';
+import { incognitoCount, lastIncognitoClosed, mayRecord } from '../shared/incognito';
+import { wipeIncognitoSession } from './incognito';
 
 export interface Tab {
   id: string;
@@ -23,6 +25,8 @@ export interface Tab {
   pinned?: boolean;       // aba fixada: só o ícone, sempre à esquerda; volta sozinha ao reabrir o Bah
   restored?: boolean;     // voltou da última sessão (Continuar de onde parou) e ainda não carregou: sem webview
                           // como a dormindo, mas com ícone e nome normais (nada de 💤); carrega no clique
+  incognito?: boolean;    // aba anônima: sessão só na memória, nada dela fica guardado (shared/incognito.ts).
+                          // Nasce assim e nunca muda (a partição da <webview> não troca depois de criada).
 }
 
 export interface ChatMessage {
@@ -67,17 +71,20 @@ let aiWriteChain: Promise<void> = Promise.resolve();
 let localWriteChain: Promise<void> = Promise.resolve();
 
 // Nova aba = página inicial do mecanismo de pesquisa escolhido (⋮ → Mecanismo de pesquisa),
-// no idioma da interface. Padrão: Google (pt-BR ainda abre o Google Brasil).
-export function createTab(url = newTabUrl()): Tab {
-  return {
+// no idioma da interface. Padrão: Google (pt-BR ainda abre o Google Brasil). Aba anônima sem
+// endereço nasce em branco: a tela mostra a explicação dela (IncognitoPage), a barra fica vazia.
+export function createTab(url?: string, incognito = false): Tab {
+  const tab: Tab = {
     id: uuidv4(),
     title: 'New Tab',
-    url,
+    url: url ?? (incognito ? '' : newTabUrl()),
     isLoading: false,
     canGoBack: false,
     canGoForward: false,
     lastActiveAt: Date.now(),
   };
+  if (incognito) tab.incognito = true;
+  return tab;
 }
 
 // Abas do boot (⋮ → Ao abrir o Bah). "Continuar de onde parou" com sessão salva: as abas da
@@ -166,8 +173,9 @@ export function useTabStore() {
   // Pilha de URLs de abas fechadas → reabrir com Ctrl+Shift+T (estilo Chrome).
   const closedTabsRef = useRef<string[]>([]);
 
-  const addTab = useCallback((url?: string): string => {
-    const tab = createTab(url);
+  // incognito = nasce aba anônima (quem decide é o chamador: shared/incognito.ts → opensIncognito).
+  const addTab = useCallback((url?: string, incognito = false): string => {
+    const tab = createTab(url, incognito);
     setTabs(prev => [...prev, tab]);
     setActive(tab.id);
     return tab.id;
@@ -179,8 +187,8 @@ export function useTabStore() {
   // de origem da conversa, fora de vista, parecendo que a tarefa "sumiu" mesmo tendo dado
   // certo. Diferente do addHiddenTab (Pesquisa Rápida): aqui a aba é visível de propósito,
   // só não some com o foco de quem estava conversando.
-  const addBackgroundTab = useCallback((url?: string): string => {
-    const tab = createTab(url);
+  const addBackgroundTab = useCallback((url?: string, incognito = false): string => {
+    const tab = createTab(url, incognito);
     setTabs(prev => [...prev, tab]);
     return tab.id;
   }, []);
@@ -188,8 +196,8 @@ export function useTabStore() {
   // HIDDEN tab (Quick Search): mounts the webview and loads the URL, but does NOT become
   // the active tab nor appear in the tab bar — the search runs "behind the scenes". It's
   // removed with closeTab when done. The TabBar ignores tabs with hidden=true.
-  const addHiddenTab = useCallback((url?: string): string => {
-    const tab = { ...createTab(url), hidden: true };
+  const addHiddenTab = useCallback((url?: string, incognito = false): string => {
+    const tab = { ...createTab(url, incognito), hidden: true };
     setTabs(prev => [...prev, tab]);
     return tab.id;
   }, []);
@@ -209,6 +217,7 @@ export function useTabStore() {
       if (next.length === prev.length) return prev;
       for (const t of prev) {
         if (!closing.has(t.id) || t.hidden || !t.url || !/^https?:\/\//i.test(t.url)) continue;
+        if (!mayRecord('closedTabs', t.incognito)) continue;   // aba anônima fechada não volta no Ctrl+Shift+T
         closedTabsRef.current.push(t.url);
         if (closedTabsRef.current.length > 25) closedTabsRef.current.shift();
       }
@@ -260,17 +269,18 @@ export function useTabStore() {
   }, []);
   // "Nova aba à direita": nasce logo depois da clicada (nunca no meio das fixadas) e vira a ativa.
   const addTabAfter = useCallback((anchorId: string, url?: string, extra?: Partial<Tab>): string => {
-    const tab: Tab = { ...createTab(url), ...extra };
+    const tab: Tab = { ...createTab(url, !!extra?.incognito), ...extra };
     setTabs(prev => insertAfter(prev, anchorId, tab));
     setActive(tab.id);
     return tab.id;
   }, [setActive]);
   // "Duplicar": o mesmo endereço numa aba nova logo depois (fixada, se a original é). O Chrome
-  // copia também o histórico de voltar/avançar; aqui a cópia carrega o endereço do zero.
+  // copia também o histórico de voltar/avançar; aqui a cópia carrega o endereço do zero. A cópia
+  // de uma aba anônima continua anônima (mesma sessão: segue logada no que a original estava).
   const duplicateTab = useCallback((id: string): string | null => {
     const src = tabs.find(t => t.id === id && !t.hidden);
     if (!src) return null;
-    return addTabAfter(id, src.url, { title: src.title, pinned: src.pinned });
+    return addTabAfter(id, src.url, { title: src.title, pinned: src.pinned, ...(src.incognito ? { incognito: true } : {}) });
   }, [tabs, addTabAfter]);
 
   // Continuar de onde parou: a sessão (abas da barra + a ativa) é gravada SEMPRE, com a opção
@@ -278,6 +288,15 @@ export function useTabStore() {
   // No máximo 1 s depois de cada mudança e na hora ao fechar a janela (renderer/session.ts).
   useEffect(() => { noteSession(tabs, activeTabId); }, [tabs, activeTabId]);
   useEffect(() => watchSessionClose(), []);
+
+  // A última aba anônima fechou (as escondidas, de trabalho da IA, contam) → o main zera a sessão
+  // anônima. A próxima aba anônima espera a limpeza (renderer/incognito.ts → incognitoReady).
+  const incognitoRef = useRef(0);
+  useEffect(() => {
+    const n = incognitoCount(tabs);
+    if (lastIncognitoClosed(incognitoRef.current, n)) wipeIncognitoSession();
+    incognitoRef.current = n;
+  }, [tabs]);
 
   return {
     tabs, activeTabId, activeTab, sidebarOpen,

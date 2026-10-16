@@ -126,6 +126,21 @@ export function checkAnswer(store: PermStore, origin: string, permission: string
   return permission === 'media';
 }
 
+/**
+ * O que uma aba ANÔNIMA enxerga das respostas guardadas: só os "Bloquear" do perfil normal (igual
+ * ao Chrome, que leva os bloqueios pra janela anônima mas não as liberações). Um "Permitir" dado
+ * numa aba normal não vale lá — a aba anônima pergunta de novo, e o que ela responde não é guardado.
+ */
+export function incognitoStore(store: PermStore): PermStore {
+  const out: PermStore = {};
+  for (const [origin, perms] of Object.entries(store)) {
+    const site: Partial<Record<PermKind, Decision>> = {};
+    for (const [k, v] of Object.entries(perms || {})) if (v === 'block') site[k as PermKind] = 'block';
+    if (Object.keys(site).length) out[origin] = site;
+  }
+  return out;
+}
+
 /** Origem "https://site.com" de um link; vazio se não for site normal (http/https). */
 export function originOf(url: string | undefined): string {
   try {

@@ -223,8 +223,16 @@ ${rowsHtml}
 </body></html>`;
 }
 
-/** Escreve a página e devolve a URL file:// pronta pra abrir numa aba. */
-export function openDataView(spec: DataViewSpec): { success: boolean; url?: string; error?: string } {
+/** Escreve a página e devolve a URL file:// pronta pra abrir numa aba. inMemory (a IA numa aba
+ *  anônima): nada vai pro disco — a página vai inteira dentro do endereço (data:). */
+export function openDataView(spec: DataViewSpec, opts?: { inMemory?: boolean }): { success: boolean; url?: string; error?: string } {
+  if (opts?.inMemory) {
+    try {
+      return { success: true, url: `data:text/html;charset=utf-8;base64,${Buffer.from(buildDataViewHtml(spec), 'utf8').toString('base64')}` };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  }
   try {
     const dir = path.join(app.getPath('userData'), 'views');
     fs.mkdirSync(dir, { recursive: true });

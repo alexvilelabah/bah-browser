@@ -2468,3 +2468,50 @@ body {
   border-radius:8px; padding:7px 10px; cursor:pointer; font-size:12.5px; font-family:inherit; text-align:center;
 }
 .ext-panel-store:hover{ background:rgba(255,255,255,0.08); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ABA ANÔNIMA (Ctrl+Shift+N) — mesma aba, outro tom (roxo escuro) e o chapéu com óculos no
+   lugar do favicon; a barra de endereço acompanha quando ela é a ativa (+ selo "Anônima").
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --incog-bg: #2f2940;          /* aba anônima ativa + barra de endereço (funde, como as normais) */
+  --incog-tab: rgba(139,108,214,0.14);
+  --incog-tab-hover: rgba(139,108,214,0.24);
+  --incog-ink: #cbbcf2;         /* ícone e selo */
+  --incog-line: rgba(203,188,242,0.28);
+}
+.tab.incognito{ background:var(--incog-tab); }
+.tab.incognito:hover{ background:var(--incog-tab-hover); }
+.tab.incognito.active{ background:var(--incog-bg); }
+.tab.incognito::before, .tab.incognito + .tab::before{ opacity:0; }
+.tab-incog{ width:16px; height:16px; flex:0 0 16px; color:var(--incog-ink); }
+.tab.pinned .tab-incog{ width:17px; height:17px; }
+.address-bar-row.incognito{ background:var(--incog-bg); }
+.url-input-wrapper.incognito .url-input{ padding-right:136px; }
+.incog-pill{
+  position:absolute; right:40px; top:50%; transform:translateY(-50%);
+  display:flex; align-items:center; gap:5px; height:26px; padding:0 10px 0 8px;
+  border-radius:var(--radius-pill); border:1px solid var(--incog-line);
+  background:rgba(139,108,214,0.16); color:var(--incog-ink);
+  font-size:12px; font-weight:500; white-space:nowrap; pointer-events:auto; cursor:default;
+}
+.site-info-incog, .perm-incog, .ext-panel-incog{ color:var(--text-secondary); font-size:12px; line-height:1.45; }
+.site-info-incog{ margin:0 0 4px; }
+.perm-incog{ margin:-6px 0 12px; }
+.ext-panel-incog{ padding:2px 0 8px; }
+.ext-puzzle.ext-incog svg{ opacity:.45; }
+
+/* Página da aba anônima recém-aberta (no lugar da <webview> em branco). */
+.incog-page{
+  position:absolute; inset:0; z-index:5; overflow:auto;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:9vh 24px 32px; background:#211d2b; color:var(--text-primary); user-select:text;
+}
+.incog-box{ width:min(620px,100%); }
+.incog-hero{ color:var(--incog-ink); margin-bottom:14px; }
+.incog-title{ font-size:24px; font-weight:500; margin-bottom:12px; letter-spacing:-.01em; }
+.incog-lead{ color:var(--text-secondary); font-size:13.5px; line-height:1.6; margin-bottom:18px; }
+.incog-cols{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px 28px; margin-bottom:18px; }
+.incog-col-title{ font-size:13px; font-weight:600; margin-bottom:6px; }
+.incog-col ul{ padding-left:18px; color:var(--text-secondary); font-size:13px; line-height:1.7; }
+.incog-note{ color:var(--text-muted); font-size:12.5px; line-height:1.55; border-top:1px solid var(--incog-line); padding-top:14px; }

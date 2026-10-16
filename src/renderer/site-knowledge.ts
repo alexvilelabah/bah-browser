@@ -1,5 +1,6 @@
 import type { ObservedState } from './page-executor';
 import { googleLocaleParams } from './i18n';
+import { aiMayRecord } from './incognito';
 
 export interface SiteShortcut {
   id: string;
@@ -948,6 +949,7 @@ function inferShortcutFromIntent(command: string): SiteShortcut | undefined {
 }
 
 export function rememberObservedSite(observation: ObservedState): void {
+  if (!aiMayRecord('siteKnowledge')) return;   // IA numa aba anônima: não aprende nada do site
   const host = safeHost(observation.url);
   if (!host) return;
 
@@ -992,6 +994,7 @@ export function rememberObservedSite(observation: ObservedState): void {
 }
 
 export function rememberActionForSite(input: ActionMemoryInput): void {
+  if (!aiMayRecord('siteKnowledge')) return;   // idem
   const host = safeHost(input.url);
   if (!host) return;
 

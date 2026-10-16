@@ -1,6 +1,7 @@
 import { AIEngine } from './ai-engine';
 import type { VisionImage, VisionReport } from '../shared/vision';
 import { classifyError, type AgentErrorCode } from '../shared/error-codes';
+import { isPrivateAi } from './incognito-session';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }
@@ -160,7 +161,8 @@ export class PageAgent {
       const problem = validateAction(action);
       if (problem) {
         const reason = `Invalid action from model: ${problem}`;
-        try {
+        // IA numa aba anônima: a resposta crua (pode citar a página) não vai pro agent.log.
+        if (!isPrivateAi()) try {
           require('fs').appendFileSync(
             require('path').join(require('electron').app.getPath('userData'), 'agent.log'),
             `${new Date().toISOString()} [Parser] ${reason} Raw: ${raw.slice(0, 500)}\n`
@@ -173,7 +175,7 @@ export class PageAgent {
           error: reason,
         };
       }
-      if (action.type === 'done' && /Invalid|missing action/.test(action.reason)) {
+      if (action.type === 'done' && /Invalid|missing action/.test(action.reason) && !isPrivateAi()) {
         try {
           require('fs').appendFileSync(
             require('path').join(require('electron').app.getPath('userData'), 'agent.log'),

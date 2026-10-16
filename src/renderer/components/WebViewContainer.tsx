@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Tab } from '../store';
 import { webviewOrder } from '../../shared/tab-strip';
+import { partitionFor } from '../../shared/incognito';
 
 interface Props {
   tabs: Tab[];
@@ -100,7 +101,9 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
           }}
           // @ts-ignore
           allowpopups="true"
-          partition="persist:browser"
+          // Aba normal: persist:browser (em disco). Aba anônima: a sessão só na memória que todas as
+          // anônimas dividem (shared/incognito.ts). Nunca muda depois que a <webview> nasce.
+          partition={partitionFor(tab.incognito)}
           // Cache de bytecode V8: o JS dos sites compila 1x e reusa nas visitas seguintes.
           webpreferences="v8CacheOptions=bypassHeatCheck"
         />

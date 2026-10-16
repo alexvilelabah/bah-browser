@@ -1,6 +1,8 @@
 // Botões das extensões do Chrome na barra, na ordem do Chrome: um ícone por extensão (com
 // o badge e a dica que ela escolheu) e depois a peça de quebra-cabeça com a lista das
 // instaladas (ligar/desligar, opções, remover) e o atalho pra Chrome Web Store.
+// Aba anônima na frente: as extensões não rodam nela (igual ao Chrome) — os botões somem e a
+// lista diz isso; dá pra gerenciar as extensões, mas não clicar nelas.
 import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
 
@@ -23,6 +25,8 @@ export interface ExtensionInfo {
 interface Props {
   /** webContents da aba que a pessoa está vendo (null enquanto a webview não anexou). */
   getActiveWcId: () => number | null;
+  /** A aba que a pessoa está vendo é anônima (extensão não roda nela). */
+  incognito?: boolean;
 }
 
 function ExtIcon({ view, name }: { view: ExtensionActionView; name: string }) {
@@ -31,7 +35,7 @@ function ExtIcon({ view, name }: { view: ExtensionActionView; name: string }) {
   return <span className="ext-letter" aria-hidden="true">{(name.trim()[0] || '?').toUpperCase()}</span>;
 }
 
-export default function ExtensionsToolbar({ getActiveWcId }: Props) {
+export default function ExtensionsToolbar({ getActiveWcId, incognito }: Props) {
   const [list, setList] = useState<ExtensionInfo[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -84,7 +88,7 @@ export default function ExtensionsToolbar({ getActiveWcId }: Props) {
       {/* Os botões encolhem (e somem pela direita) antes de apertar o endereço ou empurrar o
           menu pra fora da janela; quem não coube continua no quebra-cabeça. */}
       <div className="ext-actions">
-        {list.filter(isOn).map(x => {
+        {!incognito && list.filter(isOn).map(x => {
           const v = viewFor(x);
           return (
             <button key={x.id} type="button" className={`ext-action${v.enabled ? '' : ' off'}`}
@@ -99,7 +103,7 @@ export default function ExtensionsToolbar({ getActiveWcId }: Props) {
         })}
       </div>
       <div className="ext-puzzle-wrap" ref={panelRef}>
-        <button type="button" className={`ext-action ext-puzzle${open ? ' on' : ''}`} title={t('ext.puzzle')}
+        <button type="button" className={`ext-action ext-puzzle${open ? ' on' : ''}${incognito ? ' ext-incog' : ''}`} title={incognito ? t('incog.extOff') : t('ext.puzzle')}
           aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(o => !o)}>
           {/* Material "extension" */}
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/></svg>
@@ -108,6 +112,7 @@ export default function ExtensionsToolbar({ getActiveWcId }: Props) {
         {open && (
           <div className="ext-panel" role="dialog" aria-label={t('ext.title')}>
             <div className="ext-panel-title">{t('ext.title')}</div>
+            {incognito && <div className="ext-panel-incog">{t('incog.extOff')}</div>}
             {list.length === 0 ? (
               <div className="ext-panel-empty">{t('ext.empty')}</div>
             ) : (
@@ -115,7 +120,7 @@ export default function ExtensionsToolbar({ getActiveWcId }: Props) {
                 {list.map(x => {
                   const v = viewFor(x);
                   const on = isOn(x);
-                  const runnable = on && v.enabled;
+                  const runnable = on && v.enabled && !incognito;
                   return (
                   <li key={x.id} className={on ? undefined : 'off'}>
                     {/* Ícone + nome = o mesmo clique do botão da barra (popup ancorado aqui). */}

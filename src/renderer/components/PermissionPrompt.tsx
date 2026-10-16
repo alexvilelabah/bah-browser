@@ -1,10 +1,11 @@
 // Pergunta de permissão do site (câmera, microfone, localização…), no canto de cima da aba,
 // igual ao balão do Chrome. "Permitir"/"Bloquear" ficam guardados pro site; "Agora não" (✕)
 // nega só desta vez. A regra e a memória ficam no main (src/main/site-permissions.ts).
+// Aba anônima: nada fica guardado — a resposta vale só desta vez (o balão avisa).
 import React from 'react';
 import { t } from '../i18n';
 
-export interface SitePermAsk { id: string; wcId: number; origin: string; kinds: string[]; external?: string }
+export interface SitePermAsk { id: string; wcId: number; origin: string; kinds: string[]; external?: string; incognito?: boolean }
 
 const KIND_KEY: Record<string, string> = {
   camera: 'perm.camera', microphone: 'perm.microphone', geolocation: 'perm.geolocation',
@@ -45,6 +46,7 @@ export default function PermissionPrompt({ ask, onAnswer }: {
       <ul className="perm-list">
         {ask.kinds.map(k => <li key={k}>{permKindLabel(k, ask.external)}</li>)}
       </ul>
+      {ask.incognito && <div className="perm-incog">{t('perm.incognitoOnce')}</div>}
       <div className="perm-actions">
         <button className="perm-block" disabled={!armed} onClick={() => answer('block')}>{t('perm.block')}</button>
         <button className="perm-allow" disabled={!armed} onClick={() => answer('allow')}>{t('perm.allow')}</button>

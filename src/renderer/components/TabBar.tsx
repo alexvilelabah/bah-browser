@@ -7,6 +7,8 @@
 //    Duplicar, Fixar/Liberar, Desativar som do site, Fechar, Fechar outras, Fechar à direita,
 //    Reabrir aba fechada) — mesmo visual do menu dos favoritos.
 //  • aba fixada: só o ícone, sem ×.
+//  • aba anônima: tom roxo e o chapéu com óculos no lugar do favicon (o ícone do site não é
+//    buscado pela interface — ficaria no cache dela em disco).
 // A conta da ordem/arrasto é pura (shared/tab-strip.ts). Reordenar só muda a lista: os <webview>
 // não se mexem no DOM (WebViewContainer), então a página da aba não recarrega.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -14,6 +16,8 @@ import { createPortal } from 'react-dom';
 import { Tab } from '../store';
 import { t } from '../i18n';
 import { closeOthersIds, closeRightIds, dragShift, dragTarget, siteKey, stripTabs } from '../../shared/tab-strip';
+import { isIncognitoBlank } from '../../shared/incognito';
+import IncognitoIcon from './IncognitoIcon';
 
 // Itens do menu do botão direito (quem executa é o App: webview, som do site, store).
 export type TabCommand =
@@ -28,7 +32,7 @@ interface Props {
   onNew: () => void;
   onMove: (id: string, toIndex: number) => void;      // arrastou e soltou: posição nova entre as visíveis
   onCommand: (cmd: TabCommand, id: string) => void;   // item do menu do botão direito
-  isMuted: (url: string) => boolean;                  // site com "Desativar som do site"
+  isMuted: (url: string, incognito?: boolean) => boolean;   // site com "Desativar som do site"
   canReopen: () => boolean;                           // tem aba fechada pro Ctrl+Shift+T?
 }
 
@@ -281,7 +285,7 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
   };
 
   const renderMenu = (tab: Tab) => {
-    const muted = isMuted(tab.url);
+    const muted = isMuted(tab.url, tab.incognito);
     const hasSite = !!siteKey(tab.url);
     const item = (label: string, cmd: TabCommand, opts?: { kbd?: string; disabled?: boolean }) => (
       <button className="bm-pop-item" role="menuitem" disabled={opts?.disabled} onClick={() => run(cmd)}>
@@ -294,7 +298,8 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
         {/* no-drag: em cima da faixa de abas (que arrasta a janela) o clique tem que fechar o menu */}
         <div className="menu-overlay tab-menu-overlay" onMouseDown={closeMenu} onContextMenu={e => { e.preventDefault(); closeMenu(); }} />
         <div className="bm-pop bm-ctx tab-ctx" role="menu" ref={menuRef} style={{ left: menu!.x, top: menu!.y }}>
-          {item(t('tab.ctx.newRight'), 'new-right')}
+          {/* Na aba anônima, a aba nova à direita também é anônima. */}
+          {item(t(tab.incognito ? 'tab.ctx.newIncognitoRight' : 'tab.ctx.newRight'), 'new-right')}
           <div className="menu-sep" />
           {item(t('tab.ctx.reload'), 'reload', { kbd: tab.id === activeTabId ? KEY_RELOAD : undefined })}
           {item(t('tab.ctx.duplicate'), 'duplicate')}
@@ -320,17 +325,20 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
             const s = tab.id === drag.id ? drag.dx : dragShift(i, drag.from, drag.to, drag.width);
             if (s) style = { transform: `translateX(${s}px)` };
           }
-          const name = tab.title || t('tab.new');
+          // Anônima ainda sem site: "Nova aba anônima" (o título da página em branco não diz nada).
+          const name = tab.incognito && isIncognitoBlank(tab.url) ? t('incog.tabTitle') : (tab.title || t('tab.new'));
           // Dormindo (Memory Saver): 💤 e apagada. A que voltou da última sessão e ainda não
           // carregou também está sem webview, mas fica igual às outras (ícone e nome salvos).
           const asleep = tab.discarded && !tab.restored;
           // Fixada não mostra o nome: vai no balão do mouse.
-          const tip = tab.pinned ? (asleep ? `${name}\n${t('tab.sleeping')}` : name) : (asleep ? t('tab.sleeping') : undefined);
+          const tip0 = tab.pinned ? (asleep ? `${name}\n${t('tab.sleeping')}` : name) : (asleep ? t('tab.sleeping') : undefined);
+          // Anônima: o balão diz isso (a em branco já se chama "Nova aba anônima").
+          const tip = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
           return (
             <div
               key={tab.id}
               ref={el => { if (el) tabEls.current.set(tab.id, el); else tabEls.current.delete(tab.id); }}
-              className={`tab ${tab.id === activeTabId ? 'active' : ''}${asleep ? ' discarded' : ''}${tab.pinned ? ' pinned' : ''}${drag?.id === tab.id ? ' dragging' : ''}`}
+              className={`tab ${tab.id === activeTabId ? 'active' : ''}${asleep ? ' discarded' : ''}${tab.pinned ? ' pinned' : ''}${tab.incognito ? ' incognito' : ''}${drag?.id === tab.id ? ' dragging' : ''}`}
               style={style}
               title={tip}
               onPointerDown={e => onTabPointerDown(e, tab)}
@@ -341,9 +349,12 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
               onContextMenu={e => { e.preventDefault(); setMenu({ id: tab.id, x: e.clientX, y: e.clientY }); }}
             >
               {/* Fixada dormindo fica com o ícone (apagado): sem nome, o 💤 sozinho não diria qual site é. */}
-              {asleep && !tab.pinned ? <span className="tab-sleep">💤</span> : tab.isLoading && !tab.discarded ? <span className="tab-spinner" /> : <TabFavicon url={tab.url} pinned={tab.pinned} />}
+              {asleep && !tab.pinned ? <span className="tab-sleep">💤</span>
+                : tab.isLoading && !tab.discarded ? <span className="tab-spinner" />
+                : tab.incognito ? <IncognitoIcon className="tab-incog" />
+                : <TabFavicon url={tab.url} pinned={tab.pinned} />}
               {!tab.pinned && <span className="tab-title">{name}</span>}
-              {tab.audible && (isMuted(tab.url) ? <TabMutedIcon /> : <TabAudioIcon />)}
+              {tab.audible && (isMuted(tab.url, tab.incognito) ? <TabMutedIcon /> : <TabAudioIcon />)}
               {!tab.pinned && (
                 <button
                   className="tab-close"

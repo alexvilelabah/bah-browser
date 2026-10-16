@@ -82,8 +82,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('ollama:pull-progress', listener);
     return () => ipcRenderer.removeListener('ollama:pull-progress', listener);
   },
-  onOpenNewTab: (cb: (url: string) => void) => {
-    const listener = (_e: any, url: string) => cb(url);
+  // opts.incognito: abrir como aba anônima (popup/pesquisa de aba anônima, "Abrir link em aba anônima").
+  onOpenNewTab: (cb: (url: string, opts?: { incognito?: boolean }) => void) => {
+    const listener = (_e: any, url: string, opts?: { incognito?: boolean }) => cb(url, opts && typeof opts === 'object' ? { incognito: opts.incognito === true } : undefined);
     ipcRenderer.on('open-new-tab', listener);
     return () => ipcRenderer.removeListener('open-new-tab', listener);
   },
@@ -219,7 +220,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   siteLogin: (url: string) => ipcRenderer.invoke('site:login', url),
   googleCheckLogin: () => ipcRenderer.invoke('google:check-login'),
   clearGoogleCookies: () => ipcRenderer.invoke('cookies:clear-google'),
-  preconnect: (url: string) => ipcRenderer.invoke('net:preconnect', url),
+  preconnect: (url: string, incognito?: boolean) => ipcRenderer.invoke('net:preconnect', url, incognito === true),
+  // Aba anônima: zera a sessão anônima (a última aba anônima fechou) e avisa quando a IA trabalha numa.
+  incognitoWipe: () => ipcRenderer.invoke('incognito:wipe'),
+  setPrivateAi: (on: boolean) => ipcRenderer.send('incognito:private-ai', on === true),
   // Cron-Agent: monitores em background
   monitorsList: () => ipcRenderer.invoke('monitors:list'),
   monitorAdd: (data: { url: string; condition: string; intervalMin: number; notify?: Array<'trigger'|'change'|'error'> }) => ipcRenderer.invoke('monitors:add', data),

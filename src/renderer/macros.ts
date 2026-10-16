@@ -8,6 +8,7 @@
 // na gravação viram click_text/fill(label) — âncoras que sobrevivem a reload.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { BrowserAction, ObservedState } from './page-executor';
+import { aiMayRecord } from './incognito';
 
 export interface Macro {
   command: string;          // o pedido original que gerou a sequência
@@ -47,6 +48,7 @@ export function toDurableAction(a: BrowserAction, obs: ObservedState): BrowserAc
 }
 
 export function saveLastMacro(m: Macro): void {
+  if (!aiMayRecord('macro')) return;   // sequência feita numa aba anônima não fica guardada
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...m, steps: m.steps.slice(-40) })); } catch {}
 }
 

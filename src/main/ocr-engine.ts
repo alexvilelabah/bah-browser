@@ -101,7 +101,7 @@ function ocrWithTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
  * @param lang        Idioma (padrão 'por+eng' — português + inglês)
  */
 export async function runOCR(
-  imagePath: string,
+  imagePath: string | Buffer,   // Buffer: imagem só na memória (print de aba anônima)
   lang = 'por+eng'
 ): Promise<OcrResult> {
   const t0 = Date.now();

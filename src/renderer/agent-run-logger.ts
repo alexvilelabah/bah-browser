@@ -1,5 +1,6 @@
 import type { BrowserAction, ToolResult } from './page-executor';
 import type { ManualHelpRequest } from './agent-login-policy';
+import { aiMayRecord } from './incognito';
 
 const RUNS_KEY = 'agentRuns.v1';
 const MAX_RUNS = 50;
@@ -87,6 +88,8 @@ export function finishAgentRun(
   run.finalReason = finalReason;
   run.endedAt = Date.now();
   saveRun(run);
+  // Tarefa numa aba anônima: o dataset também não guarda nada dela (o registro já não guardou).
+  if (!aiMayRecord('agentRuns')) return;
   // Dataset em disco — OPT-IN, DESLIGADO por padrão. Só grava se o coletor estiver
   // ligado nesta máquina (localStorage 'datasetCollect' === 'on'). Pros usuários comuns
   // nada é gravado (privacidade + é inútil pra eles); quem quer coletar (o dono) liga na
@@ -110,6 +113,8 @@ export function summarizeResult(result: ToolResult | unknown): unknown {
 }
 
 function saveRun(run: AgentRunLog): void {
+  // IA numa aba anônima: nada da tarefa (pedido, passos, endereços) vai pro localStorage.
+  if (!aiMayRecord('agentRuns')) return;
   try {
     // A versão do localStorage é leve (só pra UI de histórico): remove a `observation`
     // pesada dos passos. O dado completo (com observação) vai só pro dataset em disco.

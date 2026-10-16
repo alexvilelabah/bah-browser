@@ -15,6 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ACCEPT_LANGUAGE } from './site-locale';
 import { ensureYtDlp } from './media-downloader';
+import { incognitoSession, isPrivateAi } from './incognito-session';
 
 export interface VideoCut {
   videoId: string;
@@ -45,7 +46,8 @@ function fold(s: string): string {
 // ── 1ª via: Filmot ───────────────────────────────────────────────────────────
 async function tryFilmot(phrase: string, count: number): Promise<VideoCut[] | null> {
   try {
-    const ses = session.fromPartition('persist:browser');
+    // Pedido feito numa aba anônima: a busca sai pela sessão anônima (nada no perfil normal).
+    const ses = isPrivateAi() ? incognitoSession() : session.fromPartition('persist:browser');
     const url = `https://filmot.com/search/%22${encodeURIComponent(phrase)}%22/1`;
     const ctrl = new AbortController();
     const tm = setTimeout(() => ctrl.abort(), 12_000);

@@ -179,6 +179,7 @@ interface Props {
   pageOpen?: boolean;   // há uma página real aberta (não Google home/aba nova) → gate do "sobre a tela"
   activeTabTitle?: string;   // título da aba atual — mostrado no chip "lendo esta página"
   activeTabUrl?: string;     // URL da aba atual — usada pra buscar o favicon do site no chip
+  activeIncognito?: boolean; // aba atual é anônima: o chip não busca o favicon (ficaria no cache da interface)
   agentMaxSteps?: number;    // teto de passos do agente (0 = ∞) — freio de CUSTO na nuvem
   onAgentStepsChange?: (n: number) => void;
   agentTimeLimitMin?: number;   // trava de tempo por tarefa em minutos (0 = desligada)
@@ -206,7 +207,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -223,11 +224,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // justamente o primeiro momento em que o usuário abre o navegador e vê o painel.
   const chipPageOpen = /^https?:\/\//i.test(activeTabUrl || '');
   const pageFavicon = useMemo(() => {
+    if (activeIncognito) return '';   // aba anônima: nada de pedir o ícone do site pela interface
     try {
       const p = new URL(activeTabUrl || '');
       return (p.protocol === 'http:' || p.protocol === 'https:') ? `${p.origin}/favicon.ico` : '';
     } catch { return ''; }
-  }, [activeTabUrl]);
+  }, [activeTabUrl, activeIncognito]);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
@@ -1775,7 +1777,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           {pageShared && pageFavicon
             ? <img className="composer-page-fav" src={pageFavicon} alt="" draggable={false}
                    onError={e => { e.currentTarget.style.display = 'none'; }} />
-            : <span className="composer-page-ic">{pageShared ? '🌐' : '🚫'}</span>}
+            : <span className="composer-page-ic">{pageShared ? (activeIncognito ? '🕶️' : '🌐') : '🚫'}</span>}
           <span className="composer-page-name" title={activeTabTitle || ''}>
             {pageShared ? (activeTabTitle || '—') : t('composer.pageOff')}
           </span>

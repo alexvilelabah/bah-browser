@@ -56,7 +56,8 @@ export function screenshotFilename(taskId: string, type: string): string {
 export async function captureViewport(
   wcId: number,
   ensureDebugger: (wc: Electron.WebContents, wcId: number) => Promise<void>,
-  taskId = 'task'
+  taskId = 'task',
+  opts?: { toDisk?: boolean }   // false (aba anônima): só na memória, imagePath vazio
 ): Promise<CaptureResult> {
   const wc = webContents.fromId(wcId);
   if (!wc) throw new Error(`WebContents ${wcId} not found`);
@@ -81,6 +82,7 @@ export async function captureViewport(
   }) as any;
 
   const base64: string = result.data;
+  if (opts?.toDisk === false) return { imagePath: '', base64, width, height, source: 'viewport' };
   const imagePath = screenshotFilename(taskId, 'viewport');
   fs.writeFileSync(imagePath, Buffer.from(base64, 'base64'));
 

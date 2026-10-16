@@ -209,9 +209,11 @@ export function setupChromeExtensions(deps: {
   };
 
   // ── 3. Abas: abrir pelo caminho de sempre do Bah e saber QUAL webview é a do pedido ──
+  // Só as abas da sessão das extensões: aba anônima não existe pra elas (igual ao Chrome, onde a
+  // extensão não roda na janela anônima) — nem pra fechar, nem pra badge, nem no clique do botão.
   const tabOf = (id: number): WebContents | null => {
     const wc = webContents.fromId(id);
-    return wc && !wc.isDestroyed() && wc.getType() === 'webview' ? wc : null;
+    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.session === ses ? wc : null;
   };
   // Igual ao Chrome: url/título só pra quem pode ver (tabs, activeTab ou host da página).
   const tabInfo = (wc: WebContents, active: boolean, canSee: boolean) => {
