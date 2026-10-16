@@ -6,6 +6,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),
+  // Continuar de onde parou: antes de fechar a janela, o main pede pra tela gravar as abas e
+  // espera o "gravei"; a tela pede pra mandar o localStorage pro disco quando a sessão muda.
+  onSaveSessionNow: (cb: () => void) => {
+    const listener = () => { try { cb(); } catch {} ipcRenderer.send('session:saved'); };
+    ipcRenderer.on('session:save-now', listener);
+    return () => ipcRenderer.removeListener('session:save-now', listener);
+  },
+  flushUiStorage: () => ipcRenderer.send('session:flush-storage'),
 
   // AI
   setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
@@ -100,6 +108,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:list', url),
   setSitePermission: (url: string, kind: string, value: 'allow' | 'block' | null) => ipcRenderer.invoke('site-permission:set', url, kind, value),
   resetSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:reset', url),
+  // Extensões do Chrome: botões na barra (ícone, badge), clique, remover, loja, opções.
+  getExtensionsState: () => ipcRenderer.invoke('extensions:get-state'),
+  onExtensionsState: (cb: (list: any[]) => void) => {
+    const listener = (_e: any, list: any) => cb(list);
+    ipcRenderer.on('extensions:state', listener);
+    return () => ipcRenderer.removeListener('extensions:state', listener);
+  },
+  onExtensionOpenTab: (cb: (p: { reqId: number; url: string; active: boolean }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('extensions:open-tab', listener);
+    // A tela já escuta: o main pode mandar os pedidos de aba que guardou enquanto ela subia.
+    ipcRenderer.invoke('extensions:renderer-ready').catch(() => {});
+    return () => ipcRenderer.removeListener('extensions:open-tab', listener);
+  },
+  // chrome.tabs.remove: o main pede pra fechar a aba deste webContents.
+  onExtensionCloseTab: (cb: (p: { wcId: number }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('extensions:close-tab', listener);
+    return () => ipcRenderer.removeListener('extensions:close-tab', listener);
+  },
+  // Qual webContents nasceu pra um pedido de aba da extensão (chrome.tabs.create devolve ESSA aba).
+  extensionTabOpened: (reqId: number, wcId: number) => ipcRenderer.invoke('extensions:tab-opened', reqId, wcId),
+  extensionActionClick: (extId: string, wcId: number | null, anchor: { left: number; top: number; right: number; bottom: number }) =>
+    ipcRenderer.invoke('extensions:action-click', extId, wcId, anchor),
+  removeExtension: (extId: string) => ipcRenderer.invoke('extensions:remove', extId),
+  // Interruptor do quebra-cabeça: desligada = descarregada (arquivos e dados ficam).
+  setExtensionEnabled: (extId: string, enabled: boolean) => ipcRenderer.invoke('extensions:set-enabled', extId, enabled),
+  openExtensionStore: () => ipcRenderer.invoke('extensions:open-store'),
+  openExtensionOptions: (extId: string) => ipcRenderer.invoke('extensions:open-options', extId),
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),
@@ -172,7 +209,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateImage: (prompt: string, count?: number) => ipcRenderer.invoke('image:generate', prompt, count),
   revealInFolder: (target: string) => ipcRenderer.invoke('shell:reveal', target),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
-  suggest: (q: string) => ipcRenderer.invoke('suggest:query', q),
+  suggest: (q: string, engine?: unknown) => ipcRenderer.invoke('suggest:query', q, engine),
+  // Mecanismo de pesquisa escolhido (⋮) → main, pro "Pesquisar no … por" do clique direito.
+  setSearchEngine: (setting: unknown, googleLocale: string) => ipcRenderer.send('search:set-engine', setting, googleLocale),
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),
@@ -208,6 +247,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   dismissOverlays: (wcId: number) => ipcRenderer.invoke('overlays:dismiss', wcId),
   pickDocument: () => ipcRenderer.invoke('file:pick-extract'),
+  // Favoritos: importar (Chrome/Edge/arquivo HTML) e exportar pra HTML. O main só lê/grava arquivo.
+  bookmarksSources: () => ipcRenderer.invoke('bookmarks:sources'),
+  bookmarksImportBrowser: (id: string) => ipcRenderer.invoke('bookmarks:import-browser', id),
+  bookmarksImportHtml: () => ipcRenderer.invoke('bookmarks:import-html'),
+  bookmarksExport: (favs: Array<{ url: string; title: string }>) => ipcRenderer.invoke('bookmarks:export', favs),
+  // Ícones dos favoritos (cache do main, buscados no próprio site): pede vários de uma vez;
+  // os que ainda não tinha chegam depois pelo onFaviconsUpdated.
+  faviconsGet: (origins: string[], peek?: boolean) => ipcRenderer.invoke('favicons:get', origins, peek === true),
+  onFaviconsUpdated: (cb: (batch: Record<string, string | null>) => void) => {
+    const listener = (_e: unknown, batch: Record<string, string | null>) => cb(batch);
+    ipcRenderer.on('favicons:updated', listener);
+    return () => ipcRenderer.removeListener('favicons:updated', listener);
+  },
+  // Imprimir… / Salvar como PDF… da aba ativa (wcId = webContents do <webview>).
+  printPage: (wcId: number) => ipcRenderer.invoke('page:print', wcId),
+  savePagePdf: (wcId: number) => ipcRenderer.invoke('page:save-pdf', wcId),
+  // Limpar dados de navegação: caixas + período + sites do período. O main decide o que cada caixa apaga.
+  clearBrowsingData: (req: { range: string; cookies: boolean; cache: boolean; origins: string[] }) => ipcRenderer.invoke('browsing-data:clear', req),
   // Resolve o caminho real de um arquivo arrastado (File → path) no Electron 33.
   getPathForFile: (file: File) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   stockMovers: (direction: string, count?: number) => ipcRenderer.invoke('stocks:movers', direction, count),

@@ -165,6 +165,17 @@ export function setupDownloadManager(deps: Deps) {
     try { chain = t.item.getURLChain(); } catch {}
     // O Chromium já seguiu os redirecionamentos: usa o endereço FINAL, com os cookies DELE.
     const finalUrl = chain[chain.length - 1] || t.url;
+    // Aba com proxy (VPN de extensão, proxy do sistema): o motor usa o fetch do Node, que NÃO
+    // passa pelo proxy da sessão — sairia com o IP de verdade E os cookies da aba. Nesse caso
+    // (ou se não deu pra saber) devolve pro Chromium, que baixa pelo proxy. Antes de ler cookie.
+    let route = '';
+    try { route = await sess.resolveProxy(finalUrl); } catch {}
+    if (!reg.has(t.id)) return;   // a pessoa cancelou enquanto isso
+    if (route.trim().toUpperCase() !== 'DIRECT') {
+      t.probing = false;
+      try { t.item.resume(); } catch {}
+      return;
+    }
     const headers: Record<string, string> = {};
     try { headers['User-Agent'] = (wc && !wc.isDestroyed() ? wc.getUserAgent() : '') || sess.getUserAgent(); } catch {}
     try { const ref = wc && !wc.isDestroyed() ? wc.getURL() : ''; if (/^https?:/i.test(ref)) headers.Referer = ref; } catch {}

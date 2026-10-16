@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
 import { t } from '../i18n';
 import { permKindLabel, hostOf } from './PermissionPrompt';
+import SiteIcon from './SiteIcon';
+import { getSearchEngine, searchEngineName } from '../search-engine';
 
 interface Props {
   url: string;
@@ -28,7 +30,7 @@ export default function AddressBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const lastKeyRef = useRef('');      // pra NÃO autocompletar quando o usuário está apagando
   const selRef = useRef<{ s: number; e: number } | null>(null);
-  const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);   // debounce do Google Suggest
+  const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);   // debounce das sugestões do mecanismo
   const queryRef = useRef('');                                          // query atual (descarta resposta velha)
   const localRef = useRef<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
   const focusSelectRef = useRef(false);   // 1º clique na barra seleciona TUDO (estilo Chrome)
@@ -63,15 +65,16 @@ export default function AddressBar({
     }
   }, [input]);
 
-  // Sugestões do Google (estilo Chrome): fetch no main (sem CORS), com debounce, e mescla
-  // com as locais. Pula quando o texto parece um domínio sendo digitado (deixa pro inline local).
+  // Sugestões do mecanismo de pesquisa escolhido (estilo Chrome): fetch no main (sem CORS),
+  // com debounce, e mescla com as locais. Pula quando o texto parece um domínio sendo
+  // digitado (deixa pro inline local). Personalizado não tem sugestões da web.
   const fetchWebSuggest = (val: string) => {
     if (debRef.current) clearTimeout(debRef.current);
     const domainLike = !val.includes(' ') && /\.[a-z]{2,}/i.test(val);
     if (!val.trim() || domainLike || /^https?:\/\//i.test(val)) return;
     debRef.current = setTimeout(async () => {
       try {
-        const web: string[] = (await (window as any).electronAPI?.suggest?.(val)) || [];
+        const web: string[] = (await (window as any).electronAPI?.suggest?.(val, getSearchEngine())) || [];
         if (queryRef.current !== val || !web.length) return;   // resposta velha ou vazia
         const seen = new Set(localRef.current.map(s => (s.display || s.title).toLowerCase()));
         const items = web
@@ -225,7 +228,7 @@ export default function AddressBar({
           onFocus={e => e.target.select()}
           onMouseUp={e => { if (focusSelectRef.current) { e.preventDefault(); focusSelectRef.current = false; } }}
           onBlur={() => setTimeout(() => setShowSugg(false), 150)}
-          placeholder={t('addr.placeholder')}
+          placeholder={t('addr.placeholder', { engine: searchEngineName() })}
           spellCheck={false}
           autoComplete="off"
         />
@@ -247,7 +250,7 @@ export default function AddressBar({
                 onMouseDown={e => { e.preventDefault(); go(s.url); }}
                 onMouseEnter={() => setHi(i)}
               >
-                {s.search && <span className="omni-ico" aria-hidden="true">🔍</span>}
+                {s.search ? <span className="omni-ico" aria-hidden="true">🔍</span> : <SiteIcon url={s.url} title={s.title} peek />}
                 <span className="omni-title">{s.title}</span>
                 {s.display && s.display !== s.title && <span className="omni-url">{s.display}</span>}
               </li>

@@ -44,6 +44,12 @@ import { setupSitePermissions } from './site-permissions';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupChromeExtensions } from './chrome-extensions';
+import { setupBookmarksIO } from './bookmarks-io';
+import { setupFaviconCache } from './favicon-cache';
+import { setupPagePrint } from './page-print';
+import { setupClearBrowsingData } from './clear-browsing-data';
+import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
 
@@ -60,47 +66,156 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
   en: {
     'ctx.copy': 'Copy', 'ctx.cut': 'Cut', 'ctx.paste': 'Paste', 'ctx.selectAll': 'Select all',
     'ctx.copyLink': 'Copy link address', 'ctx.reload': 'Reload', 'ctx.inspect': 'Inspect',
+    'ctx.searchFor': 'Search {engine} for “{text}”',
     'mnu.navigate': 'Navigate', 'mnu.newTab': 'New tab', 'mnu.closeTab': 'Close tab', 'mnu.reopenTab': 'Reopen tab',
     'mnu.focusUrl': 'Focus address bar', 'mnu.reload': 'Reload', 'mnu.reloadF5': 'Reload (F5)',
     'mnu.back': 'Back', 'mnu.forward': 'Forward', 'mnu.bookmark': 'Add bookmark', 'mnu.find': 'Find in page',
     'mnu.zoomIn': 'Zoom in', 'mnu.zoomOut': 'Zoom out', 'mnu.zoomReset': 'Reset zoom', 'mnu.history': 'History', 'mnu.downloads': 'Downloads',
     'mnu.nextTab': 'Next tab', 'mnu.prevTab': 'Previous tab', 'mnu.tab': 'Tab',
+    'mnu.moveTabLeft': 'Move tab left', 'mnu.moveTabRight': 'Move tab right',
     'upd.title': 'Update available', 'upd.restart': 'Restart now', 'upd.later': 'Later',
     'upd.message': 'A new version ({v}) has been downloaded.',
     'upd.detail': 'Restart to finish updating. Your settings and login are kept.',
     'tray.open': 'Open Bah', 'tray.quit': 'Quit', 'tray.tooltip': 'Bah — monitors running',
+    'ext.install.title': 'Add extension', 'ext.install.question': 'Add "{name}"?', 'ext.install.can': 'It can:',
+    'ext.install.hosts': '• Read and change your data on {hosts}', 'ext.install.allSites': '• Read and change all your data on all websites',
+    'ext.install.unsupported': 'This extension uses features Bah does not have yet; it may not work fully ({list}).',
+    'ext.install.add': 'Add extension', 'ext.install.cancel': 'Cancel',
+    'ext.update.title': 'Extension wants more access', 'ext.update.question': '"{name}" now asks for more access',
+    'ext.update.can': 'Besides what you already approved, it can:', 'ext.update.perms': '• Use: {list}',
+    'ext.update.allow': 'Allow', 'ext.update.keepOff': 'Keep it off',
+    'ext.uninstall.title': 'Remove extension', 'ext.uninstall.question': 'Remove "{name}"?',
+    'ext.uninstall.detail': 'The Chrome Web Store asked to remove this extension and its data.', 'ext.uninstall.remove': 'Remove',
+    'ext.perm.proxy': '• Control your proxy settings (all traffic from your tabs can go through its server)',
+    'ext.perm.privacy': '• Change your privacy settings', 'ext.perm.cookies': '• Read and change cookies',
+    'ext.perm.management': '• Manage your extensions', 'ext.perm.notifications': '• Show notifications',
+    'ext.selfUninstall.detail': 'The extension asked to remove itself. Its data will be deleted too.',
+    'dl.noProxy.title': 'Download outside the proxy', 'dl.noProxy.message': 'This download will not go through the VPN or proxy your tabs use',
+    'dl.noProxy.detail': 'Video downloads (the Download button) and torrents connect straight from your computer: the site and the other peers will see your real IP address. Downloads from links in your tabs still go through the proxy.',
+    'dl.noProxy.continue': 'Download anyway', 'dl.noProxy.cancel': 'Cancel',
+    'dl.noProxy.refused': 'Not downloaded: torrents do not go through the VPN or proxy your tabs use.',
+    'bm.pick.title': 'Import from {browser}', 'bm.pick.message': 'Which {browser} profile do you want to import favorites from?',
+    'bm.pick.option': '{name} ({n} favorites)', 'bm.pick.optionOne': '{name} (1 favorite)', 'bm.pick.cancel': 'Cancel',
+    'bm.dlg.import': 'Import favorites from an HTML file', 'bm.dlg.export': 'Export favorites',
+    'bm.dlg.filter': 'Favorites file (HTML)', 'bm.dlg.all': 'All files',
+    'bm.export.title': 'Bookmarks', 'bm.export.toolbar': 'Bookmarks bar',
+    'mnu.clearData': 'Clear browsing data…',
+    'mnu.print': 'Print…', 'pdf.dlg.title': 'Save as PDF', 'pdf.dlg.filter': 'PDF document', 'pdf.fallbackName': 'page',
+    'pdf.dlg.replace': '{name} already exists. Do you want to replace it?', 'pdf.dlg.replaceYes': 'Replace', 'pdf.dlg.replaceNo': 'Cancel',
   },
   pt: {
     'ctx.copy': 'Copiar', 'ctx.cut': 'Recortar', 'ctx.paste': 'Colar', 'ctx.selectAll': 'Selecionar tudo',
     'ctx.copyLink': 'Copiar endereço do link', 'ctx.reload': 'Recarregar', 'ctx.inspect': 'Inspecionar',
+    'ctx.searchFor': 'Pesquisar no {engine} por “{text}”',
     'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nova aba', 'mnu.closeTab': 'Fechar aba', 'mnu.reopenTab': 'Reabrir aba',
     'mnu.focusUrl': 'Focar endereço', 'mnu.reload': 'Recarregar', 'mnu.reloadF5': 'Recarregar (F5)',
     'mnu.back': 'Voltar', 'mnu.forward': 'Avançar', 'mnu.bookmark': 'Favoritar', 'mnu.find': 'Buscar na página',
     'mnu.zoomIn': 'Aumentar zoom', 'mnu.zoomOut': 'Diminuir zoom', 'mnu.zoomReset': 'Zoom normal', 'mnu.history': 'Histórico', 'mnu.downloads': 'Downloads',
     'mnu.nextTab': 'Próxima aba', 'mnu.prevTab': 'Aba anterior', 'mnu.tab': 'Aba',
+    'mnu.moveTabLeft': 'Mover aba para a esquerda', 'mnu.moveTabRight': 'Mover aba para a direita',
     'upd.title': 'Atualização disponível', 'upd.restart': 'Reiniciar agora', 'upd.later': 'Depois',
     'upd.message': 'Uma nova versão ({v}) foi baixada.',
     'upd.detail': 'Reinicie para concluir a atualização. Suas configurações e login são mantidos.',
     'tray.open': 'Abrir Bah', 'tray.quit': 'Sair', 'tray.tooltip': 'Bah — monitores rodando',
+    'ext.install.title': 'Adicionar extensão', 'ext.install.question': 'Adicionar "{name}"?', 'ext.install.can': 'Ela pode:',
+    'ext.install.hosts': '• Ler e alterar seus dados em {hosts}', 'ext.install.allSites': '• Ler e alterar todos os seus dados em todos os sites',
+    'ext.install.unsupported': 'Esta extensão usa recursos que o Bah ainda não tem; ela pode não funcionar por completo ({list}).',
+    'ext.install.add': 'Adicionar extensão', 'ext.install.cancel': 'Cancelar',
+    'ext.update.title': 'A extensão pede mais acesso', 'ext.update.question': '"{name}" agora pede mais acesso',
+    'ext.update.can': 'Além do que você já aprovou, ela pode:', 'ext.update.perms': '• Usar: {list}',
+    'ext.update.allow': 'Permitir', 'ext.update.keepOff': 'Deixar desligada',
+    'ext.uninstall.title': 'Remover extensão', 'ext.uninstall.question': 'Remover "{name}"?',
+    'ext.uninstall.detail': 'A Chrome Web Store pediu para remover esta extensão e os dados dela.', 'ext.uninstall.remove': 'Remover',
+    'ext.perm.proxy': '• Controlar as configurações de proxy (todo o tráfego das abas pode passar pelo servidor dela)',
+    'ext.perm.privacy': '• Mudar configurações de privacidade', 'ext.perm.cookies': '• Ler e alterar cookies',
+    'ext.perm.management': '• Gerenciar suas extensões', 'ext.perm.notifications': '• Mostrar notificações',
+    'ext.selfUninstall.detail': 'A própria extensão pediu para ser removida. Os dados dela também serão apagados.',
+    'dl.noProxy.title': 'Download fora do proxy', 'dl.noProxy.message': 'Este download não vai passar pela VPN ou pelo proxy que as abas usam',
+    'dl.noProxy.detail': 'Os downloads de vídeo (o botão Baixar) e os torrents se conectam direto do seu computador: o site e os outros participantes vão ver o seu IP de verdade. Os downloads de links nas abas continuam passando pelo proxy.',
+    'dl.noProxy.continue': 'Baixar mesmo assim', 'dl.noProxy.cancel': 'Cancelar',
+    'dl.noProxy.refused': 'Não baixado: torrents não passam pela VPN ou pelo proxy que as abas usam.',
+    'bm.pick.title': 'Importar do {browser}', 'bm.pick.message': 'De qual perfil do {browser} você quer importar os favoritos?',
+    'bm.pick.option': '{name} ({n} favoritos)', 'bm.pick.optionOne': '{name} (1 favorito)', 'bm.pick.cancel': 'Cancelar',
+    'bm.dlg.import': 'Importar favoritos de um arquivo HTML', 'bm.dlg.export': 'Exportar favoritos',
+    'bm.dlg.filter': 'Arquivo de favoritos (HTML)', 'bm.dlg.all': 'Todos os arquivos',
+    'bm.export.title': 'Favoritos', 'bm.export.toolbar': 'Barra de favoritos',
+    'mnu.clearData': 'Limpar dados de navegação…',
+    'mnu.print': 'Imprimir…', 'pdf.dlg.title': 'Salvar como PDF', 'pdf.dlg.filter': 'Documento PDF', 'pdf.fallbackName': 'pagina',
+    'pdf.dlg.replace': '{name} já existe. Deseja substituí-lo?', 'pdf.dlg.replaceYes': 'Substituir', 'pdf.dlg.replaceNo': 'Cancelar',
   },
   es: {
     'ctx.copy': 'Copiar', 'ctx.cut': 'Cortar', 'ctx.paste': 'Pegar', 'ctx.selectAll': 'Seleccionar todo',
     'ctx.copyLink': 'Copiar dirección del enlace', 'ctx.reload': 'Recargar', 'ctx.inspect': 'Inspeccionar',
+    'ctx.searchFor': 'Buscar “{text}” en {engine}',
     'mnu.navigate': 'Navegar', 'mnu.newTab': 'Nueva pestaña', 'mnu.closeTab': 'Cerrar pestaña', 'mnu.reopenTab': 'Reabrir pestaña',
     'mnu.focusUrl': 'Enfocar la dirección', 'mnu.reload': 'Recargar', 'mnu.reloadF5': 'Recargar (F5)',
     'mnu.back': 'Atrás', 'mnu.forward': 'Adelante', 'mnu.bookmark': 'Añadir a favoritos', 'mnu.find': 'Buscar en la página',
     'mnu.zoomIn': 'Acercar', 'mnu.zoomOut': 'Alejar', 'mnu.zoomReset': 'Restablecer zoom', 'mnu.history': 'Historial', 'mnu.downloads': 'Descargas',
     'mnu.nextTab': 'Pestaña siguiente', 'mnu.prevTab': 'Pestaña anterior', 'mnu.tab': 'Pestaña',
+    'mnu.moveTabLeft': 'Mover pestaña a la izquierda', 'mnu.moveTabRight': 'Mover pestaña a la derecha',
     'upd.title': 'Actualización disponible', 'upd.restart': 'Reiniciar ahora', 'upd.later': 'Después',
     'upd.message': 'Se ha descargado una nueva versión ({v}).',
     'upd.detail': 'Reinicia para completar la actualización. Tus ajustes y sesión se mantienen.',
     'tray.open': 'Abrir Bah', 'tray.quit': 'Salir', 'tray.tooltip': 'Bah — monitores activos',
+    'ext.install.title': 'Añadir extensión', 'ext.install.question': '¿Añadir "{name}"?', 'ext.install.can': 'Puede:',
+    'ext.install.hosts': '• Leer y cambiar tus datos en {hosts}', 'ext.install.allSites': '• Leer y cambiar todos tus datos en todos los sitios web',
+    'ext.install.unsupported': 'Esta extensión usa funciones que Bah todavía no tiene; puede que no funcione del todo ({list}).',
+    'ext.install.add': 'Añadir extensión', 'ext.install.cancel': 'Cancelar',
+    'ext.update.title': 'La extensión pide más acceso', 'ext.update.question': '"{name}" ahora pide más acceso',
+    'ext.update.can': 'Además de lo que ya aprobaste, puede:', 'ext.update.perms': '• Usar: {list}',
+    'ext.update.allow': 'Permitir', 'ext.update.keepOff': 'Dejarla desactivada',
+    'ext.uninstall.title': 'Quitar extensión', 'ext.uninstall.question': '¿Quitar "{name}"?',
+    'ext.uninstall.detail': 'Chrome Web Store pidió quitar esta extensión y sus datos.', 'ext.uninstall.remove': 'Quitar',
+    'ext.perm.proxy': '• Controlar la configuración de proxy (todo el tráfico de tus pestañas puede pasar por su servidor)',
+    'ext.perm.privacy': '• Cambiar la configuración de privacidad', 'ext.perm.cookies': '• Leer y cambiar cookies',
+    'ext.perm.management': '• Administrar tus extensiones', 'ext.perm.notifications': '• Mostrar notificaciones',
+    'ext.selfUninstall.detail': 'La propia extensión pidió que la quitaran. Sus datos también se borrarán.',
+    'dl.noProxy.title': 'Descarga fuera del proxy', 'dl.noProxy.message': 'Esta descarga no pasará por la VPN ni por el proxy que usan tus pestañas',
+    'dl.noProxy.detail': 'Las descargas de video (el botón Descargar) y los torrents se conectan directamente desde tu computadora: el sitio y los demás participantes verán tu IP real. Las descargas de enlaces en tus pestañas siguen pasando por el proxy.',
+    'dl.noProxy.continue': 'Descargar de todos modos', 'dl.noProxy.cancel': 'Cancelar',
+    'dl.noProxy.refused': 'No descargado: los torrents no pasan por la VPN ni por el proxy que usan tus pestañas.',
+    'bm.pick.title': 'Importar de {browser}', 'bm.pick.message': '¿De qué perfil de {browser} quieres importar los favoritos?',
+    'bm.pick.option': '{name} ({n} favoritos)', 'bm.pick.optionOne': '{name} (1 favorito)', 'bm.pick.cancel': 'Cancelar',
+    'bm.dlg.import': 'Importar favoritos de un archivo HTML', 'bm.dlg.export': 'Exportar favoritos',
+    'bm.dlg.filter': 'Archivo de favoritos (HTML)', 'bm.dlg.all': 'Todos los archivos',
+    'bm.export.title': 'Favoritos', 'bm.export.toolbar': 'Barra de favoritos',
+    'mnu.clearData': 'Borrar datos de navegación…',
+    'mnu.print': 'Imprimir…', 'pdf.dlg.title': 'Guardar como PDF', 'pdf.dlg.filter': 'Documento PDF', 'pdf.fallbackName': 'pagina',
+    'pdf.dlg.replace': '{name} ya existe. ¿Desea reemplazarlo?', 'pdf.dlg.replaceYes': 'Reemplazar', 'pdf.dlg.replaceNo': 'Cancelar',
   },
 };
+// O yt-dlp (botão Baixar do vídeo) e o torrent saem DIRETO do computador: não passam pelo proxy
+// da sessão das abas (VPN de extensão, proxy do sistema). Com proxy nas abas, pergunta UMA vez
+// por sessão do Bah; "Cancelar" vale por 30 s (sem pilha de avisos). false = não baixar.
+let directDownloadOk = false;
+let directAsk: Promise<boolean> | null = null;
+let directRefusedAt = 0;
+async function allowDirectDownload(url: string, canAsk: boolean): Promise<boolean> {
+  if (directDownloadOk) return true;
+  let route = '';
+  try { route = await session.fromPartition(BROWSER_PARTITION).resolveProxy(/^https?:\/\//i.test(url) ? url : 'https://example.com/'); } catch {}
+  if (route.trim().toUpperCase() === 'DIRECT') return true;
+  if (!canAsk || Date.now() - directRefusedAt < 30000) return false;
+  if (!directAsk) {
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning', title: mt('dl.noProxy.title'), message: mt('dl.noProxy.message'), detail: mt('dl.noProxy.detail'),
+      buttons: [mt('dl.noProxy.continue'), mt('dl.noProxy.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+    };
+    const ask = mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts);
+    directAsk = ask.then(r => r.response === 0, () => false).then(ok => {
+      if (ok) directDownloadOk = true; else directRefusedAt = Date.now();
+      directAsk = null;
+      return ok;
+    });
+  }
+  return directAsk;
+}
+
 function mt(key: string, vars?: Record<string, string>): string {
   const L = mainLang();
   let s = MAIN_STRINGS[L][key] || MAIN_STRINGS.en[key] || key;
-  if (vars) for (const k of Object.keys(vars)) s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), vars[k]);
+  // Função no replace: texto vindo da página (seleção) com "$&"/"$1" não vira padrão.
+  if (vars) for (const k of Object.keys(vars)) s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), () => vars[k]);
   return s;
 }
 
@@ -110,11 +225,17 @@ let pageAgent: PageAgent;
 let localEngine: AIEngine | null = null;
 let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
 let videoButton: ReturnType<typeof setupVideoButton> | null = null;
+let faviconCache: ReturnType<typeof setupFaviconCache> | null = null;
 let localPageAgent: PageAgent | null = null;
 // Espelho do modo IA Local do renderer (store.localSettings.enabled). O main precisa saber
 // pra trabalhos em BACKGROUND (monitores) respeitarem "local não vaza pra nuvem" — o chat
 // normal roteia por chamada, mas os monitores rodam sem o renderer decidir.
 let localModeOn = false;
+// Espelho do mecanismo de pesquisa escolhido no renderer (⋮ → Mecanismo de pesquisa; o dono é
+// o localStorage de lá). Só o "Pesquisar no … por" do clique direito usa — as sugestões da
+// barra recebem o mecanismo junto com cada pedido. Até o renderer avisar: Google.
+let searchEngine: SearchEngineSetting = normalizeSearchSetting(null);
+let searchGoogleLocale = 'hl=en';
 // Pré-aquecimento do modelo local é OPT-IN (o llama.cpp gerencia a VRAM; nunca descarregamos
 // nada). O renderer liga via IPC quando o usuário escolhe; o engine só aquece com a flag ligada.
 let localWarmupOn = false;
@@ -236,6 +357,26 @@ async function flushBrowserState(): Promise<void> {
     try { await ses.cookies.flushStore(); } catch {}
     try { await (ses as any).flushStorageData?.(); } catch {}
   }));
+}
+
+// "Continuar de onde parou": ao fechar, a tela grava as abas abertas no localStorage (ela junta as
+// mudanças por até 1 s) ANTES do flushBrowserState mandar tudo pro disco — senão o último segundo
+// ficava de fora. Tela travada ou ainda sem ouvinte: segue o fechamento em 500 ms.
+function saveTabsBeforeClose(): Promise<void> {
+  const wc = mainWindow?.webContents;
+  if (!wc || wc.isDestroyed()) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer: NodeJS.Timeout | null = null;
+    const done = (e?: Electron.IpcMainEvent) => {
+      if (e && e.sender !== wc) return;
+      if (timer) { clearTimeout(timer); timer = null; }
+      ipcMain.removeListener('session:saved', done);
+      resolve();
+    };
+    ipcMain.on('session:saved', done);
+    timer = setTimeout(() => done(), 500);
+    try { wc.send('session:save-now'); } catch { done(); }
+  });
 }
 
 function isGoogleCookie(cookie: Electron.Cookie): boolean {
@@ -916,6 +1057,7 @@ function createWindow(): void {
     if (cookiesFlushedOnClose) return;   // 2ª passada: deixa fechar de verdade
     e.preventDefault();
     (async () => {
+      try { await saveTabsBeforeClose(); } catch {}   // as abas abertas (Continuar de onde parou)
       try {
         await flushBrowserState();
       } catch {}
@@ -1004,6 +1146,8 @@ function createWindow(): void {
     wc.on('did-frame-finish-load', (_e, isMainFrame, frameProcessId, frameRoutingId) => {
       if (!isMainFrame) videoButton?.injectFrame(wc, frameProcessId, frameRoutingId);
     });
+    // Ícone que a aba mostrou → cache dos ícones dos favoritos (só guarda se o site é favorito).
+    wc.on('page-favicon-updated', (_e, favicons) => faviconCache?.notePageFavicons(wc.getURL(), favicons));
     attachContextMenu(wc);
     // Ctrl + roda do mouse = zoom (igual ao Chrome). O Chromium dispara 'zoom-changed'
     // com a direção quando o mouse está sobre a página; aplicamos no próprio webContents
@@ -1159,6 +1303,23 @@ function attachContextMenu(wc: Electron.WebContents): void {
       template.push({ label: mt('ctx.selectAll'), role: 'selectAll' });
     }
 
+    // "Pesquisar no Google por “…”" (como o Chrome) → aba nova, no mecanismo escolhido no ⋮.
+    // Só nas abas e na interface do Bah (a janela de login não tem barra de abas pra abrir).
+    const query = (params.selectionText || '').replace(/\s+/g, ' ').trim();
+    const inBah = !!mainWindow && !mainWindow.isDestroyed()
+      && (wc === mainWindow.webContents || wc.hostWebContents === mainWindow.webContents);
+    if (query && inBah) {
+      // No Windows o "&" do rótulo vira atalho sublinhado; "&&" mostra o "&" de verdade.
+      const amp = (x: string) => (process.platform === 'win32' ? x.replace(/&/g, '&&') : x);
+      template.push({
+        label: mt('ctx.searchFor', { engine: amp(engineName(searchEngine)), text: amp(selectionLabel(query)) }),
+        click: () => {
+          const url = buildSearchUrl(searchEngine, query, { googleLocale: searchGoogleLocale });
+          try { mainWindow?.webContents.send('open-new-tab', url); } catch {}
+        },
+      });
+    }
+
     if (params.linkURL) {
       if (template.length) template.push({ type: 'separator' });
       template.push({
@@ -1170,6 +1331,11 @@ function attachContextMenu(wc: Electron.WebContents): void {
 
     if (template.length) template.push({ type: 'separator' });
     template.push({ label: mt('ctx.reload'), click: () => wc.reload() });
+    // Imprimir… só no fundo de uma ABA (como no Chrome) — nunca na interface do Bah nem na janela
+    // de login, pra nunca imprimir a página errada. O menu saiu da própria janela principal.
+    if (wc.getType() === 'webview' && wc.hostWebContents === mainWindow?.webContents && !hasSelection && !isEditable && !params.linkURL && params.mediaType === 'none') {
+      template.push({ label: mt('mnu.print'), accelerator: 'CmdOrCtrl+P', click: () => mainWindow?.webContents.send('app:shortcut', 'print') });
+    }
     template.push({ label: mt('ctx.inspect'), click: () => wc.inspectElement(params.x, params.y) });
 
     Menu.buildFromTemplate(template).popup({ window: mainWindow ?? undefined });
@@ -1230,21 +1396,37 @@ function setupIPC(): void {
     }
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
+  // "Continuar de onde parou": a tela gravou uma sessão com aba/endereço/ordem diferente → manda o
+  // localStorage da interface pro disco já, sem esperar o lote do Chromium (que pode levar até um
+  // minuto): se o Bah cair, perde ~1 s. A tela pede no máximo 1x a cada 2 s (renderer/session.ts).
+  ipcMain.on('session:flush-storage', (e) => {
+    if (e.sender !== mainWindow?.webContents) return;
+    try { (session.defaultSession as any).flushStorageData?.(); } catch {}
+  });
 
-  // Sugestoes da barra de endereco (Google Suggest, estilo Chrome) — fetch no MAIN pra nao
-  // esbarrar em CORS. Sem chave. hl segue o idioma da UI. Offline/erro -> [] (cai so nas locais).
-  ipcMain.handle('suggest:query', async (_e, q: string) => {
+  // Sugestoes da barra de endereco (estilo Chrome), do mecanismo de pesquisa escolhido — fetch
+  // no MAIN pra nao esbarrar em CORS. Sem chave. hl segue o idioma. Offline/erro -> [] (cai so
+  // nas locais). O endereço sai SEMPRE da tabela fixa (shared/search-engines.ts): o renderer só
+  // diz qual mecanismo; Personalizado não tem sugestões (null → []).
+  ipcMain.handle('suggest:query', async (_e, q: string, engine?: unknown) => {
     try {
-      const query = (q || '').trim();
+      const query = (typeof q === 'string' ? q : '').trim();
       if (!query || /^https?:\/\//i.test(query)) return [];
+      const url = buildSuggestUrl(engine === undefined ? searchEngine : normalizeSearchSetting(engine), query, LANG_SWITCH);
+      if (!url) return [];
       const ctrl = new AbortController();
       const tm = setTimeout(() => ctrl.abort(), 3000);
-      const url = `https://suggestqueries.google.com/complete/search?client=firefox&hl=${encodeURIComponent(LANG_SWITCH)}&q=${encodeURIComponent(query)}`;
       const res = await fetch(url, { signal: ctrl.signal } as any).finally(() => clearTimeout(tm));
       if (!res.ok) return [];
-      const data = JSON.parse(await res.text());
-      return Array.isArray(data?.[1]) ? data[1].slice(0, 6).map((s: any) => String(s)) : [];
+      return parseSuggestResponse(JSON.parse(await res.text()), 6);
     } catch { return []; }
+  });
+  // O renderer avisa qual mecanismo está escolhido (ao abrir e a cada troca). Só a janela
+  // principal manda; o valor é revalidado aqui (Personalizado inválido = Google).
+  ipcMain.on('search:set-engine', (e, setting: unknown, googleLocale: unknown) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    searchEngine = normalizeSearchSetting(setting);
+    if (typeof googleLocale === 'string' && /^[A-Za-z0-9=&-]{1,40}$/.test(googleLocale)) searchGoogleLocale = googleLocale;
   });
 
   // Cifra/decifra segredos (a chave de API) com o cofre do SO (safeStorage). A chave fica
@@ -2509,6 +2691,25 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   downloadManager.attach(session.defaultSession);
   // Medidor do computador na barra de cima (CPU, RAM, placa de vídeo) — só mede quando ligado e visível.
   setupHwMonitor({ getMainWindow: () => mainWindow });
+  // Favoritos: importar do Chrome/Edge ou de arquivo HTML, exportar pra HTML (só arquivos; a lista é do renderer).
+  setupBookmarksIO({ getMainWindow: () => mainWindow, t: mt, lang: mainLang });
+  // Ícones dos favoritos: buscados no próprio site (sem Google/DuckDuckGo), cache em userData.
+  faviconCache = setupFaviconCache({
+    getMainWindow: () => mainWindow,
+    session: session.fromPartition(BROWSER_PARTITION),
+    file: path.join(app.getPath('userData'), 'favicons.json'),
+    userAgent: CHROME_UA,
+  });
+  // Imprimir… (Ctrl+P) e Salvar como PDF… (menu ⋮): sempre a página da aba ativa.
+  setupPagePrint({ getMainWindow: () => mainWindow, t: mt });
+  // Limpar dados de navegação (menu ⋮ / Ctrl+Shift+Delete): cookies/cache só da sessão das abas,
+  // sem tocar nas extensões nem nas configurações do Bah (defaultSession).
+  setupClearBrowsingData({
+    getMainWindow: () => mainWindow,
+    browserSession: session.fromPartition(BROWSER_PARTITION),
+    googleLoginSession: session.fromPartition(GOOGLE_LOGIN_PARTITION),
+    extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
+  });
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({
@@ -2520,6 +2721,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   videoButton = setupVideoButton({
     getMainWindow: () => mainWindow,
     msSinceGesture: (wcId) => Date.now() - (lastGesture.get(wcId) ?? -1e9),
+    allowDirect: allowDirectDownload,
   });
   // Estilo IDM: anota os vídeos/streams que as abas carregam (pros sites que o yt-dlp não conhece).
   videoButton.attachSniffer(session.fromPartition('persist:browser'));
@@ -2528,6 +2730,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
     blockedExtensions: BLOCKED_EXTENSIONS,
+    allowDirect: (uri) => allowDirectDownload(uri, true),
+    directRefused: () => mt('dl.noProxy.refused'),
   });
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
     try {
@@ -2876,6 +3080,22 @@ async function setupAdblock(): Promise<void> {
       read: fs.promises.readFile,
       write: fs.promises.writeFile,
     });
+    // Páginas de extensão do Chrome (popup, opções) também rodam em persist:browser, e o
+    // preload do Ghostery mandaria os filtros cosméticos do EasyList pra elas (um ".ad-banner"
+    // da própria extensão sumia). No Chrome, um bloqueador nunca mexe na página de outra
+    // extensão. O BlockingContext chama blocker.onInjectCosmeticFilters na HORA de cada pedido,
+    // então embrulhar o método aqui vale pra todo liga/desliga do adblock. O endereço vem do
+    // frame visto pelo main, não do que a página informou.
+    {
+      const b = blocker;
+      const origInject = b.onInjectCosmeticFilters;
+      b.onInjectCosmeticFilters = async (event, url, msg) => {
+        let real = '';
+        try { real = String(event.senderFrame?.url || event.sender?.getURL?.() || url || ''); } catch { real = String(url || ''); }
+        if (real.startsWith('chrome-extension://')) return;
+        return origInject(event, url, msg);
+      };
+    }
     const persistSession = session.fromPartition('persist:browser');
     // Respeita a preferência salva: só liga se o usuário não tiver desligado.
     if (loadAdblockPref()) blocker.enableBlockingInSession(persistSession);
@@ -3363,6 +3583,15 @@ app.whenReady().then(async () => {
     callback({ responseHeaders: headers });
   });
 
+  // Extensões do Chrome (Chrome Web Store) na sessão das abas. Vem ANTES da janela: o calço
+  // das APIs (preload de service worker) precisa estar registrado antes do primeiro worker
+  // de extensão subir, e as extensões já carregam enquanto a janela nasce.
+  try {
+    setupChromeExtensions({ getMainWindow: () => mainWindow, session: persistSession, t: (k) => mt(k) });
+  } catch (e) {
+    console.error('[Extensões] não iniciou:', e);
+  }
+
   // Menu oculto (janela sem moldura) — os ACELERADORES funcionam mesmo com uma página
   // (webview) focada, então é o jeito certo de ter atalhos estilo Chrome. Cada item
   // dispara um IPC pro renderer, que executa a ação nas abas. editMenu mantém Ctrl+C/V/X/A.
@@ -3400,6 +3629,8 @@ app.whenReady().then(async () => {
         { label: mt('mnu.forward'), accelerator: 'Alt+Right', click: () => sendSc('forward') },
         { label: mt('mnu.bookmark'), accelerator: 'CmdOrCtrl+D', click: () => sendSc('bookmark') },
         { label: mt('mnu.find'), accelerator: 'CmdOrCtrl+F', click: () => sendSc('find') },
+        // Ctrl+P com o foco na página, na barra de endereço ou no painel da IA: sempre imprime a ABA.
+        { label: mt('mnu.print'), accelerator: 'CmdOrCtrl+P', click: () => sendSc('print') },
         { type: 'separator' },
         { label: mt('mnu.zoomIn'), accelerator: 'CmdOrCtrl+Plus', click: () => sendSc('zoom-in') },
         { label: mt('mnu.zoomIn'), accelerator: 'CmdOrCtrl+=', visible: false, click: () => sendSc('zoom-in') },
@@ -3407,9 +3638,15 @@ app.whenReady().then(async () => {
         { label: mt('mnu.zoomReset'), accelerator: 'CmdOrCtrl+0', click: () => sendSc('zoom-reset') },
         { label: mt('mnu.history'), accelerator: 'CmdOrCtrl+H', click: () => sendSc('history') },
         { label: mt('mnu.downloads'), accelerator: 'CmdOrCtrl+J', click: () => sendSc('downloads') },
+        // Limpar dados de navegação: o atalho do Chrome (Ctrl+Shift+Delete; no Mac, Cmd+Shift+Backspace,
+        // a tecla "delete" do teclado do Mac). Acelerador do menu → vale com o foco na página também.
+        { label: mt('mnu.clearData'), accelerator: process.platform === 'darwin' ? 'Cmd+Shift+Backspace' : 'Ctrl+Shift+Delete', click: () => sendSc('clear-data') },
         { type: 'separator' },
         { label: mt('mnu.nextTab'), accelerator: 'Control+Tab', click: () => sendSc('next-tab') },
         { label: mt('mnu.prevTab'), accelerator: 'Control+Shift+Tab', click: () => sendSc('prev-tab') },
+        // Mover a aba ativa uma casa (atalho do Chrome), com a página focada também.
+        { label: mt('mnu.moveTabLeft'), accelerator: 'Control+Shift+PageUp', click: () => sendSc('move-tab-left') },
+        { label: mt('mnu.moveTabRight'), accelerator: 'Control+Shift+PageDown', click: () => sendSc('move-tab-right') },
         ...tabNumberItems,
         { type: 'separator' },
         { role: 'toggleDevTools' },

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Tab } from '../store';
+import { webviewOrder } from '../../shared/tab-strip';
 
 interface Props {
   tabs: Tab[];
@@ -76,9 +77,17 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
     }
   }
 
+  // Os <webview> ficam na ordem em que cada aba CHEGOU, nunca na ordem da barra. Arrastar uma
+  // aba, "Nova aba à direita", "Duplicar" e Fixar mudam a ordem da lista; se os <webview>
+  // seguissem essa ordem, o React MOVERIA o elemento no DOM — e <webview> movido desanexa a
+  // página e recarrega do zero (vídeo, formulário, login em andamento: tudo perdido). Assim
+  // nenhum se mexe: aba nova entra no fim, fechada sai, a que acorda (Memory Saver) volta pra
+  // casa dela — inserir/remover não move os vizinhos. A posição na tela é só o display.
+  const mountSeqRef = useRef<Map<string, number>>(new Map());
+
   return (
     <div className="webview-container" ref={containerRef}>
-      {tabs.filter(tab => !tab.discarded).map(tab => (
+      {webviewOrder(tabs, mountSeqRef.current).map(tab => (
         <webview
           key={tab.id}
           data-tab-id={tab.id}

@@ -15,6 +15,10 @@ interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
   uniqueDownloadPath: (base: string) => string;
   blockedExtensions: RegExp;
+  /** Torrent sai DIRETO (não pelo proxy/VPN das abas): com proxy, o Bah avisa antes. false = não baixar. */
+  allowDirect?: (uri: string) => Promise<boolean>;
+  /** Texto (traduzido) do card quando a pessoa não quis baixar sem o proxy. */
+  directRefused?: () => string;
 }
 
 interface TorrentRec {
@@ -131,7 +135,11 @@ export function setupTorrentManager(deps: Deps) {
     return p;
   }
 
-  ipcMain.handle('torrent:add', (_e, uri: string) => addTorrent(uri));
+  ipcMain.handle('torrent:add', async (_e, uri: string) => {
+    // Torrent sai DIRETO (não pelo proxy/VPN das abas): com proxy, o Bah avisa antes.
+    if (deps.allowDirect && !(await deps.allowDirect(String(uri || '')))) return { ok: false, error: deps.directRefused?.() || 'cancelled' };
+    return addTorrent(uri);
+  });
 
   ipcMain.handle('torrent:play', (_e, id: string, index: number) => {
     if (!child) return { ok: false, error: 'no engine' };

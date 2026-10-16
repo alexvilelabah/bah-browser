@@ -1,10 +1,12 @@
-import React, { useRef, useCallback, useEffect, useState } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
-import TabBar from './components/TabBar';
+import TabBar, { type TabCommand } from './components/TabBar';
+import { useSiteMute } from './site-mute';
+import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
@@ -15,6 +17,14 @@ import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } 
 import WebViewContainer from './components/WebViewContainer';
 import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
 import MonitorsPanel from './components/MonitorsPanel';
+import ClearDataDialog, { type ClearChoice } from './components/ClearDataDialog';
+import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange } from '../shared/clear-data';
+import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
+import SearchEngineMenu from './components/SearchEngineMenu';
+import StartupMenu from './components/StartupMenu';
+import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
+import BookmarksBar from './components/BookmarksBar';
+import SiteIcon from './components/SiteIcon';
 import {
   BrowserAction,
   executeBrowserAction,
@@ -72,6 +82,17 @@ import {
 } from './agent-run-logger';
 import { createDeadline } from './task-deadline';
 import { classifySelfEval, nextSelfFailCount } from '../shared/self-eval';
+import { mergeFavorites, MAX_FAVORITES, type FlatBookmark } from '../shared/bookmarks';
+
+// Quantos favoritos desenhar na barra e no menu ⋮ (a lista inteira continua no autocomplete).
+// Barra: os primeiros 100 (o que não cabe na largura vai pro "»"). ⋮ → Favoritos: os primeiros 150.
+const FAV_BAR_MAX = 100;
+const FAV_MENU_MAX = 150;
+// Atalho do "Imprimir…" como o sistema escreve (dica do item no menu ⋮).
+const BOOKMARK_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘D' : 'Ctrl+D';
+const PRINT_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘P' : 'Ctrl+P';
+// Atalho do Limpar dados de navegação, como no Chrome (no Mac a tecla "delete" é o Backspace).
+const CLEAR_DATA_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⇧⌘⌫' : 'Ctrl+Shift+Delete';
 
 declare global {
   interface Window {
@@ -84,6 +105,7 @@ declare global {
       encryptSecret?: (t: string) => Promise<string>;
       decryptSecretSync?: (t: string) => string;
       setUILanguage?: (lang: string) => Promise<any>;
+      setSearchEngine?: (setting: { id: string; custom?: string }, googleLocale: string) => void;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean; visionMode?: VisionMode }) => Promise<any>;
       localDiscover?: (provider: string, baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; models: Array<{ id: string; loaded?: boolean; vision: string; contextTokens?: number; contextSource?: string; unsuitable?: string }>; error?: string }>;
@@ -98,6 +120,10 @@ declare global {
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
+      // Continuar de onde parou: o main pede pra gravar as abas antes de fechar a janela; a tela
+      // pede pra mandar o localStorage pro disco já quando a sessão muda (renderer/session.ts).
+      onSaveSessionNow?: (cb: () => void) => (() => void);
+      flushUiStorage?: () => void;
       aiAction: (command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => Promise<{
         action?: any; actions?: any[]; thought?: string; error?: string;
         /** Machine-readable failure (shared/error-codes.ts) — the renderer decides on this. */
@@ -113,6 +139,16 @@ declare global {
       listSitePermissions?: (url: string) => Promise<{ origin: string; perms: Record<string, 'allow' | 'block'> }>;
       setSitePermission?: (url: string, kind: string, value: 'allow' | 'block' | null) => Promise<{ ok: boolean; perms?: Record<string, 'allow' | 'block'> }>;
       resetSitePermissions?: (url: string) => Promise<any>;
+      getExtensionsState?: () => Promise<ExtensionInfo[]>;
+      onExtensionsState?: (cb: (list: ExtensionInfo[]) => void) => (() => void);
+      onExtensionOpenTab?: (cb: (p: { reqId: number; url: string; active: boolean }) => void) => (() => void);
+      extensionTabOpened?: (reqId: number, wcId: number) => Promise<boolean>;
+      onExtensionCloseTab?: (cb: (p: { wcId: number }) => void) => (() => void);
+      extensionActionClick?: (extId: string, wcId: number | null, anchor: { left: number; top: number; right: number; bottom: number }) => Promise<{ ok: boolean; popup?: boolean; disabled?: boolean }>;
+      removeExtension?: (extId: string) => Promise<{ ok: boolean; error?: string }>;
+      setExtensionEnabled?: (extId: string, enabled: boolean) => Promise<{ ok: boolean; error?: string; quiet?: boolean }>;
+      openExtensionStore?: () => Promise<{ ok: boolean }>;
+      openExtensionOptions?: (extId: string) => Promise<{ ok: boolean }>;
       torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
       torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
@@ -170,6 +206,15 @@ declare global {
       onShortcut?: (cb: (action: string) => void) => (() => void) | void;
       dismissOverlays?: (wcId: number) => Promise<{ dismissed: string }>;
       pickDocument?: () => Promise<{ ok: boolean; name?: string; text?: string; error?: string } | null>;
+      bookmarksSources?: () => Promise<Array<{ id: 'chrome' | 'edge'; name: string }>>;
+      bookmarksImportBrowser?: (id: string) => Promise<{ ok: true; items: FlatBookmark[]; profile?: string } | { ok: false; error: string }>;
+      bookmarksImportHtml?: () => Promise<{ ok: true; items: FlatBookmark[] } | { ok: false; error: string }>;
+      bookmarksExport?: (favs: FlatBookmark[]) => Promise<{ ok: true; count: number; file: string } | { ok: false; error: string }>;
+      faviconsGet?: (origins: string[], peek?: boolean) => Promise<Record<string, string | null>>;
+      onFaviconsUpdated?: (cb: (batch: Record<string, string | null>) => void) => () => void;
+      printPage?: (wcId: number) => Promise<{ ok: true } | { ok: false; error: string }>;
+      savePagePdf?: (wcId: number) => Promise<{ ok: true; file?: string; path?: string; downloaded?: boolean } | { ok: false; error: string }>;
+      clearBrowsingData?: (req: { range: TimeRange; cookies: boolean; cache: boolean; origins: string[] }) => Promise<{ ok: true } | { ok: false; error: string }>;
       getPathForFile?: (file: File) => string;
       stockMovers?: (direction: string, count?: number) => Promise<{ success: boolean; spec?: any; error?: string }>;
       onVideoProgress?: (cb: (p: { state: string; percent?: number; title?: string; path?: string; error?: string; speed?: string; eta?: string }) => void) => void;
@@ -203,6 +248,8 @@ function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?:
 export default function App() {
   const store = useTabStore();
   const webviewRefs = useRef<Map<string, Electron.WebviewTag>>(new Map());
+  // "Desativar som do site" (menu da aba): mudo em todas as abas do site, salvo entre sessões.
+  const siteMute = useSiteMute(store.tabs, webviewRefs);
   const [agentVisual, setAgentVisual] = useState<AgentVisualState>('idle');
   // Live tokens/sec from the engine, shown while the agent works.
   const [liveMetrics, setLiveMetrics] = useState<{ kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean } | null>(null);
@@ -326,7 +373,9 @@ export default function App() {
     if (!pausedCutTabsRef.current.has(id)) return;
     pausedCutTabsRef.current.delete(id);
     const wv = webviewRefs.current.get(id) as any;
-    try { wv?.setAudioMuted(false); } catch {}   // usuário abriu a aba → libera o som
+    // usuário abriu a aba → libera o som (menos se o site está com "Desativar som do site")
+    const tabUrl = store.tabs.find(x => x.id === id)?.url || '';
+    if (!siteMute.isMuted(tabUrl)) { try { wv?.setAudioMuted(false); } catch {} }
     setTimeout(() => { try { wv?.executeJavaScript(VCUT_RELEASE_JS, false); } catch {} }, 250);
   }, [store.activeTabId]);
 
@@ -379,6 +428,35 @@ export default function App() {
       window.electronAPI?.setLocalProvider?.(store.localSettings.provider, store.localSettings.authKey ?? '', store.localSettings.baseUrl, store.localSettings.model, localOptsForMain(store.localSettings));
     }
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string) => store.addTab(url)) as any);
+    // Extensão pediu aba nova (chrome.tabs.create, opções, loja): na frente, ou atrás se active:false.
+    offs.push(window.electronAPI?.onExtensionOpenTab?.(({ reqId, url, active }) => {
+      const target = typeof url === 'string' && url ? url : undefined;
+      const id = active === false && target ? store.addBackgroundTab(target) : store.addTab(target);
+      // Avisa o main qual webContents é o DESTA aba (não "a próxima webview que anexar").
+      // getWebContentsId lança até a webview anexar: tenta de novo por até 5 s.
+      if (typeof reqId !== 'number') return;
+      const started = Date.now();
+      const report = () => {
+        let wcId: number | null = null;
+        try { const v = (webviewRefs.current.get(id) as any)?.getWebContentsId?.(); if (typeof v === 'number') wcId = v; } catch {}
+        if (wcId !== null) { window.electronAPI?.extensionTabOpened?.(reqId, wcId)?.catch(() => {}); return; }
+        if (Date.now() - started < 5000) setTimeout(report, 50);
+      };
+      setTimeout(report, 0);
+    }));
+    // Extensão fechou uma aba (chrome.tabs.remove): só aba que aparece na barra (a de trabalho
+    // do agente, escondida, não é da extensão).
+    offs.push(window.electronAPI?.onExtensionCloseTab?.(({ wcId }) => {
+      if (typeof wcId !== 'number') return;
+      for (const [tabId, wv] of webviewRefs.current) {
+        let id: number | null = null;
+        try { id = (wv as any).getWebContentsId?.(); } catch {}
+        if (id !== wcId) continue;
+        const tab = tabsRef.current.find(t => t.id === tabId);   // lista viva (o listener é registrado uma vez)
+        if (tab && !tab.hidden) store.closeTab(tabId);
+        return;
+      }
+    }));
     // Som na aba: o main manda o webContents que começou/parou de emitir áudio; aqui
     // achamos a aba dona dele. getWebContentsId lança se a webview ainda não anexou.
     offs.push(window.electronAPI?.onTabAudio?.(({ wcId, audible }) => {
@@ -438,6 +516,7 @@ export default function App() {
         const done = info.state === 'completed' || info.state === 'failed' || info.state === 'cancelled';
         const merged = {
           ...existing,
+          at: existing?.at ?? Date.now(),   // quando apareceu na lista (período do Limpar dados)
           id: info.id ?? existing?.id,
           kind: info.kind ?? existing?.kind,
           engine: info.engine ?? existing?.engine,
@@ -585,29 +664,124 @@ export default function App() {
         const wv = webviewRefs.current.get(tb.id) as any;
         try { if (wv?.isCurrentlyAudible?.()) continue; } catch {}   // nunca dorme aba tocando som
         // audible:false junto — a webview morre sem emitir o "parou de tocar" final.
-        store.updateTab(tb.id, { discarded: true, audible: false });
+        store.updateTab(tb.id, { discarded: true, audible: false, restored: false });
       }
     }, 60000);
     return () => clearInterval(iv);
   }, [memSaverOn, store.updateTab]);
 
   // ── Favoritos (estilo Chrome) ──
+  // Salva a lista; false = não coube no localStorage (aí o import desiste em vez de perder no reinício).
+  const persistFavorites = (list: FlatBookmark[]): boolean => {
+    try { localStorage.setItem('favorites.v1', JSON.stringify(list)); return true; } catch { return false; }
+  };
   const saveFavorite = useCallback(() => {
     const t = store.activeTab;
     if (!t?.url || !/^https?:\/\//i.test(t.url)) { return; }
     setFavorites(prev => {
       if (prev.some(f => f.url === t.url)) { return prev; }
-      const next = [{ url: t.url, title: (t.title || t.url).slice(0, 80) }, ...prev].slice(0, 60);
-      try { localStorage.setItem('favorites.v1', JSON.stringify(next)); } catch {}
+      // Teto alto: com importação a lista passa fácil dos 60 de antes (a barra continua mostrando só o começo).
+      const next = [{ url: t.url, title: (t.title || t.url).slice(0, 80) }, ...prev].slice(0, MAX_FAVORITES);
+      persistFavorites(next);
       return next;
     });
   }, [store.activeTab]);
   const removeFavorite = useCallback((url: string) => {
     setFavorites(prev => {
       const next = prev.filter(f => f.url !== url);
-      try { localStorage.setItem('favorites.v1', JSON.stringify(next)); } catch {}
+      persistFavorites(next);
       return next;
     });
+  }, []);
+
+  // ── Importar / exportar favoritos (⋮ → Favoritos → Importar e exportar) ──
+  // O main acha e lê os arquivos (Chrome/Edge/HTML); aqui só junta na lista plana, sem repetir URL.
+  const favoritesRef = useRef(favorites);
+  favoritesRef.current = favorites;
+  const [favIoOpen, setFavIoOpen] = useState(false);
+  // ⋮ → "Favoritos ▸": submenu ao lado do menu (igual ao Chrome). Abre no clique ou parando o
+  // mouse em cima; fecha passando pra outro item, com Esc ou fechando o ⋮.
+  const [favMenuOpen, setFavMenuOpen] = useState(false);
+  const favMenuOpenRef = useRef(false);
+  favMenuOpenRef.current = favMenuOpen;
+  const favHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const favHoverCancel = useCallback(() => {
+    if (favHoverTimer.current) { clearTimeout(favHoverTimer.current); favHoverTimer.current = null; }
+  }, []);
+  const favHover = useCallback((open: boolean, ms: number) => {
+    favHoverCancel();
+    favHoverTimer.current = setTimeout(() => { favHoverTimer.current = null; setFavMenuOpen(open); }, ms);
+  }, [favHoverCancel]);
+  useEffect(() => {
+    if (menuOpen) return;
+    favHoverCancel();
+    setFavMenuOpen(false);
+    setFavIoOpen(false);
+  }, [menuOpen, favHoverCancel]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    // Esc fecha o submenu primeiro, depois o ⋮ (só quando o foco está na interface do Bah).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      favHoverCancel();
+      if (favMenuOpenRef.current) setFavMenuOpen(false); else setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen, favHoverCancel]);
+  // Barra de favoritos: lista estável (a barra só remede quando a lista muda de verdade).
+  const favBarItems = useMemo(() => favorites.slice(0, FAV_BAR_MAX), [favorites]);
+  const [favBusy, setFavBusy] = useState(false);
+  const [favSources, setFavSources] = useState<Array<{ id: 'chrome' | 'edge'; name: string }>>([]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    window.electronAPI?.bookmarksSources?.().then(s => setFavSources(Array.isArray(s) ? s : [])).catch(() => {});
+  }, [menuOpen]);
+  // Aviso depois do React pintar a lista nova (o alert bloqueia a página).
+  const favNotice = (msg: string) => { setTimeout(() => window.alert(msg), 80); };
+  const favErrorText = (code: string) => t(({
+    'not-found': 'fav.err.notFound', empty: 'fav.err.empty', 'too-big': 'fav.err.tooBig',
+    'bad-format': 'fav.err.badFormat', 'write-failed': 'fav.err.write',
+  } as Record<string, string>)[code] || 'fav.err.read');
+  const importFavorites = useCallback(async (from: 'chrome' | 'edge' | 'html') => {
+    const api = window.electronAPI;
+    if (!api || favBusy) return;
+    setFavBusy(true);
+    try {
+      const r = from === 'html' ? await api.bookmarksImportHtml?.() : await api.bookmarksImportBrowser?.(from);
+      if (!r) return;
+      if (!r.ok) { if (r.error !== 'canceled') favNotice(favErrorText(r.error)); return; }
+      // Importados entram no FIM: onde eles aparecem depende de quantos a pessoa já tinha.
+      const start = favoritesRef.current.length;
+      const m = mergeFavorites(favoritesRef.current, r.items);
+      if (m.added && !persistFavorites(m.list)) { favNotice(t('fav.err.storage')); return; }
+      if (m.added) setFavorites(m.list);
+      const max = MAX_FAVORITES.toLocaleString();
+      const lines: string[] = [];
+      if (!m.added) {
+        // Nada entrou: ou já estava tudo no Bah, ou a lista está cheia (não confundir os dois).
+        lines.push(m.overLimit ? t('fav.importFull') : t('fav.importNone'));
+      } else {
+        lines.push(m.added === 1 ? t('fav.importDoneOne') : t('fav.importDone', { n: m.added.toLocaleString() }));
+        lines.push(t(start < FAV_BAR_MAX ? 'fav.importWhere' : start < FAV_MENU_MAX ? 'fav.importWhereMenu' : 'fav.importWhereSearch'));
+        if (m.duplicates) lines.push(m.duplicates === 1 ? t('fav.importDupOne') : t('fav.importDup', { n: m.duplicates.toLocaleString() }));
+        if (m.overLimit) lines.push(m.overLimit === 1 ? t('fav.importOverOne', { max }) : t('fav.importOver', { n: m.overLimit.toLocaleString(), max }));
+      }
+      favNotice(lines.join('\n'));
+    } catch { favNotice(t('fav.err.read')); }
+    finally { setFavBusy(false); }
+  }, [favBusy]);
+  const exportFavorites = useCallback(async () => {
+    const api = window.electronAPI;
+    if (!api?.bookmarksExport) return;
+    if (!favoritesRef.current.length) { favNotice(t('fav.exportEmpty')); return; }
+    try {
+      const r = await api.bookmarksExport(favoritesRef.current);
+      if (r.ok) favNotice(r.count === 1 ? t('fav.exportDoneOne', { file: r.file }) : t('fav.exportDone', { n: r.count.toLocaleString(), file: r.file }));
+      else if (r.error === 'empty') favNotice(t('fav.exportEmpty'));
+      else if (r.error !== 'canceled') favNotice(favErrorText(r.error));
+    } catch { favNotice(t('fav.err.write')); }
   }, []);
 
   // ── Histórico de navegação (alimenta o autocomplete da barra + tela Ctrl+H) ──
@@ -620,7 +794,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   // Gerenciador de downloads (Downloads → ⚙): várias conexões, igual ao IDM Caseiro.
   const [dlSettingsOpen, setDlSettingsOpen] = useState(false);
@@ -703,9 +877,10 @@ export default function App() {
     // O botão "Baixar" dos vídeos fala o idioma da UI: manda os textos novos.
     try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}
   }), []);
+  // Trocou o mecanismo de pesquisa (⋮) → placeholder da barra e o próprio menu se redesenham.
+  // Ao abrir, o main recebe o escolhido (pro "Pesquisar no … por" do clique direito).
+  useEffect(() => { syncSearchEngineToMain(); return onSearchEngineChange(() => forceI18n(n => n + 1)); }, []);
 
-  // Detecta a home do Google (nova aba) → barra de endereço mostra o placeholder em vez da URL.
-  const isGoogleHome = (u?: string) => !!u && /^https?:\/\/(www\.)?google\.[a-z.]+\/(webhp|\?|$)/i.test(u);
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
   // Mostra "Conectado ao Google" no lugar do botão quando já existe sessão importada.
@@ -713,6 +888,35 @@ export default function App() {
   const checkGoogleLogin = useCallback(async () => {
     try { const r = await window.electronAPI?.googleCheckLogin?.(); setGoogleLoggedIn(!!r?.loggedIn); } catch {}
   }, []);
+  // ── Limpar dados de navegação (menu ⋮ / Ctrl+Shift+Delete) ──
+  // Histórico e lista de downloads são daqui (renderer); cookies/cache vão pro main, que só
+  // mexe na sessão das abas. Os sites do período saem do histórico ANTES de apagá-lo.
+  const [clearDataOpen, setClearDataOpen] = useState(false);
+  const closeClearData = useCallback(() => setClearDataOpen(false), []);
+  const sitesInRange = useCallback((range: TimeRange) => originsVisited(historyRef.current, rangeSince(range, Date.now())).length, []);
+  const runClearData = useCallback(async (c: ClearChoice): Promise<boolean> => {
+    const since = rangeSince(c.range, Date.now());
+    let ok = true;
+    if (c.cookies || c.cache) {
+      const origins = c.range === 'all' ? [] : originsVisited(historyRef.current, since);
+      try {
+        const r = await window.electronAPI?.clearBrowsingData?.({ range: c.range, cookies: c.cookies, cache: c.cache, origins });
+        ok = !!r?.ok;
+      } catch { ok = false; }
+    }
+    if (c.history) {
+      const { kept, removed } = splitHistory(historyRef.current, since);
+      historyRef.current = kept;
+      try { if (kept.length) localStorage.setItem('history.v1', JSON.stringify(kept)); else localStorage.removeItem('history.v1'); } catch {}
+      setHistoryView(kept.slice(0, 300));
+      const gone = new Set(removed.map(h => h.url));
+      store.forgetClosedTabs(u => c.range === 'all' || gone.has(u));
+    }
+    if (c.downloads) setDownloads(prev => keepDownloads(prev, since));
+    // Cookies do Google podem ter saído → o menu ⋮ volta a mostrar "Entrar no Google".
+    if (c.cookies) checkGoogleLogin();
+    return ok;
+  }, [store.forgetClosedTabs, checkGoogleLogin]);
   useEffect(() => { checkGoogleLogin(); }, [checkGoogleLogin]);
 
   const handleGoogleLogin = useCallback(async () => {
@@ -763,6 +967,31 @@ export default function App() {
     return webviewRefs.current.get(activeTabIdRef.current) ?? null;
   }, []);
 
+  // Imprimir… (Ctrl+P / menu ⋮) e Salvar como PDF… (menu ⋮): sempre a página da ABA ATIVA,
+  // nunca a interface do Bah. O main confere a aba e abre o diálogo; aqui só traduz o resultado.
+  // PDF salvo aparece no painel de Downloads (abre sozinho), com "abrir arquivo" e "mostrar na pasta".
+  const printNotice = (msg: string) => { setTimeout(() => window.alert(msg), 80); };
+  const printPage = useCallback(async (mode: 'print' | 'pdf') => {
+    const api = window.electronAPI;
+    let wcId = 0;
+    // a aba que a pessoa vê, não a de trabalho do agente
+    try { wcId = (webviewRefs.current.get(userTabRef.current) as any)?.getWebContentsId?.() || 0; } catch {}
+    if (!wcId) { printNotice(t('print.err.noTab')); return; }
+    try {
+      const r = mode === 'print' ? await api?.printPage?.(wcId) : await api?.savePagePdf?.(wcId);
+      if (!r) return;
+      if (r.ok) {
+        if (mode === 'pdf') { setDlSettingsOpen(false); setDownloadsOpen(true); }
+        return;
+      }
+      if (r.error === 'canceled' || r.error === 'busy') return;
+      printNotice(t(({
+        'no-tab': 'print.err.noTab', empty: 'print.err.noTab', internal: 'print.err.internal', crashed: 'print.err.crashed',
+        'pdf-failed': 'print.err.pdfFailed', 'write-failed': 'print.err.write', timeout: 'print.err.timeout',
+      } as Record<string, string>)[r.error] || (mode === 'print' ? 'print.err.failed' : 'print.err.pdfFailed')));
+    } catch { printNotice(t(mode === 'print' ? 'print.err.failed' : 'print.err.pdfFailed')); }
+  }, []);
+
   // "Ler esta página em voz alta" (menu ⋮). Toggle: fala → clica de novo → para. Raspa o
   // texto do artigo/página atual e manda pro TTS grátis (voz segue o idioma da interface).
   const toggleReadPage = useCallback(async () => {
@@ -799,13 +1028,22 @@ export default function App() {
     if (!/^https?:\/\//i.test(url) && !/^file:/i.test(url)) {
       finalUrl = url.includes('.') && !url.includes(' ')
         ? `https://${url}`
-        : `https://www.google.com/search?${googleLocaleParams()}&pws=0&q=${encodeURIComponent(url)}`;
+        : searchUrlFor(url);   // mecanismo escolhido no ⋮ (padrão: Google, mesmos parâmetros de antes)
     }
     store.updateTab(store.activeTabId, { isLoading: true });
     // URL colada com rastreio (fbclid/gclid/…) entra já limpa — will-navigate não
     // cobre loadURL (navegação programática), então o strip é aqui.
     getActiveWebview()?.loadURL(stripTrackingParams(finalUrl)).catch(() => {});
   }, [store, getActiveWebview]);
+  // Favorito da barra / do "»": clique = aba atual; Ctrl+clique, botão do meio ou "Abrir em
+  // nova aba" = aba nova atrás (igual ao Chrome).
+  // (por ref: o navigate muda a cada render, e a barra é memo — não pode redesenhar à toa).
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const addBackgroundTab = store.addBackgroundTab;
+  const openFavorite = useCallback((url: string, newTab: boolean) => {
+    if (newTab) addBackgroundTab(url); else navigateRef.current(url);
+  }, [addBackgroundTab]);
 
   const goBack = useCallback(() => { getActiveWebview()?.goBack(); }, [getActiveWebview]);
   const goForward = useCallback(() => { getActiveWebview()?.goForward(); }, [getActiveWebview]);
@@ -908,6 +1146,10 @@ export default function App() {
       case 'forward': goForward(); break;
       case 'next-tab': if (visible.length) go(visible[(curIdx + 1) % visible.length]); break;
       case 'prev-tab': if (visible.length) go(visible[(curIdx - 1 + visible.length) % visible.length]); break;
+      // Ctrl+Shift+PageUp/PageDown (Chrome): a aba ativa anda uma casa; nas pontas do grupo dela
+      // (fixadas / outras) fica parada.
+      case 'move-tab-left': if (curIdx >= 0) store.moveTab(store.activeTabId, curIdx - 1); break;
+      case 'move-tab-right': if (curIdx >= 0) store.moveTab(store.activeTabId, curIdx + 1); break;
       case 'bookmark': { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); break; }
       case 'zoom-in': case 'zoom-out': case 'zoom-reset': {
         const wv = getActiveWebview() as any; if (!wv) break;
@@ -922,6 +1164,8 @@ export default function App() {
       }
       case 'history': setHistoryView(historyRef.current.slice(0, 300)); setHistoryOpen(true); break;
       case 'downloads': setDownloadsOpen(o => !o); break;
+      case 'clear-data': setMenuOpen(false); setClearDataOpen(true); break;
+      case 'print': printPage('print'); break;
       default:
         if (action.startsWith('tab-')) {
           const n = parseInt(action.slice(4), 10);
@@ -977,7 +1221,7 @@ export default function App() {
           // página real aberta → é sobre a página (anexa o conteúdo), não busca web. Preço tem
           // fluxo próprio (não sequestrar). Determinístico → não depende do round-trip lento.
           const url = store.activeTab?.url || '';
-          const realPage = /^https?:\/\//.test(url) && !isGoogleHome(url);
+          const realPage = /^https?:\/\//.test(url) && !isNewTabPage(url);
           const priceish = /\b(quanto\s+custa|pre[çc]o|how\s+much|\bcost\b|barat)/i.test(m);
           if (aboutPage || (realPage && !priceish && pointsAtOpenScreen(m))) return 'page';
           return 'web';
@@ -1173,6 +1417,27 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
     }
   }, [store]);
 
+  // Menu do botão direito numa aba: cada item age na aba CLICADA (que pode não ser a ativa).
+  const onTabCommand = (cmd: TabCommand, id: string) => {
+    const tab = store.tabs.find(x => x.id === id && !x.hidden);
+    if (!tab) return;
+    switch (cmd) {
+      case 'new-right': store.addTabAfter(id); break;
+      case 'duplicate': store.duplicateTab(id); break;
+      case 'reload':
+        // Aba dormindo (Memory Saver) ou que voltou da última sessão não tem webview: acordar já carrega.
+        if (tab.discarded) store.updateTab(id, { discarded: false, restored: false, lastActiveAt: Date.now() });
+        else { try { webviewRefs.current.get(id)?.reload(); } catch {} }
+        break;
+      case 'pin': case 'unpin': store.setPinned(id, cmd === 'pin'); break;
+      case 'mute': case 'unmute': siteMute.setMuted(tab.url, cmd === 'mute'); break;
+      case 'close': store.closeTab(id); break;
+      case 'close-others': store.closeTabs(closeOthersIds(store.tabs, id)); break;
+      case 'close-right': store.closeTabs(closeRightIds(store.tabs, id)); break;
+      case 'reopen': store.reopenClosedTab(); break;
+    }
+  };
+
   return (
     <div className="app-container">
       <div className="top-bar">
@@ -1183,6 +1448,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onSelect={store.setActiveTabId}
             onClose={store.closeTab}
             onNew={store.addTab}
+            onMove={store.moveTab}
+            onCommand={onTabCommand}
+            isMuted={siteMute.isMuted}
+            canReopen={store.hasClosedTabs}
           />
         </div>
         <HwMonitor />
@@ -1209,7 +1478,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
       <div className="address-bar-row">
         <AddressBar
-          url={isGoogleHome(store.activeTab.url) ? '' : store.activeTab.url}
+          url={isNewTabPage(store.activeTab.url) ? '' : store.activeTab.url}
           isLoading={store.activeTab.isLoading}
           canGoBack={store.activeTab.canGoBack}
           canGoForward={store.activeTab.canGoForward}
@@ -1221,6 +1490,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
           getSuggestions={getSuggestions}
         />
+        <ExtensionsToolbar getActiveWcId={() => {
+          // A aba que a pessoa vê (não a de trabalho do agente). Lança até a webview anexar.
+          try { const id = (webviewRefs.current.get(store.activeTabId) as any)?.getWebContentsId?.(); return typeof id === 'number' ? id : null; } catch { return null; }
+        }} />
         <div className="menu-wrap">
           <button
             className={`menu-btn${downloads.some(d => d.state === 'started' || d.state === 'progress') ? ' dl-active' : ''}`}
@@ -1349,7 +1622,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {menuOpen && (
             <>
               <div className="menu-overlay" onClick={() => setMenuOpen(false)} />
-              <div className="menu-panel">
+              <div
+                className="menu-panel"
+                onMouseOver={e => {
+                  // Mouse foi pra OUTRO item do ⋮ → o submenu de favoritos fecha (com folga, igual ao Chrome).
+                  const item = (e.target as HTMLElement).closest('.menu-item');
+                  if (favMenuOpen && item && !item.classList.contains('menu-fav-trigger')) favHover(false, 300);
+                }}
+              >
+                <button
+                  className={`menu-item menu-fav-trigger${favMenuOpen ? ' on' : ''}`}
+                  onClick={() => { favHoverCancel(); setFavMenuOpen(true); }}
+                  onMouseEnter={() => { if (!favMenuOpen) favHover(true, 200); else favHoverCancel(); }}
+                  onMouseLeave={() => { if (!favMenuOpen) favHoverCancel(); }}
+                  aria-haspopup="menu"
+                  aria-expanded={favMenuOpen}
+                >
+                  <span className="menu-ic">⭐</span>
+                  <span className="menu-label">{t('menu.favorites')}</span>
+                  <span className="menu-chev">▸</span>
+                </button>
+                <div className="menu-sep" />
+                <SearchEngineMenu />
+                <StartupMenu />
                 <button className="menu-item" onClick={() => toggleAdblock()} title={t('menu.adblockTitle')}>
                   <span className="menu-ic">🛡️</span>
                   <span className="menu-label">{t('menu.adblock')}</span>
@@ -1389,6 +1684,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
                   <span className="menu-label">{pageSpeaking ? t('menu.readPageStop') : t('menu.readPage')}</span>
                 </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); printPage('print'); }} title={t('menu.printTitle', { key: PRINT_KEY })}>
+                  <span className="menu-ic">🖨️</span>
+                  <span className="menu-label">{t('menu.print')}</span>
+                </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); printPage('pdf'); }} title={t('menu.savePdfTitle')}>
+                  <span className="menu-ic">📄</span>
+                  <span className="menu-label">{t('menu.savePdf')}</span>
+                </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setClearDataOpen(true); }} title={t('menu.clearDataTitle', { key: CLEAR_DATA_KEY })}>
+                  <span className="menu-ic">🧹</span>
+                  <span className="menu-label">{t('menu.clearData')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={t('menu.googleLoginTitle')}>
                   <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>
                   <span className={`menu-label${googleLoggedIn ? ' connected' : ''}`}>{googleLoggedIn ? t('menu.googleConnected') : t('menu.googleLogin')}</span>
@@ -1407,27 +1714,63 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🛰️</span>
                   <span className="menu-label">{t('mon.title')}</span>
                 </button>
-                <div className="menu-sep" />
-                <div className="menu-section-title">
-                  <span>⭐ {t('menu.favorites')}</span>
-                  <button className="menu-add" onClick={saveFavorite} title={t('menu.save')}>{t('menu.save')}</button>
-                </div>
-                {favorites.length === 0 ? (
-                  <div className="menu-empty">{t('menu.noFavorites')}</div>
-                ) : (
-                  <div className="menu-favlist">
-                    {favorites.map(f => (
-                      <div key={f.url} className="fav-item">
-                        <button className="fav-open" onClick={() => { navigate(f.url); setMenuOpen(false); }} title={f.url}>
-                          <span className="fav-title">{f.title}</span>
-                          <span className="fav-url">{(() => { try { return new URL(f.url).hostname.replace(/^www\./, ''); } catch { return f.url; } })()}</span>
-                        </button>
-                        <button className="fav-del" onClick={() => removeFavorite(f.url)} title={t('fav.remove')}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
+              {favMenuOpen && (
+                <div className="menu-panel menu-flyout" onMouseEnter={favHoverCancel}>
+                  <button className="menu-item" disabled={!/^https?:\/\//i.test(store.activeTab?.url || '')} onClick={() => {
+                    const u = store.activeTab.url;
+                    if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite();
+                    setMenuOpen(false);
+                  }}>
+                    <span className="menu-ic">{favorites.some(f => f.url === store.activeTab?.url) ? '★' : '☆'}</span>
+                    <span className="menu-label">{favorites.some(f => f.url === store.activeTab?.url) ? t('fav.removeThis') : t('fav.addThis')}</span>
+                    <span className="menu-kbd">{BOOKMARK_KEY}</span>
+                  </button>
+                  <button className="menu-item" onClick={() => setFavIoOpen(o => !o)} title={t('fav.ioTitle')} aria-expanded={favIoOpen}>
+                    <span className="menu-ic">↕️</span>
+                    <span className="menu-label">{t('fav.io')}</span>
+                    <span className="menu-chev">{favIoOpen ? '▾' : '▸'}</span>
+                  </button>
+                  {favIoOpen && (
+                    <div className="menu-sub">
+                      {favSources.map(s => (
+                        <button key={s.id} className="menu-item" disabled={favBusy} onClick={() => importFavorites(s.id)}>
+                          <span className="menu-ic">📥</span>
+                          <span className="menu-label">{favBusy ? t('fav.busy') : t('fav.importFrom', { browser: s.name })}</span>
+                        </button>
+                      ))}
+                      <button className="menu-item" disabled={favBusy} onClick={() => importFavorites('html')}>
+                        <span className="menu-ic">📄</span>
+                        <span className="menu-label">{favBusy ? t('fav.busy') : t('fav.importHtml')}</span>
+                      </button>
+                      <button className="menu-item" disabled={favBusy || favorites.length === 0} onClick={() => exportFavorites()}>
+                        <span className="menu-ic">📤</span>
+                        <span className="menu-label">{t('fav.export')}</span>
+                      </button>
+                    </div>
+                  )}
+                  <div className="menu-sep" />
+                  {favorites.length === 0 ? (
+                    <div className="menu-empty">{t('menu.noFavorites')}</div>
+                  ) : (
+                    <div className="menu-favlist">
+                      {/* Só o começo: com milhares importados, desenhar tudo travaria o menu. O resto acha pela barra de endereço. */}
+                      {favorites.slice(0, FAV_MENU_MAX).map(f => (
+                        <div key={f.url} className="fav-item">
+                          <button className="fav-open" onClick={() => { navigate(f.url); setMenuOpen(false); }} title={f.title ? `${f.title}\n${f.url}` : f.url}>
+                            <SiteIcon url={f.url} title={f.title} />
+                            <span className="fav-title">{f.title || f.url}</span>
+                          </button>
+                          <button className="fav-del" onClick={() => removeFavorite(f.url)} title={t('fav.remove')}>✕</button>
+                        </div>
+                      ))}
+                      {favorites.length > FAV_MENU_MAX && (
+                        <div className="menu-empty">{favorites.length - FAV_MENU_MAX === 1 ? t('fav.moreOne') : t('fav.more', { n: (favorites.length - FAV_MENU_MAX).toLocaleString() })}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
           {monitorsOpen && (
@@ -1441,20 +1784,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
       {/* Barra de favoritos (estilo Chrome) — aparece quando há favoritos salvos. */}
       {favorites.length > 0 && (
-        <div className="bookmarks-bar">
-          {favorites.map(f => (
-            <button key={f.url} className="bookmark-chip" onClick={() => navigate(f.url)} title={f.url}>
-              <img
-                className="bm-fav"
-                src={(() => { try { return `${new URL(f.url).origin}/favicon.ico`; } catch { return ''; } })()}
-                alt=""
-                draggable={false}
-                onError={e => { (e.currentTarget.style.visibility = 'hidden'); }}
-              />
-              <span className="bm-title">{(() => { try { return f.title || new URL(f.url).hostname.replace(/^www\./, ''); } catch { return f.title || f.url; } })()}</span>
-            </button>
-          ))}
-        </div>
+        <BookmarksBar items={favBarItems} onOpen={openFavorite} onRemove={removeFavorite} lang={getLang()} />
       )}
 
       <div className={`main-content ${store.sidebarOpen ? 'ai-open' : ''}`}>
@@ -1540,7 +1870,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           <AgentCommandBar
             activeTabId={store.activeTabId}
             tabIds={store.tabs.map(t => t.id).join(',')}
-            pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isGoogleHome(store.activeTab?.url)}
+            pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isNewTabPage(store.activeTab?.url)}
             activeTabTitle={store.activeTab?.title}
             activeTabUrl={store.activeTab?.url}
             agentMaxSteps={agentMaxSteps}
@@ -3798,13 +4128,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // Se a aba fechada é a aba de TRABALHO do agente, o freio anti-troca-de-aba
                       // (taskRunningRef) impede o espelhamento de corrigir o ref → ele apontaria pra
                       // aba MORTA e o passo seguinte quebraria (getActiveWebview null). Então
-                      // atualizamos na mão pra próxima aba ativa (mesma lógica do store.closeTab).
+                      // atualizamos na mão pra próxima aba ativa (mesma regra do store.closeTab: a
+                      // vizinha que sobrou NA BARRA — nunca uma aba escondida).
                       const wasActive = target.id === activeTabIdRef.current;
                       store.closeTab(target.id);
                       if (wasActive) {
-                        const idx = tabsRef.current.findIndex(t => t.id === target.id);
-                        const remaining = tabsRef.current.filter(t => t.id !== target.id);
-                        if (remaining.length > 0) activeTabIdRef.current = remaining[Math.min(idx, remaining.length - 1)].id;
+                        const nextId = nextActiveAfterClose(tabsRef.current, new Set([target.id]), target.id);
+                        if (nextId) activeTabIdRef.current = nextId;
                       }
                       toolResult = { success: true, info: { closed: action.tab } };
                     } else toolResult = { success: false, error: `Tab ${action.tab} not found` };
@@ -4206,6 +4536,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           </div>
         </div>
       )}
+      {clearDataOpen && <ClearDataDialog onClose={closeClearData} sitesInRange={sitesInRange} onClear={runClearData} />}
       {/* dead second AgentCommandBar removed */}
     </div>
   );

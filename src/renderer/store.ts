@@ -1,6 +1,11 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { detectLang } from './i18n';
+import {
+  insertAfter, moveTab as moveInStrip, nextActiveAfterClose, setPinned as pinInStrip,
+} from '../shared/tab-strip';
+import { bootPlan, sessionTitle } from '../shared/session-restore';
+import { getStartupMode, loadSavedSession, noteSession, watchSessionClose } from './session';
+import { newTabUrl } from './search-engine';
 import type { VisionMode } from '../shared/vision';
 
 export interface Tab {
@@ -15,6 +20,9 @@ export interface Tab {
   discarded?: boolean;    // Memory Saver: webview unmounted (RAM freed); reloads on activation
   lastActiveAt?: number;  // when the tab was last the active one (drives the discard sweep)
   audible?: boolean;      // sound is coming out of this tab (drives the speaker icon, Chrome-style)
+  pinned?: boolean;       // aba fixada: só o ícone, sempre à esquerda; volta sozinha ao reabrir o Bah
+  restored?: boolean;     // voltou da última sessão (Continuar de onde parou) e ainda não carregou: sem webview
+                          // como a dormindo, mas com ícone e nome normais (nada de 💤); carrega no clique
 }
 
 export interface ChatMessage {
@@ -58,16 +66,9 @@ export interface LocalSettings {
 let aiWriteChain: Promise<void> = Promise.resolve();
 let localWriteChain: Promise<void> = Promise.resolve();
 
-// Home page = Google in the user's language (don't force Brazil on everyone).
-// An English OS opens Google in English; pt-BR still gets Google Brazil.
-function googleHome(): string {
-  const lang = detectLang();
-  if (lang === 'pt') return 'https://www.google.com.br/webhp?hl=pt-BR&gl=BR&pws=0&gws_rd=cr';
-  if (lang === 'es') return 'https://www.google.com/webhp?hl=es&pws=0';
-  return 'https://www.google.com/webhp?hl=en&pws=0';
-}
-
-export function createTab(url = googleHome()): Tab {
+// Nova aba = página inicial do mecanismo de pesquisa escolhido (⋮ → Mecanismo de pesquisa),
+// no idioma da interface. Padrão: Google (pt-BR ainda abre o Google Brasil).
+export function createTab(url = newTabUrl()): Tab {
   return {
     id: uuidv4(),
     title: 'New Tab',
@@ -79,9 +80,28 @@ export function createTab(url = googleHome()): Tab {
   };
 }
 
+// Abas do boot (⋮ → Ao abrir o Bah). "Continuar de onde parou" com sessão salva: as abas da
+// última vez, na mesma ordem (fixadas primeiro); só a que estava ativa carrega, as outras esperam
+// o clique (descartadas, como as do Memory Saver). Senão, o de sempre: as fixadas da última vez
+// (igual ao Chrome) + a aba inicial, que é a ativa. Regras em shared/session-restore.ts.
+function bootTabs(): Tab[] {
+  const plan = bootPlan(getStartupMode(), loadSavedSession());
+  const tabs = plan.tabs.map((s): Tab => ({
+    ...createTab(s.url),
+    title: sessionTitle(s) || 'New Tab',
+    ...(s.pinned ? { pinned: true } : {}),
+    ...(s.active ? { startup: true } : {}),
+    ...(s.lazy ? { discarded: true, restored: true } : {}),
+  }));
+  if (plan.newTab) { const t = createTab(); t.startup = true; tabs.push(t); }
+  return tabs;
+}
+
 export function useTabStore() {
-  const [tabs, setTabs] = useState<Tab[]>(() => { const t = createTab(); t.startup = true; return [t]; });
-  const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
+  // No boot: a última sessão ou as fixadas + a aba inicial de sempre (bootTabs). A ativa é a
+  // marcada como inicial (a que estava ativa / a aba nova) — só ela mostra as boas-vindas do painel.
+  const [tabs, setTabs] = useState<Tab[]>(bootTabs);
+  const [activeTabId, setActiveTabId] = useState<string>(() => (tabs.find(t => t.startup) ?? tabs[tabs.length - 1]).id);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiSettings, setAISettings] = useState<AISettings>(() => {
     try {
@@ -127,15 +147,21 @@ export function useTabStore() {
 
   const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
 
-  // Ativar uma aba também a "acorda" (Memory Saver) e carimba o relógio de inatividade:
-  // a que ENTRA zera o descarte; a que SAI ganha lastActiveAt=agora (esteve ativa até aqui).
+  // A ativa também num ref, atualizado JUNTO com o estado: o closeTabs decide quem assume lendo
+  // daqui — duas ações no mesmo instante (abrir e fechar, fechar duas) não usam a ativa velha.
+  const activeIdRef = useRef(activeTabId);
+  activeIdRef.current = activeTabId;
+  const setActive = useCallback((id: string) => { activeIdRef.current = id; setActiveTabId(id); }, []);
+
+  // Ativar uma aba também a "acorda" (Memory Saver, ou a que voltou da última sessão) e carimba o
+  // relógio de inatividade: a que ENTRA zera o descarte; a que SAI ganha lastActiveAt=agora.
   const activateTab = useCallback((id: string) => {
     setTabs(prev => prev.map(t =>
-      t.id === id ? { ...t, discarded: false, lastActiveAt: Date.now() }
+      t.id === id ? { ...t, discarded: false, restored: false, lastActiveAt: Date.now() }
       : t.id === activeTabId ? { ...t, lastActiveAt: Date.now() }
       : t));
-    setActiveTabId(id);
-  }, [activeTabId]);
+    setActive(id);
+  }, [activeTabId, setActive]);
 
   // Pilha de URLs de abas fechadas → reabrir com Ctrl+Shift+T (estilo Chrome).
   const closedTabsRef = useRef<string[]>([]);
@@ -143,9 +169,9 @@ export function useTabStore() {
   const addTab = useCallback((url?: string): string => {
     const tab = createTab(url);
     setTabs(prev => [...prev, tab]);
-    setActiveTabId(tab.id);
+    setActive(tab.id);
     return tab.id;
-  }, []);
+  }, [setActive]);
 
   // Aba de RESULTADO (tabela de preço/notícia, render_view) — aparece na barra de abas,
   // clicável, mas NÃO rouba o foco. Sem isso, a aba nova virava a ativa e o painel da IA
@@ -168,32 +194,41 @@ export function useTabStore() {
     return tab.id;
   }, []);
 
-  const closeTab = useCallback((id: string) => {
-    window.electronAPI?.clearChatHistory?.(id);   // free that tab's chat memory
+  // Fecha uma ou várias abas (×, Ctrl+W, botão do meio, "Fechar outras abas", "Fechar abas à
+  // direita"). Cada endereço vai pra pilha do Ctrl+Shift+T, na ordem da barra. Se a ativa saiu,
+  // assume a vizinha que sobrou NA BARRA (direita, senão esquerda) — nunca uma aba escondida do
+  // agente (antes, fechar a última visível com uma Pesquisa Rápida rodando ativava a escondida);
+  // sem nenhuma visível, abre uma nova. A ativa vem de um ref: quem guardou o closeTab de um
+  // render antigo (ouvinte de IPC registrado uma vez) não decide com a ativa velha.
+  const closeTabs = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    const closing = new Set(ids);
+    for (const id of closing) window.electronAPI?.clearChatHistory?.(id);   // free that tab's chat memory
     setTabs(prev => {
-      const closing = prev.find(t => t.id === id);
-      if (closing && !closing.hidden && closing.url && /^https?:\/\//i.test(closing.url)) {
-        closedTabsRef.current.push(closing.url);
+      const next = prev.filter(t => !closing.has(t.id));
+      if (next.length === prev.length) return prev;
+      for (const t of prev) {
+        if (!closing.has(t.id) || t.hidden || !t.url || !/^https?:\/\//i.test(t.url)) continue;
+        closedTabsRef.current.push(t.url);
         if (closedTabsRef.current.length > 25) closedTabsRef.current.shift();
       }
-      const next = prev.filter(t => t.id !== id);
-      if (next.length === 0) {
+      const cur = activeIdRef.current;
+      let newActive = nextActiveAfterClose(prev, closing, cur);
+      if (newActive === null) {
         const newTab = createTab();
-        setActiveTabId(newTab.id);
-        return [newTab];
-      }
-      if (id === activeTabId) {
-        const idx = prev.findIndex(t => t.id === id);
-        const pos = Math.min(idx, next.length - 1);
-        const newActive = next[pos];
+        next.push(newTab);
+        newActive = newTab.id;
+      } else {
         // A vizinha que assume pode estar DORMINDO (Memory Saver) → acorda ela junto,
         // senão viraria aba ativa sem webview montado (tela em branco).
-        if (newActive.discarded) next[pos] = { ...newActive, discarded: false, lastActiveAt: Date.now() };
-        setActiveTabId(newActive.id);
+        const pos = next.findIndex(t => t.id === newActive);
+        if (pos >= 0 && next[pos].discarded) next[pos] = { ...next[pos], discarded: false, restored: false, lastActiveAt: Date.now() };
       }
+      if (newActive !== cur) setActive(newActive);
       return next;
     });
-  }, [activeTabId]);
+  }, [setActive]);
+  const closeTab = useCallback((id: string) => closeTabs([id]), [closeTabs]);
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
@@ -205,10 +240,50 @@ export function useTabStore() {
     if (url) addTab(url);
   }, [addTab]);
 
+  // Limpar histórico (Limpar dados de navegação): o Ctrl+Shift+T não pode trazer de volta
+  // um endereço que acabou de sair do histórico.
+  const forgetClosedTabs = useCallback((drop: (url: string) => boolean) => {
+    closedTabsRef.current = closedTabsRef.current.filter(u => !drop(u));
+  }, []);
+  // Tem aba pra reabrir? (o item "Reabrir aba fechada" do menu da aba fica apagado sem nenhuma)
+  const hasClosedTabs = useCallback(() => closedTabsRef.current.length > 0, []);
+
+  // ── Barra de abas estilo Chrome (arrastar, menu do botão direito, fixar) ──
+  // A conta (ordem, fronteira das fixadas, onde nasce a aba nova) mora em shared/tab-strip.ts.
+  // Só a ORDEM da lista muda: os <webview> ficam na ordem de chegada (WebViewContainer), então
+  // mover uma aba nunca recarrega a página dela.
+  const moveTab = useCallback((id: string, to: number) => {
+    setTabs(prev => moveInStrip(prev, id, to));
+  }, []);
+  const setPinned = useCallback((id: string, pinned: boolean) => {
+    setTabs(prev => pinInStrip(prev, id, pinned));
+  }, []);
+  // "Nova aba à direita": nasce logo depois da clicada (nunca no meio das fixadas) e vira a ativa.
+  const addTabAfter = useCallback((anchorId: string, url?: string, extra?: Partial<Tab>): string => {
+    const tab: Tab = { ...createTab(url), ...extra };
+    setTabs(prev => insertAfter(prev, anchorId, tab));
+    setActive(tab.id);
+    return tab.id;
+  }, [setActive]);
+  // "Duplicar": o mesmo endereço numa aba nova logo depois (fixada, se a original é). O Chrome
+  // copia também o histórico de voltar/avançar; aqui a cópia carrega o endereço do zero.
+  const duplicateTab = useCallback((id: string): string | null => {
+    const src = tabs.find(t => t.id === id && !t.hidden);
+    if (!src) return null;
+    return addTabAfter(id, src.url, { title: src.title, pinned: src.pinned });
+  }, [tabs, addTabAfter]);
+
+  // Continuar de onde parou: a sessão (abas da barra + a ativa) é gravada SEMPRE, com a opção
+  // ligada ou não — ligar depois já traz a última. As fixadas moram nela (não há outra lista).
+  // No máximo 1 s depois de cada mudança e na hora ao fechar a janela (renderer/session.ts).
+  useEffect(() => { noteSession(tabs, activeTabId); }, [tabs, activeTabId]);
+  useEffect(() => watchSessionClose(), []);
+
   return {
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
-    setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, closeTab, updateTab, reopenClosedTab,
+    setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, closeTab, updateTab, reopenClosedTab, forgetClosedTabs,
+    closeTabs, hasClosedTabs, moveTab, setPinned, addTabAfter, duplicateTab,
     setSidebarOpen,
     setAISettings: (s: AISettings) => {
       setAISettings(s);   // memória = texto puro (UI/agente intactos)

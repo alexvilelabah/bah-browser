@@ -23,6 +23,11 @@ interface Deps {
   getMainWindow: () => BrowserWindow | null;
   /** ms desde o último clique/tecla DE VERDADE naquela aba (trava contra script da página). */
   msSinceGesture: (wcId: number) => number;
+  /**
+   * O yt-dlp sai DIRETO do computador (não pelo proxy/VPN das abas). Com proxy na aba, o Bah
+   * avisa antes (canAsk = pode abrir o aviso agora). false = não baixar.
+   */
+  allowDirect?: (pageUrl: string, canAsk: boolean) => Promise<boolean>;
 }
 
 /** O vídeo que a página pediu, já conferido. */
@@ -366,10 +371,19 @@ export function setupVideoButton(deps: Deps) {
     const t = resolveTarget(msg, frameUrl);
     if (!t) return;
     const replyFrame = frame || wc.mainFrame;
+    // Aba com proxy: o aviso "sai sem a VPN" só abre com clique de verdade (página não abre sozinha).
+    const direct = async (): Promise<boolean> => {
+      if (!deps.allowDirect || await deps.allowDirect(t.pageUrl, false)) return true;
+      return (await hasGesture(wc, replyFrame)) && deps.allowDirect(t.pageUrl, true);
+    };
     if (msg.op === 'formats') {
-      getChoices(t, wc).then(c => callPage(replyFrame, 'onFormats', { v: t.key, ...presentable(c) }));
+      direct().then((ok) => ok
+        ? getChoices(t, wc).then(c => callPage(replyFrame, 'onFormats', { v: t.key, ...presentable(c) }))
+        : callPage(replyFrame, 'onFormats', { v: t.key, ok: false, live: false, drm: false })).catch(() => {});
     } else if (msg.op === 'download') {
-      hasGesture(wc, replyFrame).then((ok) => { if (ok) return startDownload(wc, replyFrame, t, String(msg.key || '')); }).catch(() => {});
+      hasGesture(wc, replyFrame).then(async (ok) => {
+        if (ok && await direct()) return startDownload(wc, replyFrame, t, String(msg.key || ''));
+      }).catch(() => {});
     } else if (msg.op === 'reveal') {
       hasGesture(wc, replyFrame).then((ok) => {
         if (!ok) return;

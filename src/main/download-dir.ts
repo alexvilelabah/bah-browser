@@ -18,10 +18,22 @@ export function setDownloadDir(dir: string | null | undefined): string {
   return getDownloadDir();
 }
 
-/** Pastas onde "abrir arquivo"/"mostrar na pasta" podem mexer (nunca um caminho arbitrário). */
+// Arquivos que a PESSOA escolheu onde salvar (diálogo do "Salvar como PDF…"): podem estar fora
+// da pasta dos downloads, mas "abrir arquivo"/"mostrar na pasta" no Ctrl+J têm que funcionar
+// pra eles. Só o arquivo exato entra (nunca a pasta dele), e só nesta sessão do Bah.
+const savedFiles: string[] = [];
+const MAX_SAVED_FILES = 200;
+
+export function rememberSavedFile(p: string): void {
+  if (!p || savedFiles.includes(p)) return;
+  savedFiles.push(p);
+  if (savedFiles.length > MAX_SAVED_FILES) savedFiles.shift();
+}
+
+/** Pastas (e arquivos salvos pela pessoa) onde "abrir arquivo"/"mostrar na pasta" podem mexer (nunca um caminho arbitrário). */
 export function downloadRoots(): string[] {
   const roots = [app.getPath('downloads')];
   const d = getDownloadDir();
   if (!roots.includes(d)) roots.push(d);
-  return roots;
+  return [...roots, ...savedFiles];
 }

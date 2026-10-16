@@ -185,6 +185,25 @@ body {
   -webkit-app-region:no-drag;
 }
 .tab-new:hover{background:rgba(255,255,255,0.10);color:var(--text-primary);}
+/* Site com "Desativar som do site" tentando tocar: alto-falante riscado, apagado. */
+.tab .tab-audio.muted{color:var(--text-muted);}
+/* Aba FIXADA (botão direito → Fixar): só o ícone, largura fixa, sem ×, sempre à esquerda.
+   O alto-falante vira um selinho no canto (não cabe do lado do ícone). */
+.tab.pinned{flex:0 0 40px;width:40px;min-width:40px;max-width:40px;padding:0;gap:0;justify-content:center;}
+.tab.pinned .tab-audio{position:absolute;right:2px;bottom:3px;width:10px;height:10px;}
+.tab.pinned.discarded .tab-favicon{opacity:0.5;}   /* fixada dormindo (Memory Saver) */
+/* Arrastando uma aba: ela segue o mouse por cima das outras (sem transição); as vizinhas
+   deslizam pra abrir espaço (a transição de transform do .tab). Ao soltar, um quadro sem
+   transição nenhuma (tab-settle): a ordem nova entra no lugar e só a aba solta desliza. */
+.tab.dragging{transition:none;z-index:3;}
+.tabs-scroll.tab-settle .tab{transition:none;}
+/* Cobre a janela durante o arrasto: a página (webview) não engole o movimento do mouse. */
+.tab-drag-overlay{position:fixed;inset:0;z-index:9998;cursor:default;-webkit-app-region:no-drag;}
+/* Menu do botão direito na aba (visual do menu dos favoritos). O fundo invisível é no-drag:
+   em cima da faixa de abas o clique fecha o menu em vez de arrastar a janela. */
+.tab-menu-overlay{-webkit-app-region:no-drag;}
+.tab-ctx .bm-pop-item:disabled{opacity:.4;cursor:default;background:transparent;}
+.tab-ctx .menu-kbd{margin-left:18px;}
 
 /* ADDRESS BAR */
 .address-bar-row{display:flex;align-items:stretch;}
@@ -284,6 +303,7 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 }
 .omni-item.on{ background:rgba(255,255,255,0.08); }
 .omni-ico{ flex:0 0 auto; font-size:11px; opacity:0.55; }
+.omni-item > .site-ic, .omni-item > .omni-ico{ align-self:center; width:16px; text-align:center; }
 .omni-title{ color:var(--text-primary); font-size:13px; overflow:hidden; text-overflow:ellipsis; flex:0 1 auto; max-width:55%; }
 .omni-url{ color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; }
 
@@ -315,6 +335,21 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 .history-item:hover{ background:rgba(255,255,255,0.06); }
 .history-title{ color:var(--text-primary); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .history-url{ color:var(--text-muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* 🧹 Limpar dados de navegação (Ctrl+Shift+Delete) — mesma moldura do Histórico, caixas do painel de Downloads */
+.cbd-panel{ width:min(460px,92vw); }
+.cbd-body{ display:flex; flex-direction:column; gap:12px; padding:14px 16px 16px; overflow-y:auto; }
+.dl-set-row select.cbd-range{ width:auto; min-width:170px; }
+.cbd-note{ font-size:11px; line-height:1.45; color:var(--text-muted); }
+.cbd-error{ font-size:12px; color:#e0705a; }
+.cbd-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+.cbd-cancel, .cbd-go{ height:32px; padding:0 14px; border-radius:8px; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid var(--border); }
+.cbd-cancel{ background:transparent; color:var(--text-secondary); }
+.cbd-cancel:hover:not(:disabled){ background:rgba(255,255,255,0.06); }
+.cbd-go{ background:var(--accent); border-color:var(--accent); color:#fff; }
+.cbd-go:hover:not(:disabled){ background:var(--accent-hover); }
+.cbd-cancel:disabled, .cbd-go:disabled{ opacity:0.5; cursor:default; }
+.cbd-done{ padding:34px 16px; text-align:center; font-size:14px; font-weight:600; color:#5fb87a; }
 
 /* ⬇️ Painel de downloads (Ctrl+J) */
 .menu-btn.dl-active{ color:var(--accent); }
@@ -415,24 +450,65 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 .bookmark-star:hover{ background:rgba(255,255,255,0.10); color:var(--text-secondary); }
 .bookmark-star.on{ color:#f5c518; }   /* favoritado = estrela amarela cheia */
 
-/* 📑 Barra de favoritos (faixa fina abaixo da barra de endereço) */
+/* 📑 Barra de favoritos (faixa fina abaixo da barra de endereço), igual à do Chrome:
+   ícone + nome numa linha, o que não cabe vai pro "»". A barra CORTA (overflow hidden):
+   nada passa da borda da janela mesmo num arredondamento de subpixel. */
 .bookmarks-bar{
-  display:flex; align-items:center; gap:2px;
-  padding:4px 8px; overflow-x:auto;
+  position:relative; display:flex; align-items:center; gap:2px; flex:none;
+  padding:3px 8px; overflow:hidden;
   background:var(--bg-secondary); border-bottom:1px solid var(--border);
   -webkit-app-region:no-drag;
 }
-.bookmarks-bar::-webkit-scrollbar{ height:0; }
 .bookmark-chip{
-  display:flex; align-items:center; gap:6px; flex:none;
-  max-width:180px; height:28px; padding:0 9px;
+  display:flex; align-items:center; gap:7px; flex:none; min-width:0;
+  max-width:168px; height:28px; padding:0 9px;
   border:none; background:transparent; color:var(--text-secondary);
-  border-radius:7px; cursor:pointer; font-size:12px;
+  border-radius:7px; cursor:pointer; font-size:12px; font-family:inherit; line-height:1;
   transition:background 0.12s var(--ease), color 0.12s var(--ease);
 }
-.bookmark-chip:hover{ background:rgba(255,255,255,0.07); color:var(--text-primary); }
-.bm-fav{ width:15px; height:15px; flex:none; border-radius:3px; object-fit:contain; }
-.bm-title{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bookmark-chip.icon-only{ padding:0 6px; }
+.bookmark-chip:hover, .bm-more:hover{ background:rgba(255,255,255,0.08); color:var(--text-primary); }
+.bookmark-chip:active{ background:rgba(255,255,255,0.12); }
+.bm-title{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+/* "»" no fim da barra: abre a lista do que não coube */
+.bm-more{
+  flex:none; margin-left:auto; width:28px; height:28px; padding:0;
+  display:flex; align-items:center; justify-content:center;
+  border:none; background:transparent; color:var(--text-secondary);
+  border-radius:7px; cursor:pointer; font-size:16px; font-family:inherit; line-height:1;
+}
+.bm-more.on{ background:rgba(255,255,255,0.12); color:var(--text-primary); }
+/* Cópia invisível dos favoritos, só pra medir a largura de cada um (não ocupa lugar nem recebe clique). */
+.bm-measure{
+  position:absolute; left:0; top:0; height:0; width:max-content; overflow:hidden;
+  display:flex; visibility:hidden; pointer-events:none;
+}
+/* Ícone 16px de site (barra, "»", ⋮ → Favoritos, autocomplete); sem ícone = letra colorida. */
+.site-ic{
+  width:16px; height:16px; flex:none; display:inline-flex; align-items:center; justify-content:center;
+  border-radius:3px; object-fit:contain;
+}
+.site-ic-tile{ color:#fff; font-size:10px; font-weight:700; line-height:1; border-radius:4px; font-family:inherit; }
+/* Lista do "»" e menu do botão direito — presos dentro da janela (position fixed + teto de altura). */
+.bm-pop{
+  position:fixed; z-index:9000; min-width:200px; max-width:calc(100vw - 16px);
+  overflow-y:auto; overscroll-behavior:contain;
+  background:#21201d; border:1px solid var(--glass-border); border-radius:12px;
+  box-shadow:0 16px 44px rgba(0,0,0,0.45);
+  padding:6px; display:flex; flex-direction:column; gap:1px;
+  animation:msgIn .12s ease; -webkit-app-region:no-drag;
+}
+.bm-pop::-webkit-scrollbar{ width:5px; }
+.bm-pop::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+.bm-overflow{ width:300px; }
+.bm-ctx{ min-width:190px; }
+.bm-pop-item{
+  display:flex; align-items:center; gap:10px; width:100%; flex:none;
+  border:none; background:transparent; cursor:pointer; text-align:left;
+  padding:7px 10px; border-radius:8px; color:var(--text-primary); font-size:12.5px; font-family:inherit;
+}
+.bm-pop-item:hover{ background:rgba(255,255,255,0.07); }
+.bm-pop-label{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 /* 🔎 Barra de busca na página (Ctrl+F) — overlay no canto superior direito */
 .webview-area{ position:relative; }
@@ -2088,6 +2164,20 @@ body {
 .menu-item:hover { background:rgba(255,255,255,0.06); }
 .menu-ic { font-size:15px; width:20px; text-align:center; flex:none; }
 .menu-label { flex:1; }
+.menu-item:disabled { opacity:.5; cursor:default; }
+.menu-item:disabled:hover { background:transparent; }
+.menu-chev { font-size:11px; color:var(--text-muted); flex:none; }
+/* Subitens (Importar e exportar favoritos): recuados sob o item que abriu. */
+.menu-sub { display:flex; flex-direction:column; gap:1px; padding-left:14px; }
+.menu-sub .menu-item { padding:7px 10px; font-size:12.5px; }
+/* ⋮ → Mecanismo de pesquisa: nome do escolhido à direita, ✓ no marcado, campo do Personalizado. */
+.menu-engine { max-width:92px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.menu-ic .site-ic { vertical-align:middle; }
+.menu-check { font-size:13px; font-weight:700; color:var(--accent); flex:none; }
+.menu-sub .menu-empty { padding:4px 10px 6px; }
+.menu-custom { display:flex; flex-direction:column; gap:6px; padding:4px 6px 8px 10px; }
+.menu-custom .menu-empty { padding:0 2px; }
+.menu-err { color:#ff7a86; }
 
 /* ── Cron-Agent: painel de Monitores ── */
 .monitors-panel { width:340px; max-width:92vw; padding:10px; }
@@ -2138,12 +2228,24 @@ body {
 .fav-item:hover { background:rgba(255,255,255,0.06); }
 .fav-open {
   flex:1; min-width:0; border:none; background:transparent; cursor:pointer; text-align:left;
-  padding:7px 10px; display:flex; flex-direction:column; gap:1px; border-radius:9px;
+  padding:7px 10px; display:flex; align-items:center; gap:10px; border-radius:9px; font-family:inherit;
 }
 .fav-title { font-size:12.5px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .fav-url { font-size:10.5px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .fav-del { border:none; background:transparent; color:var(--text-muted); cursor:pointer; width:26px; height:26px; border-radius:7px; flex:none; margin-right:3px; font-size:12px; }
 .fav-del:hover { background:rgba(255,77,94,0.18); color:#ff7a86; }
+.fav-item .fav-del { opacity:0; }
+.fav-item:hover .fav-del, .fav-del:focus-visible { opacity:1; }
+/* ⋮ → "Favoritos ▸": submenu ao lado esquerdo do ⋮ (igual ao Chrome). O topo (adicionar,
+   importar/exportar) fica parado; só a lista rola. */
+.menu-item.menu-fav-trigger.on { background:rgba(255,255,255,0.06); }
+.menu-kbd { font-size:11px; color:var(--text-muted); flex:none; }
+.menu-flyout { right:calc(270px + 6px); width:300px; overflow:hidden; }
+.menu-flyout > * { flex:none; }
+.menu-flyout .fav-title { flex:1; min-width:0; }
+.menu-flyout > .menu-favlist { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+.menu-flyout > .menu-favlist::-webkit-scrollbar { width:5px; }
+.menu-flyout > .menu-favlist::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
 
 /* ── Configurações: IA ativa + Salvar que se destaca (feedback do público) ── */
 /* Linha "IA ativa: X" no topo do painel — a pessoa vê o que está rodando AGORA
@@ -2269,3 +2371,100 @@ body {
 .plan-btn:hover{ filter:brightness(1.12); }
 .plan-btn.primary{ background:var(--accent); border-color:transparent; color:#fff; }
 .plan-btn.ghost{ background:transparent; color:var(--text-secondary); }.dl-set-icon{ display:flex; align-items:center; justify-content:center; padding:0 8px; }
+
+
+/* Extensões do Chrome: um botão por extensão (ícone + badge) e a peça de quebra-cabeça,
+   entre a barra de endereço e os botões de download/menu — a ordem do Chrome. */
+.ext-toolbar{ display:flex; align-items:center; gap:2px; flex:0 1 auto; min-width:0; }
+/* Muitas extensões: os botões encolhem e são cortados, o endereço fica com um piso e os
+   botões de download/menu nunca saem da janela (as cortadas seguem no quebra-cabeça). */
+.ext-actions{ display:flex; align-items:center; gap:2px; flex:0 1 auto; min-width:0; overflow:hidden; }
+.ext-actions:empty{ display:none; }
+.ext-actions .ext-action{ flex:none; }
+.address-bar-row .address-bar{ min-width:260px; }
+/* Mesmo tamanho e cantos dos outros botões da barra (.menu-btn), pro passo ficar igual. */
+.ext-action{
+  position:relative; width:34px; height:34px; padding:0; border:none; background:transparent;
+  border-radius:8px; display:inline-flex; align-items:center; justify-content:center;
+  color:var(--text-secondary); cursor:pointer; transition:background .15s var(--ease), color .15s var(--ease);
+}
+.ext-action:hover, .ext-action.on{ background:var(--bg-hover); color:var(--text-primary); }
+.ext-action img{ width:18px; height:18px; object-fit:contain; pointer-events:none; }
+.ext-action.off{ cursor:default; }
+.ext-action.off img, .ext-action.off .ext-letter{ filter:grayscale(1); opacity:.45; }
+.ext-action.off:hover{ background:transparent; }
+.ext-letter{
+  width:18px; height:18px; border-radius:4px; background:#5f6368; color:#fff;
+  font-size:11px; font-weight:700; line-height:18px; text-align:center; pointer-events:none;
+}
+/* Badge no canto de baixo à direita, como o do Chrome (até 4 caracteres) */
+.ext-badge{
+  position:absolute; right:3px; bottom:3px; min-width:14px; max-width:30px; height:13px;
+  padding:0 3px; box-sizing:border-box; border-radius:7px;
+  font-size:9px; font-weight:700; line-height:13px; text-align:center; letter-spacing:-0.2px;
+  white-space:nowrap; overflow:hidden; text-overflow:clip; pointer-events:none;
+  box-shadow:0 0 0 1px var(--bg-elevated);
+}
+.ext-puzzle-wrap{ position:relative; display:flex; align-items:center; flex:none; }
+/* Risquinho depois do quebra-cabeça, como o Chrome separa as extensões do download. */
+.ext-puzzle-wrap::after{ content:''; width:1px; height:18px; margin:0 6px 0 8px; background:rgba(255,255,255,0.14); }
+/* Botões da direita quase colados, como no Chrome (passo de 36px); o respiro fica só
+   entre o endereço e o primeiro botão. */
+.address-bar-row{ gap:2px; }
+.address-bar-row .address-bar{ margin-right:6px; }
+/* Painel do quebra-cabeça: mesmo estilo do painel do cadeado, ancorado à direita. Mesma
+   camada dos outros menus desta linha (downloads, três pontinhos): fica ACIMA da barra de
+   busca na página, do aviso de login e dos pedidos de permissão. */
+.ext-panel-scrim{ position:fixed; inset:0; z-index:8999; background:transparent; }
+.ext-panel{
+  position:absolute; top:calc(100% + 8px); right:0; z-index:9000; width:320px; max-height:70vh; overflow-y:auto;
+  background:#2b2b29; border:1px solid var(--hairline); border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,0.45); padding:12px 12px 10px; color:var(--text-primary); font-size:13px;
+  animation:msgIn .16s ease;
+}
+.ext-panel-title{ font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:6px; }
+.ext-panel-empty{ color:var(--text-secondary); padding:6px 0 10px; line-height:1.4; }
+.ext-panel-list{ list-style:none; margin:0 0 8px; padding:0; }
+.ext-panel-list li{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06); }
+.ext-panel-run{
+  flex:1; min-width:0; display:flex; align-items:center; gap:8px; padding:2px 4px; margin:-2px 0 -2px -4px;
+  background:transparent; border:none; border-radius:8px; color:inherit; font:inherit; text-align:left; cursor:pointer;
+}
+.ext-panel-run:hover:not(:disabled){ background:rgba(255,255,255,0.08); }
+.ext-panel-run:disabled{ cursor:default; }
+/* Botão desligado PELA extensão (chrome.action.disable): só o ícone apaga, como na barra; o nome fica normal. */
+.ext-panel-run:disabled .ext-panel-icon img, .ext-panel-run:disabled .ext-letter{ filter:grayscale(1); opacity:.45; }
+.ext-panel-icon{ width:20px; height:20px; flex:none; display:flex; align-items:center; justify-content:center; }
+.ext-panel-icon img{ width:18px; height:18px; object-fit:contain; }
+.ext-panel-name{ flex:1; min-width:0; display:flex; flex-direction:column; }
+.ext-panel-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ext-panel-version{ font-size:11.5px; color:var(--text-muted); }
+.ext-panel-proxy{ font-size:11.5px; color:var(--accent, #1a73e8); font-weight:600; }
+.ext-panel-btn{
+  flex:none; background:transparent; border:1px solid var(--hairline); color:var(--text-primary);
+  border-radius:8px; padding:4px 8px; cursor:pointer; font-size:12px; font-family:inherit;
+}
+.ext-panel-btn:hover{ background:rgba(255,255,255,0.08); }
+.ext-panel-btn.danger:hover{ color:#e07a6a; border-color:rgba(224,122,106,0.4); }
+/* Desligada no interruptor: continua na lista com ícone apagado + nome em cinza legível (versão, interruptor e Remover normais). */
+.ext-panel-list li.off .ext-panel-icon{ opacity:.45; }
+.ext-panel-list li.off .ext-panel-label{ color:var(--text-secondary); }
+.ext-panel-list li.off .ext-panel-icon img, .ext-panel-list li.off .ext-letter{ filter:grayscale(1); }
+/* Interruptor liga/desliga, no jeito do chrome://extensions */
+.ext-switch{
+  flex:none; position:relative; width:30px; height:16px; padding:0; border:none; border-radius:8px;
+  background:rgba(255,255,255,0.22); cursor:pointer; transition:background .15s var(--ease);
+}
+.ext-switch.on{ background:var(--accent); }
+.ext-switch:disabled{ cursor:progress; opacity:.6; }
+.ext-switch:focus-visible{ outline:2px solid var(--accent-hover); outline-offset:2px; }
+.ext-switch-knob{
+  position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.35); transition:transform .15s var(--ease);
+}
+.ext-switch.on .ext-switch-knob{ transform:translateX(14px); }
+.ext-panel-store{
+  width:100%; margin-top:2px; background:transparent; border:1px solid var(--hairline); color:var(--text-primary);
+  border-radius:8px; padding:7px 10px; cursor:pointer; font-size:12.5px; font-family:inherit; text-align:center;
+}
+.ext-panel-store:hover{ background:rgba(255,255,255,0.08); }
