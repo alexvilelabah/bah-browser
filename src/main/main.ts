@@ -49,6 +49,7 @@ import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
 import { setupPagePrint } from './page-print';
 import { setupClearBrowsingData } from './clear-browsing-data';
+import { setupOutsideOpen, outsideRendererLoading, setupDefaultBrowser } from './default-browser';
 import { incognitoSession, isIncognitoWc, wipeIncognitoSession, setPrivateAi, isPrivateAi } from './incognito-session';
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
@@ -79,6 +80,7 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'upd.message': 'A new version ({v}) has been downloaded.',
     'upd.detail': 'Restart to finish updating. Your settings and login are kept.',
     'tray.open': 'Open Bah', 'tray.quit': 'Quit', 'tray.tooltip': 'Bah — monitors running',
+    'defbrowser.appDescription': 'Open-source AI browser',
     'ext.install.title': 'Add extension', 'ext.install.question': 'Add "{name}"?', 'ext.install.can': 'It can:',
     'ext.install.hosts': '• Read and change your data on {hosts}', 'ext.install.allSites': '• Read and change all your data on all websites',
     'ext.install.unsupported': 'This extension uses features Bah does not have yet; it may not work fully ({list}).',
@@ -120,6 +122,7 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'upd.message': 'Uma nova versão ({v}) foi baixada.',
     'upd.detail': 'Reinicie para concluir a atualização. Suas configurações e login são mantidos.',
     'tray.open': 'Abrir Bah', 'tray.quit': 'Sair', 'tray.tooltip': 'Bah — monitores rodando',
+    'defbrowser.appDescription': 'Navegador com IA, de código aberto',
     'ext.install.title': 'Adicionar extensão', 'ext.install.question': 'Adicionar "{name}"?', 'ext.install.can': 'Ela pode:',
     'ext.install.hosts': '• Ler e alterar seus dados em {hosts}', 'ext.install.allSites': '• Ler e alterar todos os seus dados em todos os sites',
     'ext.install.unsupported': 'Esta extensão usa recursos que o Bah ainda não tem; ela pode não funcionar por completo ({list}).',
@@ -161,6 +164,7 @@ const MAIN_STRINGS: Record<'en' | 'pt' | 'es', Record<string, string>> = {
     'upd.message': 'Se ha descargado una nueva versión ({v}).',
     'upd.detail': 'Reinicia para completar la actualización. Tus ajustes y sesión se mantienen.',
     'tray.open': 'Abrir Bah', 'tray.quit': 'Salir', 'tray.tooltip': 'Bah — monitores activos',
+    'defbrowser.appDescription': 'Navegador con IA, de código abierto',
     'ext.install.title': 'Añadir extensión', 'ext.install.question': '¿Añadir "{name}"?', 'ext.install.can': 'Puede:',
     'ext.install.hosts': '• Leer y cambiar tus datos en {hosts}', 'ext.install.allSites': '• Leer y cambiar todos tus datos en todos los sitios web',
     'ext.install.unsupported': 'Esta extensión usa funciones que Bah todavía no tiene; puede que no funcione del todo ({list}).',
@@ -257,6 +261,7 @@ let monitorManager: MonitorManager | null = null;
 let tray: Tray | null = null;
 let minimizeToTray = false;   // fechar a janela manda pra bandeja em vez de sair (opção do usuário)
 let isQuitting = false;       // "Sair" de verdade (bandeja / before-quit) libera o fechamento
+let windowCreatedOnce = false;   // a janela do boot já nasceu (antes disso, link de fora só espera na fila)
 
 // Aquece DNS+TLS do provedor de IA ativo (pool keep-alive do fetch do Node) — a 1ª
 // mensagem deixa de pagar o handshake frio (~1-2s). Fire-and-forget, nunca quebra nada.
@@ -281,6 +286,13 @@ function attachLocalMetrics(e: AIEngine | null): void {
 function showMainWindow() {
   if (!mainWindow) { createWindow(); return; }
   try { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } catch {}
+}
+// Link de outro app com o Bah já aberto: traz a janela pra frente (inclusive da bandeja). Sem janela:
+// no Mac (fechou a janela, o app segue vivo) abre uma; no Windows isso só acontece fechando o Bah —
+// não ressuscita. Antes da janela do boot nascer, o link só espera na fila (default-browser.ts).
+function showForOutsideOpen(): void {
+  if (mainWindow) { showMainWindow(); return; }
+  if (process.platform === 'darwin' && windowCreatedOnce && !isQuitting && app.isReady()) createWindow();
 }
 function ensureTray() {
   if (tray) return;
@@ -1032,6 +1044,11 @@ function createWindow(): void {
   mainWindow.webContents.session.setPermissionCheckHandler((wc, permission) =>
     permission === 'media' ? wc === mainWindow?.webContents : true);
 
+  // Links de outros apps (default-browser.ts) esperam a tela nova avisar que já escuta.
+  windowCreatedOnce = true;
+  outsideRendererLoading();
+  mainWindow.webContents.on('did-start-navigation', (d) => { if (d.isMainFrame && !d.isSameDocument) outsideRendererLoading(); });
+
   mainWindow.once('ready-to-show', () => { try { mainWindow?.show(); } catch {} });
   // Rede de segurança: no 44.4.x o 'ready-to-show' às vezes não vinha e a janela nunca
   // aparecia (corrigido no 44.5.1). Se em 5 s ainda estiver escondida, mostra assim mesmo.
@@ -1286,6 +1303,13 @@ function createWindow(): void {
         if (maliciousHosts.has(u.hostname)) {
           e.preventDefault();
           mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
+          return;
+        }
+        // Página do computador aberta de fora, SEM JavaScript (default-browser-rules.ts): link pra um
+        // site abre numa aba normal — nesta, sem JavaScript, o site viria quebrado.
+        if (u.protocol !== 'file:' && (wc as any).getLastWebPreferences?.()?.javascript === false) {
+          e.preventDefault();
+          mainWindow?.webContents.send('open-new-tab', stripTrackingParams(url));
           return;
         }
         // Clique em link com rastreio (fbclid/gclid/…) → navega já na URL limpa.
@@ -3494,6 +3518,11 @@ try {
   }
 } catch {}
 
+// Bah como navegador padrão: link/arquivo de outro app vira aba (default-browser.ts). No Bah
+// instalado, um só por perfil: a 2ª abertura entrega o pedido pro que já está aberto e sai aqui
+// mesmo — app.exit antes do 'ready' encerra na hora, sem janela nem 'before-quit' (medido).
+if (!setupOutsideOpen({ getMainWindow: () => mainWindow, showWindow: () => showForOutsideOpen() })) app.exit(0);
+
 // Flush periódico dos cookies (a cada 30s) — garante persistência mesmo se o app travar
 function startCookieFlushInterval() {
   setInterval(async () => {
@@ -3722,6 +3751,7 @@ app.whenReady().then(async () => {
 
   createWindow();
   setupIPC();
+  setupDefaultBrowser({ getMainWindow: () => mainWindow, t: (k) => mt(k) });
   startCookieFlushInterval();
   setupAutoUpdater();
 

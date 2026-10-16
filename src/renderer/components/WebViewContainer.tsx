@@ -104,8 +104,9 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
           // Aba normal: persist:browser (em disco). Aba anônima: a sessão só na memória que todas as
           // anônimas dividem (shared/incognito.ts). Nunca muda depois que a <webview> nasce.
           partition={partitionFor(tab.incognito)}
-          // Cache de bytecode V8: o JS dos sites compila 1x e reusa nas visitas seguintes.
-          webpreferences="v8CacheOptions=bypassHeatCheck"
+          // Cache de bytecode V8: o JS dos sites compila 1x e reusa nas visitas seguintes. Página do
+          // computador aberta de fora: sem JavaScript (store.ts → noScript; vale pra vida da <webview>).
+          webpreferences={tab.noScript ? 'v8CacheOptions=bypassHeatCheck, javascript=no' : 'v8CacheOptions=bypassHeatCheck'}
         />
       ))}
     </div>

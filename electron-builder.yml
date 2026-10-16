@@ -59,6 +59,17 @@ mac:
   icon: build/icon.png
   # Electron 44 não roda mais no macOS 12 (Monterey).
   minimumSystemVersion: "13.0"
+  # Navegador padrão (⋮ → Navegador padrão): o macOS só lista como navegador o app que declara os
+  # links http/https e as páginas .html. Só no Mac — no Windows quem registra é o próprio Bah, no
+  # clique (nada de associação de arquivo no instalador NSIS).
+  protocols:
+    - name: Web
+      schemes: [http, https]
+      role: Viewer
+  fileAssociations:
+    - ext: [html, htm, xhtml]
+      name: HTML Document
+      role: Viewer
 # Arquitetura SEMPRE no nome (o padrão do electron-builder omite o "x64"), pra Apple Silicon
 # e Intel não colidirem quando os dois .dmg sobem pra mesma release.
 dmg:

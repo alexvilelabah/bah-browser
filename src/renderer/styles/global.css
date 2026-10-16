@@ -2178,6 +2178,9 @@ body {
 .menu-custom { display:flex; flex-direction:column; gap:6px; padding:4px 6px 8px 10px; }
 .menu-custom .menu-empty { padding:0 2px; }
 .menu-err { color:#ff7a86; }
+/* ⋮ → Navegador padrão: linha de status ("✓ O Bah é o seu navegador padrão"), não é botão. */
+.menu-status { cursor:default; }
+.menu-status:hover { background:transparent; }
 
 /* ── Cron-Agent: painel de Monitores ── */
 .monitors-panel { width:340px; max-width:92vw; padding:10px; }

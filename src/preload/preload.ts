@@ -88,6 +88,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('open-new-tab', listener);
     return () => ipcRenderer.removeListener('open-new-tab', listener);
   },
+  // Link/arquivo de outro app (Bah como navegador padrão, main/default-browser.ts) → aba. noScript:
+  // página do computador, abre sem JavaScript; launch: foi ela que abriu o Bah agora.
+  onOutsideOpen: (cb: (p: { url: string; noScript: boolean; launch: boolean }) => void) => {
+    const listener = (_e: unknown, p: any) => {
+      if (p && typeof p.url === 'string') cb({ url: p.url, noScript: p.noScript === true, launch: p.launch === true });
+    };
+    ipcRenderer.on('outside-open', listener);
+    return () => ipcRenderer.removeListener('outside-open', listener);
+  },
+  outsideOpenReady: () => ipcRenderer.send('outside-open:ready'),
+  // ⋮ → Navegador padrão: o Bah é o padrão? / "Tornar o Bah padrão" (grava só no Bah instalado).
+  defaultBrowserStatus: () => ipcRenderer.invoke('default-browser:status'),
+  defaultBrowserMake: () => ipcRenderer.invoke('default-browser:make'),
   // Aba emitindo som → alto-falante na aba. Só o aviso do Chromium; nada de config de som.
   onTabAudio: (cb: (p: { wcId: number; audible: boolean }) => void) => {
     const listener = (_e: any, p: any) => cb(p);

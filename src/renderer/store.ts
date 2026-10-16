@@ -27,6 +27,8 @@ export interface Tab {
                           // como a dormindo, mas com ícone e nome normais (nada de 💤); carrega no clique
   incognito?: boolean;    // aba anônima: sessão só na memória, nada dela fica guardado (shared/incognito.ts).
                           // Nasce assim e nunca muda (a partição da <webview> não troca depois de criada).
+  noScript?: boolean;     // página do computador aberta de fora (Bah como navegador padrão): sem JavaScript,
+                          // senão ela leria os outros arquivos do PC (main/default-browser-rules.ts). Nasce assim.
 }
 
 export interface ChatMessage {
@@ -193,6 +195,22 @@ export function useTabStore() {
     return tab.id;
   }, []);
 
+  // Link/arquivo de outro app (Bah como navegador padrão): aba nova na frente. Se foi ele que ABRIU
+  // o Bah agora (launch), a aba nova do boot — ainda intocada — dá lugar a ele, no mesmo lugar da
+  // barra, igual ao Chrome (que nem mostra a Nova guia nesse caso). As boas-vindas do painel vão junto.
+  const addOutsideTab = useCallback((url: string, opts: { launch: boolean; noScript: boolean }): string => {
+    const tab: Tab = { ...createTab(url), ...(opts.noScript ? { noScript: true } : {}) };
+    const blank = newTabUrl();
+    setTabs(prev => {
+      const boot = opts.launch
+        ? prev.find(t => t.startup && t.id === activeIdRef.current && !t.hidden && !t.incognito && !t.pinned && !t.canGoBack && t.url === blank)
+        : undefined;
+      return boot ? prev.map(t => (t.id === boot.id ? { ...tab, startup: true } : t)) : [...prev, tab];
+    });
+    setActive(tab.id);
+    return tab.id;
+  }, [setActive]);
+
   // HIDDEN tab (Quick Search): mounts the webview and loads the URL, but does NOT become
   // the active tab nor appear in the tab bar — the search runs "behind the scenes". It's
   // removed with closeTab when done. The TabBar ignores tabs with hidden=true.
@@ -280,7 +298,7 @@ export function useTabStore() {
   const duplicateTab = useCallback((id: string): string | null => {
     const src = tabs.find(t => t.id === id && !t.hidden);
     if (!src) return null;
-    return addTabAfter(id, src.url, { title: src.title, pinned: src.pinned, ...(src.incognito ? { incognito: true } : {}) });
+    return addTabAfter(id, src.url, { title: src.title, pinned: src.pinned, ...(src.incognito ? { incognito: true } : {}), ...(src.noScript ? { noScript: true } : {}) });
   }, [tabs, addTabAfter]);
 
   // Continuar de onde parou: a sessão (abas da barra + a ativa) é gravada SEMPRE, com a opção
@@ -301,7 +319,7 @@ export function useTabStore() {
   return {
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
-    setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, closeTab, updateTab, reopenClosedTab, forgetClosedTabs,
+    setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, addOutsideTab, closeTab, updateTab, reopenClosedTab, forgetClosedTabs,
     closeTabs, hasClosedTabs, moveTab, setPinned, addTabAfter, duplicateTab,
     setSidebarOpen,
     setAISettings: (s: AISettings) => {

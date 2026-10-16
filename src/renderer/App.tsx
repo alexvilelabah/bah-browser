@@ -22,6 +22,7 @@ import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
 import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
+import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
@@ -137,6 +138,10 @@ declare global {
       }>;
       actionCancel?: (actionId: string) => Promise<any>;
       onOpenNewTab?: (cb: (url: string, opts?: { incognito?: boolean }) => void) => void;
+      onOutsideOpen?: (cb: (p: { url: string; noScript: boolean; launch: boolean }) => void) => (() => void);
+      outsideOpenReady?: () => void;
+      defaultBrowserStatus?: () => Promise<{ platform: 'win32' | 'darwin' | 'other'; packaged: boolean; isDefault: boolean }>;
+      defaultBrowserMake?: () => Promise<{ ok: true; alreadyDefault?: boolean; openedSettings?: boolean } | { ok: false; error: string }>;
       incognitoWipe?: () => Promise<boolean>;
       setPrivateAi?: (on: boolean) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
@@ -459,6 +464,10 @@ export default function App() {
       if (opts?.incognito) void openIncognitoTab(url);
       else store.addTab(url);
     }) as any);
+    // Link/arquivo de outro app (Bah como navegador padrão). O main segura o que chegou antes da tela
+    // montar (o link que ABRIU o Bah) e só manda depois do aviso — então o ouvinte vem antes dele.
+    offs.push(window.electronAPI?.onOutsideOpen?.((p) => { store.addOutsideTab(p.url, { launch: p.launch, noScript: p.noScript }); }));
+    window.electronAPI?.outsideOpenReady?.();
     // Extensão pediu aba nova (chrome.tabs.create, opções, loja): na frente, ou atrás se active:false.
     offs.push(window.electronAPI?.onExtensionOpenTab?.(({ reqId, url, active }) => {
       const target = typeof url === 'string' && url ? url : undefined;
@@ -1063,6 +1072,9 @@ export default function App() {
         ? `https://${url}`
         : searchUrlFor(url);   // mecanismo escolhido no ⋮ (padrão: Google, mesmos parâmetros de antes)
     }
+    // Aba sem JavaScript (página do computador aberta de fora): site digitado ou favorito abre numa
+    // aba normal — nesta o site viria quebrado (os links dela o main já desvia igual).
+    if (store.activeTab?.noScript && !/^file:/i.test(finalUrl)) { store.addTab(stripTrackingParams(finalUrl)); return; }
     store.updateTab(store.activeTabId, { isLoading: true });
     // URL colada com rastreio (fbclid/gclid/…) entra já limpa — will-navigate não
     // cobre loadURL (navegação programática), então o strip é aqui.
@@ -1694,6 +1706,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 <div className="menu-sep" />
                 <SearchEngineMenu />
                 <StartupMenu />
+                <DefaultBrowserMenu />
                 <button className="menu-item" onClick={() => toggleAdblock()} title={t('menu.adblockTitle')}>
                   <span className="menu-ic">🛡️</span>
                   <span className="menu-label">{t('menu.adblock')}</span>
