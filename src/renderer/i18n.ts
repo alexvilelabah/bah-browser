@@ -18,6 +18,10 @@ export const LANGS: Array<{ code: Lang; label: string }> = [
 
 const dict: Record<Lang, Record<string, string>> = {
   en: {
+    'research.provider': 'Quick Research provider (applies immediately)',
+    'research.off': 'Off',
+    'research.hint': 'Google/Bing is the default. Parallel sends only your research question to Parallel for free Fast-mode search, with no account or API key. Your selected AI summarizes the results. Off disables Quick Research only.',
+
     // Barra de endereço + janela
     'addr.placeholder': 'Search {engine} or type a URL',
     // ⋮ → Mecanismo de pesquisa
@@ -621,6 +625,10 @@ const dict: Record<Lang, Record<string, string>> = {
     'set.planPreviewHint': 'You can approve, reword or stop',
   },
   pt: {
+    'research.provider': 'Provedor da Pesquisa Rápida (aplicação imediata)',
+    'research.off': 'Desativada',
+    'research.hint': 'Google/Bing é o padrão. Parallel envia só sua pergunta de pesquisa para a Parallel, com busca gratuita no modo Fast, sem conta nem chave de API. Sua IA resume os resultados. Desativada desliga apenas a Pesquisa Rápida.',
+
     'addr.placeholder': 'Pesquise no {engine} ou digite um URL',
     'search.menu': 'Mecanismo de pesquisa',
     'search.hint': 'Mecanismo de pesquisa usado na barra de endereço',
@@ -1213,6 +1221,10 @@ const dict: Record<Lang, Record<string, string>> = {
     'set.planPreviewHint': 'Você aprova, muda o texto ou para',
   },
   es: {
+    'research.provider': 'Proveedor de Búsqueda Rápida (se aplica al instante)',
+    'research.off': 'Desactivada',
+    'research.hint': 'Google/Bing es la opción predeterminada. Parallel envía solo tu pregunta de búsqueda a Parallel para búsquedas gratuitas en modo Fast, sin cuenta ni clave de API. Tu IA resume los resultados. Desactivada solo deshabilita la Búsqueda Rápida.',
+
     'addr.placeholder': 'Busca en {engine} o escribe una URL',
     'search.menu': 'Motor de búsqueda',
     'search.hint': 'Motor de búsqueda que se usa en la barra de direcciones',

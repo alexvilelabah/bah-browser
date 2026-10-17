@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   flushUiStorage: () => ipcRenderer.send('session:flush-storage'),
 
   // AI
+  researchSearch: (query: string, requestId: string, sessionId: string) =>
+    ipcRenderer.invoke('research:search', query, requestId, sessionId),
+  researchCancel: (requestId: string) => ipcRenderer.invoke('research:cancel', requestId),
   setAIProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
     ipcRenderer.invoke('ai:set-provider', provider, apiKey, baseUrl, model),
   // Cifra (cofre do SO) o que vai pro disco; decifra na hora de carregar. Chave em texto puro só na memória.

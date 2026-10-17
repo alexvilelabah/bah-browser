@@ -7,6 +7,7 @@ import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, poi
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
 import { fmtUsd } from '../pricing';
+import { loadResearchProvider, normalizeResearchProvider, RESEARCH_PROVIDER_KEY } from '../../shared/research';
 
 export interface StepRecord {
   step: number;
@@ -168,7 +169,7 @@ interface Props {
   onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
   /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
    *  COM dica, e não uma "resposta" que disfarça a falha. */
-  onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
+  onResearch: (query: string, signal?: AbortSignal, sessionId?: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
   onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
@@ -410,6 +411,12 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [planEditing, setPlanEditing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(aiSettings);
+  const [researchProvider, setResearchProvider] = useState(() => loadResearchProvider(localStorage));
+  // One anonymous correlation token per tab conversation, never sent as browser identity.
+  const researchSessions = useRef(new Map<string, string>());
+  useEffect(() => {
+    for (const id of researchSessions.current.keys()) if (!tabIds.includes(id)) researchSessions.current.delete(id);
+  }, [tabIds]);
   const [localCfg, setLocalCfg] = useState(localSettings);
   // Qual aba de config está aberta (nuvem/local) — SEPARADO de "qual IA está ativa".
   // Abrir a aba local só mostra os modelos; o local liga ao escolher um modelo.
@@ -483,6 +490,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   useEffect(() => {
     if (!showSettings) return;
     setSettings(aiSettings);
+    setResearchProvider(loadResearchProvider(localStorage));
     setLocalCfg(localSettings);
     setView(viewFor(localSettings));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -757,12 +765,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     push({ kind: 'event', event: { kind: 'status', message: t('feed.searchingWeb') } });
     setInput('');
     try {
-      // Parar na pesquisa: destrava a UI na hora (o pipeline de busca termina em
-      // segundo plano e é descartado — não há socket único pra abortar aqui).
+      // Parallel cancels both MCP and synthesis; the legacy browser scrape is discarded.
+      const controller = new AbortController();
+      const sessionKey = activeTabId || 'startup';
+      if (!researchSessions.current.has(sessionKey)) researchSessions.current.set(sessionKey, crypto.randomUUID());
       const cancelled = new Promise<never>((_, rej) => {
-        chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
+        chatCancelRef.current = () => { controller.abort(); rej(new Error('CHAT_CANCELLED')); };
       });
-      const { answer, sources, isError } = await Promise.race([onResearch(msg), cancelled]);
+      const { answer, sources, isError } = await Promise.race([onResearch(msg, controller.signal, researchSessions.current.get(sessionKey)), cancelled]);
       // Falha (captcha do buscador, IA fora) vira aviso vermelho COM dica — antes se
       // disfarçava de resposta e a pessoa só via o status ciclando sem resultado claro.
       if (isError) { push({ kind: 'error', text: String(answer).replace(/^Error(\s+summarizing)?:\s*/i, '') }); return; }
@@ -1675,6 +1685,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 </div>
             </div>
           )}
+          <label>
+            {t('research.provider')}
+            <select aria-label={t('research.provider')} value={researchProvider} onChange={e => {
+              const next = normalizeResearchProvider(e.target.value);
+              try { localStorage.setItem(RESEARCH_PROVIDER_KEY, next); setResearchProvider(next); } catch {}
+            }}>
+              <option value="browser">Google / Bing</option>
+              <option value="parallel">Parallel Search MCP</option>
+              <option value="off">{t('research.off')}</option>
+            </select>
+            <small>{t('research.hint')}</small>
+          </label>
           {/* Rodapé fixo com fundo próprio: o conteúdo rola POR BAIXO do Salvar, em vez de
               aparecer espremido na faixa entre o botão e a borda do painel. */}
           <div className="settings-footer">

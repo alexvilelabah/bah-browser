@@ -32,11 +32,12 @@ the entire boundary between the web/UI side and the privileged side (see below).
 - **Cloud AI mode (default for the agent):** the page text and a screenshot of the current
   page are sent to the **AI provider you chose** (DeepSeek / Mistral / NVIDIA NIM)
   over HTTPS, so the model can "see" the page and decide the next action. Your
-  API key (if any) goes only to that provider. Nothing goes anywhere else. See
+  API key (if any) goes only to that provider. This describes model requests; optional web research is described below. See
   [`src/main/ai-engine.ts`](src/main/ai-engine.ts).
-- **Local AI mode (Ollama):** nothing leaves your machine. If the local model fails, Bah
+- **Local AI mode (Ollama):** model inference stays on your machine. Web research still accesses the web using the selected research provider. If the local model fails, Bah
   **errors out — it does not silently fall back to the cloud** (enforced in
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
+- **Optional Parallel Quick Research:** only after selecting Parallel in AI settings, the typed research question and an anonymous per-tab conversation token go to `https://search.parallel.ai/mcp` over HTTPS. No browser cookies, page text, screenshot, chat history or API keys are sent to Parallel. Search excerpts return to the AI provider you selected for synthesis. Google/Bing remains the default; Off disables Quick Research. See [`research-search.ts`](src/main/research-search.ts) and [Parallel privacy](https://parallel.ai/privacy-policy).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
@@ -75,7 +76,7 @@ end in a couple of hops.
 | OCR / screenshots stay local | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract on-device; image never sent to a cloud |
 | Adblock | `main.ts` (`@ghostery/adblocker-electron`, `ADBLOCK_BYPASS_HOSTS`) | EasyList/EasyPrivacy; the small bypass list (e.g. Google login) is explicit and inspectable |
 | Opt-in training-data collector | `main.ts` (`dataset:append-run`) + [`agent-run-logger.ts`](src/renderer/agent-run-logger.ts) | writes **only** to local disk, **only** when enabled; never uploaded |
-| Where your data can go (AI) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM (cloud) or Ollama (local) — and nothing else |
+| Where your data can go (AI) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM (cloud) or Ollama (local); optional research queries can also go to Parallel |
 
 ---
 

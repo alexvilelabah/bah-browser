@@ -50,6 +50,7 @@ import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
 import { setupPagePrint } from './page-print';
+import { setupResearchSearch } from './research-search';
 import { setupClearBrowsingData } from './clear-browsing-data';
 import { setupOutsideOpen, outsideRendererLoading, setupDefaultBrowser } from './default-browser';
 import { incognitoSession, isIncognitoWc, wipeIncognitoSession, setPrivateAi, isPrivateAi } from './incognito-session';
@@ -1497,6 +1498,8 @@ function setupIPC(): void {
     }
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
+  setupResearchSearch(ipcMain, event => !!mainWindow && event.sender === mainWindow.webContents
+    && event.senderFrame === mainWindow.webContents.mainFrame);
   // "Continuar de onde parou": a tela gravou uma sessão com aba/endereço/ordem diferente → manda o
   // localStorage da interface pro disco já, sem esperar o lote do Chromium (que pode levar até um
   // minuto): se o Bah cair, perde ~1 s. A tela pede no máximo 1x a cada 2 s (renderer/session.ts).

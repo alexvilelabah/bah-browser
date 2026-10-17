@@ -1,4 +1,5 @@
 import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { loadResearchProvider, runQuickResearch, type ResearchBridge } from '../shared/research';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
@@ -127,6 +128,9 @@ declare global {
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
       aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
+      researchSearch: ResearchBridge['researchSearch'];
+      researchCancel: ResearchBridge['researchCancel'];
+      chatCancel: ResearchBridge['chatCancel'];
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
@@ -1428,7 +1432,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   // aba em SEGUNDO PLANO no Google (Bing de fallback), raspa os snippets dos
   // resultados, manda pro modelo sintetizar e devolve a resposta + fontes pro
   // PAINEL onde o usuário digita. A aba dele não muda; ele não "lê a página".
-  const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
+  const runBrowserResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
     const q = (query || '').trim();
     if (!q) return { answer: 'Empty question.', sources: [], isError: true };
     // Aba OCULTA: carrega e raspa "por baixo dos panos" — nunca aparece na barra de
@@ -1488,6 +1492,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
       try { store.closeTab(bgId); } catch {}   // remove a aba oculta (nunca foi vista)
     }
   }, [store]);
+
+  const runWebResearch = useCallback((query: string, signal?: AbortSignal, sessionId: string = crypto.randomUUID()) =>
+    runQuickResearch(query, {
+      provider: loadResearchProvider(localStorage), language: uiLangName(),
+      local: store.localSettings.enabled, sessionId, signal,
+    }, { browser: runBrowserResearch, api: window.electronAPI }), [store, runBrowserResearch]);
 
   // ── VITRINE DE NOVIDADES (placeholder dinâmico) ────────────────────────────
   // Puxa manchetes recentes pra ciclar no placeholder da caixa. Reusa o vertical de

@@ -32,11 +32,12 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
 - **Modo nuvem (padrão do agente):** o texto da página e um screenshot da página atual são
   enviados pro **provedor de IA que você escolheu** (DeepSeek / Mistral / NVIDIA NIM)
   por HTTPS, pra o modelo "ver" a página e decidir a próxima ação. Sua chave de
-  API (se houver) vai só pra esse provedor. Nada vai pra mais lugar nenhum. Ver
+  API (se houver) vai só pra esse provedor. Isso descreve as chamadas ao modelo; a pesquisa opcional está descrita abaixo. Ver
   [`src/main/ai-engine.ts`](src/main/ai-engine.ts).
-- **Modo local (Ollama):** nada sai da sua máquina. Se o modelo local falha, o Bah **dá erro —
+- **Modo local (Ollama):** a inferência do modelo fica na sua máquina. A pesquisa web continua acessando a internet pelo provedor de pesquisa escolhido. Se o modelo local falha, o Bah **dá erro —
   não cai pra nuvem em silêncio** (garantido em [`src/main/main.ts`](src/main/main.ts), no ramo
   local do roteador híbrido).
+- **Pesquisa Rápida opcional com Parallel:** só após selecionar Parallel nas configurações de IA, a pergunta digitada e um identificador anônimo por conversa/aba vão para `https://search.parallel.ai/mcp` por HTTPS. Nenhum cookie, texto da página, screenshot, histórico do chat ou chave de API é enviado à Parallel. Os trechos retornam ao provedor de IA escolhido para o resumo. Google/Bing continua sendo o padrão; Desativada desliga a Pesquisa Rápida. Veja [`research-search.ts`](src/main/research-search.ts) e a [privacidade da Parallel](https://parallel.ai/privacy-policy).
 - **OCR e screenshots usados pra OCR** rodam **no aparelho** (Tesseract) — a imagem nunca é
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
@@ -74,7 +75,7 @@ uns dois pulos.
 | OCR / screenshots ficam locais | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract no aparelho; imagem nunca vai pra nuvem |
 | Adblock | `main.ts` (`@ghostery/adblocker-electron`, `ADBLOCK_BYPASS_HOSTS`) | EasyList/EasyPrivacy; a pequena lista de bypass (ex.: login do Google) é explícita |
 | Coletor de dados de treino (opt-in) | `main.ts` (`dataset:append-run`) + [`agent-run-logger.ts`](src/renderer/agent-run-logger.ts) | grava **só** em disco local, **só** quando ligado; nunca sobe |
-| Pra onde seus dados podem ir (IA) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM (nuvem) ou Ollama (local) — e nada mais |
+| Pra onde seus dados podem ir (IA) | [`ai-engine.ts`](src/main/ai-engine.ts) | DeepSeek / Mistral / NVIDIA NIM (nuvem) ou Ollama (local); perguntas de pesquisa opcionais também podem ir à Parallel |
 
 ---
 
