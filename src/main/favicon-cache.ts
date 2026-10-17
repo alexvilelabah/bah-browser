@@ -61,6 +61,9 @@ export function setupFaviconCache(deps: {
       for (const [k, e] of Object.entries<any>(raw)) {
         if (faviconOrigin(k) !== k || !e || typeof e !== 'object') continue;
         const icon = typeof e.icon === 'string' && /^data:image\/[a-z+.-]+;base64,/i.test(e.icon) && e.icon.length < MAX_STORED_BYTES * 2 ? e.icon : null;
+        // "Sem ícone" não atravessa reinício: cada vez que o Bah abre, tenta de novo os favoritos
+        // que ficaram sem (são poucos) — senão um site que falhou uma vez ficava 7 dias na letra.
+        if (!icon) continue;
         const checked = Number(e.checked) || 0, used = Number(e.used) || 0;
         out[k] = { icon, checked, used, ...(typeof e.src === 'string' && e.src.length < 2048 ? { src: e.src } : {}) };
       }

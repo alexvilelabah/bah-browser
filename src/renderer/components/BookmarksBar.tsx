@@ -10,6 +10,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { t } from '../i18n';
 import SiteIcon from './SiteIcon';
+import { prefetchSiteIcons } from '../favicons';
 import { splitOverflow } from '../../shared/favicons';
 import type { FlatBookmark } from '../../shared/bookmarks';
 
@@ -72,6 +73,8 @@ function BookmarksBar({ items, onOpen, onRemove }: Props) {
 
   // Tudo voltou a caber → a lista do "»" não tem mais o que mostrar.
   useEffect(() => { if (!hidden.length) setMore(null); }, [hidden.length]);
+  // Ícones dos favoritos escondidos já vêm sendo buscados antes de alguém abrir o "»".
+  useEffect(() => { prefetchSiteIcons(items.map(f => f.url)); }, [items]);
 
   // Esc, janela mudando de tamanho ou perdendo o foco fecham (igual aos menus do Chrome).
   useEffect(() => {

@@ -18,11 +18,19 @@ let subscribed = false;
 
 function notify(): void { for (const l of listeners) l(); }
 
+// Ícones que o <img> não conseguiu desenhar: se o main mandar o MESMO de novo, fica a letra
+// (senão a barra ficava piscando ícone ↔ letra a cada aviso do main).
+const broken = new Set<string>();
+
 function merge(batch: Record<string, string | null> | null | undefined): void {
   if (!batch || typeof batch !== 'object') return;
   let changed = false;
   for (const [o, icon] of Object.entries(batch)) {
-    const v = typeof icon === 'string' && icon.startsWith('data:image/') ? icon : null;
+    let v = typeof icon === 'string' && icon.startsWith('data:image/') ? icon : null;
+    if (v && broken.has(v)) v = null;
+    // Nunca troca um ícone que já está aparecendo por "sem ícone": a resposta do pedido pode
+    // chegar DEPOIS do aviso com o ícone novo (ou a busca de agora falhou) — e piscava.
+    if (v === null && typeof icons.get(o) === 'string') continue;
     if (icons.get(o) !== v) { icons.set(o, v); changed = true; }
   }
   if (changed) notify();
@@ -60,6 +68,16 @@ function request(origin: string, peek: boolean): void {
   if (!flushTimer) flushTimer = setTimeout(flush, 30);
 }
 
+/** Pede (em segundo plano) os ícones de vários sites de uma vez — os favoritos que estão atrás do
+ *  "»" e no ⋮ → Favoritos: assim, quando a lista abre, os ícones já chegaram (antes só eram
+ *  pedidos ao abrir, e iam aparecendo um por um). */
+export function prefetchSiteIcons(urls: string[], max = 300): void {
+  for (const u of urls.slice(0, max)) {
+    const o = faviconOrigin(u);
+    if (o) request(o, false);
+  }
+}
+
 function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
@@ -75,5 +93,6 @@ export function useSiteIcon(url: string, peek = false): string | null | undefine
 /** O <img> não conseguiu desenhar o ícone (arquivo estranho): passa a usar a letra. */
 export function markIconBroken(url: string): void {
   const origin = faviconOrigin(url);
-  if (origin && icons.get(origin)) { icons.set(origin, null); notify(); }
+  const cur = origin ? icons.get(origin) : null;
+  if (origin && cur) { broken.add(cur); icons.set(origin, null); notify(); }
 }

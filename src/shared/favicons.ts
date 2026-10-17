@@ -10,7 +10,9 @@
 export const HIT_TTL_MS = 30 * 24 * 3_600_000;   // ícone achado: confere de novo depois de 30 dias
 export const MISS_TTL_MS = 7 * 24 * 3_600_000;   // site sem ícone: só tenta de novo depois de 7 dias
 export const MAX_ORIGINS_PER_ASK = 400;          // teto de sites por pedido do renderer
-export const MAX_ICON_BYTES = 200 * 1024;        // download maior que isso não é favicon
+// Download maior que isso não é favicon. 1 MB porque .ico com vários tamanhos passa fácil de
+// 200 KB (o do Hugging Face tem 205 KB) e era descartado — o Bah corta pro de 32px de qualquer jeito.
+export const MAX_ICON_BYTES = 1024 * 1024;
 export const MAX_STORED_BYTES = 48 * 1024;       // depois de enxugar, o que passar disso não entra no cache
 
 // ── Origem ──
