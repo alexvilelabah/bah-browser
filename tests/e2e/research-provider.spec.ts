@@ -28,7 +28,6 @@ test('Quick Research choice persists and routes question to cited response; Off 
     localStorage.setItem('uiLang', 'en');
     localStorage.setItem('tourSeen', '1');
     localStorage.setItem('guideSeen', '1');
-    localStorage.setItem('agentDrive', '0');
     (window as any).researchCalls = [];
     (window as any).electronAPI = new Proxy({}, {
       get: (_target, name: string) => {
@@ -59,25 +58,24 @@ test('Quick Research choice persists and routes question to cited response; Off 
   await expect(select).toHaveValue('parallel');
   await page.locator('.sidebar-actions button').first().click();
   await page.getByTestId('agent-command-input').fill('What is Electron?');
-  await page.getByTestId('agent-run').click();
+  await page.getByTestId('quick-research').click();
   await expect(page.locator('.agent-feed')).toContainText('Electron combines Chromium and Node.js');
   await expect(page.locator('.agent-feed .chat-source').first()).toBeVisible();
   await expect(page.locator('.agent-feed .chat-source').first()).toHaveAttribute('title', 'Electron documentation\nhttps://www.electronjs.org/docs/latest/');
+  expect(await page.evaluate(() => localStorage.getItem('agentDrive'))).toBeNull();
   const firstCalls = await page.evaluate(() => (window as any).researchCalls);
   expect(firstCalls).toHaveLength(1);
   expect(firstCalls[0].query).toBe('What is Electron?');
   expect(firstCalls[0].sessionId).toMatch(/^[a-f0-9-]{36}$/);
   await page.getByTestId('agent-command-input').fill('What is Chromium?');
-  await page.getByTestId('agent-run').click();
+  await page.getByTestId('quick-research').click();
   await expect.poll(() => page.evaluate(() => (window as any).researchCalls.length)).toBe(2);
   const secondCalls = await page.evaluate(() => (window as any).researchCalls);
   expect(secondCalls[1].sessionId).toBe(firstCalls[0].sessionId);
   await page.locator('.sidebar-actions button').first().click();
   await select.selectOption('off');
   await page.locator('.sidebar-actions button').first().click();
-  await expect(page.getByTestId('agent-run')).toBeDisabled(); // empty composer, previous research finished
   await page.getByTestId('agent-command-input').fill('What is Node.js?');
-  await page.getByTestId('agent-run').click();
-  await expect(page.locator('.agent-feed')).toContainText('Quick Research is off.');
+  await expect(page.getByTestId('quick-research')).toBeDisabled();
   expect(await page.evaluate(() => (window as any).researchCalls.length)).toBe(2);
 });

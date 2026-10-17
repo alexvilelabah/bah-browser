@@ -1998,6 +1998,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           <span className="composer-spacer" />
           <button
             type="button"
+            data-testid="quick-research"
+            className="composer-research"
+            title={t('research.run')}
+            aria-label={t('research.run')}
+            disabled={!input.trim() || loading || chatLoading || !!manualHelp || imageMode || !!attachedDoc || researchProvider === 'off'}
+            onClick={() => {
+              if (busyRef.current) return;
+              pendingSuggestionRef.current = null;
+              void runResearch(input.trim());
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
+          </button>
+          <button
+            type="button"
             className={`composer-mic${voiceState === 'listening' ? ' listening' : voiceState === 'transcribing' ? ' busy' : ''}`}
             onClick={toggleVoice}
             disabled={loading || chatLoading}

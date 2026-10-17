@@ -205,3 +205,28 @@ test('Stop during synthesis cancels inference and discards the late answer', asy
   await rejection;
   assert.equal(chatCancelled, true);
 });
+
+test('no results avoids synthesis; inference failures remain errors with source evidence', async () => {
+  let summaries = 0;
+  const options = { provider: 'parallel' as const, language: 'English', local: true, sessionId };
+  const api: ResearchBridge = {
+    researchSearch: async () => ({ results: [] }),
+    researchCancel: async () => true, chatCancel: async () => true,
+    aiChat: async () => { summaries++; return { error: 'Local model unavailable.' }; },
+  };
+  const deps = { browser: async () => { throw new Error('must not fall back'); }, api };
+  assert.equal((await runQuickResearch('question', options, deps)).isError, true);
+  assert.equal(summaries, 0);
+  api.researchSearch = async () => ({ results: [{ title: 'Source', url: 'https://example.com/', snippet: 'evidence' }] });
+  const failed = await runQuickResearch('question', options, deps);
+  assert.equal(failed.isError, true);
+  assert.match(failed.answer, /Local model unavailable/);
+  assert.equal(failed.sources.length, 1);
+  assert.equal(summaries, 1);
+  // The new provider's request limit must not change the existing browser path.
+  let browserQuery = '';
+  await runQuickResearch('x'.repeat(2001), { ...options, provider: 'browser' }, { browser: async query => {
+    browserQuery = query; return { answer: 'legacy', sources: [] };
+  } });
+  assert.equal(browserQuery.length, 2001);
+});

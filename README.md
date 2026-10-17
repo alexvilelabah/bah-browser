@@ -152,7 +152,7 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 
 ### Quick Research provider
 
-Open the AI panel settings and choose **Quick Research provider**. **Google / Bing** remains the default. Select **Parallel Search MCP** for free web search powered by Fast mode, with no Parallel account or API key. The choice applies immediately and is remembered. Ask a research question in the command bar; Bah summarizes the web excerpts with your selected AI and shows source links. You still need your usual cloud AI setup or local model to summarize the results.
+Open the AI panel settings and choose **Quick Research provider**. **Google / Bing** remains the default. Select **Parallel Search MCP** for free web search powered by Fast mode, with no Parallel account or API key. The choice applies immediately and is remembered. Type a research question and click the **Quick Research** magnifying-glass button beside Send, in either cloud or local AI mode. Bah summarizes the web excerpts with your selected AI and shows source links. You still need your usual cloud AI setup or local model to summarize the results.
 
 Parallel receives the typed research question and an anonymous conversation token, not the open page, browser cookies or chat history. See [Parallel privacy](https://parallel.ai/privacy-policy) and [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Anonymous usage has service limits; an error appears if search fails, without switching providers. **Off** disables Quick Research only. Address-bar search, agent navigation, news and file searches keep their existing behavior.
 

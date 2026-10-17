@@ -148,7 +148,7 @@ Atalho Windows: clique duplo em `Abrir-Bah.bat`.
 
 ### Provedor da Pesquisa Rápida
 
-Abra as configurações do painel de IA e escolha **Provedor da Pesquisa Rápida**. **Google / Bing** continua sendo o padrão. Selecione **Parallel Search MCP** para busca gratuita na web no modo Fast, sem conta nem chave de API da Parallel. A escolha é aplicada imediatamente e fica salva. Faça uma pergunta de pesquisa na barra de comandos; o Bah resume os trechos com sua IA selecionada e mostra links das fontes. O resumo continua precisando da sua IA de nuvem configurada ou de um modelo local.
+Abra as configurações do painel de IA e escolha **Provedor da Pesquisa Rápida**. **Google / Bing** continua sendo o padrão. Selecione **Parallel Search MCP** para busca gratuita na web no modo Fast, sem conta nem chave de API da Parallel. A escolha é aplicada imediatamente e fica salva. Digite uma pergunta e clique na lupa **Pesquisa Rápida** ao lado de Enviar, no modo de IA local ou de nuvem. O Bah resume os trechos com sua IA selecionada e mostra links das fontes. O resumo continua precisando da sua IA de nuvem configurada ou de um modelo local.
 
 A Parallel recebe a pergunta digitada e um identificador anônimo da conversa, sem o conteúdo da página, cookies do navegador ou histórico do chat. Veja a [privacidade da Parallel](https://parallel.ai/privacy-policy) e o [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). O uso anônimo tem limites; se a busca falhar, o erro aparece sem trocar de provedor. **Desativada** desliga apenas a Pesquisa Rápida. Barra de endereço, navegação do agente, notícias e busca de arquivos mantêm o comportamento atual.
 

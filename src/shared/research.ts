@@ -36,9 +36,9 @@ export async function runQuickResearch(
   const checkCancelled = () => { if (options.signal?.aborted) throw new Error('CHAT_CANCELLED'); };
   checkCancelled();
   if (!q) return fail('Empty question.');
-  if (q.length > 2000) return fail('Research questions must be at most 2000 characters.');
   if (options.provider === 'off') return fail('Quick Research is off. Enable it in AI settings to search the web.');
   if (options.provider === 'browser') return deps.browser(q);
+  if (q.length > 2000) return fail('Research questions must be at most 2000 characters.');
   const api = deps.api;
   if (!api?.researchSearch) return fail('Parallel search is unavailable.');
   const requestId = crypto.randomUUID();

@@ -1896,6 +1896,13 @@ body {
 .agent-side-panel-host .composer-send:hover:not(:disabled) { transform:scale(1.06); box-shadow:0 4px 16px rgba(0,0,0,0.40); }
 .agent-side-panel-host .composer-send:disabled { opacity:0.3; cursor:default; box-shadow:none; }
 .agent-side-panel-host .composer-send.stop { background:rgba(255,77,94,0.20); color:#ff7a86; box-shadow:none; }
+.agent-side-panel-host .composer-research {
+  width:30px; height:30px; flex:0 0 30px; display:flex; align-items:center; justify-content:center;
+  border:1px solid var(--border); border-radius:50%; background:var(--bg-tertiary);
+  color:var(--text-secondary); cursor:pointer;
+}
+.agent-side-panel-host .composer-research:hover:not(:disabled) { background:var(--bg-hover); color:var(--text-primary); }
+.agent-side-panel-host .composer-research:disabled { opacity:0.3; cursor:default; }
 .agent-side-panel-host .composer-continue {
   border:none; border-radius:999px; padding:7px 14px; cursor:pointer;
   background:var(--accent); color:#fff; font-size:12px; font-weight:700;
