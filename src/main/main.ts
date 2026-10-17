@@ -325,10 +325,12 @@ function warmAiConnection(): void {
   } catch {}
 }
 
+// Bandeja = 16 px: usa a versão PEQUENA do logo (build/tray.png, sem os tracinhos que viram
+// borrão nesse tamanho). Se faltar (instalação antiga), cai no ícone grande.
 function trayIconPath(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'icon.png')
-    : path.join(__dirname, '..', '..', 'build', 'icon.png');
+  const dir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', '..', 'build');
+  const small = path.join(dir, 'tray.png');
+  return fs.existsSync(small) ? small : path.join(dir, 'icon.png');
 }
 function attachLocalMetrics(e: AIEngine | null): void {
   if (!e) return;

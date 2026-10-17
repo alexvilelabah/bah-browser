@@ -23,10 +23,13 @@ files:
   - dist/**/*
   - package.json
 # Ícone acessível em runtime (bandeja do sistema) — o exe embute o ícone, mas o Tray
-# precisa de um arquivo em disco. Vai pra resources/icon.png no app empacotado.
+# precisa de um arquivo em disco. Vai pra resources/ no app empacotado. tray.png é a versão
+# PEQUENA do logo (sem tracinhos, anel mais claro): a grande vira borrão em 16 px.
 extraResources:
   - from: build/icon.png
     to: icon.png
+  - from: build/tray.png
+    to: tray.png
   # OCR offline: sem isso o tesseract.js baixa do CDN na primeira OCR. langPath aponta pra ca.
   - from: eng.traineddata
     to: tessdata/eng.traineddata

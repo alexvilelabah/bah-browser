@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<g transform="translate(512 512) scale(1.05833) translate(-512 -512)">
   <defs>
     <mask id="ring" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
       <circle cx="512" cy="512" r="480" fill="#fff"/>
@@ -72,4 +73,5 @@
   <polygon points="512,512 164.7,512 374.5,455" fill="#DAA81B"/>
   <polygon points="512,512 374.5,455 272.5,272.5" fill="#F4CD1B"/>
   <polygon points="512,512 272.5,272.5 455,374.5" fill="#DAA81B"/>
+</g>
 </svg>
