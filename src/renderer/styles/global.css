@@ -124,9 +124,10 @@ body {
 .tab{
   display:flex;align-items:center;gap:9px;
   padding:0 10px 0 12px;height:34px;
-  /* flex-shrink ligado + min-width baixo = abas ENCOLHEM (estilo Chrome) em vez de
-     fazer scroll e esconder o "+". O título trunca com reticências ao apertar. */
-  flex:0 1 auto;min-width:56px;max-width:240px;
+  /* Todas as abas do MESMO tamanho, igual ao Chrome: base 0 + crescer/encolher por igual,
+     teto de 240px. Só ficam menores quando abrir mais aba e não couber — e aí encolhem
+     todas juntas (o título trunca com reticências), sem esconder o "+". */
+  flex:1 1 0;min-width:56px;max-width:240px;
   background:transparent;
   border-radius:9px 9px 0 0;
   cursor:pointer;position:relative;
@@ -154,9 +155,7 @@ body {
 .stream-caret{display:inline-block;margin-left:2px;color:var(--text-muted);animation:streamBlink 1s steps(1) infinite;}
 @keyframes streamBlink{50%{opacity:0;}}
 
-/* Memory Saver: aba dormindo (webview descartado) — discreta, com 💤 no lugar do favicon */
-.tab.discarded .tab-title{opacity:0.55;}
-.tab-sleep{font-size:11px;line-height:1;flex:none;opacity:0.8;}
+/* Memory Saver: aba dormindo (webview descartado) fica IGUAL às outras — sem 💤, sem apagar. */
 .tab-close{
   width:18px;height:18px;border:none;background:transparent;
   color:transparent;cursor:pointer;font-size:15px;line-height:1;
@@ -173,6 +172,8 @@ body {
 }
 .tab-favicon{width:16px;height:16px;flex:0 0 16px;border-radius:3px;object-fit:contain;}
 .tab-favicon.fallback{display:block;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 0 10px var(--accent-glow);}
+/* Site sem ícone nenhum: quadradinho com a 1ª letra (mesma cor da barra de favoritos). */
+.tab-favicon-tile{display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;line-height:1;border-radius:4px;}
 /* Alto-falante da aba tocando som. flex:0 0 = nunca encolhe quando as abas apertam. */
 .tab-audio{width:13px;height:13px;flex:0 0 13px;color:var(--text-secondary);}
 .tab.active .tab-audio{color:var(--text-primary);}
@@ -191,7 +192,6 @@ body {
    O alto-falante vira um selinho no canto (não cabe do lado do ícone). */
 .tab.pinned{flex:0 0 40px;width:40px;min-width:40px;max-width:40px;padding:0;gap:0;justify-content:center;}
 .tab.pinned .tab-audio{position:absolute;right:2px;bottom:3px;width:10px;height:10px;}
-.tab.pinned.discarded .tab-favicon{opacity:0.5;}   /* fixada dormindo (Memory Saver) */
 /* Arrastando uma aba: ela segue o mouse por cima das outras (sem transição); as vizinhas
    deslizam pra abrir espaço (a transição de transform do .tab). Ao soltar, um quadro sem
    transição nenhuma (tab-settle): a ordem nova entra no lugar e só a aba solta desliza. */

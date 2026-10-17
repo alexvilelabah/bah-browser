@@ -39,6 +39,17 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
           canGoForward: wv.canGoForward(),
         })],
         ['page-title-updated', (e: any) => onUpdateTab(tabId, { title: e.title })],
+        // O ícone que a página declarou (<link rel="icon">) — muitos sites não têm /favicon.ico e a
+        // aba ficava sem nada. Guarda junto a origem: navegou pra outro site, este não vale mais.
+        ['page-favicon-updated', (e: any) => {
+          const list: unknown[] = Array.isArray(e?.favicons) ? e.favicons : [];
+          const icon = list.find((u): u is string => typeof u === 'string' && u.length <= 200_000
+            && (/^https?:\/\//i.test(u) || /^data:image\//i.test(u)));
+          if (!icon) return;
+          let origin = '';
+          try { origin = new URL(wv.getURL()).origin; } catch {}
+          if (origin) onUpdateTab(tabId, { favicon: icon, faviconOrigin: origin });
+        }],
         ['did-navigate', (e: any) => onUpdateTab(tabId, { url: e.url, canGoBack: wv.canGoBack(), canGoForward: wv.canGoForward() })],
         ['did-navigate-in-page', (e: any) => onUpdateTab(tabId, { url: e.url })],
         // NÃO existe listener de 'new-window' aqui: o evento foi removido da <webview> no

@@ -649,7 +649,7 @@ export default function App() {
 
   // ── Economia de memória (Memory Saver, estilo Chrome) ──
   // Aba parada há 30+ min (não ativa, sem áudio) tem o webview DESMONTADO → o Chromium
-  // libera o processo/RAM. Ao clicar na aba ela recarrega na URL onde estava (💤 na aba).
+  // libera o processo/RAM. Ao clicar na aba ela recarrega na URL onde estava (na barra ela fica igual às outras).
   const [memSaverOn, setMemSaverOn] = useState<boolean>(() => { try { return localStorage.getItem('memSaver') !== '0'; } catch { return true; } });
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });

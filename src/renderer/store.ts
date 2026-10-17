@@ -22,6 +22,8 @@ export interface Tab {
   discarded?: boolean;    // Memory Saver: webview unmounted (RAM freed); reloads on activation
   lastActiveAt?: number;  // when the tab was last the active one (drives the discard sweep)
   audible?: boolean;      // sound is coming out of this tab (drives the speaker icon, Chrome-style)
+  favicon?: string;       // ícone que a PÁGINA declarou (page-favicon-updated) — só na memória, nunca
+  faviconOrigin?: string; // vai pro disco; vale só enquanto a aba estiver nessa mesma origem
   pinned?: boolean;       // aba fixada: só o ícone, sempre à esquerda; volta sozinha ao reabrir o Bah
   restored?: boolean;     // voltou da última sessão (Continuar de onde parou) e ainda não carregou: sem webview
                           // como a dormindo, mas com ícone e nome normais (nada de 💤); carrega no clique

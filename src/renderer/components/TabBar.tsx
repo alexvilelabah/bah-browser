@@ -17,6 +17,7 @@ import { Tab } from '../store';
 import { t } from '../i18n';
 import { closeOthersIds, closeRightIds, dragShift, dragTarget, siteKey, stripTabs } from '../../shared/tab-strip';
 import { isIncognitoBlank } from '../../shared/incognito';
+import { letterTile } from '../../shared/favicons';
 import IncognitoIcon from './IncognitoIcon';
 
 // Itens do menu do botão direito (quem executa é o App: webview, som do site, store).
@@ -327,11 +328,11 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
           }
           // Anônima ainda sem site: "Nova aba anônima" (o título da página em branco não diz nada).
           const name = tab.incognito && isIncognitoBlank(tab.url) ? t('incog.tabTitle') : (tab.title || t('tab.new'));
-          // Dormindo (Memory Saver): 💤 e apagada. A que voltou da última sessão e ainda não
-          // carregou também está sem webview, mas fica igual às outras (ícone e nome salvos).
+          // Dormindo (Memory Saver) ou voltando da última sessão: sem webview, mas na barra fica
+          // IGUAL às outras — ícone, nome e balão normais (acorda sozinha no clique).
           const asleep = tab.discarded && !tab.restored;
           // Fixada não mostra o nome: vai no balão do mouse.
-          const tip0 = tab.pinned ? (asleep ? `${name}\n${t('tab.sleeping')}` : name) : (asleep ? t('tab.sleeping') : undefined);
+          const tip0 = tab.pinned ? name : undefined;
           // Anônima: o balão diz isso (a em branco já se chama "Nova aba anônima").
           const tip = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
           return (
@@ -348,11 +349,12 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
               onAuxClick={e => { if (e.button === 1) { e.preventDefault(); onClose(tab.id); } }}
               onContextMenu={e => { e.preventDefault(); setMenu({ id: tab.id, x: e.clientX, y: e.clientY }); }}
             >
-              {/* Fixada dormindo fica com o ícone (apagado): sem nome, o 💤 sozinho não diria qual site é. */}
-              {asleep && !tab.pinned ? <span className="tab-sleep">💤</span>
-                : tab.isLoading && !tab.discarded ? <span className="tab-spinner" />
+              {/* Dormindo (Memory Saver) fica IGUAL a uma aba normal — ícone e nome, sem 💤 (pedido do
+                  usuário: quem olha a barra não precisa saber; ela acorda sozinha no clique). */}
+              {tab.isLoading && !tab.discarded ? <span className="tab-spinner" />
                 : tab.incognito ? <IncognitoIcon className="tab-incog" />
-                : <TabFavicon url={tab.url} pinned={tab.pinned} />}
+                : <TabFavicon url={tab.url} title={tab.title}
+                    pageIcon={tab.faviconOrigin && tab.favicon && sameOrigin(tab.url, tab.faviconOrigin) ? tab.favicon : ''} />}
               {!tab.pinned && <span className="tab-title">{name}</span>}
               {tab.audible && (isMuted(tab.url, tab.incognito) ? <TabMutedIcon /> : <TabAudioIcon />)}
               {!tab.pinned && (
@@ -400,28 +402,36 @@ function TabMutedIcon() {
   );
 }
 
-// Fixada sem ícone (site sem favicon ou arquivo quebrado) mostra o quadradinho — senão a aba
-// ficaria vazia. Aba comum sem ícone só some com ele (o nome está ali).
-function TabFavicon({ url, pinned }: { url: string; pinned?: boolean }) {
-  const [broken, setBroken] = useState('');
-  let icon = '';
+function sameOrigin(url: string, origin: string): boolean {
+  try { return new URL(url).origin === origin; } catch { return false; }
+}
+
+// Ícone da aba — TODA aba tem um (igual ao Chrome), na ordem:
+//   1. o que a página declarou (<link rel="icon">, chega por page-favicon-updated);
+//   2. o /favicon.ico do site (abas que voltaram da última sessão ou dormindo, sem página aberta);
+//   3. quadradinho com a 1ª letra do site (a mesma cor da barra de favoritos) quando nada carrega.
+// Página que não é de site (nova aba interna, about:blank): o quadradinho do Bah.
+function TabFavicon({ url, title, pageIcon }: { url: string; title?: string; pageIcon?: string }) {
+  const [broken, setBroken] = useState<string[]>([]);
+  let origin = '';
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      icon = `${parsed.origin}/favicon.ico`;
-    }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') origin = parsed.origin;
   } catch {}
 
-  if (!icon) return <span className="tab-favicon fallback" />;
-  if (broken === icon) return pinned ? <span className="tab-favicon fallback" /> : null;
-
+  if (!origin) return <span className="tab-favicon fallback" />;
+  const icon = [pageIcon, `${origin}/favicon.ico`].find(u => u && !broken.includes(u));
+  if (!icon) {
+    const tile = letterTile(url, title);
+    return <span className="tab-favicon tab-favicon-tile" style={{ background: tile.color }} aria-hidden="true">{tile.letter}</span>;
+  }
   return (
     <img
       className="tab-favicon"
       src={icon}
       alt=""
       draggable={false}
-      onError={() => setBroken(icon)}
+      onError={() => setBroken(b => (b.includes(icon) ? b : [...b, icon]))}
     />
   );
 }
