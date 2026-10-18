@@ -325,8 +325,8 @@ function warmAiConnection(): void {
   } catch {}
 }
 
-// Bandeja = 16 px: usa a versão PEQUENA do logo (build/tray.png, sem os tracinhos que viram
-// borrão nesse tamanho). Se faltar (instalação antiga), cai no ícone grande.
+// Bandeja = 16 px: usa o logo já desenhado em 32 px (build/tray.png) — mais nítido que encolher o
+// PNG de 1024 na hora. Se faltar (instalação antiga), cai no ícone grande.
 function trayIconPath(): string {
   const dir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', '..', 'build');
   const small = path.join(dir, 'tray.png');

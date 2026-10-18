@@ -23,8 +23,8 @@ files:
   - dist/**/*
   - package.json
 # Ícone acessível em runtime (bandeja do sistema) — o exe embute o ícone, mas o Tray
-# precisa de um arquivo em disco. Vai pra resources/ no app empacotado. tray.png é a versão
-# PEQUENA do logo (sem tracinhos, anel mais claro): a grande vira borrão em 16 px.
+# precisa de um arquivo em disco. Vai pra resources/ no app empacotado. tray.png é o logo já
+# desenhado em 32 px (fica mais nítido que encolher o PNG de 1024 na hora).
 extraResources:
   - from: build/icon.png
     to: icon.png
