@@ -4553,13 +4553,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { paths: vr.paths, title: vr.title } } });
-                        // Auto-finish ONLY when nothing else is queued. A batch of named songs
-                        // (actions:[download_video A, B, C]) must run them all before ending.
-                        if (actionQueue.length === 0) {
+                        // Auto-finish ONLY when nothing else is queued AND this download was the whole request. A batch
+                        // of named songs (actions:[download_video A, B, C]) must run them all; a COLLECTION ("all the
+                        // music videos from the movie…") goes on to the next track of the list it stored.
+                        if (actionQueue.length === 0 && downloadIsLastStep) {
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
-                        history += `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`;
+                        history += actionQueue.length
+                          ? `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`
+                          : `\nDOWNLOADED: ${list}. The request covers more than this one item: continue with the NEXT item of the list you stored (download_video with its "Artist – Title" query); finish only when every item is downloaded or reported as unavailable.`;
                         toolResult = { success: true, info: { paths: vr.paths } };
                       } else {
                         // ── FALLBACK CHAIN (self-healing, Gemini): yt-dlp falhou →
