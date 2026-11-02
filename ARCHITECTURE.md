@@ -206,6 +206,19 @@ reads the system once (`process.platform`/`arch`, `getSystemVersion()`, Rosetta 
   the page and downloads from them with `THIRD-PARTY DOWNLOAD SITE` (outdated or bundleware installers) and
   sends the agent back to the vendor. Which domain *is* official is left to the agent (web search) and to
   `site-knowledge.ts`.
+- **The download button, whatever its words.** `isDownloadControl(label, href)`: "Download…" always
+  counts; vendor wording ("Install Steam", "Get the app", "Install now", "Try free") only when it leads to an
+  installer file or is a plain button. App-store and extension-store links never count. The agent's element
+  list comes from the accessibility tree and has no `href`, so the candidates' targets are read from the DOM
+  and matched to the `[id]`s by text and position (`matchControl`, [`src/shared/page-controls.ts`](src/shared/page-controls.ts)).
+  `LIKELY DOWNLOAD BUTTON` shows the target file, leaves out wrong-OS/CPU files, and a `click_text` with the
+  same label is turned into a `click_ref` on that button. Without this, Steam's menu "Install Steam" (which only
+  reloads the page) was clicked in a loop.
+- **ARIA-less modals.** The `uiState` pass also collects fixed/high-z panels; `pickOverlay` scores them by
+  covering the viewport centre, a backdrop, z-index and action buttons. An empty backdrop no longer wins the
+  old "≥ 20% of the screen" rule. The `OPEN DIALOG/POPUP` line lists the dialog's own buttons with their `[id]`s
+  (HP's download modal: the modal's "Download" vs the page's). `tests/unit/page-scripts-syntax.test.ts` parses
+  every page script in `App.tsx`; a single-backslash regex in one had silently disabled all of `uiState`.
 - **Sign-in walls.** In a download task (after the first step), `signInWall()` — a password field, an auth host
   (`login.*`, `auth.*`, `login.microsoftonline.com`…), a `/signin`/`/register` path, or "sign in to download" text —
   pauses the agent with the manual-help card (`dl.signinWall.*`): the user signs in themselves or stops. The agent
@@ -215,7 +228,7 @@ reads the system once (`process.platform`/`arch`, `getSystemVersion()`, Rosetta 
   (`skills/software-download/SKILL.md`) also tells the model never to open or run the installer.
 
 Tested with `tests/e2e/software-download.spec.ts` (synthetic vendor pages: auto-detect button, OS/CPU list,
-printer model picker, sign-in wall).
+printer model picker with an ARIA-less modal, a Steam-like page whose only download control says "Install Steam", sign-in wall).
 
 #### Video / audio (`media-downloader.ts`, `media-parts.ts`)
 
