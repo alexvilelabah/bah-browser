@@ -249,6 +249,8 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 - 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
 - 🔐 **Signs in only with you.** When a task needs your account ("my list", "my saved jobs", orders, inbox) the agent may click the site's **Sign in** button once; at the login form Bah **pauses** — you sign in (click the username field to pick a login saved in Bah's password manager, or type it) and press Continue. The agent never types or sees a password and never guesses a username. Bah tracks whether you're **signed in or out per site** and tells the agent each step, so it doesn't re-click Sign in or assume pages it can't see.
+- 🔑 **Works with your password-manager extension.** With LastPass, Bitwarden or 1Password installed, Bah steps aside so the two managers don't compete: its own logins list and "Save password?" stay off in normal tabs (there's a switch in Passwords). At a login form the agent waits a few seconds for the **extension's own** auto-login and carries on once you're in. If nothing happens, a card tells you to sign in with the extension and which setting to turn on so it's automatic next time: "Auto-login" in LastPass, "Autofill on page load" in Bitwarden. The agent never clicks the extension's menu and never reads a password.
+- 🧩 **Add to Bah.** The Chrome Web Store only shows its install button in Google Chrome. On an extension's store page, Bah shows its own **Add to Bah** button, which downloads the extension's public package and asks before adding it.
 
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 

@@ -690,6 +690,130 @@
       if (chrome.management || perms.has('management')) augment('management', add, ['uninstallSelf']);
     }
 
+    // ══ O que gerenciador de senhas usa (LastPass, Bitwarden, 1Password) ═══════════════
+    // Medido ao vivo: o background do Bitwarden MORRIA em chrome.webNavigation.onCommitted e o
+    // do LastPass em chrome.windows.onFocusChanged (TypeError logo no começo — a extensão inteira
+    // parava: sem menu nos campos, sem popup). Aqui entram as que faltam no Electron 44.
+
+    // ── chrome.windows: o Bah é UMA janela (id 1, a mesma do tabInfo) ──────────
+    if (!chrome.windows) {
+      const win = () => ({
+        id: 1, focused: true, top: 0, left: 0, width: 1280, height: 800, incognito: false,
+        type: 'normal', state: 'normal', alwaysOnTop: false, sessionId: undefined,
+      });
+      defineNs('windows', {
+        WINDOW_ID_NONE: -1,
+        WINDOW_ID_CURRENT: -2,
+        get: local(() => win()),
+        getCurrent: local(() => win()),
+        getLastFocused: local(() => win()),
+        getAll: local(() => [win()]),
+        // "Abrir numa janela" (popout do Bitwarden, diálogos do LastPass) vira aba do Bah.
+        create: api('windows.create'),
+        update: local(() => win()),
+        remove: local(() => undefined),
+        onCreated: makeEvent(),
+        onRemoved: makeEvent(),
+        onFocusChanged: makeEvent(),
+        onBoundsChanged: makeEvent(),
+      });
+    }
+
+    // ── chrome.webNavigation: eventos das abas (o Bah manda depois do 1º addListener) ─
+    if (!chrome.webNavigation) {
+      let navSubscribed = false;
+      const navEvent = (name: string) => {
+        const ev: any = makeEvent(name);
+        const add = ev.addListener;
+        ev.addListener = (fn: any) => {
+          add(fn);
+          if (!navSubscribed && typeof fn === 'function') {
+            navSubscribed = true;
+            call('webNavigation.subscribe', {}).catch(() => { navSubscribed = false; });
+          }
+        };
+        return ev;
+      };
+      defineNs('webNavigation', {
+        getFrame: api('webNavigation.getFrame'),
+        getAllFrames: api('webNavigation.getAllFrames'),
+        onBeforeNavigate: navEvent('webNavigation.onBeforeNavigate'),
+        onCommitted: navEvent('webNavigation.onCommitted'),
+        onDOMContentLoaded: navEvent('webNavigation.onDOMContentLoaded'),
+        onCompleted: navEvent('webNavigation.onCompleted'),
+        onErrorOccurred: navEvent('webNavigation.onErrorOccurred'),
+        onHistoryStateUpdated: navEvent('webNavigation.onHistoryStateUpdated'),
+        onReferenceFragmentUpdated: navEvent('webNavigation.onReferenceFragmentUpdated'),
+        onCreatedNavigationTarget: makeEvent(),
+        onTabReplaced: makeEvent(),
+      });
+    }
+
+    // ── chrome.idle: "travou a tela" vem do sistema (o cofre tranca junto, como no Chrome) ─
+    if (!chrome.idle) {
+      defineNs('idle', {
+        queryState: api('idle.queryState', (secs?: unknown) => ({ secs })),
+        setDetectionInterval: local(() => undefined),
+        getAutoLockDelay: local(() => 0),
+        onStateChanged: makeEvent('idle.onStateChanged'),
+      });
+    }
+
+    // ── chrome.commands: lista os atalhos do manifesto (o Bah não liga teclas a eles) ─
+    if (!chrome.commands) {
+      defineNs('commands', {
+        getAll: local(() => Object.entries((manifest && manifest.commands) || {}).map(([name, c]: [string, any]) => ({
+          name, description: typeof c?.description === 'string' ? c.description : '', shortcut: '',
+        }))),
+        onCommand: makeEvent(),
+      });
+    }
+
+    // ── chrome.offscreen: página escondida da extensão (área de transferência, DOMParser) ─
+    // O Bah abre a página da PRÓPRIA extensão numa janela invisível; uma por extensão, como no Chrome.
+    if (!chrome.offscreen) {
+      defineNs('offscreen', {
+        Reason: {
+          TESTING: 'TESTING', AUDIO_PLAYBACK: 'AUDIO_PLAYBACK', IFRAME_SCRIPTING: 'IFRAME_SCRIPTING', DOM_SCRAPING: 'DOM_SCRAPING',
+          BLOBS: 'BLOBS', DOM_PARSER: 'DOM_PARSER', USER_MEDIA: 'USER_MEDIA', DISPLAY_MEDIA: 'DISPLAY_MEDIA', WEB_RTC: 'WEB_RTC',
+          CLIPBOARD: 'CLIPBOARD', LOCAL_STORAGE: 'LOCAL_STORAGE', WORKERS: 'WORKERS', BATTERY_STATUS: 'BATTERY_STATUS',
+          MATCH_MEDIA: 'MATCH_MEDIA', GEOLOCATION: 'GEOLOCATION',
+        },
+        createDocument: api('offscreen.createDocument'),
+        closeDocument: api('offscreen.closeDocument', () => ({})),
+        hasDocument: api('offscreen.hasDocument', () => ({})),
+      });
+    }
+    // ── chrome.permissions: o que o manifesto pede é o que ela tem (o Bah não concede opcional) ─
+    // O Bitwarden e o 1Password chamam permissions.contains logo no começo (TypeError sem isto).
+    if (!chrome.permissions) {
+      const granted = new Set<string>(perms);
+      const hosts: string[] = Array.isArray(manifest.host_permissions) ? manifest.host_permissions.filter((x: unknown) => typeof x === 'string') : [];
+      const glob = (pat: string) => new RegExp('^' + pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+      const originOk = (o: unknown) => typeof o === 'string' && hosts.some(h => h === '<all_urls>' || h === o || glob(h).test(o));
+      defineNs('permissions', {
+        contains: local((q?: any) => {
+          const ps = Array.isArray(q?.permissions) ? q.permissions : [];
+          const os = Array.isArray(q?.origins) ? q.origins : [];
+          return ps.every((x: unknown) => typeof x === 'string' && granted.has(x)) && os.every(originOk);
+        }),
+        getAll: local(() => ({ permissions: Array.from(granted), origins: hosts.slice() })),
+        request: local(() => false),
+        remove: local(() => false),
+        onAdded: makeEvent(),
+        onRemoved: makeEvent(),
+      });
+    }
+    if (chrome.runtime && !chrome.runtime.getContexts) {
+      define(chrome.runtime, 'getContexts', api('runtime.getContexts', (filter?: unknown) => ({ filter })));
+    }
+
+    // ── chrome.tabs.getCurrent (o Electron não tem): popup = undefined, página da extensão numa aba =
+    // a aba. O popup do Bitwarden chama isto pra decidir a largura; sem a função, ficava com 25 px.
+    if (chrome.tabs && !chrome.tabs.getCurrent) {
+      if (define(chrome.tabs, 'getCurrent', api('tabs.getCurrent', () => ({})))) lock('tabs', chrome.tabs);
+    }
+
     // ── chrome.tabs.remove (o Electron não tem): fecha aba do Bah ───────────────
     if (chrome.tabs && !chrome.tabs.remove) {
       if (define(chrome.tabs, 'remove', api('tabs.remove', (ids?: unknown) => ({ tabIds: Array.isArray(ids) ? ids : [ids] })))) lock('tabs', chrome.tabs);

@@ -212,6 +212,84 @@ for the result:
 
 ---
 
+## Chrome Web Store install and password-manager extensions
+
+**Installing from the store ("Add to Bah").** The Chrome Web Store now decides on its *server* whether the
+browser is Google Chrome. Its page script asks `chrome.webstorePrivate.getFullChromeVersion()` and, for
+142.0.7430 and later, stops reading the user agent and trusts only a flag the server ships with the page
+(`IJ_values`). That flag is false for every non-Chrome browser. Bah's store preload, `webstorePrivate`
+and `userAgentData` brands (including "Google Chrome") were all in place; changing `sec-ch-ua` does not
+flip the flag either. So the page shows "Switch to Chrome" and hides its button. Bah does **not** pretend
+to be Chrome to get past this (no forged headers, no fake version). Instead, on a store detail page
+(`shared/extension-store.ts`, exact origin) the toolbar shows Bah's own **Add to Bah** button.
+`extensions:install-from-store` takes the id from the tab's URL (never from an argument) and downloads the
+public `.crx` from the same update endpoint the store uses, through the tabs' session and its proxy.
+`parseCrx3` checks that the package's key hashes to its declared id and to the page's id. Bah then asks
+the same "Add X?" question as the store and loads through the gated loader (access approval, removed
+list).
+
+**Running LastPass, Bitwarden and 1Password.** When tested with their public packages (never signed in),
+the Bitwarden background died at `chrome.webNavigation.onCommitted` and LastPass at
+`chrome.windows.onFocusChanged`: a TypeError on start-up stops the whole extension, including field menus
+and the popup. The shim (`extension-shim-preload.ts`) now adds the missing pieces, served from
+`chrome-extensions.ts`:
+
+- `webNavigation`: events from the tabs' frames, only to subscribers, only for pages the extension may
+  see. `frameId` 0 is the main frame and others use `frameTreeNodeId`. Also `getFrame`/`getAllFrames`.
+- `windows`: Bah is one window, id 1. `windows.create` opens a tab.
+- `idle`: "locked" follows the OS screen lock, so vaults that lock with the computer still lock.
+- `offscreen`: one hidden window per extension, showing only that extension's own page (used for the
+  clipboard and DOMParser). Bah also provides `runtime.getContexts` for that document.
+- `commands`: the manifest's shortcut list, with no keys bound.
+- `permissions`: `contains` / `getAll` answer from the manifest. Optional grants are refused.
+- `tabs.getCurrent`: returns `undefined` in a popup, and the tab when an extension page is open in a tab. Bitwarden's popup picks its width from this call.
+
+The LastPass and Bitwarden popups fix their size in the body's CSS, and `preferred-size-changed` never arrived for them, so they stayed at 25×25. The popup is now measured a few times after it loads and grows to fit (max 800×600, as in Chrome).
+
+**Who is installed** (`shared/password-extensions.ts`): detection uses the Web Store IDs, which come from
+the extension's public key, so another extension cannot claim them. A name alone does not count.
+
+**Bah's own manager steps back.** Default on, with a switch in the Passwords panel. While one of these
+extensions is enabled, Bah's manager offers neither its logins list nor "Save password?" in normal tabs;
+two managers competing over the same field is the surprise to avoid. Private tabs keep Bah's manager,
+because extensions don't run there (same as Chrome).
+
+**Agent at a login form** (`loginWaitStep`, `waitForExtensionLogin` in `App.tsx`). On an account task:
+
+- With a password-manager extension, Bah waits up to 8 s for the extension's own auto-login. If the form
+  disappears or the page shows signed-in, the agent continues.
+- Bitwarden's "Autofill on page load" only fills. If the extension filled the password, Bah presses the
+  form's Sign in once.
+- 1Password never fills on its own, so Bah does not wait for it.
+- Otherwise Bah pauses with a card naming the extension's setting: LastPass "Auto-login" (site item →
+  Edit → Advanced Settings), Bitwarden "Autofill on page load" (Settings → Autofill, also per login), or
+  1Password's pick-and-submit.
+- The agent never types credentials. Bah asks the page only whether the password field is empty (yes/no)
+  and never reads the value.
+
+**Extension UI is not part of the page** (`shared/extension-ui.ts`). The agent never sees or clicks
+`chrome-extension://` iframes, or the marked injection roots under which LastPass and 1Password draw
+their icons and menus:
+
+- they are removed from the main accessibility tree (`cdp:axtree`) and from the iframe trees
+  (`cdp:frames-ax`);
+- the cookie-banner sweeper (`overlays:dismiss`) skips them.
+
+Clicking a password manager's menu would hand out a credential on the AI's initiative.
+
+**Reading or setting per-site auto-login: no supported route.** None of the three documents a supported
+way for another program to read or change their per-site auto-login or autofill:
+
+- No extension messaging API: none has `externally_connectable`.
+- Their CLIs (`lpass`, `bw`, `op`) need the user's unlocked vault.
+- Their enterprise policies live in the vendor's admin console, not readable by a browser. Electron has
+  no `storage.managed` either.
+
+Reading their private storage or patching them is off-limits: it crosses into the vault, and it would
+break on every update. So Bah only *guides*, and names the setting.
+
+---
+
 ## `src/renderer/` — UI + agent loop
 
 | File | Responsibility |

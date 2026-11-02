@@ -63,7 +63,8 @@ import { isAboutLastRun, reportsIncompleteRun } from './last-run';
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
-import { canDiscard, isIncognitoBlank, mayRecord, opensIncognito } from '../shared/incognito';
+import { canDiscard, isIncognitoBlank, mayRecord, opensIncognito, partitionFor } from '../shared/incognito';
+import { AUTO_LOGIN, guidanceKey, loginWaitStep, PASSWORD_FIELD_FILLED_JS, SUBMIT_FILLED_LOGIN_JS } from '../shared/password-extensions';
 import { incognitoReady, setAiIncognitoProbe } from './incognito';
 import {
   BrowserAction,
@@ -114,6 +115,8 @@ import {
   detectManualHelpNeed,
   commandLikelyNeedsAccount,
   noteAccountState,
+  accountStateOf,
+  loginFormVisible,
   accountStateLine,
   manualHelpHistoryNote,
   type ManualHelpRequest,
@@ -214,6 +217,8 @@ declare global {
       removeExtension?: (extId: string) => Promise<{ ok: boolean; error?: string }>;
       setExtensionEnabled?: (extId: string, enabled: boolean) => Promise<{ ok: boolean; error?: string; quiet?: boolean }>;
       openExtensionStore?: () => Promise<{ ok: boolean }>;
+      installExtensionFromStore?: (wcId: number) => Promise<{ ok: boolean; name?: string; cancelled?: boolean; error?: string }>;
+      getPasswordExtensions?: () => Promise<Array<{ id: string; name: string; kind: 'lastpass' | 'bitwarden' | '1password' }>>;
       openExtensionOptions?: (extId: string) => Promise<{ ok: boolean }>;
       torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
       torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
@@ -1919,7 +1924,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           ) : null}
           incognito={activeIncognito}
         />
-        <ExtensionsToolbar incognito={activeIncognito} getActiveWcId={() => {
+        <ExtensionsToolbar incognito={activeIncognito} activeUrl={store.activeTab?.url} getActiveWcId={() => {
           // A aba que a pessoa vê (não a de trabalho do agente). Lança até a webview anexar.
           try { const id = (webviewRefs.current.get(store.activeTabId) as any)?.getWebContentsId?.(); return typeof id === 'number' ? id : null; } catch { return null; }
         }} />
@@ -2845,6 +2850,49 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 actionQueue = [];
                 skipManualHelpDetectionOnce = true;
               };
+              // Gerenciador de senha em extensão (LastPass/Bitwarden/1Password) no formulário de login:
+              // espera um tempo curto o login automático dele (o formulário some ou a conta aparece).
+              // Bitwarden só PREENCHE: com a senha posta por ele, o Bah aperta "Entrar" uma vez. O Bah
+              // nunca lê a senha — só pergunta à página se o campo tem algo (sim/não).
+              const waitForExtensionLogin = async (w: Electron.WebviewTag): Promise<{ done: boolean; name?: string; instruction?: string }> => {
+                let partition = '';
+                try { partition = w.getAttribute('partition') || ''; } catch {}
+                if (partition && partition !== partitionFor(false)) return { done: false };   // anônima: extensão não roda
+                const exts = await window.electronAPI?.getPasswordExtensions?.().catch(() => []) ?? [];
+                const ext = exts[0];
+                if (!ext) return { done: false };
+                const instruction = t(guidanceKey(ext.kind));
+                if (!AUTO_LOGIN[ext.kind].acts) return { done: false, name: ext.name, instruction };
+                onProgress({ kind: 'status', message: t('pwext.waiting', { name: ext.name }) });
+                const started = Date.now();
+                let submitted = false;
+                let filledBefore = false;   // preenchido em DUAS olhadas seguidas: a extensão (instantâneo), não alguém digitando
+                for (;;) {
+                  await sleep(800);
+                  throwIfCancelled();
+                  const o = await observeFast(w, 6000).catch(() => null);
+                  if (!o) continue;
+                  const filledNow = (await w.executeJavaScript(PASSWORD_FIELD_FILLED_JS).catch(() => false)) === true;
+                  const filled = filledNow && filledBefore;
+                  filledBefore = filledNow;
+                  const step = loginWaitStep({
+                    kind: ext.kind, elapsedMs: Date.now() - started, submitted,
+                    snap: { loginForm: loginFormVisible(o), signedIn: accountStateOf(o) === 'signed-in', passwordFilled: filled },
+                  });
+                  if (step === 'continue') {
+                    noteAccountState(o);
+                    onProgress({ kind: 'status', message: t('pwext.signedIn', { name: ext.name }) });
+                    return { done: true, name: ext.name };
+                  }
+                  if (step === 'submit') {
+                    submitted = true;
+                    const ok = await w.executeJavaScript(SUBMIT_FILLED_LOGIN_JS, true).catch(() => false);
+                    if (ok) onProgress({ kind: 'status', message: t('pwext.submitted', { name: ext.name }) });
+                    continue;
+                  }
+                  if (step === 'pause') return { done: false, name: ext.name, instruction };
+                }
+              };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
@@ -3108,7 +3156,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
-                    const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    let manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    // Login numa tarefa da conta com gerenciador de senha em extensão ligado: o Bah não
+                    // preenche nada — espera o login automático DA EXTENSÃO; se não vier, o cartão diz
+                    // como ligar a opção nela (o nome certo pra cada uma).
+                    if (manualHelpNeed?.kind === 'login') {
+                      const viaExt = await waitForExtensionLogin(wv);
+                      if (viaExt.done) {
+                        history += `\nSIGN-IN: ${viaExt.name} (the user's password-manager extension) signed the user in on its own. Do not type credentials; continue the task.`;
+                        noEffectCount = 0;
+                        stepsOnSameUrl = 0;
+                        actionQueue = [];
+                        continue;
+                      }
+                      if (viaExt.instruction) manualHelpNeed = { ...manualHelpNeed, instruction: viaExt.instruction };
+                    }
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow

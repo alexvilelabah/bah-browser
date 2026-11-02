@@ -3,6 +3,7 @@
 // (cross-origin, OOPIF) por sessão CDP "achatada" (Target.setAutoAttach flatten). Coordenadas devolvidas
 // sempre na viewport da página (OOPIF: + posição do <iframe>), pra clicar/digitar como qualquer elemento.
 import { ipcMain, webContents, type WebContents } from 'electron';
+import { isExtensionFrameUrl } from '../shared/extension-ui';
 
 type FrameRef = { key: string; label: string; nodes: any[] };
 const oopifs = new Map<number, Map<string, { frameId: string; url: string }>>();
@@ -121,7 +122,10 @@ export function setupFrames(ensureDebugger: (wc: WebContents, id: number) => Pro
       await ensureDebugger(wc, wcId);
       await ensureAutoAttach(wc);
       const out: FrameRef[] = [];
-      const walk = (ft: any, depth: number): any[] => depth > 3 ? [] : (ft?.childFrames || []).flatMap((c: any) => [c.frame, ...walk(c, depth + 1)]);
+      // Iframe de extensão (menu do LastPass/Bitwarden…) e o que houver dentro dele: não é da página — fora.
+      const walk = (ft: any, depth: number): any[] => depth > 3 ? [] : (ft?.childFrames || [])
+        .filter((c: any) => !isExtensionFrameUrl(c?.frame?.url))
+        .flatMap((c: any) => [c.frame, ...walk(c, depth + 1)]);
       const tree = await wc.debugger.sendCommand('Page.getFrameTree') as any;
       for (const f of walk(tree.frameTree, 0).slice(0, 8)) {
         try {
@@ -131,6 +135,7 @@ export function setupFrames(ensureDebugger: (wc: WebContents, id: number) => Pro
       }
       for (const [sid, info] of oopifs.get(wcId) || []) {
         if (out.length >= 8) break;
+        if (isExtensionFrameUrl(info.url)) continue;
         try {
           const ax = await wc.debugger.sendCommand('Accessibility.getFullAXTree', {}, sid) as any;
           if (ax?.nodes?.length) out.push({ key: `oopif:${sid}`, label: label(info.url), nodes: ax.nodes });
