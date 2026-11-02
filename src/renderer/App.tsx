@@ -5898,6 +5898,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Um passo pode juntar vários ticks de progresso (ex.: 15 num wait de 15s): só o
                   // ÚLTIMO de cada download entra — 15 linhas "ainda não terminou" deixavam o modelo
                   // achar que nada andava.
+                  // O "download começou" chega DEPOIS do clique voltar (o Chromium só avisa quando o servidor
+                  // responde). Numa tarefa de download, um clique espera até 2,5 s por ele — senão o passo seguinte
+                  // já roda sem saber do download (e a tarefa nem acaba quando ele começa, nem espera por ele).
+                  if (commandWantsDownload && downloadEventsRef.current.length === 0
+                      && (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'click_at' || action.type === 'click_role' || action.type === 'navigate')) {
+                    for (let w = 0; w < 25 && downloadEventsRef.current.length === 0; w++) await new Promise(r => setTimeout(r, 100));
+                  }
                   const dlEvents = (() => {
                     const all = downloadEventsRef.current.splice(0);
                     const lastProg = new Map<string, number>();
