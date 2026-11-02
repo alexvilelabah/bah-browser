@@ -2237,6 +2237,14 @@ body {
 .menu-sub .menu-empty { padding:4px 10px 6px; }
 .menu-custom { display:flex; flex-direction:column; gap:6px; padding:4px 6px 8px 10px; }
 .menu-custom .menu-empty { padding:0 2px; }
+/* ⋮ → Economia de memória: lista "Manter estes sites sempre ativos" (site + ✕). */
+.menu-sub-group { display:flex; flex-direction:column; gap:1px; }
+.memsaver-keep-title { font-weight:600; color:var(--text-secondary, inherit); }
+.memsaver-keep-list { list-style:none; margin:0; padding:0 6px 0 10px; display:flex; flex-direction:column; gap:2px; max-height:160px; overflow-y:auto; }
+.memsaver-keep-row { display:flex; align-items:center; gap:6px; font-size:12px; }
+.memsaver-keep-site { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.memsaver-keep-del { flex:none; background:none; border:none; color:var(--text-muted); cursor:pointer; padding:2px 6px; border-radius:4px; }
+.memsaver-keep-del:hover { color:#ff7a86; background:rgba(255,122,134,0.12); }
 .menu-err { color:#ff7a86; }
 /* ⋮ → Navegador padrão: linha de status ("✓ O Bah é o seu navegador padrão"), não é botão. */
 .menu-status { cursor:default; }

@@ -78,8 +78,26 @@ export function setupSitePermissions(deps: { getMainWindow: () => BrowserWindow 
     send('site-permission:ask', { id, wcId: wc.id, origin, kinds, external, ...(priv ? { incognito: true } : {}) });
   };
 
+  // Economia de memória: aba que ganhou câmera/microfone/tela nesta página conta como "em uso"
+  // até trocar de página ou fechar (o Electron não avisa quando a captura para).
+  const capturing = new Set<number>();
+  const markCapture = (wc: WebContents) => {
+    const id = wc.id;   // guardado: depois do 'destroyed' o wc não responde mais
+    if (capturing.has(id)) return;
+    capturing.add(id);
+    const off = () => {
+      capturing.delete(id);
+      try { wc.removeListener('did-navigate', off); wc.removeListener('destroyed', off); } catch {}
+    };
+    wc.on('did-navigate', off);
+    wc.on('destroyed', off);
+  };
   const bind = (ses: Session, priv: boolean) => {
-    ses.setPermissionRequestHandler((wc, permission, callback, details: any) => {
+    ses.setPermissionRequestHandler((wc, permission, rawCallback, details: any) => {
+      const callback = (ok: boolean) => {
+        if (ok && (permission === 'media' || permission === 'display-capture')) { try { markCapture(wc); } catch {} }
+        rawCallback(ok);
+      };
       const r = resolveRequest(viewOf(priv), permission, details || {}, wc.getURL());
       if (r.action !== 'ask') return callback(r.action === 'allow');
       ask(wc, r.origin, r.kinds, r.external, callback, priv);
@@ -132,4 +150,10 @@ export function setupSitePermissions(deps: { getMainWindow: () => BrowserWindow 
     if (origin && store[origin]) { delete store[origin]; save(); }
     return { ok: true };
   });
+  return {
+    /** Câmera/microfone/tela liberados nesta página da aba. */
+    isCapturing: (wcId: number) => capturing.has(wcId),
+    /** O site tem notificações permitidas (perfil normal). */
+    notificationsAllowed: (url: string) => { const o = originOf(url); return !!o && store[o]?.notifications === 'allow'; },
+  };
 }

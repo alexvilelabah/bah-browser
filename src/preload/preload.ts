@@ -124,6 +124,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   answerSitePermission: (id: string, answer: 'allow' | 'block' | 'dismiss') => ipcRenderer.invoke('site-permission:answer', id, answer),
   listSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:list', url),
+  memSaverSignals: (wcIds: number[]) => ipcRenderer.invoke('memsaver:signals', wcIds),
   setSitePermission: (url: string, kind: string, value: 'allow' | 'block' | null) => ipcRenderer.invoke('site-permission:set', url, kind, value),
   resetSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:reset', url),
   // Senhas salvas (main/password-manager.ts). A tela nunca recebe senha guardada nem cifrada: só o
