@@ -365,6 +365,11 @@ function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?:
   };
 }
 
+/** O pedido é de VÁRIOS arquivos ("os dois", "todos", "3 vídeos") — aí a tarefa não acaba no 1º download. */
+function commandWantsSeveralFiles(command: string): boolean {
+  return /\b([2-9]|\d{2,}|two|three|four|five|six|seven|eight|nine|ten|both|all|every|several|dois|duas|tr[eê]s|quatro|cinco|ambos|ambas|todos|todas|v[aá]rios|v[aá]rias|dos|cuatro|varios|varias)\b/i.test(command);
+}
+
 /** Página do próprio buscador (resultado/ajuda), que nunca serve de fonte de uma resposta. */
 function isSearchEnginePage(url: string): boolean {
   try {
@@ -2648,7 +2653,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
               // Download que começou NESTA tarefa (não um que terminou depois, vindo da anterior).
               const ofThisTask = (d: any) => !!d && (d.startedAt ?? 0) >= taskStartedAt;
-              let shortDownloadBlocks = 0;
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
               let unfinishedBlocks = 0;    // encerrou dizendo que "vai continuar"
               let planNudged = false;      // tarefa em vários sites sem plano
@@ -3276,7 +3280,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         if (d.state === 'failed' || d.state === 'cancelled') return `  • ${d.filename} — ${d.state.toUpperCase()}`;
                         if ((d as any).stalled) return `  • ${d.filename} — STALLED at ${of} (no data for ${(d as any).stalledForSec || 15}s)`;
                         const pct = d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : '';
-                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally. Keep waiting (wait 60000); do not look for another source.`;
+                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally in the background. If this is the file the user asked for, the task is DONE: finish with done saying it is downloading (the user follows it on the download button). Do not wait for it and do not look for another source.`;
                       }).join('\n')}`
                     : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
                   // Download task: aponta o(s) botão(ões) de baixar DESTA página. O modelo pequeno lia
@@ -3987,18 +3991,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Download desta tarefa terminando em ≤3 min: não encerra antes — o modelo tende a
                     // dizer "vai terminar sozinho" e sair 30s antes do arquivo existir. ETA longo
                     // (ou desconhecido) pode encerrar com a nota de "ainda baixando" abaixo.
-                    if (shortDownloadBlocks < 6) {
-                      const soon = [...agentDlIdsRef.current]
-                        .map(k => dlLatestRef.current.get(k))
-                        .find(d => !!d && (d.state === 'started' || d.state === 'progress') && typeof d.etaSec === 'number' && d.etaSec <= 180);
-                      if (soon) {
-                        shortDownloadBlocks++;
-                        const pct = soon.totalBytes ? Math.floor(((soon.bytes || 0) / soon.totalBytes) * 100) + '% done, ' : '';
-                        history += `\nNOT DONE YET: ${soon.filename} is ${pct}ETA ${fmtEta(soon.etaSec as number)} — that is short, so the task finishes only after DOWNLOAD COMPLETED. Use { "action": "wait", "ms": 60000 } now (it ends as soon as the download completes).`;
-                        onProgress({ kind: 'status', message: `⏳ ${soon.filename} finishes in ~${fmtEta(soon.etaSec as number)} — waiting for it before finishing.` });
-                        continue;
-                      }
-                    }
+                    // (Antes: download com ETA curta segurava a tarefa até terminar — o painel ficava "trabalhando"
+                    // só esperando. Agora a tarefa acaba quando o download COMEÇA; o anel do botão mostra o resto.)
                     // Rede de segurança: a tarefa acaba com um download DELA ainda baixando → a
                     // resposta final diz isso (o modelo costuma ler "STARTED" como "baixou").
                     {
@@ -4489,7 +4483,33 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (action.query) {
                         lastQuickActionRef.current = { type: 'download_video', query: action.query, audio_only: action.audio_only, count, quality: qual };
                       }
-                      const vr = await window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      const callAt = Date.now();
+                      const vrP = window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      // UM vídeo e nada mais na fila: a tarefa acaba quando o download COMEÇA (primeiros bytes),
+                      // não quando termina — senão o painel fica "trabalhando" só esperando. O anel do botão de
+                      // downloads mostra o progresso e o fim. Se o yt-dlp falhar antes de começar, segue o
+                      // caminho de sempre (fallbacks abaixo).
+                      if (vrP && count === 1 && actionQueue.length === 0) {
+                        const startedDl = await new Promise<any>(resolve => {
+                          let settled = false;
+                          const finish = (v: any) => { if (!settled) { settled = true; clearInterval(iv); resolve(v); } };
+                          vrP.then(() => finish(null), () => finish(null));
+                          const iv = setInterval(() => {
+                            const d = [...dlLatestRef.current.values()].find((x: any) => x.kind === 'video' && (x.startedAt ?? 0) >= callAt
+                              && (x.state === 'progress' || x.state === 'started') && ((x.bytes || 0) > 0));
+                            if (d) finish(d);
+                          }, 500);
+                        });
+                        if (startedDl) {
+                          const size = startedDl.totalBytes ? ` (~${fmtSize(startedDl.totalBytes)})` : '';
+                          const what = startedDl.filename && startedDl.filename !== 'download' ? startedDl.filename : (action.query || (action.audio_only ? 'the song' : 'the video'));
+                          const msg = `⬇️ Downloading ${what}${size} to Downloads — follow its progress on the download button.`;
+                          onProgress({ kind: 'status', message: msg });
+                          finishRun('success', msg);
+                          return { thought: msg, results: [...allResults, { action, result: { success: true, info: { started: true } } }], done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                        }
+                      }
+                      const vr = await vrP;
                       if (vr?.success) {
                         // A finished media download IS the goal — auto-complete the task here.
                         // Don't let a weaker model second-guess success (it was reporting
@@ -5874,9 +5894,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         : d.state === 'progress' && d.stalled
                         ? `DOWNLOAD STALLED: ${d.filename} — no data for ${d.stalledForSec || 15}s at ${of}. It is aborted after 60s without data; you may wait, or retry/try another source.`
                         : d.state === 'progress'
-                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally — keep waiting (wait 60000); do NOT start another copy or look for another source.`
+                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally in the background — if this is what the user asked for, finish with done now (say it is downloading); do NOT start another copy or look for another source.`
                         : d.state === 'duplicate'
-                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. Just wait for the first one (wait 60000) until DOWNLOAD COMPLETED.`
+                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. The first one continues in the background: finish with done saying it is downloading.`
                         : d.state === 'failed' && d.stalled
                         ? `DOWNLOAD FAILED (stalled): ${d.filename} — the server stopped sending data after ${of}; the partial file was removed. Retry once, or try another mirror/source.`
                         : d.state === 'failed'
@@ -5885,11 +5905,26 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         ? (d.id && agentCancelledRef.current.has(d.id)
                           ? `DOWNLOAD CANCELLED (by your cancel_download): ${d.filename}; the partial file was removed.`
                           : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
-                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background; DOWNLOAD PROGRESS / COMPLETED lines follow. Do not report it as downloaded until DOWNLOAD COMPLETED.`;
+                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.`;
                       history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
                       onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${osNote ? ' ⚠️ wrong OS' : ''}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
+                    // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
+                    // O resto (progresso, fim) aparece no botão de downloads — não segura o painel "trabalhando".
+                    // Fica de fora: pedido de VÁRIOS arquivos, arquivo do SO/processador errado e download parado.
+                    if (commandWantsDownload && actionQueue.length === 0 && !commandWantsSeveralFiles(command)) {
+                      const started = dlEvents.find(d => (d.state === 'started' || (d.state === 'progress' && !d.stalled))
+                        && ((dlLatestRef.current.get(d.id || d.path || d.filename) as any)?.startedAt ?? 0) >= taskStartedAt
+                        && !wrongOsNote(d.filename));
+                      if (started) {
+                        const size = started.totalBytes ? ` (${fmtSize(started.totalBytes)})` : '';
+                        const msg = `⬇️ Downloading ${started.filename}${size} to ${started.path ? started.path.split(/[\\/]/).slice(0, -1).join('/') || 'Downloads' : 'Downloads'} — follow its progress on the download button.`;
+                        onProgress({ kind: 'status', message: msg });
+                        finishRun('success', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                      }
+                    }
                   }
                   if (toolResult && toolResult.reason === 'element_covered') {
                     history += `\nHINT: The target element is covered by an overlay (${toolResult.covering || 'unknown'}). Close the modal / cookie banner / popup first (look for "Aceitar", "Accept", "Fechar", "X", "OK"), then retry.`;
