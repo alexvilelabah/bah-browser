@@ -2,20 +2,13 @@ import type { ObservedState } from './page-executor';
 import { googleLocaleParams } from './i18n';
 import { aiMayRecord } from './incognito';
 import { namesStore } from './stores';
+import { userAmazonDomain, namedOfficialSite, officialSitesPromptBlock } from './known-sites';
+import { wantsTabsSummary, wantsWakeTabs } from './tabs-summary';
 
-// Loja/enciclopédia do PAÍS da pessoa (era fixo amazon.com.br e pt.wikipedia — usuário nos EUA
-// caía na Amazon do Brasil, em reais). País/idioma vêm do navegador (locale do sistema).
-const AMAZON_BY_COUNTRY: Record<string, string> = {
-  US: 'amazon.com', GB: 'amazon.co.uk', UK: 'amazon.co.uk', CA: 'amazon.ca', DE: 'amazon.de', AT: 'amazon.de', BR: 'amazon.com.br',
-  ES: 'amazon.es', FR: 'amazon.fr', IT: 'amazon.it', MX: 'amazon.com.mx', IN: 'amazon.in', JP: 'amazon.co.jp', AU: 'amazon.com.au',
-  NL: 'amazon.nl', SE: 'amazon.se', PL: 'amazon.pl', BE: 'amazon.com.be', TR: 'amazon.com.tr', AE: 'amazon.ae', SA: 'amazon.sa', SG: 'amazon.sg',
-};
+// Amazon do país da pessoa: mora em known-sites.ts (puro, testável); reexportado aqui.
+export { userAmazonDomain };
 function userLocale(): string {
   try { return (typeof navigator !== 'undefined' && (navigator.languages?.[0] || navigator.language)) || 'en-US'; } catch { return 'en-US'; }
-}
-export function userAmazonDomain(locale = userLocale()): string {
-  const country = (locale.split(/[-_]/)[1] || (locale.toLowerCase().startsWith('pt') ? 'BR' : 'US')).toUpperCase();
-  return AMAZON_BY_COUNTRY[country] || 'amazon.com';
 }
 export function userWikiLang(locale = userLocale()): string {
   return (locale.split(/[-_]/)[0] || 'en').toLowerCase();
@@ -175,8 +168,10 @@ export function buildKnownSitesBlock(observation?: ObservedState): string {
     'KNOWN SITE SHORTCUTS:',
     shortcuts,
     '',
+    officialSitesPromptBlock(),
+    '',
     'FAST PATH RULES:',
-    '- If the user names a known site, prefer navigate/new_tab directly to that site or its searchUrl.',
+    '- If the user names a known site (shortcuts or OFFICIAL SITES above), navigate/new_tab directly to that site or its searchUrl — do not web_search its name. Only a site that is NOT listed and whose address you do not know needs web_search; never guess a domain.',
     '- For safe exploration/search tasks, prefer each known site searchUrl over manually filling search fields.',
     '- For YouTube video tasks, search YouTube directly, open a likely result, then use the Like/Gostei toggle once.',
     '- For YouTube comment tasks, after opening a video, scroll to the comments area, click/fill the comment box, then click the visible "Comentar"/"Comment" submit button. Do not navigate away after typing a comment.',
@@ -224,7 +219,12 @@ export function getInitialShortcutAction(command: string): { action: { type: 'na
   if (commandHasExplicitUrl(command)) return null;
 
   const site = findShortcutForCommand(command) ?? inferShortcutFromIntent(command);
-  if (!site) return null;
+  if (!site) {
+    // Site da lista curada (LinkedIn, Indeed, Walmart…) sem atalho de busca: abre a home oficial
+    // em vez de deixar o agente procurar o nome. Nome fora da lista segue pro agente (busca).
+    const named = namedOfficialSite(command);
+    return named ? { action: { type: 'navigate', url: named.url }, reason: `fast path: open ${named.id}` } : null;
+  }
 
   const query = extractSearchQuery(command, site);
   if (site.id === 'google' && query && wantsGoogleImages(command)) {
@@ -267,7 +267,9 @@ export type QuickAction =
   | { type: 'find_file'; query: string; filetype: string }
   // Playlist determinística: com songs[] (usuário listou) OU artist+count (o executor
   // resolve as top-N faixas no YouTube via resolveManyVideos — sem depender do modelo).
-  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean };
+  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean }
+  // "Resuma minhas abas abertas" (tabs-summary.ts): lê as abas da pessoa com permissão, sem acordar as dormindo.
+  | { type: 'summarize_tabs'; wake?: boolean };
 
 const NUM_WORDS: Record<string, number> = {
   dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, cem: 100,
@@ -489,6 +491,7 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const prompt = stripAgentMeta(command).trim() || command.trim();
     if (prompt) return { type: 'generate_image', prompt, count: 1 };
   }
+  if (wantsTabsSummary(command)) return { type: 'summarize_tabs', wake: wantsWakeTabs(command) };
   // URL/site explícito no comando → cede pro agente NAVEGAR pra lá (não sequestrar pra
   // um atalho de busca tipo google_news). Conserta "vá no site X e busque Y" virar uma
   // query-lixo no Google News. Baixar por URL não passa por aqui (a quick action de

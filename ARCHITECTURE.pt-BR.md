@@ -299,6 +299,27 @@ Cada tarefa terminada guarda a última coisa em que agiu, e o prompt diz que "is
 testado empacotando em `tests/unit/quick-video.test.ts`). As respostas da web tiram páginas de buscador
 das fontes e nunca mostram `[[ACTION: …]]` cru; ação sugerida "none" não vira botão.
 
+**Site nomeado vai direto pro endereço oficial.** `src/renderer/known-sites.ts` é uma lista curta,
+conferida à mão, de sites conhecidos (LinkedIn, Indeed, GitHub, a Amazon do seu país, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → endereço oficial. Quando o pedido cita um deles ("browse to linkedin,
+find a job…"), o primeiro prompt do agente ganha a linha `NAMED SITE:` com o endereço e a regra "navegue,
+não faça web_search do nome"; todo prompt traz a lista em `OFFICIAL SITES`; com IA local o atalho abre
+direto (`getInitialShortcutAction`). Nome que também é palavra comum ("indeed", "target") só conta depois
+de "go to / on / at / abra…". Nome fora da lista nunca vira domínio chutado (golpe de domínio parecido):
+continua indo pro `web_search`. Testes: `tests/unit/known-sites.test.ts`,
+`tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
+
+**"Resuma minhas abas abertas".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) transforma o
+pedido na ação `summarize_tabs`, mesmo com a IA no comando (senão o modelo visitaria aba por aba com
+`switch_tab`). O executor no `App.tsx` escolhe as abas (`selectTabsForSummary`: sem abas anônimas, sem
+páginas internas como `about:`, `file:` ou o player do Bah; aba dormindo aparece como dormindo e só é
+acordada se a pessoa pedir, ex.: "inclusive as dormindo"), confere a permissão **suas abas** uma vez pro
+conjunto (`tabsAccessDecision`: perguntar / sempre / nunca do menu; a aba da própria tarefa não precisa),
+lê o texto de cada aba com `<webview>.executeJavaScript` (que recua pro mundo isolado em página que proíbe
+script) e faz uma chamada sem histórico ao modelo pra uma linha por aba e um resumo geral. O painel mostra
+um cartão com um link por aba que troca pra ela. Testes: `tests/unit/tabs-summary.test.ts`,
+`tests/e2e/tabs-summary.spec.ts`.
+
 **Arquivos de texto puro no tema escuro.** O visualizador de texto do Chromium clareia o texto no tema
 escuro, mas site que manda `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub
 raw) não ganha o fundo escuro → branco no branco. O `main.ts` insere uma folha de usuário

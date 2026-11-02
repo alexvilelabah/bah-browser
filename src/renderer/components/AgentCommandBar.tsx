@@ -42,7 +42,11 @@ export type AgentProgressEvent =
   | { kind: 'action'; action: BrowserAction }
   | { kind: 'result'; action: BrowserAction; result: any }
   | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
-  | { kind: 'step'; step: StepRecord };
+  | { kind: 'step'; step: StepRecord }
+  // Resumo das abas abertas (App.tsx → summarize_tabs): um cartão com link pra cada aba.
+  | { kind: 'tabs_summary'; tabs: TabsSummaryEntry[]; overall: string; skippedIncognito: number; skippedInternal: number; onOpen: (tabId: string) => void };
+
+export interface TabsSummaryEntry { id: string; title: string; url: string; state: 'read' | 'asleep' | 'no_access' | 'unreadable'; summary: string }
 
 interface ActionResult {
   thought?: string;
@@ -2568,6 +2572,7 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   // rendered as its own card above the composer, not as a feed row
   if (event.kind === 'plan_preview') return null;
   if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui
+  if (event.kind === 'tabs_summary') return <TabsSummaryCard event={event} />;
   if (event.kind === 'action') {
     return <div className="result-action"><span className="result-desc">▶ {formatAction(event.action)}</span></div>;
   }
@@ -2641,6 +2646,31 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   return (
     <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '1px 0', opacity: 0.7 }}>
       {msg}
+    </div>
+  );
+}
+
+function TabsSummaryCard({ event }: { event: Extract<AgentProgressEvent, { kind: 'tabs_summary' }> }) {
+  const note = (e: TabsSummaryEntry) => e.state === 'asleep' ? t('tabsSummary.asleep')
+    : e.state === 'no_access' ? t('tabsSummary.noAccess')
+    : e.state === 'unreadable' ? t('tabsSummary.unreadable') : e.summary;
+  return (
+    <div className="tabs-summary-card" data-testid="tabs-summary">
+      <div className="tabs-summary-title">{t('tabsSummary.title')}</div>
+      <ol className="tabs-summary-list">
+        {event.tabs.map(e => (
+          <li key={e.id} className={`tabs-summary-item tabs-summary-${e.state}`}>
+            <button type="button" className="tabs-summary-link" data-testid="tabs-summary-link" title={`${t('tabsSummary.switch')}\n${e.url}`} onClick={() => event.onOpen(e.id)}>
+              {e.title || e.url}
+            </button>
+            {note(e) && <div className="tabs-summary-text">{note(e)}</div>}
+          </li>
+        ))}
+      </ol>
+      {event.overall && <div className="tabs-summary-overall"><b>{t('tabsSummary.overall')}:</b> {event.overall}</div>}
+      {(event.skippedIncognito > 0 || event.skippedInternal > 0) && (
+        <div className="tabs-summary-skipped">{t('tabsSummary.skipped').replace('{incognito}', String(event.skippedIncognito)).replace('{internal}', String(event.skippedInternal))}</div>
+      )}
     </div>
   );
 }

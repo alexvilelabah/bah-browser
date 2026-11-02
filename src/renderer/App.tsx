@@ -90,12 +90,15 @@ import {
   buildKnownSitesBlock,
   detectQuickAction,
   getInitialShortcutAction,
+  commandHasExplicitUrl,
   pointsAtOpenScreen,
   isTaskDataAction,
   rememberActionForSite,
   rememberObservedSite,
   type QuickAction,
 } from './site-knowledge';
+import { namedSiteHint } from './known-sites';
+import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
 import {
@@ -2888,8 +2891,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // EXPLÍCITA do usuário, não palpite de heurística. Sem esta exceção, marcar
                 // "gerar imagem" e escrever "gato" virava uma busca na web — o pedido sumia.
                 // (Mesmo caso do "repete N vezes": ordem explícita nunca é muleta de atalho.)
+                // "Resuma minhas abas" também passa com a IA no comando: o modelo não lê aba por aba sem
+                // trocar de aba (switch_tab, uma pergunta de permissão por aba); o executor lê todas de uma vez.
                 let quickAction = (aiDrive && !opts?.forceImage)
-                  ? null
+                  ? (wantsTabsSummary(command) ? { type: 'summarize_tabs', wake: wantsWakeTabs(command) } as QuickAction : null)
                   : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
@@ -2950,6 +2955,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   history += `\nFAST PATH: ${initialShortcut.reason}\nRESULT: ${JSON.stringify(shortcutResult).slice(0, 500)}`;
                   usedInitialShortcut = true;
+                } else if (!quickAction && !commandHasExplicitUrl(command)) {
+                  // Sem atalho (nuvem: a IA decide): o site nomeado da lista curada vira dica do 1º passo.
+                  // Medido: "browse to linkedin…" → web_search("LinkedIn") (~25s) antes do navigate.
+                  const siteHint = namedSiteHint(command);
+                  if (siteHint) history += `\n${siteHint}`;
                 }
 
                 for (let step = 0; step < MAX_STEPS; step++) {
@@ -4814,6 +4824,67 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nPRICE COMPARE: auto-extraction from Google Shopping returned nothing for "${q}". The Shopping page IS OPEN — use extract_text to read the visible prices and answer, or report the cheapest you can see.`;
                       toolResult = { success: false, error: 'Could not scrape the prices automatically. The Google Shopping page is open — I will read it.' };
                     }
+                  } else if (action.type === 'summarize_tabs') {
+                    // Resumo das abas abertas da pessoa. Anônimas e páginas internas ficam fora; as
+                    // dormindo (Memory Saver) só aparecem como "dormindo" — acordar todas de uma vez
+                    // custaria RAM/rede que a pessoa não pediu (acorda só se ela pedir). Ler aba que não é
+                    // da tarefa passa pela permissão das abas (perguntar / sempre / nunca). Auto-done.
+                    setAgentVisual('acting');
+                    const sel = selectTabsForSummary(tabsRef.current, { wake: !!action.wake });
+                    let readable = sel.toRead;
+                    let noAccess: typeof readable = [];
+                    const decision = tabsAccessDecision(getPerm('userTabs'), readable.map(x => x.id), grantedTabs);
+                    const mayRead = decision === 'read'
+                      || (decision === 'ask' && await askPermission('userTabs', `Read the text of your ${readable.length} open tab(s) to summarize them.`));
+                    if (mayRead) readable.forEach(x => grantedTabs.add(x.id));
+                    else { noAccess = readable.filter(x => !grantedTabs.has(x.id)); readable = readable.filter(x => grantedTabs.has(x.id)); }
+                    onProgress({ kind: 'status', message: `🗂️ Reading ${readable.length} tab(s)…` });
+                    // Acordar (só quando pedido): tira o "dormindo" e espera a <webview> montar e carregar.
+                    for (const tb of readable) {
+                      if (!(tb.discarded || tb.restored)) continue;
+                      store.updateTab(tb.id, { discarded: false, restored: false, lastActiveAt: Date.now() });
+                    }
+                    const readTab = async (id: string): Promise<string | null> => {
+                      for (let i = 0; i < 30 && !webviewRefs.current.get(id); i++) await sleep(300);
+                      const w = webviewRefs.current.get(id) as any;
+                      if (!w) return null;
+                      for (let i = 0; i < 30; i++) { try { if (!w.isLoading()) break; } catch { break; } await sleep(300); }
+                      try {
+                        // executeJavaScript da aba: já recua pro mundo isolado em página que bloqueia script (page-eval.ts).
+                        const txt = await withTimeout(w.executeJavaScript(`(document.body ? document.body.innerText : '').slice(0, 6000)`), 8000, null as any);
+                        return typeof txt === 'string' ? txt : null;
+                      } catch { return null; }
+                    };
+                    const texts: Array<TabText & { id: string; ok: boolean }> = [];
+                    for (const tb of readable) {
+                      throwIfCancelled();
+                      const txt = await readTab(tb.id);
+                      const live = tabsRef.current.find(x => x.id === tb.id) ?? tb;
+                      texts.push({ id: tb.id, title: live.title || tb.title, url: live.url || tb.url, text: txt || '', ok: txt != null });
+                    }
+                    const okTexts = texts.filter(x => x.ok);
+                    let parsed = { perTab: okTexts.map(() => ''), overall: '' };
+                    if (okTexts.length) {
+                      onProgress({ kind: 'status', message: `🧠 Summarizing ${okTexts.length} tab(s)…` });
+                      const r = await raceTimeout(window.electronAPI?.aiChat(buildTabsSummaryPrompt(okTexts, uiLangName()), '', true, store.localSettings.enabled) ?? Promise.resolve(undefined), 90000, undefined);
+                      throwIfCancelled();
+                      parsed = parseTabsSummary(String(r?.response || ''), okTexts);
+                      if (!parsed.overall && r?.error) parsed.overall = `(${r.error})`;
+                    }
+                    const summaryOf = new Map(okTexts.map((x, i) => [x.id, parsed.perTab[i]]));
+                    const entries = [
+                      ...texts.map(x => ({ id: x.id, title: x.title, url: x.url, state: x.ok ? 'read' as const : 'unreadable' as const, summary: summaryOf.get(x.id) || '' })),
+                      ...noAccess.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'no_access' as const, summary: '' })),
+                      ...sel.asleep.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'asleep' as const, summary: '' })),
+                    ];
+                    onProgress({ kind: 'tabs_summary', tabs: entries, overall: parsed.overall,
+                      skippedIncognito: sel.skippedIncognito, skippedInternal: sel.skippedInternal,
+                      onOpen: (id: string) => { if (tabsRef.current.some(x => x.id === id)) store.setActiveTabId(id); } });
+                    const doneMsg = parsed.overall
+                      || (entries.length ? `${okTexts.length} tab(s) read${sel.asleep.length ? `, ${sel.asleep.length} asleep` : ''}${noAccess.length ? `, ${noAccess.length} without access` : ''}.` : 'No open web pages to summarize.');
+                    allResults.push({ action, result: { success: true, info: { read: okTexts.length, asleep: sel.asleep.length, noAccess: noAccess.length } } });
+                    finishRun('success', doneMsg);
+                    return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                   } else if (action.type === 'google_news') {
                     // Vertical Notícias do Google (udm=12) — raspa as manchetes do DOM
                     // renderizado e monta um painel clicável. Determinístico → auto-done.

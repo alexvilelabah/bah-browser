@@ -2715,3 +2715,13 @@ body {
 .chat-hist-title{display:flex;align-items:center;gap:4px;font-size:14px;}
 .chat-hist-ro{margin:4px 0 8px;font-size:11.5px;color:var(--text-muted);}
 .chat-hist-actions{display:flex;gap:8px;flex-wrap:wrap;}
+/* Resumo das abas abertas (summarize_tabs): cada título leva pra aba */
+.tabs-summary-card{background:var(--gradient-subtle);border:1px solid var(--border-bright);padding:10px 12px;border-radius:var(--radius);margin-bottom:8px;font-size:13px;line-height:1.5;color:var(--text-primary);}
+.tabs-summary-title{font-weight:600;margin-bottom:6px;}
+.tabs-summary-list{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;}
+.tabs-summary-link{background:none;border:none;padding:0;color:var(--accent,#6b93b8);cursor:pointer;font:inherit;font-weight:500;text-align:left;text-decoration:underline;text-underline-offset:2px;}
+.tabs-summary-link:hover{opacity:.85;}
+.tabs-summary-text{color:var(--text-secondary);user-select:text;}
+.tabs-summary-asleep .tabs-summary-text,.tabs-summary-no_access .tabs-summary-text,.tabs-summary-unreadable .tabs-summary-text{font-style:italic;color:var(--text-muted);}
+.tabs-summary-overall{margin-top:8px;border-top:1px solid var(--border);padding-top:6px;user-select:text;}
+.tabs-summary-skipped{margin-top:4px;font-size:11px;color:var(--text-muted);}

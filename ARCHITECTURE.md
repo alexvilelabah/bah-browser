@@ -194,6 +194,8 @@ The separate **🌱 Share torrents (seed)** switch (default OFF) only matters wh
 | `components/AgentCommandBar.tsx` | The unified command box, the activity feed, and settings |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
+| `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
+| `tabs-summary.ts` | "Summarize my open tabs": tab selection, permission, prompt and reply parsing |
 | `page-executor.ts` | Executes browser actions inside the page |
 | `risk.ts` | The safety-brake classifier (`riskForAction`) |
 | `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
@@ -300,6 +302,27 @@ Each finished run records the last thing it acted on, and the prompt says "it / 
 "N <anything> … each / different" opens N videos even with a typo (`site-knowledge.ts`, tested by
 bundling in `tests/unit/quick-video.test.ts`). Web answers drop search-engine pages from their sources
 and never show a raw `[[ACTION: …]]` tag; a suggested action of "none" is not shown as a button.
+
+**Named sites go straight to their official address.** `src/renderer/known-sites.ts` is a short,
+hand-checked map of well-known sites (LinkedIn, Indeed, GitHub, Amazon for your country, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → official URL. When a command names one ("browse to linkedin, find a
+job…"), the agent's first prompt gets a `NAMED SITE:` line with the address and the rule "navigate,
+don't web_search the name"; every prompt lists the map under `OFFICIAL SITES`; with a local AI the fast
+path opens it directly (`getInitialShortcutAction`). Names that are also common words ("indeed",
+"target") only count after "go to / on / at / abra…". A name that is not on the list is never turned
+into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
+`tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
+
+**"Summarize my open tabs".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) turns the request
+into the `summarize_tabs` action, even with the AI in charge (otherwise the model would visit every tab
+with `switch_tab`). The executor in `App.tsx` picks the tabs (`selectTabsForSummary`: no incognito tabs,
+no internal pages such as `about:`, `file:` or Bah's own player; sleeping tabs are listed as asleep and
+only woken when the user asks, e.g. "including the sleeping ones"), checks the **your tabs** permission
+once for the set (`tabsAccessDecision`: ask / always / never from the menu; the task's own tab needs
+none), reads each tab's text with `<webview>.executeJavaScript` (which falls back to the isolated
+world on pages that forbid scripts) and makes one stateless model call for a per-tab line plus an
+overall summary. The panel shows a card with one link per tab that switches to it. Tests:
+`tests/unit/tabs-summary.test.ts`, `tests/e2e/tabs-summary.spec.ts`.
 
 **Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
 site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub raw) never
