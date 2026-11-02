@@ -4,8 +4,9 @@
 // nag on "remove filter", "clear search" etc.). Looks at the LABEL of the button/field
 // the agent is about to touch. Pure function → testable.
 export interface RiskInfo { kind: string; label: string }
-/** jobs: the task is a job application — a bare "Submit"/"Send" button sends it (Workday, iCIMS…). */
-export interface RiskOpts { jobs?: boolean }
+/** jobs: the task is a job application — a bare "Submit"/"Send" button sends it (Workday, iCIMS…).
+ *  unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too. */
+export interface RiskOpts { jobs?: boolean; unattended?: boolean }
 
 export function classifyRisk(
   actionType: string,
@@ -40,6 +41,12 @@ export function classifyRisk(
     return { kind: 'application', label: shown || 'submit' };
   }
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
+  // Tarefa agendada rodando sozinha: mandar/publicar/reservar sai em nome da pessoa e não volta.
+  // Com ela olhando o agente segue (pediu "manda"); sem ela, o cartão espera (e o aviso do sistema chama).
+  if (opts.unattended && (label || '').trim().length <= 40
+      && /^(submit|send|post|publish|reply|tweet|book|reserve|order|place|confirm|enviar|envie|publicar|postar|responder|reservar|confirmar|pedir|enviar mensaje|publicar ahora)\b/.test(norm(label).trim())) {
+    return { kind: 'sending', label: shown || 'send' };
+  }
   return null;
 }
 

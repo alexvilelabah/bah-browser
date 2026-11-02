@@ -219,6 +219,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   applicantSaveAnswers: (a: Record<string, string>) => ipcRenderer.invoke('applicant:save-answers', a),
   applicantDeleteAnswer: (key: string) => ipcRenderer.invoke('applicant:delete-answer', key),
   applicantClear: () => ipcRenderer.invoke('applicant:clear'),
+  // Tarefas agendadas (guardadas cifradas no main; relógio/fila no renderer)
+  schedList: () => ipcRenderer.invoke('sched:list'),
+  schedSave: (list: any[]) => ipcRenderer.invoke('sched:save', list),
+  schedClock: () => ipcRenderer.invoke('sched:clock'),
+  schedNotify: (n: { title: string; body: string; taskId?: string }) => ipcRenderer.invoke('sched:notify', n),
+  onSchedFocus: (cb: (taskId: string) => void) => {
+    const listener = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('sched:focus', listener);
+    return () => ipcRenderer.removeListener('sched:focus', listener);
+  },
   proxyGet: () => ipcRenderer.invoke('proxy:get'),
   proxySet: (c: any) => ipcRenderer.invoke('proxy:set', c),
   proxyTest: (url?: string) => ipcRenderer.invoke('proxy:test', url),

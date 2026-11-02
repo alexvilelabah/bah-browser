@@ -40,6 +40,8 @@ import PasswordSuggest from './components/PasswordSuggest';
 import PasswordsPanel from './components/PasswordsPanel';
 import type { PasswordsBridge, PwOffer, PwSuggest } from '../shared/password-types';
 import MonitorsPanel from './components/MonitorsPanel';
+import { ScheduledTasksPanel, MissedRunsCard } from './components/ScheduledTasksPanel';
+import { useScheduler } from './scheduler';
 import ClearDataDialog, { type ClearChoice } from './components/ClearDataDialog';
 import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange } from '../shared/clear-data';
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
@@ -287,6 +289,11 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
+      schedList?: () => Promise<{ tasks: import('../shared/schedule').ScheduledTask[]; available: boolean }>;
+      schedSave?: (list: import('../shared/schedule').ScheduledTask[]) => Promise<{ ok: boolean; tasks: import('../shared/schedule').ScheduledTask[] }>;
+      schedClock?: () => Promise<{ offset: number; test: boolean }>;
+      schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
+      onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       applicantGet?: () => Promise<{ profile: import('../shared/form-fill').ApplicantProfile; answers: Record<string, string>; available: boolean }>;
       applicantSetProfile?: (p: any) => Promise<{ ok: boolean }>;
       applicantSaveAnswers?: (a: Record<string, string>) => Promise<{ ok: boolean }>;
@@ -1081,6 +1088,25 @@ export default function App() {
   }, []);
   const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
+  // ⏰ Tarefas agendadas (renderer/scheduler.ts): cada uma roda numa aba com sessão própria.
+  const [schedOpen, setSchedOpen] = useState(false);
+  const sched = useScheduler({
+    openRunTab: (_task, reuse) => {
+      if (reuse && tabsRef.current.some(x => x.id === reuse && !x.hidden)) { store.setActiveTabId(reuse); return reuse; }
+      return store.addTab();
+    },
+    ensureRunSession: (tabId, task) => {
+      if (!tabsRef.current.some(x => x.id === tabId)) return false;   // a aba nova ainda não chegou no estado
+      const had = store.threadKeyOf(tabId) !== tabId;
+      const sid = store.ensureSession(tabId, { command: task.command });
+      if (sid === tabId) return false;
+      // Nome reconhecível no chip ("⏰ News"); se a pessoa renomeou a sessão depois, fica o nome dela.
+      if (!had) store.renameSession(sid, `⏰ ${task.name}`);
+      return true;
+    },
+    focusTab: (id) => { if (tabsRef.current.some(x => x.id === id && !x.hidden)) store.setActiveTabId(id); },
+    openPanel: () => store.setSidebarOpen(true),
+  });
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
   const zoomBadgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2108,6 +2134,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🔓</span>
                   <span className="menu-label">{t('menu.siteLogin')}</span>
                 </button>
+                <button className="menu-item" data-testid="menu-scheduled" onClick={() => { setMenuOpen(false); setSchedOpen(true); }} title={t('sched.menuTitle')}>
+                  <span className="menu-ic">⏰</span>
+                  <span className="menu-label">{t('sched.title')}</span>
+                  {sched.run?.status === 'waiting' && <span className="menu-kbd">{t('sched.waiting')}</span>}
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setMonitorsOpen(true); }} title={t('mon.menuTitle')}>
                   <span className="menu-ic">🛰️</span>
                   <span className="menu-label">{t('mon.title')}</span>
@@ -2253,6 +2284,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {proxyOpen && <ProxySettings onClose={() => setProxyOpen(false)} />}
           {regionOpen && <RegionPanel onClose={() => setRegionOpen(false)} />}
           {applicantOpen && <ApplicantPanel onClose={() => setApplicantOpen(false)} />}
+          {schedOpen && <ScheduledTasksPanel sched={sched} onClose={() => setSchedOpen(false)} />}
+          <MissedRunsCard sched={sched} />
           <JsDialogHost />
           <ProxyAuthPrompt />
           {showGuide && (
@@ -2288,6 +2321,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             tabIds={store.tabs.map(t => t.sessionId || t.id).join(',')}
             threadKeyOf={store.threadKeyOf}
             onEnsureSession={(tabId, text) => { store.ensureSession(tabId, { command: text }); }}
+            onCreateSchedule={(command, spec) => { const task = sched.add(command, spec); return task ? { nextAt: task.nextAt } : null; }}
+            schedNow={sched.now}
             viewSession={(() => {
               const sid = store.activeTab?.sessionId;
               const s = sid ? store.sessions.find(x => x.id === sid) : undefined;
@@ -2504,7 +2539,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
               // Candidatura a vaga: liga a skill job-apply e o freio do "Submit" puro do formulário.
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
-              const riskOpts = { jobs: commandIsJobs };
+              // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
+              const unattended = !!opts?.unattended;
+              const riskOpts = { jobs: commandIsJobs, unattended };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
               const openedJobs: OpenedJob[] = [];
@@ -2724,9 +2761,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const message = risk.kind === 'application'
                   ? `📨 Ready to send your application. Check the form in the tab first: I will click "${risk.label}" and it goes to the employer. Send it?`
                   : `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`;
+                // Pessoa pensando não é o modelo lento: o relógio da tarefa dorme enquanto o cartão espera
+                // (numa tarefa agendada ele pode esperar horas, até a pessoa voltar).
+                deadline.suspend();
                 return new Promise<boolean>((resolve) => {
                   let done = false;
-                  const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+                  const finish = (v: boolean) => { if (!done) { done = true; deadline.resume(); resolve(v); } };
                   if (signal) signal.addEventListener('abort', () => finish(false), { once: true });
                   onProgress({
                     kind: 'confirm',
@@ -2978,7 +3018,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
-                  if (!aiDrive && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
+                  if (!aiDrive && !unattended && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
                     gmailComposeAttempted = true;
                     const compose = await tryComposeGmailDraft(wv, parsedEmailDraft);
                     if (compose.success) {
@@ -2995,7 +3035,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `Gmail: draft assistant could not fill it (${compose.reason || 'no detail'}).` });
                     }
                   }
-                  if (!aiDrive && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
+                  if (!aiDrive && !unattended && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
                     const assist = await tryRevealYouTubeCommentBox(wv);
                     if (assist.success) {
                       onProgress({ kind: 'status', message: 'YouTube: comment box located/activated.' });

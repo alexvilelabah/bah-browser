@@ -53,6 +53,7 @@ import { setupRegion, getTimezoneOverride } from './region';
 import { setupUpload, setUploadTextExtractor } from './upload';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupApplicantProfile } from './applicant-profile';
+import { setupScheduledTasks } from './scheduled-tasks';
 import { setupFrames } from './frames';
 import { setupPageSave } from './page-save';
 import { loadSystemCAs, installCAs } from './system-ca';
@@ -3985,6 +3986,7 @@ app.whenReady().then(async () => {
   setupUpload(() => mainWindow, sharedEnsureDebugger);
   setupJsDialogs();
   setupApplicantProfile();
+  setupScheduledTasks({ getMainWindow: () => mainWindow, showMainWindow });
   setupFrames(sharedEnsureDebugger);
   setupPageSave(sharedEnsureDebugger);
   loadSystemCAs().then((pems) => { systemCAs = pems; const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
