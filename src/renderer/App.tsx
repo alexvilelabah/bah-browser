@@ -35,6 +35,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
+import { commandHasFollowUp, commandWantsSeveralFiles } from './download-steps';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
@@ -363,11 +364,6 @@ function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?:
     vision: ls.vision === true,
     visionMode: resolveVisionMode(ls),
   };
-}
-
-/** O pedido é de VÁRIOS arquivos ("os dois", "todos", "3 vídeos") — aí a tarefa não acaba no 1º download. */
-function commandWantsSeveralFiles(command: string): boolean {
-  return /\b([2-9]|\d{2,}|two|three|four|five|six|seven|eight|nine|ten|both|all|every|several|dois|duas|tr[eê]s|quatro|cinco|ambos|ambas|todos|todas|v[aá]rios|v[aá]rias|dos|cuatro|varios|varias)\b/i.test(command);
 }
 
 /** Página do próprio buscador (resultado/ajuda), que nunca serve de fonte de uma resposta. */
@@ -2605,6 +2601,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Pedido de download: não deixa encerrar "com sucesso" antes de QUALQUER download
               // começar (o modelo lê a página "Thank you for downloading" como arquivo baixado).
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
+              // O download é o ÚLTIMO passo do pedido? Sim → a tarefa acaba quando ele começa. Não ("baixe e
+              // instale", "baixe os dois e compare") → o Bah espera TODOS os downloads da tarefa terminarem
+              // antes do próximo passo, senão o modelo acha que o arquivo já está lá.
+              const downloadIsLastStep = commandWantsDownload && !commandWantsSeveralFiles(command) && !commandHasFollowUp(command);
               let noDownloadYetBlocks = 0;
               // Skills de navegação: carregadas uma vez por tarefa; escolhidas a cada passo.
               const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
@@ -3280,7 +3280,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         if (d.state === 'failed' || d.state === 'cancelled') return `  • ${d.filename} — ${d.state.toUpperCase()}`;
                         if ((d as any).stalled) return `  • ${d.filename} — STALLED at ${of} (no data for ${(d as any).stalledForSec || 15}s)`;
                         const pct = d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : '';
-                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally in the background. If this is the file the user asked for, the task is DONE: finish with done saying it is downloading (the user follows it on the download button). Do not wait for it and do not look for another source.`;
+                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is downloading (the user follows it on the download button). Do not wait for it' : 'Bah waits for it to finish before your next step'}; do not look for another source.`;
                       }).join('\n')}`
                     : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
                   // Download task: aponta o(s) botão(ões) de baixar DESTA página. O modelo pequeno lia
@@ -4489,7 +4489,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // não quando termina — senão o painel fica "trabalhando" só esperando. O anel do botão de
                       // downloads mostra o progresso e o fim. Se o yt-dlp falhar antes de começar, segue o
                       // caminho de sempre (fallbacks abaixo).
-                      if (vrP && count === 1 && actionQueue.length === 0) {
+                      if (vrP && count === 1 && actionQueue.length === 0 && downloadIsLastStep) {
                         const startedDl = await new Promise<any>(resolve => {
                           let settled = false;
                           const finish = (v: any) => { if (!settled) { settled = true; clearInterval(iv); resolve(v); } };
@@ -5894,9 +5894,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         : d.state === 'progress' && d.stalled
                         ? `DOWNLOAD STALLED: ${d.filename} — no data for ${d.stalledForSec || 15}s at ${of}. It is aborted after 60s without data; you may wait, or retry/try another source.`
                         : d.state === 'progress'
-                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally in the background — if this is what the user asked for, finish with done now (say it is downloading); do NOT start another copy or look for another source.`
+                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally in the background — ${downloadIsLastStep ? 'if this is what the user asked for, finish with done now (say it is downloading)' : 'Bah waits for it to complete before your next step'}; do NOT start another copy or look for another source.`
                         : d.state === 'duplicate'
-                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. The first one continues in the background: finish with done saying it is downloading.`
+                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. The first one continues in the background${downloadIsLastStep ? ': finish with done saying it is downloading' : ' and Bah waits for it'}.`
                         : d.state === 'failed' && d.stalled
                         ? `DOWNLOAD FAILED (stalled): ${d.filename} — the server stopped sending data after ${of}; the partial file was removed. Retry once, or try another mirror/source.`
                         : d.state === 'failed'
@@ -5905,7 +5905,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         ? (d.id && agentCancelledRef.current.has(d.id)
                           ? `DOWNLOAD CANCELLED (by your cancel_download): ${d.filename}; the partial file was removed.`
                           : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
-                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.`;
+                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.' : 'Bah waits for it to COMPLETE before your next step; the rest of the request continues after DOWNLOAD COMPLETED.'}`;
                       history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
                       onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${osNote ? ' ⚠️ wrong OS' : ''}` });
                     }
@@ -5913,7 +5913,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
                     // O resto (progresso, fim) aparece no botão de downloads — não segura o painel "trabalhando".
                     // Fica de fora: pedido de VÁRIOS arquivos, arquivo do SO/processador errado e download parado.
-                    if (commandWantsDownload && actionQueue.length === 0 && !commandWantsSeveralFiles(command)) {
+                    if (downloadIsLastStep && actionQueue.length === 0) {
                       const started = dlEvents.find(d => (d.state === 'started' || (d.state === 'progress' && !d.stalled))
                         && ((dlLatestRef.current.get(d.id || d.path || d.filename) as any)?.startedAt ?? 0) >= taskStartedAt
                         && !wrongOsNote(d.filename));
@@ -5923,6 +5923,31 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         onProgress({ kind: 'status', message: msg });
                         finishRun('success', msg);
                         return { thought: thoughts.join('\n\n') || msg, results: allResults, done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                      }
+                    } else if (commandWantsDownload && !downloadIsLastStep) {
+                      // Pedido continua depois do download (ou são vários): o BAH espera todos os downloads desta
+                      // tarefa (sem gastar chamada de modelo), mostrando o que espera; o modelo só volta com as
+                      // linhas DOWNLOAD COMPLETED — assim o próximo passo sabe que o arquivo existe e onde está.
+                      const mine = () => [...agentDlIdsRef.current].map(k => dlLatestRef.current.get(k) as any)
+                        .filter(d => !!d && (d.startedAt ?? 0) >= taskStartedAt);
+                      const running = () => mine().filter(d => (d.state === 'started' || d.state === 'progress' || d.state === 'queued') && !d.stalled);
+                      if (running().length) {
+                        deadline.suspend();   // esperar download não é o modelo demorando
+                        try {
+                          while (running().length) {
+                            throwIfCancelled();
+                            const parts = mine().map(d => d.state === 'completed' ? `${d.filename} ✓`
+                              : `${d.filename}${d.totalBytes ? ' ' + Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%' : ''}${d.etaSec != null ? ` (ETA ${fmtEta(d.etaSec)})` : ''}`);
+                            onProgress({ kind: 'status', message: `⏳ Waiting for downloads: ${parts.join(', ')}` });
+                            await new Promise(r => setTimeout(r, 2000));
+                          }
+                        } finally { deadline.resume(); }
+                        for (const d of mine()) {
+                          history += d.state === 'completed'
+                            ? `\nDOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready; continue with the rest of the request.`
+                            : `\nDOWNLOAD ${String(d.state).toUpperCase()}${d.stalled ? ' (stalled)' : ''}: ${d.filename}${d.reason ? ' — ' + d.reason : ''}`;
+                        }
+                        noEffectCount = 0;
                       }
                     }
                   }
