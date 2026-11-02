@@ -42,6 +42,7 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { setupMemorySaverSignals } from './memory-saver-signals';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
@@ -3200,12 +3201,14 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
-  setupSitePermissions({
+  const sitePerms = setupSitePermissions({
     getMainWindow: () => mainWindow,
     sessions: [session.fromPartition(BROWSER_PARTITION), session.fromPartition(GOOGLE_LOGIN_PARTITION)],
     // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
     privateSessions: [incognitoSession()],
   });
+  // Economia de memória: câmera/tela, notificações e downloads que seguram a aba acordada.
+  setupMemorySaverSignals({ ...sitePerms, downloadWcIds: downloadManager.activeWcIds });
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.

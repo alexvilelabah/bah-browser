@@ -253,6 +253,32 @@ request (no time, "at 9" morning or evening, interval below the minimum) gets a 
 - **Tests**: `tests/e2e/scheduled-tasks.spec.ts` uses an injectable clock (`E2E_SCHED_NOW` and
   `window.__bahSched.setNow`, only with `NODE_ENV=test`).
 
+## Memory saver (sleeping tabs)
+
+Chrome's Memory Saver, plus one Bah rule. A sweep in `App.tsx` (every 60 s) unmounts the `<webview>` of a
+tab that has been idle long enough (`discarded: true`); clicking the tab remounts it at its URL. Pure rules
+in `src/shared/memory-saver.ts` (tested in `tests/unit/memory-saver.test.ts`); UI in
+`components/MemorySaverMenu.tsx` (⋮ → 💤 Memory saver ▸: on/off, level, keep-active list).
+- **Levels** (Chrome publishes no times; these are Bah's): Moderate 2 h, Balanced 30 min (default, the old
+  behaviour), Maximum 10 min idle. Stored in `localStorage` `memSaver` / `memSaverLevel` / `memSaverKeep`.
+- **Never discarded**: the active tab, incognito/hidden tabs (`incognito.ts` `canDiscard`), pinned tabs,
+  sites on the keep-active list, tabs whose **session** (`store.threadKeyOf`) has an agent task running or
+  waiting for the user (confirm/questions card, sign-in pause — the whole `onExecute`; plus the scheduler's
+  current run), and — gathered only for tabs that pass those cheap checks — tabs playing audio or video
+  (even a muted `<video>`), with camera/microphone/screen granted on the current page, with notifications
+  allowed for the site, with a download in progress that started there, with a half-filled form, or with an
+  open USB/HID/serial/Bluetooth device. The page part is one script (`PAGE_SIGNALS_SCRIPT`, run through the
+  isolated-world fallback of `page-eval.ts`; forms compare `value`/`checked`/`selected` with their HTML
+  defaults, ignoring hidden and search inputs); the main part is `memsaver:signals`
+  (`src/main/memory-saver-signals.ts`, fed by `site-permissions.ts` and `download-manager.ts`).
+  Camera/screen counts from the grant until the page navigates (Electron has no "capture stopped" event).
+- **Keep-active list**, Chrome's rules: `google.com` covers its subdomains, `.google.com` only that domain,
+  `[*.]`/`*.` prefixes mean the same as none, an optional path matches on a segment boundary
+  (`site.com/app`), and a written scheme or port must match.
+- The tab's hover tooltip says why a candidate tab was kept ("Kept active: form partly filled in").
+- **Tests**: `tests/e2e/memory-saver.spec.ts` uses `memSaverIdleMs` / `memSaverSweepMs` (localStorage
+  overrides for tests) to shorten the idle time and the sweep.
+
 ## Command routing & follow-ups
 
 The box under the assistant decides per message: agent task, answer about the page, web answer or chat

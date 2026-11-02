@@ -91,6 +91,8 @@ export function setupDownloadManager(deps: Deps) {
   const engineJobs = new Map<string, EngineJob>();
   // URLs que o motor devolveu pro Chromium (não suportou): o próximo will-download passa direto.
   const bypass = new Set<string>();
+  // Download → aba de onde saiu (webContents id): a Economia de memória não põe essa aba pra dormir.
+  const srcWc = new Map<string, number>();
   let settings: DownloadEngineSettings = { ...DEFAULT_DOWNLOAD_ENGINE_SETTINGS };
   let seq = 0;
   const engineConfig = (): Partial<EngineConfig> => ({
@@ -261,6 +263,7 @@ export function setupDownloadManager(deps: Deps) {
       const willQueue = activeCount() >= MAX_CONCURRENT;
       const t: Tracked = { id, item, url, filename: path.basename(target), path: target, lastBytes: 0, lastTime: now, speedBps: 0, lastEmit: 0, queued: willQueue };
       originOf.set(id, sess);
+      if (wc) { srcWc.set(id, wc.id); if (srcWc.size > MAX_ORIGINS) srcWc.delete(srcWc.keys().next().value as string); }
       if (originOf.size > MAX_ORIGINS) originOf.delete(originOf.keys().next().value as string);
       reg.set(id, t);
       if (willQueue) { try { item.pause(); } catch {} }
@@ -429,5 +432,15 @@ export function setupDownloadManager(deps: Deps) {
     }
   });
 
-  return { attach };
+  // Abas com download em andamento (baixando, na fila ou pausado; Chromium ou várias conexões).
+  const activeWcIds = (): Set<number> => {
+    const out = new Set<number>();
+    for (const [id, wcId] of srcWc) {
+      const job = engineJobs.get(id);
+      if (reg.has(id) || (job && (job.dl.state === 'downloading' || job.dl.state === 'paused'))) out.add(wcId);
+      else if (!job) srcWc.delete(id);
+    }
+    return out;
+  };
+  return { attach, activeWcIds };
 }
