@@ -2,6 +2,8 @@
 // formulário longo — inventava campo, esquecia o currículo, parava antes das perguntas. Aqui o Bah
 // lê os campos da página e diz o que já está preenchido e o que falta, com o rótulo de cada um.
 
+import { DD_JS } from './dropdown-page.ts';
+
 export interface FormField {
   label: string;
   kind: 'text' | 'file' | 'choice' | 'check' | 'select';
@@ -28,6 +30,7 @@ export const FORM_ROOT_JS = `function(){
 // Roda na página (executeJavaScript). Rádios/caixas agrupados por name; rótulo = <label>, aria,
 // legenda do grupo ou o texto logo antes.
 export const FORM_FIELDS_SCRIPT = `(function(){
+  ${DD_JS}
   var vis = function(e){ var r = e.getBoundingClientRect(); var cs = getComputedStyle(e); return cs.display !== 'none' && cs.visibility !== 'hidden' && (r.width > 0 || e.type === 'file'); };
   var clean = function(s){ return String(s || '').replace(/\\s+/g, ' ').replace(/\\*+/g, '').trim().slice(0, 90); };
   var labelOf = function(el){
@@ -49,8 +52,15 @@ export const FORM_FIELDS_SCRIPT = `(function(){
   };
   var form = (${FORM_ROOT_JS})();
   var out = [], groups = {};
-  Array.prototype.forEach.call(form.querySelectorAll('input,textarea,select'), function(el){
+  Array.prototype.forEach.call(form.querySelectorAll('input,textarea,select,button[aria-haspopup=listbox]'), function(el){
     var t = (el.type || '').toLowerCase();
+    // Lista suspensa (react-select/Workday): o valor aparece fora do <input> — "feito" é o que o campo mostra.
+    if (el.tagName === 'BUTTON' || DD.is(el)) {
+      if (!vis(el)) return;
+      out.push({ label: labelOf(el), kind: 'select', required: el.required || el.getAttribute('aria-required') === 'true', done: !!DD.shown(el) });
+      return;
+    }
+    if (el.getAttribute('aria-hidden') === 'true' && el.tabIndex < 0 && t !== 'radio' && t !== 'checkbox') return;
     if (t === 'hidden' || t === 'submit' || t === 'button' || t === 'search' || el.name === 'g-recaptcha-response') return;
     if (t !== 'file' && !vis(el)) return;
     var req = el.required || el.getAttribute('aria-required') === 'true';

@@ -4,7 +4,7 @@ import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
 import { namesStore } from './stores';
 // Rótulo de botão que abre o seletor de arquivos do SO.
 const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-]{0,25}\b(files?|r[eé]sum[eé]s?|cv|documents?|cover letter|attachments?)(?![a-z0-9])|^(upload|attach|browse|choose files?|anexar|enviar arquivo)\.{0,3}$/i;
-import { FORM_SCAN_SCRIPT, formApplyScript } from './form-filler';
+import { FORM_SCAN_SCRIPT, applyFill, readDropdownOptions } from './form-filler';
 import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
 import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
@@ -3258,10 +3258,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       autoFilledForms.add(observation.url);
                       const scanFields = await withTimeout(wv.executeJavaScript(FORM_SCAN_SCRIPT), 4000, [] as FieldInfo[]).catch(() => [] as FieldInfo[]);
                       const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts, { url: observation.url });   // URL → tabela do ATS (ats-tables.ts)
-                      const did: number[] = plan.fill.length ? await withTimeout(wv.executeJavaScript(formApplyScript(plan.fill)), 4000, [] as number[]).catch(() => [] as number[]) : [];
-                      const filledNow = plan.fill.filter(d => did.includes(d.idx));
+                      // Cada chamada à página com teto próprio; lista suspensa (react-select/Workday) vai uma a uma.
+                      const pageExec = (js: string) => withTimeout(wv.executeJavaScript(js), 6000, null as any);
+                      const first = plan.fill.length ? await applyFill(pageExec, plan.fill, scanFields || []).catch(() => ({ done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> })) : { done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> };
+                      const pickedText: Record<number, string> = { ...first.texts };
+                      const filledNow = plan.fill.filter(d => first.done.includes(d.idx));
                       // Pergunta à pessoa: o que falta e o modelo não deve inventar (obrigatórias e escolhas; não arquivo).
-                      const ask = plan.missing.filter(f => f.type !== 'file' && f.type !== 'combobox' && (f.required || (f.options && f.options.length))).slice(0, 12);
+                      // Lista suspensa cujo valor do perfil não estava nas opções também vem pra cá, com as opções lidas.
+                      const missingAll = [...plan.missing.filter(f => !first.failed.some(x => x.idx === f.idx)), ...first.failed]
+                        .filter(f => f.type !== 'file' && (f.required || (f.options && f.options.length) || first.failed.includes(f)));
+                      const ask = (await readDropdownOptions(pageExec, missingAll.slice(0, 12)).catch(() => missingAll.slice(0, 12)));
                       let answered: FillDecision[] = [];
                       if (ask.length) {
                         const reply = await new Promise<string>((resolve) => onProgress({ kind: 'confirm', risk: 'form', label: 'application questions',
@@ -3274,13 +3280,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         try { got = JSON.parse(reply || '{}'); } catch {}
                         if (got.answers && Object.keys(got.answers).length) {
                           if (got.save) await window.electronAPI?.applicantSaveAnswers?.(got.answers).catch(() => null);
-                          const second = planFill(ask, {}, got.answers);
-                          const did2: number[] = second.fill.length ? await withTimeout(wv.executeJavaScript(formApplyScript(second.fill)), 4000, [] as number[]).catch(() => [] as number[]) : [];
-                          answered = second.fill.filter(d => did2.includes(d.idx));
+                          const second = planFill(ask.map(f => ({ ...f, filled: false })), {}, got.answers);
+                          const r2 = second.fill.length ? await applyFill(pageExec, second.fill, ask).catch(() => null) : null;
+                          Object.assign(pickedText, r2?.texts || {});
+                          answered = second.fill.filter(d => (r2?.done || []).includes(d.idx));
                         }
                       }
                       if (filledNow.length || answered.length) {
-                        history += `\nFORM FILLED BY BAH (from ${profile.email ? 'the user\'s profile' : 'the résumé'} and saved answers — do not retype these): ${[...filledNow, ...answered].map(d => `${d.label} = ${d.value ?? (scanFields.find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] ?? '✓'}`).join('; ')}.`;
+                        history += `\nFORM FILLED BY BAH (from ${profile.email ? 'the user\'s profile' : 'the résumé'} and saved answers — do not retype these): ${[...filledNow, ...answered].map(d => `${d.label} = ${pickedText[d.idx] ?? d.value ?? ([...ask, ...scanFields].find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] ?? '✓'}`).join('; ')}.`;
                         onProgress({ kind: 'status', message: `✍️ Filled ${filledNow.length + answered.length} field(s) from ${profile.email ? 'your profile' : 'the résumé'}${answered.length ? ' and your answers' : ''}` });
                         formFields = await withTimeout(wv.executeJavaScript(FORM_FIELDS_SCRIPT), 3000, formFields).catch(() => formFields);
                         isAppForm = !!formFields && (formFields.some((f: FormField) => f.kind === "file") || formFields.length >= 4);

@@ -194,6 +194,7 @@ A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só i
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |
 | `page-executor.ts` | Executa as ações do navegador dentro da página |
 | `risk.ts` | O classificador do freio de segurança (`riskForAction`) |
+| `form-filler.ts`, `dropdown-page.ts` | Formulário de candidatura preenchido **por código** (regras em `shared/form-fill.ts`): ler → planejar → aplicar. Listas suspensas com busca (react-select `input[role=combobox]`, combobox ARIA, "prompt" do Workday `button[aria-haspopup=listbox]`, inclusive com caixa de busca) vão uma a uma por `shared/dropdown-fill.ts`: digita o valor, espera (com teto) a lista de `role=option` — que pode carregar com atraso e vir num portal —, escolhe a melhor opção (semântica do `pickOption` + apelidos de país + palavra única) com a sequência completa de eventos de ponteiro/mouse e confere que o campo mostra o valor. Nada casou → as opções da lista vão como escolhas pro cartão único de perguntas. Fecha a lista com blur/clique fora, nunca Escape dentro de diálogo (fecharia o modal do Easy Apply). Documento principal + diálogo aberto, como o resto do preenchimento |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Recuperação de estado travado + detecção de login/captcha |
 | `agent-run-logger.ts` | Log de corridas opt-in (coletor de dados de treino, local) |
 | `store.ts` | Estado da UI/configurações (localStorage) |
