@@ -204,6 +204,46 @@ The separate **🌱 Share torrents (seed)** switch (default OFF) only matters wh
 
 ---
 
+## Agent sessions (tab chips + shared conversation)
+
+A **session** is the line of work the assistant follows: one tab, or a group of tabs that share one
+conversation. A tab gets a session the first time the assistant is used on it (`ensureSession`): the
+name comes from the request ("Job hunt", "Groceries", "Trip"…), the colour is one not in use. On the tab
+strip it shows like a Chrome tab group — a coloured chip with the name before the session's tabs, the
+same colour underlining each of them; the panel shows the same chip (click to rename). Tabs the agent
+opens during a task, and links opened in a new tab from a session tab, join that session; the tab's
+right-click menu adds it to another session, starts a new one or removes it; dragging a tab between two
+tabs of a session joins it, dragging it away leaves.
+The conversation is keyed by **thread key** = session id (or the tab id when the tab has none): the
+panel feed (`AgentCommandBar` `feedsByTab`), the main process chat memory (`ai-engine.ts`
+`conversationHistories`, moved with `ai:move-history`) and the recent-requests memory the agent prompt
+starts with (`recentRunsRef`). When a tab's key changes, its conversation moves with it
+(`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in `tests/unit/agent-sessions.test.ts`);
+state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to end: `tests/e2e/agent-sessions.spec.ts`.
+Sessions live in memory for now (restore + chat history come next).
+
+## Command routing & follow-ups
+
+The box under the assistant decides per message: agent task, answer about the page, web answer or chat
+(`routeCommand` in `AgentCommandBar.tsx`; with a cloud AI a one-word classifier in `App.tsx`
+`classifyIntent` goes first, with a local AI the word rules decide). Before any of that:
+- a **question about the last run** ("did you click it?", "what happened?") → chat with a log of that
+  run (`src/renderer/last-run.ts` `lastRunDigest`), never a web search;
+- a **report that the last run fell short** ("one window was opened, but not the second") → back to the
+  agent (`reportsIncompleteRun`), which gets the previous requests and how they ended;
+- a message that **starts with an action verb** ("search for…", "find…", "browse to…") → agent
+  (`src/renderer/route-words.ts`); questions keep going to the web answer.
+Each finished run records the last thing it acted on, and the prompt says "it / that one" means it.
+"N <anything> … each / different" opens N videos even with a typo (`site-knowledge.ts`, tested by
+bundling in `tests/unit/quick-video.test.ts`). Web answers drop search-engine pages from their sources
+and never show a raw `[[ACTION: …]]` tag; a suggested action of "none" is not shown as a button.
+
+**Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
+site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub raw) never
+gets the matching dark background → white on white. `main.ts` inserts a user stylesheet
+(`PLAIN_TEXT_VIEWER_CSS`, matching only the viewer's `<meta>` + `<pre>` layout) so background and text
+follow the same scheme (`tests/e2e/plain-text-dark.spec.ts`).
+
 ## Navigation skills (`skills/*/SKILL.md`)
 
 Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt
@@ -234,10 +274,12 @@ first (site > page state > task), as a `SKILLS FOR THIS PAGE` section near the t
 | `os-selector` | controls offer Windows **and** macOS/Linux |
 | `searchbox` | a visible search / destination / city field |
 | `tabs` | a tab strip (`role=tablist`, or ≥2 controls named like Overview / Specifications / Reviews / Accessories…) |
+| `cards` | ≥3 sibling cards of the same kind, each with a link (job/hotel/product lists) |
+| `signin` | a visible password field, a login page (title/path), or a "sign in to see/continue…" wall |
 
 Task types come from the request: `download` (download words, typos included), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (stores, prices, buy...), `parts`
-(charger/adapter/battery/compatible...). **Bundled skills are general rules, not recipes for named sites** —
+(charger/adapter/battery/compatible...), `people`, `jobs`. Per-site **account state** (signed in / signed out, read from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an `ACCOUNT:` line. **Bundled skills are general rules, not recipes for named sites** —
 site-specific recipes belong in user/contributed skills.
 User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a successful task Bah offers to draft one
 ("Save as skill" → review → Save → optional GitHub proposal). See [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md). Code: parser + selection `src/shared/skills.ts` (unit-tested in
@@ -245,7 +287,7 @@ User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a succ
 loader + `skills:list` IPC `src/main/skills-loader.ts` (re-reads files in dev; packaged via
 `electron-builder.yml` `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`,
 `site-search`, `page-tabs`, `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`,
-`shopping-compare`, `used-listings`, `travel-search`.
+`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`.
 
 ---
 

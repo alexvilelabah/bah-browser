@@ -9,6 +9,11 @@ import { newTabUrl } from './search-engine';
 import type { VisionMode } from '../shared/vision';
 import { incognitoCount, lastIncognitoClosed, mayRecord } from '../shared/incognito';
 import { wipeIncognitoSession } from './incognito';
+import {
+  joinSession as joinInStrip, leaveSession as leaveInStrip, sessionAfterMove, liveSessions,
+  pickSessionColor, sessionNameFor, uniqueSessionName, isSessionColor, MAX_SESSION_NAME,
+  type AgentSession, type SessionColor,
+} from '../shared/agent-sessions';
 
 export interface Tab {
   id: string;
@@ -30,6 +35,7 @@ export interface Tab {
                           // como a dormindo, mas com ícone e nome normais (nada de 💤); carrega no clique
   incognito?: boolean;    // aba anônima: sessão só na memória, nada dela fica guardado (shared/incognito.ts).
                           // Nasce assim e nunca muda (a partição da <webview> não troca depois de criada).
+  sessionId?: string;     // sessão do agente (chip colorido na barra): abas da mesma sessão dividem a conversa
   noScript?: boolean;     // página do computador aberta de fora (Bah como navegador padrão): sem JavaScript,
                           // senão ela leria os outros arquivos do PC (main/default-browser-rules.ts). Nasce assim.
 }
@@ -232,9 +238,17 @@ export function useTabStore() {
   const closeTabs = useCallback((ids: string[]) => {
     if (!ids.length) return;
     const closing = new Set(ids);
-    for (const id of closing) window.electronAPI?.clearChatHistory?.(id);   // free that tab's chat memory
     setTabs(prev => {
       const next = prev.filter(t => !closing.has(t.id));
+      // Libera a memória de chat da conversa que ficou sem aba (a de uma sessão segue enquanto
+      // houver outra aba nela).
+      const keysLeft = new Set(next.map(t => t.sessionId || t.id));
+      for (const t of prev) {
+        if (!closing.has(t.id)) continue;
+        sessionOfTab.current.delete(t.id);
+        const k = t.sessionId || t.id;
+        if (!keysLeft.has(k)) window.electronAPI?.clearChatHistory?.(k);
+      }
       if (next.length === prev.length) return prev;
       for (const t of prev) {
         if (!closing.has(t.id) || t.hidden || !t.url || !/^https?:\/\//i.test(t.url)) continue;
@@ -283,8 +297,14 @@ export function useTabStore() {
   // Só a ORDEM da lista muda: os <webview> ficam na ordem de chegada (WebViewContainer), então
   // mover uma aba nunca recarrega a página dela.
   const moveTab = useCallback((id: string, to: number) => {
-    setTabs(prev => moveInStrip(prev, id, to));
-  }, []);
+    setTabs(prev => {
+      const before = prev.find(t => t.id === id)?.sessionId;
+      const next = sessionAfterMove(moveInStrip(prev, id, to), id);
+      const after = next.find(t => t.id === id)?.sessionId;
+      if (before !== after) noteThreadChange(id, before, after, prev);
+      return next;
+    });
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const setPinned = useCallback((id: string, pinned: boolean) => {
     setTabs(prev => pinInStrip(prev, id, pinned));
   }, []);
@@ -319,7 +339,97 @@ export function useTabStore() {
     incognitoRef.current = n;
   }, [tabs]);
 
+  // ── Sessões do agente (chip colorido na barra; regras em shared/agent-sessions.ts) ──
+  // Uma aba ganha sessão na 1ª vez que alguém usa o assistente nela. A conversa (feed do painel,
+  // memória de chat do main, pedidos recentes) é chaveada pela sessão: abas da mesma sessão a
+  // dividem. sessionOfTab é a cópia SÍNCRONA (o setTabs só vale no próximo render): quem grava
+  // no feed logo depois de criar/entrar numa sessão já usa a chave nova.
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const sessionOfTab = useRef(new Map<string, string>());
+
+  const threadKeyOf = useCallback((tabId: string): string => sessionOfTab.current.get(tabId) || tabId, []);
+
+  // A chave da conversa de uma aba mudou: a conversa dela vai junto (se ninguém mais usa a antiga).
+  function noteThreadChange(tabId: string, before: string | undefined, after: string | undefined, tabsBefore: Tab[]) {
+    const from = before || tabId, to = after || tabId;
+    if (after) sessionOfTab.current.set(tabId, after); else sessionOfTab.current.delete(tabId);
+    if (from === to) return;
+    const othersOnFrom = tabsBefore.some(t => t.id !== tabId && (t.sessionId || t.id) === from);
+    if (!othersOnFrom) moveThread(from, to);
+  }
+  function moveThread(from: string, to: string) {
+    window.electronAPI?.moveChatHistory?.(from, to);
+    window.dispatchEvent(new CustomEvent('bah:move-thread', { detail: { from, to } }));
+  }
+
+  /** A sessão da aba (cria na 1ª vez, com nome do pedido e cor livre). Devolve a chave da conversa. */
+  const ensureSession = useCallback((tabId: string, hint?: { command?: string; url?: string }): string => {
+    const cur = sessionOfTab.current.get(tabId);
+    if (cur) return cur;
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab || tab.hidden) return tabId;
+    const live = liveSessions(sessionsRef.current, tabsRef.current);
+    const s: AgentSession = {
+      id: uuidv4(),
+      name: uniqueSessionName(sessionNameFor(hint?.command || '', hint?.url || tab.url), live.map(x => x.name)),
+      color: pickSessionColor(live.map(x => x.color)),
+      createdAt: Date.now(),
+    };
+    sessionsRef.current = [...sessionsRef.current, s];
+    setSessions(prev => [...prev, s]);
+    sessionOfTab.current.set(tabId, s.id);
+    moveThread(tabId, s.id);
+    setTabs(prev => prev.map(t => (t.id === tabId ? { ...t, sessionId: s.id } : t)));
+    return s.id;
+  }, []);
+
+  /** A aba entra na sessão (vai pra perto das abas dela). */
+  const joinTabToSession = useCallback((tabId: string, sessionId: string) => {
+    // A aba pode ter acabado de nascer (addTab no mesmo instante): ainda não está em tabsRef, mas o
+    // setTabs abaixo (funcional) já a vê.
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if ((tab && tab.sessionId === sessionId) || !sessionsRef.current.some(x => x.id === sessionId)) return;
+    noteThreadChange(tabId, tab?.sessionId, sessionId, tabsRef.current);
+    setTabs(prev => joinInStrip(prev, tabId, sessionId));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Aba aberta A PARTIR de outra (link, agente): entra na sessão da de origem, se ela tiver. */
+  const joinOpenerSession = useCallback((tabId: string, openerTabId: string) => {
+    const sid = sessionOfTab.current.get(openerTabId);
+    if (sid) joinTabToSession(tabId, sid);
+  }, [joinTabToSession]);
+
+  /** A aba sai da sessão e começa uma conversa própria (vazia; se era a única aba, leva a conversa). */
+  const leaveTabSession = useCallback((tabId: string) => {
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab?.sessionId) return;
+    sessionOfTab.current.delete(tabId);
+    // Era a única aba da sessão: a conversa fica com ela (só some o chip).
+    if (!tabsRef.current.some(t => t.id !== tabId && t.sessionId === tab.sessionId)) moveThread(tab.sessionId, tabId);
+    setTabs(prev => leaveInStrip(prev, tabId));
+  }, []);
+
+  const renameSession = useCallback((id: string, name: string) => {
+    const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, MAX_SESSION_NAME);
+    if (!clean) return;
+    setSessions(prev => prev.map(s => (s.id === id ? { ...s, name: clean } : s)));
+  }, []);
+  const recolorSession = useCallback((id: string, color: SessionColor) => {
+    if (!isSessionColor(color)) return;
+    setSessions(prev => prev.map(s => (s.id === id ? { ...s, color } : s)));
+  }, []);
+
+  // Sessão sem aba nenhuma some (a Fase 3 leva pro histórico de conversas).
+  useEffect(() => {
+    setSessions(prev => { const live = liveSessions(prev, tabs); return live.length === prev.length ? prev : live; });
+  }, [tabs]);
+
   return {
+    sessions, ensureSession, joinTabToSession, joinOpenerSession, leaveTabSession, renameSession, recolorSession, threadKeyOf,
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
     setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, addOutsideTab, closeTab, updateTab, reopenClosedTab, forgetClosedTabs,

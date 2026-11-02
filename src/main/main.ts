@@ -386,6 +386,13 @@ const lastGesture = new Map<number, number>();
 const liveAuthPopups = new Map<number, number>();
 const lastAuthPopupAt = new Map<number, number>();
 // Host da janela de login enquanto ela existe ('' quando não há nenhuma) + o gancho pra
+// Visualizador de texto puro do Chromium (ver did-attach-webview): fundo e texto do MESMO esquema de
+// cor (Canvas/CanvasText), mesmo com a CSP do site bloqueando o estilo dele.
+const PLAIN_TEXT_VIEWER_CSS = `
+html:has(> head > meta[name="color-scheme"]:only-child):has(> body > pre:only-child) { color-scheme: light dark; background: Canvas; color: CanvasText; }
+html:has(> head > meta[name="color-scheme"]:only-child) > body > pre:only-child { color: CanvasText; }
+`;
+
 // reavaliar o bloqueador. Ficam no escopo de módulo porque quem liga é o handler de popup
 // (did-attach-webview) e quem lê é o evalAdblockForHost, lá dentro do setupIPC.
 let authPopupHost = '';
@@ -1265,6 +1272,15 @@ function createWindow(): void {
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
+    // Arquivo de TEXTO puro (README.md, .txt, logs) aberto direto: o Chromium mostra num <pre> e, no
+    // tema escuro, pinta o texto claro. Quando o servidor manda CSP "default-src 'none'; sandbox"
+    // (Hugging Face, GitHub raw…), o fundo escuro do próprio visualizador não vem: o texto fica claro
+    // num fundo branco (invisível). Folha de USUÁRIO (insertCSS) não
+    // passa pela CSP da página; o seletor só casa com o visualizador de texto do Chromium
+    // (<head> só com o meta color-scheme e <body> só com um <pre>), nunca com página de verdade.
+    wc.on('dom-ready', () => {
+      wc.insertCSS(PLAIN_TEXT_VIEWER_CSS, { cssOrigin: 'user' }).catch(() => {});
+    });
     // Indicador de som na aba (igual ao Chrome). O Chromium avisa quando a aba passa a
     // EMITIR áudio de verdade — vídeo mudo não conta. Só avisa o renderer (que acha a aba
     // dona pelo wcId); não mexe em som/autoplay.
@@ -1848,6 +1864,11 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     aiEngine?.clearHistory(tabId);
     localEngine?.clearHistory(tabId);
     return { ok: true };
+  });
+  ipcMain.handle('ai:move-history', (_event, from: string, to: string) => {
+    if (typeof from !== 'string' || typeof to !== 'string') return;
+    aiEngine?.moveHistory(from, to);
+    localEngine?.moveHistory(from, to);
   });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine

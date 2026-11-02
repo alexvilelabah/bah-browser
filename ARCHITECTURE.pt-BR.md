@@ -202,6 +202,44 @@ A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só i
 
 ---
 
+## Sessões do agente (chip na aba + conversa dividida)
+
+Uma **sessão** é a linha de trabalho que o assistente acompanha: uma aba, ou um grupo de abas que dividem
+a mesma conversa. A aba ganha sessão na 1ª vez que o assistente é usado nela (`ensureSession`): nome tirado
+do pedido ("Job hunt", "Groceries", "Trip"…), cor que não está em uso. Na barra aparece como grupo de abas
+do Chrome — chip colorido com o nome antes das abas da sessão e a mesma cor sublinhando cada uma; o painel
+mostra o mesmo chip (clique renomeia). Abas que o agente abre na tarefa e links abertos em aba nova a partir
+de uma aba da sessão entram nela; o menu do botão direito da aba adiciona a outra sessão, cria uma nova ou
+tira dela; arrastar a aba pra entre duas abas de uma sessão entra, pra longe sai.
+A conversa é chaveada pela **chave da thread** = id da sessão (ou da aba, sem sessão): o feed do painel
+(`feedsByTab`), a memória de chat do main (`conversationHistories`, movida com `ai:move-history`) e os
+pedidos recentes do prompt do agente (`recentRunsRef`). Mudou a chave da aba → a conversa vai junto
+(`bah:move-thread`). Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`);
+estado: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
+Por enquanto só na memória (restaurar + histórico de conversas vêm a seguir).
+
+## Roteamento dos pedidos e continuações
+
+A caixa do assistente decide por mensagem: tarefa do agente, resposta sobre a página, resposta da web ou
+chat (`routeCommand` no `AgentCommandBar.tsx`; com IA na nuvem um classificador de uma palavra em
+`classifyIntent` no `App.tsx` vai antes, com IA local as regras de palavras decidem). Antes de tudo:
+- **pergunta sobre a última tarefa** ("você clicou?", "o que aconteceu?") → chat com o registro dela
+  (`src/renderer/last-run.ts` `lastRunDigest`), nunca busca na web;
+- **relato de que a última tarefa ficou pela metade** ("abriu uma janela, mas não a segunda") → volta pro
+  agente (`reportsIncompleteRun`), que recebe os pedidos anteriores e como terminaram;
+- mensagem que **começa com verbo de ação** ("procure…", "pesquise…", "abra…") → agente
+  (`src/renderer/route-words.ts`); perguntas continuam indo pra resposta da web.
+Cada tarefa terminada guarda a última coisa em que agiu, e o prompt diz que "isso / essa" é ela.
+"N <qualquer coisa> … cada / diferente" abre N vídeos mesmo com erro de digitação (`site-knowledge.ts`,
+testado empacotando em `tests/unit/quick-video.test.ts`). As respostas da web tiram páginas de buscador
+das fontes e nunca mostram `[[ACTION: …]]` cru; ação sugerida "none" não vira botão.
+
+**Arquivos de texto puro no tema escuro.** O visualizador de texto do Chromium clareia o texto no tema
+escuro, mas site que manda `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub
+raw) não ganha o fundo escuro → branco no branco. O `main.ts` insere uma folha de usuário
+(`PLAIN_TEXT_VIEWER_CSS`, que só casa com o `<meta>` + `<pre>` do visualizador) e fundo e texto seguem o
+mesmo esquema (`tests/e2e/plain-text-dark.spec.ts`).
+
 ## Skills de navegação (`skills/*/SKILL.md`)
 
 Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que
@@ -219,7 +257,7 @@ e `search`. Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/
 Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
 skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`. Estados extras: `searchbox` (campo de busca/destino), `tabs` (abas).
+`used-listings`, `travel-search`. Estados extras: `searchbox` (campo de busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou aviso "entre para ver…"). Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`. Skills novas: `card-list`, `job-apply`, `sign-in`.
 Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`.
 
 ---

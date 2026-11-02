@@ -23,7 +23,7 @@ import { refreshRegion, onRegionState, regionState, agentRegionLine, askedNetwor
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
-import TabBar, { type TabCommand } from './components/TabBar';
+import TabBar, { type TabCommand, type SessionCommand } from './components/TabBar';
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
@@ -96,6 +96,9 @@ import {
 } from './agent-recovery';
 import {
   detectManualHelpNeed,
+  commandLikelyNeedsAccount,
+  noteAccountState,
+  accountStateLine,
   manualHelpHistoryNote,
   type ManualHelpRequest,
 } from './agent-login-policy';
@@ -149,6 +152,7 @@ declare global {
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
+      moveChatHistory?: (from: string, to: string) => Promise<any>;
       // Continuar de onde parou: o main pede pra gravar as abas antes de fechar a janela; a tela
       // pede pra mandar o localStorage pro disco já quando a sessão muda (renderer/session.ts).
       onSaveSessionNow?: (cb: () => void) => (() => void);
@@ -327,6 +331,17 @@ function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?:
   };
 }
 
+/** Página do próprio buscador (resultado/ajuda), que nunca serve de fonte de uma resposta. */
+function isSearchEnginePage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.replace(/^www\./, '');
+    if (/^search\.google$|(^|\.)google\.[a-z.]+$/.test(h) && (h === 'search.google' || /^\/(search|url|webhp)\b/.test(u.pathname))) return true;
+    if (/(^|\.)(bing\.com|duckduckgo\.com|search\.yahoo\.com|search\.brave\.com|yandex\.[a-z]+|ecosia\.org|startpage\.com)$/.test(h) && (/\/(search|html)\b/.test(u.pathname) || u.searchParams.has('q'))) return true;
+    return false;
+  } catch { return false; }
+}
+
 export default function App() {
   const store = useTabStore();
   // A aba que a pessoa está vendo é anônima (selo na barra, extensões e "Entrar…" apagados).
@@ -456,6 +471,18 @@ export default function App() {
   // Memória curta de tarefas do agente POR ABA (tabId → últimos comandos+desfecho).
   // Antes era uma lista global → follow-up de agente vazava entre abas.
   const recentRunsRef = useRef<Map<string, Array<{ cmd: string; outcome: string }>>>(new Map());
+  // A conversa de uma aba mudou de chave (ganhou sessão / entrou em outra): os pedidos recentes vão junto.
+  useEffect(() => {
+    const onMove = (e: Event) => {
+      const { from, to } = (e as CustomEvent).detail || {};
+      const m = recentRunsRef.current, a = m.get(from);
+      if (!a?.length || !to || from === to) { m.delete(from); return; }
+      m.set(to, [...(m.get(to) ?? []), ...a].slice(-5));
+      m.delete(from);
+    };
+    window.addEventListener('bah:move-thread', onMove);
+    return () => window.removeEventListener('bah:move-thread', onMove);
+  }, []);
   const lastQuickActionRef = useRef<QuickAction | null>(null);
   // Gravação de macro: ações duráveis executadas com sucesso no run atual.
   // No fim (sucesso), vira a "receita" que o usuário repete sem gastar IA.
@@ -568,7 +595,12 @@ export default function App() {
     // opts.incognito: popup/pesquisa saída de aba anônima ou "Abrir link em aba anônima" (main).
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string, opts) => {
       if (opts?.incognito) void openIncognitoTab(url);
-      else store.addTab(url);
+      else {
+        // Link aberto em aba nova a partir da aba ativa ("Apply on company site"): entra na sessão dela.
+        const opener = activeTabIdRef.current;
+        const id = store.addTab(url);
+        if (opener) store.joinOpenerSession(id, opener);
+      }
     }) as any);
     // Link/arquivo de outro app (Bah como navegador padrão). O main segura o que chegou antes da tela
     // montar (o link que ABRIU o Bah) e só manda depois do aviso — então o ouvinte vem antes dele.
@@ -1438,7 +1470,7 @@ export default function App() {
       const greeting = m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
       if (greeting) return 'chat';
       const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
-      const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
+      const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|browse|browsing|navigate|visit|apply|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
       if (!actionVerb && !hasUrl) {
         const questionStart = /^(o ?que|oq\b|qual|quais|quem|como|por ?qu[eê]|pra ?que|para ?que|quando|onde|cad[êe]|what|who|whose|how|why|when|where|which|cu[áa]l(es)?|qu[ée]\b|qui[ée]n|c[óo]mo|por ?qu[ée]|cu[áa]ndo|d[óo]nde)\b/.test(m);
         const questionEnd = /\?\s*$/.test(m);
@@ -1625,7 +1657,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
     const q = (query || '').trim();
     if (!q) return { answer: 'Empty question.', sources: [], isError: true };
-    const { results, blocked, error } = await searchWebResults(q);
+    const found = await searchWebResults(q);
+    const { blocked, error } = found;
+    // Página do PRÓPRIO buscador (search.google, google.com/search, bing.com/search…) não é fonte:
+    // não diz nada sobre o assunto e aparecia como "Sources: search.google" duas vezes.
+    const results = found.results.filter(x => !isSearchEnginePage(x.url));
     if (results.length === 0) {
       return {
         answer: error || (blocked
@@ -1640,8 +1676,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
     const r = await window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled);   // stateless: não polui o histórico
     const ok = (r?.response || '').trim();
     // Falha da IA na síntese NÃO pode se disfarçar de resposta: vira aviso vermelho com dica.
-    const answer = ok || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
-    return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !ok };
+    // O prompt pede pra não propor ação, mas o modelo local às vezes escreve [[ACTION: …]] mesmo assim:
+    // nunca aparece cru na resposta.
+    const clean = ok.replace(/\[\[\s*ACTION\s*:[^\]]*\]\]/ig, '').trim();
+    const answer = clean || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
+    return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !clean };
   }, [store, searchWebResults]);
 
   // ── VITRINE DE NOVIDADES (placeholder dinâmico) ────────────────────────────
@@ -1674,6 +1713,26 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   }, [store]);
 
   // Menu do botão direito numa aba: cada item age na aba CLICADA (que pode não ser a ativa).
+  // Chip / menu das sessões do agente (TabBar) → store.
+  const onSessionCommand = useCallback((cmd: SessionCommand) => {
+    switch (cmd.kind) {
+      case 'rename': store.renameSession(cmd.id, cmd.name); break;
+      case 'color': store.recolorSession(cmd.id, cmd.color); break;
+      case 'join': store.joinTabToSession(cmd.tabId, cmd.sessionId); break;
+      case 'leave': store.leaveTabSession(cmd.tabId); break;
+      case 'new': {
+        const tab = store.tabs.find(x => x.id === cmd.tabId);
+        store.leaveTabSession(cmd.tabId);
+        store.ensureSession(cmd.tabId, { url: tab?.url });
+        break;
+      }
+      case 'new-tab': {
+        const id = store.addTab();
+        store.joinTabToSession(id, cmd.sessionId);
+        break;
+      }
+    }
+  }, [store]);
   const onTabCommand = (cmd: TabCommand, id: string) => {
     const tab = store.tabs.find(x => x.id === id && !x.hidden);
     if (!tab) return;
@@ -1709,6 +1768,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onCommand={onTabCommand}
             isMuted={siteMute.isMuted}
             canReopen={store.hasClosedTabs}
+            sessions={store.sessions}
+            onSession={onSessionCommand}
           />
         </div>
         <HwMonitor />
@@ -2216,7 +2277,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           )}
           <AgentCommandBar
             activeTabId={store.activeTabId}
-            tabIds={store.tabs.map(t => t.id).join(',')}
+            tabIds={store.tabs.map(t => t.sessionId || t.id).join(',')}
+            threadKeyOf={store.threadKeyOf}
+            onEnsureSession={(tabId, text) => { store.ensureSession(tabId, { command: text }); }}
+            viewSession={(() => {
+              const sid = store.activeTab?.sessionId;
+              const s = sid ? store.sessions.find(x => x.id === sid) : undefined;
+              return s ? { id: s.id, name: s.name, color: s.color, tabs: store.tabs.filter(t => t.sessionId === sid && !t.hidden).length } : null;
+            })()}
+            onRenameSession={store.renameSession}
             pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isNewTabPage(store.activeTab?.url)}
             activeTabTitle={store.activeTab?.title}
             activeTabUrl={store.activeTab?.url}
@@ -2319,10 +2388,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
-              const convoCtx = (recentRunsRef.current.get(taskTabId) ?? []).slice(-3)
+              const convoCtx = (recentRunsRef.current.get(store.threadKeyOf(taskTabId)) ?? []).slice(-3)
                 .map(r => `- "${r.cmd}" → ${r.outcome}`)
                 .join('\n');
-              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
+              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
               let previousStateKey = '';
               let noEffectCount = 0;
               // Vision: mode + how many images this run already sent (token/latency budget).
@@ -2426,7 +2495,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Peça compatível com um modelo (carregador/fonte/bateria pra "Lenovo IdeaPad 3 15ADA05").
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
               // Candidatura a vaga: liga a skill job-apply e o freio do "Submit" puro do formulário.
-              const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
+              const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
               const riskOpts = { jobs: commandIsJobs };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
@@ -2440,7 +2509,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const seenJobs: JobListing[] = [];   // cartões vistos nesta tarefa (pra reconhecer a vaga aberta pelo título)
               const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
               // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
-              let carefulNavs = 0;
+              let carefulNavs = 0, carefulRefusals = 0;
+              // A última coisa em que o agente agiu (texto do clique + página): o próximo pedido pode dizer "it/that".
+              let lastTarget = '';
               const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
               // Compras/viagem com a conexão saindo em OUTRO país (VPN/proxy): os sites vão mostrar preço,
               // moeda e estoque de lá. Pergunta uma vez por país, por sessão; só a pessoa muda a configuração.
@@ -2545,10 +2616,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   : "The task stopped before finishing and the model gave no reason. Try rephrasing it."
                 );
                 // Memória curta da conversa: o próximo pedido pode ser um follow-up.
-                const tabRuns = recentRunsRef.current.get(taskTabId) ?? [];
-                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}` });
+                const runsKey = store.threadKeyOf(taskTabId);   // sessão da aba de origem (abas da sessão dividem)
+                const tabRuns = recentRunsRef.current.get(runsKey) ?? [];
+                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}${lastTarget ? ` — last thing acted on: ${lastTarget}` : ''}` });
                 if (tabRuns.length > 5) tabRuns.shift();
-                recentRunsRef.current.set(taskTabId, tabRuns);
+                recentRunsRef.current.set(runsKey, tabRuns);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
@@ -3200,8 +3272,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       var n = {}; kids.forEach(function(c){ n[sig(c)] = (n[sig(c)] || 0) + 1; });
                       return Object.keys(n).some(function(k){ return n[k] >= 3; });
                     });
-                    return { promo: promo, dialog: label, closers: closers, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards };
-                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; promo?: string } | null;
+                    // Parede de login: campo de senha à vista, página de login (título/endereço) ou aviso "entre para ver…".
+                    var signin = Array.prototype.slice.call(document.querySelectorAll('input[type=password]')).filter(visRow).length > 0
+                      || /\b(log ?in|sign ?in|sign ?up)\b|\bentrar\b|iniciar sesi[oó]n/i.test(document.title || '')
+                      || /\/(login|signin|sign-in|log-in|uas\/login|auth|account\/login)\b/i.test(location.pathname)
+                      || /\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\b/i.test((document.body.innerText || '').slice(0, 4000));
+                    return { promo: promo, dialog: label, closers: closers, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
+                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
                   const elFor = (txt: string) => observation.interactive_elements.find(e => {
                     const t = String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase();
                     return t && (t === txt.toLowerCase() || t.startsWith(txt.toLowerCase().slice(0, 40)));
@@ -3235,7 +3312,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const pageStates = [
                     uiState?.dialog ? 'dialog' : '', uiState?.options?.length ? 'suggestions' : '',
                     uiState?.datepicker ? 'datepicker' : '', uiState?.eula ? 'eula' : '', uiState?.osSelector ? 'os-selector' : '',
-                    uiState?.searchbox ? 'searchbox' : '', uiState?.tabs ? 'tabs' : '', uiState?.cards ? 'cards' : '',
+                    uiState?.searchbox ? 'searchbox' : '', uiState?.tabs ? 'tabs' : '', uiState?.cards ? 'cards' : '', uiState?.signin ? 'signin' : '',
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
@@ -3252,12 +3329,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (eng && SEARCH_BLOCK_RE.test(`${observation.url} ${observation.title} ${(observation.text_sample || '').slice(0, 1500)}`)) markBlocked(eng); }
                   agentDialogsTab((wv as any).getWebContentsId?.());
                   history += drainDialogLog();
+                  noteAccountState(observation);
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
                     '',
                     agentSearchLine(),
                     agentRegionLine(),
                     pacingLine,
+                    accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
                     downloadsBlock,
@@ -3840,8 +3919,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'dblclick') {
                     const tgtText = action.type === 'click_text' ? String((action as any).text || '')
                       : String((observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.text || (observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.aria || '');
+                    if (tgtText.trim()) lastTarget = `"${tgtText.replace(/\s+/g, ' ').trim().slice(0, 120)}" on ${hostOf(observation.url) || observation.url}`;
                     if (/^\W*(sign ?in|log ?in|sign ?up|register|create (an )?account|join( now)?|continue with (google|apple|facebook|microsoft|email)|sign in with|log in with|entrar|fazer login|cadastr|iniciar sesi[oó]n|reg[ií]strate)\b/i.test(tgtText.trim())
-                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command)) {
+                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command) && !commandLikelyNeedsAccount(command)) {
                       history += `\nNOT SIGNING IN: "${tgtText.slice(0, 50)}" starts a sign-in/sign-up, and the user did not ask for anything that needs an account. Close the popup (its close button or press "Escape") and continue without an account — searching does not need one. If the site truly blocks without an account, try another site.`;
                       onProgress({ kind: 'status', message: `🔒 Not signing in ("${tgtText.slice(0, 40)}") — the task doesn't need an account.` });
                       continue;
@@ -3856,10 +3936,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         history += `\nCAREFUL SITE (${targetHost}): ${why} The user continues by hand — summarize what is visible (extract_text) and finish with done/report telling them the next step.`;
                         onProgress({ kind: 'status', message: `🛡️ ${targetHost} forbids automated browsing — ${why}` });
                       };
+                      // O modelo pequeno insistia no mesmo clique recusado (6× "Jobs") e a tarefa morria como
+                      // "repetição", sem dizer o porquê. Segunda recusa → para e diz à pessoa o que fazer à mão.
+                      const stopCareful = () => {
+                        const signInWall = /\b(log ?in|sign ?in|sign ?up|join)\b/i.test(observation.title || '') || /\/(login|signup|uas\/login|checkpoint)\b/i.test(observation.url || '');
+                        const msg = `🛡️ ${targetHost} is in careful mode: its terms forbid automated browsing, so Bah only opens and reads pages there — no clicking or typing.`
+                          + (signInWall ? ' Sign in yourself in this tab (once — the session stays), then ask again.' : '')
+                          + (commandIsJobs ? ' Open the job and click Apply yourself; if it sends you to the company\'s own application site, ask Bah to continue there.' : ' Continue by hand from here.');
+                        const done: BrowserAction = { type: 'done', success: false, reason: msg };
+                        finishRun('failed', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done };
+                      };
                       if (action.type === 'navigate') {
-                        if (carefulNavs >= 1) { refuse('only one page load per request is allowed here.'); continue; }
+                        if (carefulNavs >= 1) { if (++carefulRefusals >= 2) return stopCareful(); refuse('only one page load per request is allowed here.'); continue; }
                         carefulNavs++;
                       } else if (!CAREFUL_ALLOWED.has(action.type)) {
+                        if (++carefulRefusals >= 2) return stopCareful();
                         refuse(`"${action.type}" is not done automatically on this site.`);
                         continue;
                       }
@@ -4506,7 +4598,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // (no clique da aba) dá play. Sem isso, as N abas tocavam todas juntas.
                       const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
-                      for (const v of vids) { try { opened.push(store.addTab(v.url, opensIncognito('from-tab', aiOnIncognito()))); } catch {} }
+                      for (const v of vids) { try { const nid = store.addTab(v.url, opensIncognito('from-tab', aiOnIncognito())); store.joinOpenerSession(nid, taskTabId); opened.push(nid); } catch {} }
                       store.setActiveTabId(originTabId);
                       activeTabIdRef.current = originTabId;
                       opened.forEach(id => { pausedCutTabsRef.current.set(id, 0); armCutTab(id); });
@@ -4542,7 +4634,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
                       for (const c of vc.cuts) {
-                        opened.push(store.addTab(`https://www.youtube.com/watch?v=${c.videoId}&t=${c.seconds}s`, opensIncognito('from-tab', aiOnIncognito())));
+                        { const nid = store.addTab(`https://www.youtube.com/watch?v=${c.videoId}&t=${c.seconds}s`, opensIncognito('from-tab', aiOnIncognito())); store.joinOpenerSession(nid, taskTabId); opened.push(nid); }
                       }
                       store.setActiveTabId(originTabId);
                       activeTabIdRef.current = originTabId;
@@ -4610,6 +4702,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         // sem roubar o foco — senão o painel da IA (que segue a aba ATIVA)
                         // ficava em branco, escondendo esta própria resposta.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${sorted.length} offers for "${q}". Cheapest: ${c.title} — R$ ${fmt(c.price)}${c.store ? ` (${c.store})` : ''}. Comparison table opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4655,6 +4748,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         // addBackgroundTab: mesma razão do compare_prices acima.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${valid.length} news for "${q}". Top: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Panel opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4697,6 +4791,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         // addBackgroundTab: mesma razão do compare_prices acima.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `Done: "${spec.title}" opened in a new tab (${spec.rows?.length ?? 0} rows, sortable table + chart).`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4985,6 +5080,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: `Blocked: the agent only opens http(s) pages, not "${action.url}".` };
                     } else {
                     const newId = store.addTab(action.url, opensIncognito('from-tab', aiOnIncognito()));   // tarefa de aba anônima → aba anônima
+                    store.joinOpenerSession(newId, taskTabId);   // aba do agente entra na sessão da tarefa
                     agentOpenedTabs.add(newId);
                     grantedTabs.add(newId);
                     store.updateTab(newId, { agentTask: true });
@@ -5705,7 +5801,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                             ? 'Solve the human verification manually in this tab. When you are done, click Continue.'
                             : kind === 'paywall'
                             ? 'If you have access, sign in manually. Then click Continue so I can try to take it from here.'
-                            : 'Log in manually on the site itself. Once you are logged in, click Continue so I can resume the task.',
+                            : 'Sign in yourself in this tab: click the username field to pick a login saved in Bah\'s password manager, or type it. Once you are signed in, click Continue and I resume the task. (I never see your password.)',
                         }, afterObservation.url);
                         continue;
                       }
@@ -5760,7 +5856,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               }
             }}
             onSendChat={async (msg, docText, streamId, skipPageContext) => {
-              const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
+              const chatTabId = store.threadKeyOf(store.activeTabId);   // a conversa pertence à SESSÃO desta aba (ou a ela, sem sessão)
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
@@ -5810,7 +5906,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // um modelo de raciocínio divagando "[[ACTION:…]]" no pensamento não vira botão.
               const answerOnly = raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*?<\/think>/, '');
               const m = answerOnly.match(/\[\[\s*ACTION\s*:\s*([^\]]+?)\s*\]\]/i);
-              const suggestedCommand = m ? m[1].trim() : undefined;
+              // "[[ACTION: none]]" (o modelo dizendo que não há ação) não vira botão "⚡ Fazer isso: none".
+              const proposed = m ? m[1].trim() : '';
+              const suggestedCommand = proposed && !/^(none|n\/?a|null|nothing|nada|ninguna|nenhuma|no action|-+)\.?$/i.test(proposed) ? proposed : undefined;
               const reply = raw.replace(/\[\[\s*ACTION\s*:[^\]]*\]\]/ig, '').trim() || raw.trim();
               return { reply, suggestedCommand, isError: !!result?.error };
             }}

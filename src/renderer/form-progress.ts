@@ -13,6 +13,18 @@ export interface FormField {
   voluntary?: boolean;
 }
 
+// Onde está o formulário: um diálogo aberto com campos (Easy Apply do LinkedIn, modais de ATS)
+// vence; senão o <form> com mais campos (a página pode ter um form de busca antes); senão o body.
+export const FORM_ROOT_JS = `function(){
+    var fieldsIn = function(n, skipChecks){ return Array.prototype.filter.call(n.querySelectorAll('input,textarea,select'), function(e){ var t = (e.type || '').toLowerCase(); return !/^(hidden|submit|button|reset|image|search)$/.test(t) && !(skipChecks && t === 'checkbox'); }).length; };
+    var shown = function(e){ var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    var dlg = Array.prototype.filter.call(document.querySelectorAll('[role=dialog],dialog[open],[aria-modal=true]'), function(d){ return shown(d) && fieldsIn(d, true) > 0; }).pop();
+    if (dlg) return dlg;
+    var best = null, n = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('form'), function(f){ var c = fieldsIn(f, false); if (c > n) { n = c; best = f; } });
+    return best || document.body;
+  }`;
+
 // Roda na página (executeJavaScript). Rádios/caixas agrupados por name; rótulo = <label>, aria,
 // legenda do grupo ou o texto logo antes.
 export const FORM_FIELDS_SCRIPT = `(function(){
@@ -35,7 +47,7 @@ export const FORM_FIELDS_SCRIPT = `(function(){
     }
     return clean(el.name);
   };
-  var form = document.querySelector('form') || document.body;
+  var form = (${FORM_ROOT_JS})();
   var out = [], groups = {};
   Array.prototype.forEach.call(form.querySelectorAll('input,textarea,select'), function(el){
     var t = (el.type || '').toLowerCase();

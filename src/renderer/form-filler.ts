@@ -4,6 +4,7 @@
 // (setter nativo + input/change), escolhe opção de select e clica o rádio/caixa certo.
 // Combobox com busca (react-select etc.) fica de fora: o agente ou a pessoa escolhe.
 import type { FieldInfo, FillDecision } from '../shared/form-fill';
+import { FORM_ROOT_JS } from './form-progress';
 
 export const FORM_SCAN_SCRIPT = `(function(){
   var clean = function(s){ return String(s || '').replace(/\\s+/g, ' ').replace(/\\s*\\*\\s*$/, '').trim().slice(0, 160); };
@@ -27,7 +28,7 @@ export const FORM_SCAN_SCRIPT = `(function(){
     }
     return clean(el.name);
   };
-  var root = document.querySelector('form') || document.body;
+  var root = (${FORM_ROOT_JS})();
   var fields = [], groups = {}, store = [];
   Array.prototype.forEach.call(root.querySelectorAll('input,textarea,select'), function(el){
     var t = (el.type || el.tagName).toLowerCase();

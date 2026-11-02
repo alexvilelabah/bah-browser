@@ -715,6 +715,16 @@ export class AIEngine {
     return `\n\nENGINE: You are ${who}. If the user asks who/what AI you are, or who made you, answer THIS honestly and briefly — you are the browser's assistant, currently powered by the engine just described. Do NOT claim to be ChatGPT/Gemini/Claude or made by OpenAI/Google/Anthropic/Microsoft unless that is exactly the engine above.`;
   }
 
+  /** A conversa de uma aba passou pra sessão (ou a aba entrou em outra): junta no destino, nesta ordem. */
+  moveHistory(from: string, to: string): void {
+    if (!from || !to || from === to) return;
+    const a = this.conversationHistories.get(from);
+    if (!a?.length) { this.conversationHistories.delete(from); return; }
+    const merged = [...(this.conversationHistories.get(to) ?? []), ...a];
+    this.conversationHistories.set(to, merged.slice(-40));
+    this.conversationHistories.delete(from);
+  }
+
   clearHistory(tabId?: string): void {
     if (tabId) this.conversationHistories.delete(tabId);
     else this.conversationHistories.clear();

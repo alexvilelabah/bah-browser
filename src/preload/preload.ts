@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
+  moveChatHistory: (from: string, to: string) => ipcRenderer.invoke('ai:move-history', from, to),
   // Live model progress (tokens/sec) so a slow local step reads as working, not hung.
   onActionDelta: (cb: (m: { kind: string; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => {
     const listener = (_e: any, m: any) => cb(m);

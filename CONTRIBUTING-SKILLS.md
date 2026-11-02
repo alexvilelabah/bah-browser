@@ -26,7 +26,7 @@ repo — nothing is sent until you submit it there.
 name: kebab-case-name           # = folder name
 description: one line
 sites: [example.com]            # optional; subdomains match
-states: [dialog, suggestions, datepicker, eula, os-selector, searchbox, tabs]   # optional
+states: [dialog, suggestions, datepicker, eula, os-selector, searchbox, tabs, cards, signin]   # optional
 tasks: [download, search, travel, shopping, parts, people, jobs]                # optional
 priority: 40
 ---
