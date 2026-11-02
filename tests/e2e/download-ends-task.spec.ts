@@ -17,7 +17,7 @@ test('a download task finishes as soon as the download starts; the file keeps do
   test.setTimeout(150_000);
   const SIZE = 3 * 1024 * 1024, CHUNK = 64 * 1024;
   const server = http.createServer((q, res) => {
-    if (q.url !== '/setup.dmg') { res.setHeader('Content-Type', 'text/html'); res.end('<title>Get the app</title><h1>App</h1><a href="/setup.dmg">Download for Mac</a>'); return; }
+    if (q.url !== '/setup.dmg') { res.setHeader('Content-Type', 'text/html'); res.end('<title>Get the app</title><h1>App</h1><p>Our app is the fastest way to use Example on your computer. Free for personal use.</p><a href="/setup.dmg">Download for Mac</a> <a href="/">Home</a> <a href="/">Support</a>'); return; }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(SIZE), 'Content-Disposition': 'attachment; filename="setup.dmg"' });
     let sent = 0;
     const tick = () => { if (sent >= SIZE) { res.end(); return; } res.write(Buffer.alloc(CHUNK, 1)); sent += CHUNK; setTimeout(tick, 250); };
@@ -63,7 +63,7 @@ test('a chained request ("…and then open it") keeps the agent engaged: Bah wai
   test.setTimeout(150_000);
   const SIZE = 2 * 1024 * 1024, CHUNK = 64 * 1024;
   const server = http.createServer((q, res) => {
-    if (q.url !== '/setup.dmg') { res.setHeader('Content-Type', 'text/html'); res.end('<title>Get the app</title><a href="/setup.dmg">Download for Mac</a>'); return; }
+    if (q.url !== '/setup.dmg') { res.setHeader('Content-Type', 'text/html'); res.end('<title>Get the app</title><h1>App</h1><p>Our app is the fastest way to use Example on your computer. Free for personal use.</p><a href="/setup.dmg">Download for Mac</a> <a href="/">Home</a> <a href="/">Support</a>'); return; }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(SIZE), 'Content-Disposition': 'attachment; filename="setup.dmg"' });
     let sent = 0;
     const tick = () => { if (sent >= SIZE) { res.end(); return; } res.write(Buffer.alloc(CHUNK, 1)); sent += CHUNK; setTimeout(tick, 200); };
