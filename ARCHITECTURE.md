@@ -215,6 +215,10 @@ and the popup. The shim (`extension-shim-preload.ts`) now adds the missing piece
 - `offscreen`: one hidden window per extension, showing only that extension's own page (used for the
   clipboard and DOMParser). Bah also provides `runtime.getContexts` for that document.
 - `commands`: the manifest's shortcut list, with no keys bound.
+- `permissions`: `contains` / `getAll` answer from the manifest. Optional grants are refused.
+- `tabs.getCurrent`: returns `undefined` in a popup, and the tab when an extension page is open in a tab. Bitwarden's popup picks its width from this call.
+
+The LastPass and Bitwarden popups fix their size in the body's CSS, and `preferred-size-changed` never arrived for them, so they stayed at 25×25. The popup is now measured a few times after it loads and grows to fit (max 800×600, as in Chrome).
 
 **Who is installed** (`shared/password-extensions.ts`): detection uses the Web Store IDs, which come from
 the extension's public key, so another extension cannot claim them. A name alone does not count.

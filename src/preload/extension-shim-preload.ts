@@ -808,6 +808,12 @@
       define(chrome.runtime, 'getContexts', api('runtime.getContexts', (filter?: unknown) => ({ filter })));
     }
 
+    // ── chrome.tabs.getCurrent (o Electron não tem): popup = undefined, página da extensão numa aba =
+    // a aba. O popup do Bitwarden chama isto pra decidir a largura; sem a função, ficava com 25 px.
+    if (chrome.tabs && !chrome.tabs.getCurrent) {
+      if (define(chrome.tabs, 'getCurrent', api('tabs.getCurrent', () => ({})))) lock('tabs', chrome.tabs);
+    }
+
     // ── chrome.tabs.remove (o Electron não tem): fecha aba do Bah ───────────────
     if (chrome.tabs && !chrome.tabs.remove) {
       if (define(chrome.tabs, 'remove', api('tabs.remove', (ids?: unknown) => ({ tabIds: Array.isArray(ids) ? ids : [ids] })))) lock('tabs', chrome.tabs);

@@ -214,6 +214,10 @@ campos e o popup. O calço (`extension-shim-preload.ts`) agora põe o que faltav
 - `offscreen`: uma janela escondida por extensão, só com a página da própria extensão (usada pra área de
   transferência e DOMParser). O Bah também atende `runtime.getContexts` pra esse documento.
 - `commands`: a lista de atalhos do manifesto, sem tecla ligada.
+- `permissions`: `contains` / `getAll` respondem pelo manifesto. Permissão opcional é recusada.
+- `tabs.getCurrent`: devolve `undefined` no popup e a aba quando a página da extensão está aberta numa aba. O popup do Bitwarden escolhe a largura por essa chamada.
+
+Os popups do LastPass e do Bitwarden fixam o tamanho no CSS do body, e o `preferred-size-changed` nunca chegava pra eles, então ficavam em 25×25. Agora o popup é medido algumas vezes depois de carregar e cresce até caber o conteúdo (máximo 800×600, como no Chrome).
 
 **Quem está instalado** (`shared/password-extensions.ts`): a detecção usa os IDs da Web Store, que vêm da
 chave pública da extensão, então outra extensão não consegue usar os mesmos. Só o nome não conta.

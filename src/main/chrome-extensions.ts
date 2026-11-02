@@ -677,6 +677,7 @@ export function setupChromeExtensions(deps: {
         const see = wc ? R.canSeeTabUrl(ext.manifest, wc.getURL() || String(first), ext.id) : false;
         return { id: 1, focused: true, incognito: false, type: 'normal', state: 'normal', alwaysOnTop: false, tabs: wc ? [tabInfo(wc, true, see)] : [] };
       }
+      case 'tabs.getCurrent': return undefined;   // o worker não é aba (página de extensão: ver o CALL)
       case 'webNavigation.subscribe': navSubs.add(extId); return true;
       case 'webNavigation.getAllFrames': {
         const wc = tabId === undefined ? null : tabOf(tabId);
@@ -755,6 +756,12 @@ export function setupChromeExtensions(deps: {
     }
     const extId = R.extensionIdFromUrl(src);
     if (!extId || !exts.has(extId)) throw new Error('Not allowed.');
+    // A aba de quem chamou (página da extensão aberta numa aba); popup/opções/offscreen não são aba.
+    if (method === 'tabs.getCurrent') {
+      const ext = exts.get(extId)!;
+      const wc = ev.type === 'service-worker' ? null : tabOf(e.sender.id);
+      return wc ? tabInfo(wc, true, R.canSeeTabUrl(ext.manifest, wc.getURL(), ext.id)) : undefined;
+    }
     return handleCall(extId, String(method), details);
   });
 
@@ -899,7 +906,9 @@ export function setupChromeExtensions(deps: {
     const win = new BrowserWindow({
       parent: mw, show: false, frame: false, resizable: false, movable: false,
       minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
-      width: 25, height: 25, useContentSize: true, backgroundColor: '#ffffff',
+      // Nasce (escondida) com a altura máxima do Chrome: popup que escolhe o layout pela altura da
+      // janela na hora de abrir (o Bitwarden: < 300 px vira a versão "mini") vê a altura de verdade.
+      width: 25, height: 600, useContentSize: true, backgroundColor: '#ffffff',
       webPreferences: {
         session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false,
         enablePreferredSizeMode: true, spellcheck: false,
@@ -927,6 +936,25 @@ export function setupChromeExtensions(deps: {
     };
     win.webContents.on('preferred-size-changed', (_e, s) => { size = R.clampPopupSize(s.width, s.height); place(); show(); });
     win.webContents.once('did-finish-load', () => setTimeout(show, 150));   // página que não avisa o tamanho
+    // Medido ao vivo: o popup do LastPass (400×418) e o do Bitwarden ficavam em 25×25 — o
+    // preferred-size-changed não chega pra página que fixa o tamanho no CSS do body. Mede o conteúdo
+    // algumas vezes logo depois de carregar e cresce até ele (nunca encolhe; o limite é o do Chrome).
+    const MEASURE_JS = `(() => { const d = document.documentElement, b = document.body;
+      const r = (e) => e ? e.getBoundingClientRect() : { width: 0, height: 0 };
+      // Altura pelo conteúdo (body, e o <html> quando o CSS fixa um mínimo): o scrollHeight do <html>
+      // é no mínimo a janela, e a janela nasce alta — mediria todo popup com 600.
+      return [Math.max(d.scrollWidth, b ? b.scrollWidth : 0, r(d).width, r(b).width),
+              Math.max(b ? b.scrollHeight : 0, r(d).height, r(b).height)]; })()`;
+    const measure = async () => {
+      if (win.isDestroyed()) return;
+      try {
+        const m = await win.webContents.executeJavaScript(MEASURE_JS);
+        if (!Array.isArray(m) || win.isDestroyed()) return;
+        const next = R.clampPopupSize(Math.max(size.width, Number(m[0])), Math.max(size.height, Number(m[1])));
+        if (next.width !== size.width || next.height !== size.height) { size = next; place(); }
+      } catch {}
+    };
+    win.webContents.on('did-finish-load', () => { for (const ms of [100, 400, 1000, 2500]) setTimeout(() => { void measure(); }, ms); });
     win.on('blur', () => { if (popup?.win === win) closePopup(); });
     win.on('closed', () => { if (popup?.win === win) popup = null; });
     win.webContents.on('before-input-event', (ev, input) => {
