@@ -17,6 +17,8 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // O cliente embutido é opcional (padrão desligado) — liga pro teste.
     await page.evaluate(() => (window as any).electronAPI.torrentSetBuiltin(true));
@@ -67,6 +69,8 @@ test('seed toggle: OFF by default, flips ON and persists', async () => {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // Isolamento: o userData dos testes persiste o localStorage entre execuções — garante
     // o estado inicial "sem preferência" (= padrão OFF) independente de rodadas anteriores.

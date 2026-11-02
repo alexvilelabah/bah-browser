@@ -15,6 +15,8 @@ test('selecting Claude in the provider dropdown sticks (does not snap back to De
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // O painel do assistente ja abre por padrao (store.sidebarOpen inicia true) --
     // clicar em .ai-toggle aqui FECHARIA em vez de abrir.

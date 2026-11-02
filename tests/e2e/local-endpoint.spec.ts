@@ -13,6 +13,8 @@ async function launch() {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   return { app, page };
 }
 
