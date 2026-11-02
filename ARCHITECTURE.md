@@ -201,6 +201,7 @@ The separate **🌱 Share torrents (seed)** switch (default OFF) only matters wh
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Job applications filled by code from the 📝 applicant profile. The page scan (`FORM_SCAN_SCRIPT`) returns `FieldInfo[]`, including a stable `automationId` (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` detects the ATS (`detectAts`: URL, or field names for embedded forms) and classifies each field with **that ATS's table first** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), then the generic label/name/autocomplete rules. A table can also say `skip` (honeypots such as Workday's `beecatcher`, passwords, react-select internals) so a field is neither filled nor asked. Tables are built from public forms; their minimized field inventories live in `tests/fixtures/ats/*.json` and `tests/unit/ats-tables.test.ts` checks them and prints coverage per ATS |
 
 ---
 

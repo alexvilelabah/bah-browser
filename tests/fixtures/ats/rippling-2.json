@@ -1,0 +1,126 @@
+{
+ "ats": "rippling",
+ "source": "https://ats.rippling.com/rippling/jobs/528f45e5-4c17-4fb7-affe-41e0c12c7c15/apply",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "Second ats.rippling.com /apply page: same template as rippling-1 with different random names, confirming data-input is the stable key.",
+ "fields": [
+  {
+   "label": "Drop or select (.doc / .docx / .pdf)",
+   "type": "file",
+   "expect": null
+  },
+  {
+   "label": "First name",
+   "type": "text",
+   "name": "7830viCGFl",
+   "id": "field-8",
+   "automationId": "first_name",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last name",
+   "type": "text",
+   "name": "3u5SigKNx6p",
+   "id": "field-12",
+   "automationId": "last_name",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "Email",
+   "type": "text",
+   "name": "k0qeAq2SZet",
+   "id": "field-16",
+   "automationId": "email",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Pronouns",
+   "type": "combobox",
+   "name": "63QE-kCKST1",
+   "id": "field-20",
+   "automationId": "select-search-input",
+   "autocomplete": "auto-complete-off",
+   "expect": "pronouns"
+  },
+  {
+   "label": "Current company",
+   "type": "text",
+   "name": "wigfUdYb5Vf",
+   "id": "field-27",
+   "automationId": "current_company",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "currentCompany"
+  },
+  {
+   "label": "Search",
+   "type": "combobox",
+   "name": "40QgivnahR",
+   "id": "field-34",
+   "automationId": "select-search-input",
+   "autocomplete": "auto-complete-off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Phone number",
+   "type": "text",
+   "name": "v8yS_N_SoDc",
+   "id": "field-31",
+   "automationId": "phone_number",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Location",
+   "type": "text",
+   "name": "djGki9JUZRS",
+   "id": "field-42",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "LinkedIn Link",
+   "type": "text",
+   "name": "oU2BmBpsn7O",
+   "id": "field-51",
+   "automationId": "linkedin_link",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "linkedin"
+  },
+  {
+   "label": "Drop or select (.doc / .docx / .pdf)",
+   "type": "file",
+   "expect": null
+  },
+  {
+   "label": "Please identify your race",
+   "type": "combobox",
+   "name": "uKihoBoZTZK",
+   "id": "field-71",
+   "automationId": "select-search-input",
+   "autocomplete": "auto-complete-off",
+   "expect": "voluntary"
+  },
+  {
+   "label": "Yes - I consent to receiving text messages",
+   "type": "radio",
+   "name": "sms_opt_in",
+   "options": [
+    "Yes - I consent to receiving text messages",
+    "No - I do not consent to receiving text messages"
+   ],
+   "expect": null
+  }
+ ]
+}
