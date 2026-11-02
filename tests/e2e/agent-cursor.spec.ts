@@ -16,7 +16,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 test('the overlay ripple lands where the real click landed on the page', async () => {
   test.setTimeout(120_000);
   const PAGE = `<!doctype html><title>cursor</title><style>body{margin:0}#t1{position:absolute;left:600px;top:420px;width:160px;height:60px}</style>
-<button id=t1>Target one</button><script>window.__clicks=[];addEventListener('click',e=>__clicks.push([e.clientX,e.clientY,e.isTrusted]));</script>`;
+<button id=t1>Target one</button><script>window.__clicks=[];window.__moves=[];addEventListener('mousemove',e=>__moves.push([e.clientX,e.clientY]));addEventListener('click',e=>__clicks.push([e.clientX,e.clientY,e.isTrusted]));</script>`;
   const server = http.createServer((_q, r) => { r.setHeader('Content-Type', 'text/html'); r.end(PAGE); });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
@@ -57,5 +57,15 @@ test('the overlay ripple lands where the real click landed on the page', async (
     // Ondinha (coordenadas da janela) − origem da página = ponto na página; tem que bater com o clique real.
     expect(Math.abs(rx - wv.x - cx)).toBeLessThanOrEqual(6);
     expect(Math.abs(ry - wv.y - cy)).toBeLessThanOrEqual(6);
+    // O ponteiro que a PÁGINA recebeu segue um arco (o mesmo do cursor desenhado): vários movimentos, que
+    // se afastam da reta entre o início e o clique — é o que um gravador de sessão (HotJar) mostra.
+    const moves: number[][] = await app.evaluate(async ({ webContents }, url) => {
+      const wc = webContents.getAllWebContents().find(w => w.getType() === 'webview' && w.getURL() === url);
+      return wc ? JSON.parse(await wc.executeJavaScript('JSON.stringify(window.__moves || [])')) : [];
+    }, T);
+    expect(moves.length).toBeGreaterThanOrEqual(10);
+    const [sx, sy] = moves[0], [ex, ey] = moves[moves.length - 1];
+    const dist = (p: number[]) => Math.abs((ey - sy) * p[0] - (ex - sx) * p[1] + ex * sy - ey * sx) / (Math.hypot(ex - sx, ey - sy) || 1);
+    expect(Math.max(...moves.map(dist))).toBeGreaterThan(15);
   } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

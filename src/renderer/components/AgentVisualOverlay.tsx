@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
-import { arcPoint } from '../agent-cursor-path';
+import { arcPoint, arcSide, easeInOut, ARC_MS } from '../../shared/agent-cursor-path';
 
 export type AgentVisualState = 'idle' | 'observing' | 'thinking' | 'acting';
 
@@ -34,25 +34,24 @@ const STATE_LABEL: Record<AgentVisualState, string> = {
 // Comet-style overlay: a soft flowing aurora glow around the viewport edges
 // that breathes while the agent works. No grids/reticles — just an elegant
 // perimeter of colored light, tinted by the current state.
-// Cursor do agente desenhado PELO BAH por cima da página (o site não vê nada disso): desliza da
-// última posição até o próximo clique num arco, e aí o ripple acontece. Respeita "reduzir movimento".
+// Cursor do agente desenhado pelo Bah por cima da página: desliza da última posição até o próximo clique
+// no MESMO arco que os eventos de mouse reais seguem (shared/agent-cursor-path.ts). Respeita "reduzir movimento".
 function AgentCursor({ target }: { target: ClickRipple | undefined }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const posRef = useRef<{ x: number; y: number } | null>(null);
-  const sideRef = useRef<1 | -1>(1);
   useEffect(() => {
     if (!target) return;
     const to = { x: target.x, y: target.y };
     const from = posRef.current;
     const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     if (!from || reduce) { posRef.current = to; setPos(to); return; }
-    const side = sideRef.current; sideRef.current = (side === 1 ? -1 : 1);
-    const t0 = performance.now(), dur = 450;
+    // Mesmo lado e mesma duração do ponteiro de verdade (main/input:click): o desenho bate com o que o site recebe.
+    const side = arcSide(from, to);
+    const t0 = performance.now(), dur = ARC_MS;
     let raf = 0;
     const tick = (now: number) => {
       const k = Math.min(1, (now - t0) / dur);
-      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;   // ease-in-out
-      const p = arcPoint(from, to, e, side);
+      const p = arcPoint(from, to, easeInOut(k), side);
       posRef.current = p; setPos(p);
       if (k < 1) raf = requestAnimationFrame(tick);
     };
