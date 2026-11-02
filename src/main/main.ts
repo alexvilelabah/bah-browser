@@ -47,6 +47,7 @@ import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupRouterManager } from './router-manager';
 import { setupSkills } from './skills-loader';
 import { setupProxy, proxyFor } from './proxy';
 import { setupRegion, getTimezoneOverride } from './region';
@@ -292,6 +293,7 @@ let aiEngine: AIEngine;
 let pageAgent: PageAgent;
 let localEngine: AIEngine | null = null;
 let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
+let routerManager: ReturnType<typeof setupRouterManager> | null = null;
 let videoButton: ReturnType<typeof setupVideoButton> | null = null;
 let faviconCache: ReturnType<typeof setupFaviconCache> | null = null;
 // Senhas salvas: o main avisa quando a IA digita numa aba (o que ela digita nunca vira "Salvar senha?").
@@ -3219,6 +3221,13 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     allowDirect: (uri) => allowDirectDownload(uri, true),
     directRefused: () => mt('dl.noProxy.refused'),
   });
+  // Roteador local (Qwen2.5-1.5B, utilityProcess): rotula cada mensagem da caixa do assistente.
+  // Sobe DEPOIS que a janela aparece, e só se o modelo já estiver baixado (baixar pede um "sim").
+  routerManager = setupRouterManager({ getMainWindow: () => mainWindow, modelsDir: path.join(app.getPath('userData'), 'models') });
+  {
+    const startRouter = () => setTimeout(() => routerManager?.start(), 3000);
+    if (mainWindow?.isVisible()) startRouter(); else mainWindow?.once('show', startRouter);
+  }
   // ═══ Ação `download` do agente — roda numa worker thread (agent-download-worker.ts) ═══
   // Devolve assim que o download COMEÇA (caminho final + tamanho) e segue em background. O
   // resto chega como 'agent:download-event' (kind 'agent'): progresso a cada 1s pro painel,
@@ -4205,6 +4214,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;   // libera o close handler (não vai mais esconder na bandeja)
   try { monitorManager?.disposeAll(); } catch {}
+  try { routerManager?.dispose(); } catch {}
   destroyTray();
   // Free the persistent OCR workers (≈40–80MB) cleanly on exit.
   import('./ocr-engine').then(m => m.terminateOcrWorkers()).catch(() => {});

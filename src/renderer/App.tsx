@@ -47,6 +47,8 @@ import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
 import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
+import { parseRoute, routeToIntent, type RoutedIntent, type RouteContext, type RouterStatus } from '../shared/router-routes';
+import { isAboutLastRun, reportsIncompleteRun } from './last-run';
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
@@ -196,6 +198,10 @@ declare global {
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
       torrentSetBuiltin?: (on: boolean) => Promise<{ ok: boolean; builtin: boolean }>;
       torrentOpen?: (uri: string) => Promise<{ ok: boolean }>;
+      routerStatus?: () => Promise<RouterStatus & { rss?: number }>;
+      routerClassify?: (text: string, ctx?: RouteContext) => Promise<{ route: string; ms: number } | null>;
+      routerDownload?: () => Promise<{ ok: boolean; error?: string }>;
+      onRouterStatus?: (cb: (s: RouterStatus) => void) => (() => void);
       setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
       setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
       cancelVideoDownload?: (id: string) => Promise<any>;
@@ -832,6 +838,15 @@ export default function App() {
   //   LOCAL: atalhos LIGADOS (agentDrive=false). Modelo fraco erra o roteamento e é lento;
   //          o atalho acerta o óbvio de graça. Continua desligável no botão do compositor.
   // Escolha explícita já salva manda sempre — o padrão só vale pra quem nunca mexeu.
+  // Roteador local: estado vindo do main (baixar / carregando / pronto). Pronto → classifyIntent usa ele.
+  const [routerStatus, setRouterStatus] = useState<RouterStatus>({ state: 'not-downloaded' });
+  const routerReadyRef = useRef(false);
+  useEffect(() => {
+    const api = window.electronAPI;
+    const apply = (st: RouterStatus) => { routerReadyRef.current = st?.state === 'ready'; setRouterStatus(st); };
+    api?.routerStatus?.().then((st) => { if (st) apply(st); }).catch(() => {});
+    return api?.onRouterStatus?.(apply);
+  }, []);
   const [agentDrive, setAgentDrive] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem('agentDrive');
@@ -1460,15 +1475,36 @@ export default function App() {
   // Classificador de intenção por IA: lê o contexto da aba atual (url+título) e decide o caminho
   // da caixa (agir / página atual / web / chat). Chamada barata (resposta de UMA palavra, stateless).
   // Retorna null em qualquer falha/timeout → o AgentCommandBar usa o roteador determinístico.
-  const classifyIntent = useCallback(async (msg: string): Promise<'action' | 'page' | 'web' | 'chat' | null> => {
+  const classifyIntent = useCallback(async (msg: string, rctx?: { lastRun?: RouteContext['lastRun'] }): Promise<RoutedIntent | null> => {
+    // ── Roteador local (Qwen2.5-1.5B no utilityProcess), quando pronto: decide PRIMEIRO, na nuvem e
+    // no local. Entende erro de digitação e follow-up ("só abriu uma janela") melhor que as regras.
+    // Só rotula; falhou / "other" / demorou → segue o caminho de antes, abaixo.
+    // Saudação/agradecimento curto ("valeu!", "thanks") → chat na hora, antes até do roteador:
+    // 0 latência, e um "obrigado" nunca pode virar tarefa do agente.
+    if (isGreeting(msg.trim().toLowerCase())) return 'chat';
+    if (routerReadyRef.current && window.electronAPI?.routerClassify) {
+      const tabUrl = store.activeTab?.url || '';
+      const ctx: RouteContext = {
+        url: isNewTabPage(tabUrl) ? '' : tabUrl,
+        title: (store.activeTab as any)?.title || '',
+        lastRun: rctx?.lastRun ?? null,
+      };
+      const r = await raceTimeout(window.electronAPI.routerClassify(msg, ctx).catch(() => null), 5000, null);
+      const intent = routeToIntent(parseRoute(r?.route), !!ctx.lastRun);
+      if (intent) return intent;
+      // O AgentCommandBar pulou as regras de "última tarefa" contando com o roteador → aplica aqui.
+      if (ctx.lastRun) {
+        if (reportsIncompleteRun(msg)) return 'fix';
+        if (isAboutLastRun(msg)) return 'last_run';
+      }
+    }
     // ── Pré-classificador determinístico (0 token, 0 latência) ──
     // Padrões de ALTA precisão resolvem na hora os casos óbvios — a resposta começa já,
     // sem esperar o round-trip (até 6s) do classificador na nuvem. Só entra aqui o que é
     // inequívoco; qualquer dúvida segue pro classificador de sempre (conservador).
     try {
       const m = msg.trim().toLowerCase();
-      const greeting = m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
-      if (greeting) return 'chat';
+      if (isGreeting(m)) return 'chat';
       const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
       const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|browse|browsing|navigate|visit|apply|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
       if (!actionVerb && !hasUrl) {
@@ -2335,6 +2371,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               } catch { return []; }
             }}
             agentDrive={agentDrive}
+            routerReady={routerStatus.state === 'ready'}
+            routerStatus={routerStatus}
             panelOpen={store.sidebarOpen}
             onExecute={async (command, onProgress, signal, opts) => {
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
@@ -6333,6 +6371,10 @@ function fallbackThreeBullets(text: string): string[] {
 // Module-level bounded await — for helpers outside the agent-loop closure.
 // On hung pages (ad/video scripts holding the main thread) executeJavaScript never
 // resolves; every page-touching await must be raced against a budget.
+function isGreeting(m: string): boolean {
+  return m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
+}
+
 function raceTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   let id: ReturnType<typeof setTimeout>;
   const t = new Promise<T>(r => { id = setTimeout(() => r(fallback), ms); });

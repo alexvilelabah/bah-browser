@@ -60,3 +60,21 @@ export function lastRunDigest(items: RunFeedItem[], fmt: (action: unknown) => st
     lastUrl ? `Last page: ${lastUrl}` : '',
   ].filter(Boolean).join('\n');
 }
+
+/**
+ * A última tarefa em uma linha cada (pedido e como terminou) — o contexto curto do roteador local.
+ * null quando não houve tarefa.
+ */
+export function lastRunSummary(items: RunFeedItem[]): { request: string; outcome: string } | null {
+  let start = -1;
+  for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'task') { start = i; break; }
+  if (start < 0) return null;
+  let outcome = 'unknown';
+  for (const it of items.slice(start + 1)) {
+    const x = it as any;
+    if (x.kind === 'report') outcome = 'done: ' + String(x.text);
+    else if (x.kind === 'error') outcome = 'ended with: ' + String(x.text);
+  }
+  const one = (s: string, n: number) => { const t = s.replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  return { request: one(String((items[start] as any).text || ''), 200), outcome: one(outcome, 200) };
+}

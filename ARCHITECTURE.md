@@ -226,7 +226,8 @@ Sessions live in memory for now (restore + chat history come next).
 
 The box under the assistant decides per message: agent task, answer about the page, web answer or chat
 (`routeCommand` in `AgentCommandBar.tsx`; with a cloud AI a one-word classifier in `App.tsx`
-`classifyIntent` goes first, with a local AI the word rules decide). Before any of that:
+`classifyIntent` goes first, with a local AI the word rules decide; with the optional
+[local router](#local-router-qwen25-15b-optional) downloaded, it goes first in both modes). Before any of that:
 - a **question about the last run** ("did you click it?", "what happened?") → chat with a log of that
   run (`src/renderer/last-run.ts` `lastRunDigest`), never a web search;
 - a **report that the last run fell short** ("one window was opened, but not the second") → back to the
@@ -243,6 +244,41 @@ site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging 
 gets the matching dark background → white on white. `main.ts` inserts a user stylesheet
 (`PLAIN_TEXT_VIEWER_CSS`, matching only the viewer's `<meta>` + `<pre>` layout) so background and text
 follow the same scheme (`tests/e2e/plain-text-dark.spec.ts`).
+
+### Local router (Qwen2.5-1.5B, optional)
+
+When the routing model is downloaded, a small local LLM labels **every** message before anything
+reaches the big model — in cloud *and* local mode — and the word rules above become the fallback.
+- **Model:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1,117,320,736 bytes, sha256
+  `6a1a2eb6…9407e`) in `<userData>/models/`. Never bundled: the assistant settings show a card
+  ("Download the 1.1 GB routing model?"); `router:download` runs only after that click, resumes a
+  `.part` with `Range`, and checks size + sha256 before renaming (`src/main/router/model-download.ts`).
+- **Engine:** `src/main/router/engine.mjs` (esbuild bundle, `node-llama-cpp` external) in a
+  `utilityProcess`, started 3 s after the window shows, only if the file is there. `gpu: 'auto'`
+  (Metal / Vulkan / CPU); if it fails to load it retries once on CPU, then `router:status` = `error`
+  and the word rules route. A crash only kills that process. node-llama-cpp tests its native binary in a
+  child process on Windows/Linux; from a utility process that fork would start another Bah (the
+  `RunAsNode` fuse is off), so the engine forwards that fork to `router-manager.ts`, which opens the
+  test file as another utility process.
+- **Prompt** (`src/shared/router-routes.ts`, idea from Arch-Router, none of its weights or text): routes
+  `{name, description}` with descriptive keys the model writes (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), rules and a few
+  examples. That system prompt is the fixed prefix, evaluated once; per message only
+  `Open page / Last task / Message` is processed. Output is held by a JSON-schema grammar to
+  `{"route": "<one key>"}`. LAST_RUN vs FIX is then settled by the sentence's shape (question →
+  LAST_RUN, statement → FIX). The router only labels text; it never acts, and the text never leaves the machine.
+- **Mapping** (`classifyIntent` → `routeCommand`): ACTION → agent, PAGE/CHAT → chat (page attached),
+  WEB → web answer, LAST_RUN → chat with the last run's log, FIX → agent; `other` / timeout (5 s) →
+  the previous path. Still ahead of the router: short greetings, the agent-drive toggle,
+  repeat/macro intents, vague-request hints and the zero-token quick actions.
+- **Eval:** `npm run router:eval` runs the same core (`router-core.mjs`) in plain Node over
+  `tests/fixtures/routing-cases.json` (82 en/pt/es cases) and scores the word rules on the same set.
+  On an Intel i7-9750H (CPU): router 89.0 % (90.2 % with the greeting fast path) vs word rules 84.1 %, p50 ≈ 0.6–0.9 s, p95 ≈ 1.0–1.4 s,
+  load ≈ 9 s, ≈ 0.9 GB RSS in Node (≈ 2 GB reported for the utility process, model file mmapped).
+  Smoke: `tests/e2e/router-local.spec.ts` (skips without the model).
+- **Packaging:** `@node-llama-cpp/*` (and node-llama-cpp `bins/`) are `asarUnpack`ed; node-llama-cpp's JS
+  and the engine stay in the asar, where its ~120 dependencies resolve. CUDA packages, the llama.cpp
+  source bundle and CLI templates are excluded.
 
 ## Navigation skills (`skills/*/SKILL.md`)
 
