@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { installIsolatedFallback } from '../page-eval';
 import { Tab } from '../store';
 import { webviewOrder } from '../../shared/tab-strip';
 import { partitionFor } from '../../shared/incognito';
@@ -26,6 +27,8 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
       const tabId = wv.dataset.tabId;
       if (!tabId || boundIds.current.has(tabId)) return;
 
+      // Página que proíbe scripts (CSP sandbox): os leitores do Bah caem pro mundo isolado.
+      installIsolatedFallback(wv);
       webviewRefs.current.set(tabId, wv);
       boundIds.current.add(tabId);
 

@@ -240,6 +240,15 @@ raw) não ganha o fundo escuro → branco no branco. O `main.ts` insere uma folh
 (`PLAIN_TEXT_VIEWER_CSS`, que só casa com o `<meta>` + `<pre>` do visualizador) e fundo e texto seguem o
 mesmo esquema (`tests/e2e/plain-text-dark.spec.ts`).
 
+**Páginas que proíbem scripts.** Essa mesma CSP desliga o JavaScript da página, e junto todo
+`<webview>.executeJavaScript` que o Bah usa pra ler páginas (amostra de texto, `extract_text`, estado da
+tela, vagas, formulários). `src/renderer/page-eval.ts` embrulha o `executeJavaScript` de cada aba uma vez
+(`WebViewContainer`): tenta no mundo da página; se falhar, um teste trivial separa erro de verdade do
+script (repassado, nunca roda de novo) de página que bloqueia scripts (→ o mesmo código roda no **mundo
+isolado** 1047 do Bah via `page:eval-isolated` no `main.ts`, o mecanismo dos content scripts de extensão,
+lembrado até a aba mudar de endereço). Testes: `tests/unit/page-eval.test.ts`,
+`tests/e2e/no-js-page.spec.ts`.
+
 ## Skills de navegação (`skills/*/SKILL.md`)
 
 Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que

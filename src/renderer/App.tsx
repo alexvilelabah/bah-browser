@@ -153,6 +153,7 @@ declare global {
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
       moveChatHistory?: (from: string, to: string) => Promise<any>;
+      evalIsolated?: (wcId: number, code: string, userGesture?: boolean) => Promise<any>;
       // Continuar de onde parou: o main pede pra gravar as abas antes de fechar a janela; a tela
       // pede pra mandar o localStorage pro disco já quando a sessão muda (renderer/session.ts).
       onSaveSessionNow?: (cb: () => void) => (() => void);

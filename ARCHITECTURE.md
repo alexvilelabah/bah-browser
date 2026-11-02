@@ -244,6 +244,15 @@ gets the matching dark background → white on white. `main.ts` inserts a user s
 (`PLAIN_TEXT_VIEWER_CSS`, matching only the viewer's `<meta>` + `<pre>` layout) so background and text
 follow the same scheme (`tests/e2e/plain-text-dark.spec.ts`).
 
+**Pages that forbid scripts.** That same CSP turns off the page's JavaScript, and with it every
+`<webview>.executeJavaScript` Bah uses to read pages (text sample, `extract_text`, page state, job
+listings, forms). `src/renderer/page-eval.ts` wraps `executeJavaScript` on every tab once
+(`WebViewContainer`): it tries the page world; if that fails, a trivial probe tells a real script error
+(passed on, never re-run) from a page that blocks scripts (→ the same code runs in Bah's **isolated
+world** 1047 through `page:eval-isolated` in `main.ts`, the mechanism extension content scripts use,
+remembered until the tab's address changes). Tests: `tests/unit/page-eval.test.ts`,
+`tests/e2e/no-js-page.spec.ts`.
+
 ## Navigation skills (`skills/*/SKILL.md`)
 
 Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt

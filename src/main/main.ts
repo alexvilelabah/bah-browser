@@ -388,6 +388,9 @@ const lastAuthPopupAt = new Map<number, number>();
 // Host da janela de login enquanto ela existe ('' quando não há nenhuma) + o gancho pra
 // Visualizador de texto puro do Chromium (ver did-attach-webview): fundo e texto do MESMO esquema de
 // cor (Canvas/CanvasText), mesmo com a CSP do site bloqueando o estilo dele.
+// Mundo isolado do Bah nas abas (renderer/page-eval.ts: o mesmo número).
+const BAH_ISOLATED_WORLD = 1047;
+
 const PLAIN_TEXT_VIEWER_CSS = `
 html:has(> head > meta[name="color-scheme"]:only-child):has(> body > pre:only-child) { color-scheme: light dark; background: Canvas; color: CanvasText; }
 html:has(> head > meta[name="color-scheme"]:only-child) > body > pre:only-child { color: CanvasText; }
@@ -1864,6 +1867,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     aiEngine?.clearHistory(tabId);
     localEngine?.clearHistory(tabId);
     return { ok: true };
+  });
+  // Script do Bah numa aba cuja página PROÍBE scripts (CSP sandbox): roda no mundo isolado do Bah
+  // (renderer/page-eval.ts). Só abas <webview> desta janela; o código é do próprio Bah (o renderer).
+  ipcMain.handle('page:eval-isolated', async (e, wcId: unknown, code: unknown, userGesture: unknown) => {
+    if (e.sender !== mainWindow?.webContents) throw new Error('not allowed');
+    if (typeof wcId !== 'number' || typeof code !== 'string' || code.length > 2_000_000) throw new Error('bad request');
+    const wc = webContents.fromId(wcId);
+    if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || wc.hostWebContents !== mainWindow?.webContents) throw new Error('no such tab');
+    return wc.executeJavaScriptInIsolatedWorld(BAH_ISOLATED_WORLD, [{ code }], userGesture === true);
   });
   ipcMain.handle('ai:move-history', (_event, from: string, to: string) => {
     if (typeof from !== 'string' || typeof to !== 'string') return;
