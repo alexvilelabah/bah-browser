@@ -223,7 +223,8 @@ for the result:
 | `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
 | `tabs-summary.ts` | "Summarize my open tabs": tab selection, permission, prompt and reply parsing |
 | `page-executor.ts` | Executes browser actions inside the page |
-| `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `risk.ts` | The safety-brake classifier (`riskForAction`). Kinds: payment, deletion, card data, application, sending (unattended) and **message** — a support ticket or forum post: "Submit ticket/request", "Create case", "Post your question", "Request/Schedule a call" always; a bare Submit/Send/Post/Start chat in a `support` task; Enter on a ticket/post form URL |
+| `support-tickets.ts` | Support tickets and support-forum posts: `commandIsSupport`/`commandIsForum` (en/pt/es), the vendor's **official** support/community address (`SUPPORT_SITES`, first vendor named wins), the prompt block with only the 📝 profile's contact fields, and `SUPPORT_DRAFT_SCRIPT` + `formatSupportDraft`: the send card shows the form's filled fields and the full description, never a password. Support tasks count as account tasks, so the sign-in wall pauses for the user |
 | `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
 | `agent-run-logger.ts` | Opt-in run logging (local training-data collector) |
@@ -408,7 +409,8 @@ User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a succ
 loader + `skills:list` IPC `src/main/skills-loader.ts` (re-reads files in dev; packaged via
 `electron-builder.yml` `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`,
 `site-search`, `page-tabs`, `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`,
-`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`.
+`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`,
+`support-ticket` (task `support`: a support ticket or a support-forum post — see `support-tickets.ts`).
 
 ---
 

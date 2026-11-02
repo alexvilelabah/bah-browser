@@ -13,7 +13,7 @@ import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearch
 import {
   promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
   noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
-  contextWindow as contextWindowNow, setContextWindow,
+  contextWindow as contextWindowNow, setContextWindow, getThread,
 } from './threads';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
@@ -98,6 +98,7 @@ import {
   type QuickAction,
 } from './site-knowledge';
 import { namedSiteHint } from './known-sites';
+import { supportRequestText, commandIsForum as isForumCommand, supportPromptBlock, formatSupportDraft, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
 import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
@@ -2571,7 +2572,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
               // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
               const unattended = !!opts?.unattended;
-              const riskOpts = { jobs: commandIsJobs, unattended };
+              // Chamado de suporte / post em fórum: liga a skill support-ticket e o freio do Submit/Send/Post.
+              // Resposta da pessoa no meio do chamado ("use chat, serial X") continua sendo tarefa de suporte.
+              const prevGoal = [...(getThread(threadKey)?.entries || [])].reverse().find(e => e.kind === 'task') as { goal?: string } | undefined;
+              const supportText = commandIsJobs ? null : supportRequestText(command, prevGoal?.goal);
+              const commandIsSupport = !!supportText;
+              const commandIsForum = commandIsSupport && isForumCommand(supportText || '');
+              let supportBlock = '';
+              if (supportText) {
+                const applicant = await window.electronAPI?.applicantGet?.().catch(() => null);
+                supportBlock = supportPromptBlock(supportText, applicant?.profile);
+                if (supportText !== command) supportBlock += `\nTHIS IS A FOLLOW-UP to the support request: ${prevGoal?.goal?.slice(0, 300)}`;
+              }
+              const riskOpts = { jobs: commandIsJobs, unattended, support: commandIsSupport };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
               const openedJobs: OpenedJob[] = [];
@@ -2786,11 +2799,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
-              const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
+              // O freio já perguntou neste passo: a recuperação não pergunta de novo nem encerra a tarefa.
+              let brakeDecided = false;
+              const confirmRisky = async (risk: { kind: string; label: string }): Promise<boolean> => {
                 setAgentVisual('idle');
+                brakeDecided = true;
+                // Chamado/post: o cartão mostra o texto que vai sair, lido do formulário agora.
+                let draft = '';
+                if (risk.kind === 'message') {
+                  const fields = await withTimeout(Promise.resolve(getActiveWebview()?.executeJavaScript(SUPPORT_DRAFT_SCRIPT)), 3000, [] as DraftField[]).catch(() => [] as DraftField[]);
+                  draft = formatSupportDraft(fields || []);
+                }
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
                 const message = risk.kind === 'application'
                   ? `📨 Ready to send your application. Check the form in the tab first: I will click "${risk.label}" and it goes to the employer. Send it?`
+                  : risk.kind === 'message'
+                  ? t('agent.sendMsg.message', { label: risk.label, draft: draft || t('agent.sendMsg.noDraft') })
                   : `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`;
                 // Pessoa pensando não é o modelo lento: o relógio da tarefa dorme enquanto o cartão espera
                 // (numa tarefa agendada ele pode esperar horas, até a pessoa voltar).
@@ -2805,6 +2829,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     label: risk.label,
                     message,
                     ...(risk.kind === 'application' ? { title: '📨 Send application?', yesLabel: '📨 Send it', noLabel: "Don't send" } : {}),
+                    ...(risk.kind === 'message' ? { title: t('agent.sendMsg.title'), yesLabel: t('agent.sendMsg.yes'), noLabel: t('agent.sendMsg.no') } : {}),
                     onConfirm: () => finish(true),
                     onCancel: () => finish(false),
                   });
@@ -3047,7 +3072,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
-                    const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    const manualHelpNeed = detectManualHelpNeed(supportText || command, observation, stepsOnSameUrl, noEffectCount);
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow
@@ -3409,7 +3434,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
-                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : ''].filter(Boolean),
+                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : '', commandIsSupport ? 'support' : ''].filter(Boolean),
                   });
                   const skillsBlock = formatSkillsBlock(stepSkills);
                   if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });
@@ -3437,6 +3462,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     downloadsBlock,
                     dlButtonsBlock,
                     jobsBlock,
+                    supportBlock,
                     formBlock,
                     skillsBlock,
                     '',
@@ -4004,7 +4030,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const socEl = (action as any).ref != null
                       ? observation.interactive_elements.find(e => e.id === (action as any).ref)
                       : undefined;
-                    const blocked = socialActionToBlock(action as any, socEl, command);
+                    // Post num fórum de suporte é o pedido: quem decide é o freio do envio (mostra o texto).
+                    const blocked = socialActionToBlock(action as any, socEl, commandIsForum ? `${command} post comment` : command);
                     if (blocked) {
                       const msg = `Skipped "${blocked}" — you didn't ask for it, so I won't touch your account.`;
                       onProgress({ kind: 'status', message: `🛡️ ${msg}` });
@@ -5864,6 +5891,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (noEffectCount >= 2) history += '\nWARNING: Two consecutive actions had no visible effect. Choose a different strategy now.';
 
                   // ── Recovery layer — detect blockers and inject corrective instructions ──
+                  const decidedByBrake = brakeDecided; brakeDecided = false;
                   const recoveryVerdict = recovery.evaluate({
                     goal: command,
                     url: afterObservation.url,
@@ -5873,7 +5901,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     lastResult: toolResult,
                     lastActionType: action.type,
                     // Texto do botão clicado (do estado ANTES do clique) → ação sensível precisa.
-                    lastActionTargetText:
+                    lastActionTargetText: decidedByBrake ? '' :
                       action.type === 'click_ref'
                         ? (observation.interactive_elements.find(e => e.id === (action as any).ref)?.text || '')
                         : action.type === 'click_text'

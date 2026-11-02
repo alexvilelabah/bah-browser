@@ -229,7 +229,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **É a sua sessão real.** O navegador usa partition persistente (`persist:browser`), então cookies e logins ficam salvos. Se você está logado no Gmail no Bah, o agente também está. **A IA acessa tudo que você acessaria manualmente.** Não logue em contas que não confiaria a um assistente.
 
-- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, excluir, meter dados de cartão ou enviar uma candidatura a vaga**, o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
+- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, excluir, meter dados de cartão, enviar uma candidatura a vaga ou enviar um chamado de suporte ou post em fórum** (o cartão mostra o texto que vai sair), o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
 
 - **Parar é parar.** O botão ■ Parar cancela na hora, mesmo no meio de uma chamada ao modelo ou do loop; uma resposta atrasada não "ressuscita" a tarefa cancelada.
 
