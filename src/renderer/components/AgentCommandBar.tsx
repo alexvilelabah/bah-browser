@@ -12,6 +12,9 @@ import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
 import { CommandHistory } from '../command-history';
 import { fmtUsd } from '../pricing';
+import { noteExchange, compactNow, clear as clearThread, getThread, hydratedKeys, type ThreadNotice } from '../threads';
+import { ThreadView, ThreadNoticeRow } from './ThreadView';
+import ContextMeter from './ContextMeter';
 
 export interface StepRecord {
   step: number;
@@ -57,7 +60,10 @@ type FeedData =
   | { kind: 'report'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'help'; message: string; instruction: string }
-  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> };
+  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> }
+  // Thread da sessão (renderer/threads.ts): avisos de orçamento/resumo/limpeza/corte, e a conversa que voltou.
+  | { kind: 'thread-notice'; notice: ThreadNotice }
+  | { kind: 'thread-recap'; key: string };
 type FeedItem = FeedData & { id: number };
 
 const FEED_CAP = 400;
@@ -198,7 +204,7 @@ interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
   /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
    *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
-  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
+  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean, docIsFile?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
   /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
@@ -382,7 +388,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
-  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
+  // Conversa que voltou (Continuar de onde parou): o feed começa com ela, só leitura.
+  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>(() =>
+    Object.fromEntries(hydratedKeys().map((k, i) => [k, [{ kind: 'thread-recap', key: k, id: -1 - i } as FeedItem]])));
   const convoTabRef = useRef<string>(activeTabId);
   // ── CONVERSA PRESA NA ABA DE ORIGEM ──────────────────────────────────────────────
   // As mensagens já iam pra aba onde a tarefa COMEÇOU (convoTabRef), mas o painel exibia a
@@ -415,6 +423,23 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     };
     window.addEventListener('bah:move-thread', onMove);
     return () => window.removeEventListener('bah:move-thread', onMove);
+  }, []);
+  // Avisos da thread vão pro feed DA CONVERSA deles (não necessariamente a vista); conversa retomada
+  // do 🕘 histórico começa com ela mesma, só leitura.
+  useEffect(() => {
+    const add = (key: string, item: FeedData) => setFeedsByTab(m => {
+      const prev = m[key] ?? [];
+      const next = [...prev, { ...item, id: ++idRef.current } as FeedItem];
+      return { ...m, [key]: next.length > FEED_CAP ? next.slice(-FEED_CAP) : next };
+    });
+    const onNotice = (e: Event) => { const n = (e as CustomEvent).detail as ThreadNotice; if (n?.key) add(n.key, { kind: 'thread-notice', notice: n }); };
+    const onHydrated = (e: Event) => {
+      const keys: string[] = (e as CustomEvent).detail?.keys ?? [];
+      for (const k of keys) setFeedsByTab(m => (m[k]?.length ? m : { ...m, [k]: [{ kind: 'thread-recap', key: k, id: ++idRef.current }] }));
+    };
+    window.addEventListener('bah:thread-notice', onNotice);
+    window.addEventListener('bah:thread-hydrated', onHydrated);
+    return () => { window.removeEventListener('bah:thread-notice', onNotice); window.removeEventListener('bah:thread-hydrated', onHydrated); };
   }, []);
   // O cartão de pergunta mais recente (só ele responde à pergunta pendente).
   const lastConfirmId = useMemo(() => [...feed].reverse().find(i => i.kind === 'confirm')?.id ?? -1, [feed]);
@@ -808,16 +833,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared), cancelled]);
+      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared, !!fileName), cancelled]);
       // Erro (IA fora, chave inválida…) NÃO é resposta: vira aviso vermelho COM dica
       // acionável. Antes se disfarçava de bolha normal da IA e a pessoa ficava sem saída.
-      if (isError) { push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
+      if (isError) { noteExchange(threadKeyOf(convoTabRef.current), msg); push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
       // Modelo de raciocínio: pensamento vira o chip 💭 (com duração); resposta fica limpa.
       const { clean, thinking } = splitThink(reply);
       const text = clean || thinking || reply;   // resposta vazia (só pensou) → mostra o que houver
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || text);   // a troca entra na thread da sessão
       push({ kind: 'chat-assistant', text, suggestedCommand, localFailed,
              thinking: clean ? thinking : undefined,
              thinkSecs: (clean && thinking && thinkSecsRef.current) ? thinkSecsRef.current : undefined });
@@ -857,6 +883,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       pendingSuggestionRef.current = null;
       // Modelo de raciocínio local na síntese: pensamento não vaza na resposta da pesquisa.
       const { clean, thinking } = splitThink(answer);
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || answer);
       push({ kind: 'chat-assistant', text: clean || thinking || answer, sources, thinking: clean ? thinking : undefined });
     } catch (e: any) {
       if (String(e?.message) === 'CHAT_CANCELLED') push({ kind: 'event', event: { kind: 'status', message: '⏹ ' + t('composer.stopped') } });
@@ -974,6 +1001,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   };
 
   const runUnified = (msg: string) => {
+    // "/compact": resume já os itens mais velhos da conversa (o feed mostra o texto que ficou no lugar).
+    if (/^\/compact\s*$/i.test(msg.trim())) {
+      setInput('');
+      convoTabRef.current = activeTabId;
+      compactNow(threadKeyOf(activeTabId));
+      return;
+    }
     // "sim/pode/faça…" logo após uma proposta → roda a proposta (reclassificada).
     if (pendingSuggestionRef.current && isAffirmative(msg)) {
       const cmd = pendingSuggestionRef.current;
@@ -1444,6 +1478,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         <div className="sidebar-title-wrap">
           <h3>{t('assist.title')}</h3>
           <span className="sidebar-active-ai" title={activeAiLabel()}>{activeAiLabel()}</span>
+          <ContextMeter viewKey={viewKey} />
           {viewSession && (
             <SessionChip session={viewSession} onRename={name => onRenameSession?.(viewSession.id, name)} />
           )}
@@ -1466,7 +1501,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
             </svg>
           </button>
-          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewKey]: [] })); window.electronAPI?.clearChatHistory?.(viewKey); }} title={t('assist.clear')}>
+          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewKey]: [] })); window.electronAPI?.clearChatHistory?.(viewKey); clearThread(viewKey); }} title={t('assist.clear')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
           <button onClick={onClose} title={t('assist.close')}>
@@ -2276,6 +2311,12 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confi
       );
     case 'step':
       return <StepCard step={item.step} />;
+    case 'thread-notice':
+      return <ThreadNoticeRow notice={item.notice} />;
+    case 'thread-recap': {
+      const th = getThread(item.key);
+      return th ? <details className="thread-notice" open data-testid="thread-recap"><summary>{t('thread.restored')}</summary><ThreadView thread={th} compact /></details> : null;
+    }
     case 'event':
       return <ProgressLine event={item.event} />;
     case 'media':

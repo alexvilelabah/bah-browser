@@ -14,6 +14,8 @@ import {
   pickSessionColor, sessionNameFor, uniqueSessionName, isSessionColor, MAX_SESSION_NAME,
   type AgentSession, type SessionColor,
 } from '../shared/agent-sessions';
+import { liveToRestore, sanitizeLive, type ChatHistoryEntry, type LiveState } from '../shared/chat-history';
+import { hydrate as hydrateThreads, setLiveSource, scheduleSave as scheduleThreadSave, dropThread } from './threads';
 
 export interface Tab {
   id: string;
@@ -102,16 +104,50 @@ export function createTab(url?: string, incognito = false): Tab {
 // última vez, na mesma ordem (fixadas primeiro); só a que estava ativa carrega, as outras esperam
 // o clique (descartadas, como as do Memory Saver). Senão, o de sempre: as fixadas da última vez
 // (igual ao Chrome) + a aba inicial, que é a ativa. Regras em shared/session-restore.ts.
+// A conversa do assistente salva (threads + sessões, cifradas pelo main) volta SÓ com "Continuar de
+// onde parou": as abas voltam com o mesmo id e a mesma sessão, e a conversa se prende a elas de novo.
+// Com a outra escolha, a salva é apagada (o histórico de conversas fica — é outra coisa).
+let bootLive: LiveState | null | undefined;
+function loadBootLive(): LiveState | null {
+  if (bootLive !== undefined) return bootLive;
+  const mode = getStartupMode();
+  if (mode !== 'restore') {
+    bootLive = null;
+    try { void window.electronAPI?.threadsClearLive?.(); } catch {}
+    return null;
+  }
+  let raw: unknown = null;
+  try { raw = window.electronAPI?.threadsLoadLiveSync?.(); } catch {}
+  bootLive = liveToRestore(mode, raw ? sanitizeLive(raw) : null);
+  return bootLive;
+}
+
 function bootTabs(): Tab[] {
-  const plan = bootPlan(getStartupMode(), loadSavedSession());
-  const tabs = plan.tabs.map((s): Tab => ({
-    ...createTab(s.url),
-    title: sessionTitle(s) || 'New Tab',
-    ...(s.pinned ? { pinned: true } : {}),
-    ...(s.active ? { startup: true } : {}),
-    ...(s.lazy ? { discarded: true, restored: true } : {}),
-  }));
+  const mode = getStartupMode();
+  const plan = bootPlan(mode, loadSavedSession());
+  const live = loadBootLive();
+  const liveSids = new Set((live?.sessions ?? []).map(s => s.id));
+  const usedIds = new Set<string>();
+  const tabs = plan.tabs.map((s): Tab => {
+    const tab: Tab = {
+      ...createTab(s.url),
+      title: sessionTitle(s) || 'New Tab',
+      ...(s.pinned ? { pinned: true } : {}),
+      ...(s.active ? { startup: true } : {}),
+      ...(s.lazy ? { discarded: true, restored: true } : {}),
+    };
+    if (mode === 'restore') {
+      if (s.id && !usedIds.has(s.id)) { tab.id = s.id; usedIds.add(s.id); }
+      if (s.sid && liveSids.has(s.sid)) tab.sessionId = s.sid;
+    }
+    return tab;
+  });
   if (plan.newTab) { const t = createTab(); t.startup = true; tabs.push(t); }
+  // Só as conversas das abas que voltaram (as outras não têm onde ficar).
+  if (live) {
+    const keys = new Set(tabs.map(t => t.sessionId || t.id));
+    hydrateThreads(live.threads.filter(t => keys.has(t.key)));
+  }
   return tabs;
 }
 
@@ -247,7 +283,8 @@ export function useTabStore() {
         if (!closing.has(t.id)) continue;
         sessionOfTab.current.delete(t.id);
         const k = t.sessionId || t.id;
-        if (!keysLeft.has(k)) window.electronAPI?.clearChatHistory?.(k);
+        // A conversa que ficou sem aba: grava (vai pro histórico de conversas) e solta da memória.
+        if (!keysLeft.has(k)) { window.electronAPI?.clearChatHistory?.(k); dropThread(k); }
       }
       if (next.length === prev.length) return prev;
       for (const t of prev) {
@@ -344,12 +381,22 @@ export function useTabStore() {
   // memória de chat do main, pedidos recentes) é chaveada pela sessão: abas da mesma sessão a
   // dividem. sessionOfTab é a cópia SÍNCRONA (o setTabs só vale no próximo render): quem grava
   // no feed logo depois de criar/entrar numa sessão já usa a chave nova.
-  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [sessions, setSessions] = useState<AgentSession[]>(() => {
+    const used = new Set(tabs.map(t => t.sessionId).filter(Boolean));
+    return (loadBootLive()?.sessions ?? []).filter(s => used.has(s.id));
+  });
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const sessionOfTab = useRef(new Map<string, string>());
+  const sessionOfTab = useRef<Map<string, string>>(null as unknown as Map<string, string>);
+  if (!sessionOfTab.current) sessionOfTab.current = new Map(tabs.filter(t => t.sessionId).map(t => [t.id, t.sessionId!] as [string, string]));
+
+  // As conversas vão pro disco (main/chat-store.ts) com as sessões e as abas de agora.
+  useEffect(() => {
+    setLiveSource(() => ({ sessions: sessionsRef.current, tabs: tabsRef.current }));
+  }, []);
+  useEffect(() => { scheduleThreadSave(); }, [tabs, sessions]);
 
   const threadKeyOf = useCallback((tabId: string): string => sessionOfTab.current.get(tabId) || tabId, []);
 
@@ -413,6 +460,28 @@ export function useTabStore() {
     setTabs(prev => leaveInStrip(prev, tabId));
   }, []);
 
+  /** 🕘 Histórico de conversas → Retomar: a sessão volta viva (mesmo id, a conversa junto), numa aba
+   *  nova ou reabrindo as abas dela. Já está aberta → só vai pra ela. */
+  const resumeSession = useCallback((entry: ChatHistoryEntry, reopenTabs: boolean) => {
+    const open = tabsRef.current.find(t => t.sessionId === entry.id && !t.hidden);
+    if (open) { activateTab(open.id); return; }
+    const live = liveSessions(sessionsRef.current, tabsRef.current);
+    const s: AgentSession = {
+      id: entry.id,
+      name: uniqueSessionName(entry.name, live.map(x => x.name)),
+      color: isSessionColor(entry.color) && !live.some(x => x.color === entry.color) ? entry.color : pickSessionColor(live.map(x => x.color)),
+      createdAt: entry.startedAt || Date.now(),
+    };
+    hydrateThreads([{ ...entry.thread, key: s.id }]);
+    sessionsRef.current = [...sessionsRef.current.filter(x => x.id !== s.id), s];
+    setSessions(prev => [...prev.filter(x => x.id !== s.id), s]);
+    const urls = reopenTabs && entry.tabs.length ? entry.tabs.map(t => t.url) : [undefined];
+    const fresh = urls.map(u => ({ ...createTab(u), sessionId: s.id }));
+    for (const t of fresh) sessionOfTab.current.set(t.id, s.id);
+    setTabs(prev => [...prev, ...fresh]);
+    setActive(fresh[0].id);
+  }, [activateTab, setActive]);
+
   const renameSession = useCallback((id: string, name: string) => {
     const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, MAX_SESSION_NAME);
     if (!clean) return;
@@ -429,7 +498,7 @@ export function useTabStore() {
   }, [tabs]);
 
   return {
-    sessions, ensureSession, joinTabToSession, joinOpenerSession, leaveTabSession, renameSession, recolorSession, threadKeyOf,
+    sessions, ensureSession, resumeSession, joinTabToSession, joinOpenerSession, leaveTabSession, renameSession, recolorSession, threadKeyOf,
     tabs, activeTabId, activeTab, sidebarOpen,
     aiSettings, localSettings,
     setActiveTabId: activateTab, addTab, addBackgroundTab, addHiddenTab, addOutsideTab, closeTab, updateTab, reopenClosedTab, forgetClosedTabs,

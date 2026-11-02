@@ -212,11 +212,43 @@ mostra o mesmo chip (clique renomeia). Abas que o agente abre na tarefa e links 
 de uma aba da sessão entram nela; o menu do botão direito da aba adiciona a outra sessão, cria uma nova ou
 tira dela; arrastar a aba pra entre duas abas de uma sessão entra, pra longe sai.
 A conversa é chaveada pela **chave da thread** = id da sessão (ou da aba, sem sessão): o feed do painel
-(`feedsByTab`), a memória de chat do main (`conversationHistories`, movida com `ai:move-history`) e os
-pedidos recentes do prompt do agente (`recentRunsRef`). Mudou a chave da aba → a conversa vai junto
-(`bah:move-thread`). Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`);
-estado: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
-Por enquanto só na memória (restaurar + histórico de conversas vêm a seguir).
+(`feedsByTab`) e a **thread** da sessão. Mudou a chave da aba → a conversa vai junto (`bah:move-thread`).
+Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`); estado: `store.ts`;
+UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
+
+**Uma thread por sessão.** `src/renderer/threads.ts` guarda uma thread por chave (regras em
+`src/shared/thread-store.ts`): **turnos** (o que você pediu, o que o chat respondeu — os recentes palavra
+por palavra, com teto), **resumos das tarefas do agente** (objetivo, últimos passos-chave, desfecho, o
+último alvo — não cada passo; gravados pelo `finishRun` do `App.tsx`) e **fatos** (logado ou não em cada
+site, vagas vistas) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
+REQUESTS THIS SESSION") e o chat leem o mesmo bloco (`promptBlock`); o chat o manda pro `ai:chat` e o
+`ai-engine.ts` deixa de usar o próprio histórico por aba (lá só fica o arquivo anexado, `lastDocs`). A
+thread tem um **orçamento fixo de tokens por prompt** — ~15% da janela do modelo, de 512 a 4096; 3000 com
+janela desconhecida — e a página atual nunca perde espaço pra ela. Nos 80% o feed avisa e oferece 📌;
+passou, os itens mais velhos viram um resumo corrido e o feed diz "🗜 N itens antigos resumidos", que abre
+o texto exato que ficou no lugar; `/compact` e o 🗑 fazem o mesmo, à vista. Quando a observação precisa
+ser cortada pra caber, corta-se a página (nunca a thread) e o feed mostra "✂️ página cortada".
+**Medidor de contexto** (`components/ContextMeter.tsx`, conta em `src/shared/context-meter.ts`): ao lado
+do nome do modelo, `contexto 6.1k / 16k · conversa 2.3k`; a barra fica âmbar/vermelha dizendo quem ocupa a
+janela; um toque mostra o detalhe da última chamada (instruções, skills, conversa, página). Janela pela
+detecção do engine (`ai:context-window` → `resolveContextBudget`: `/props` no llama.cpp ou o tamanho
+configurado; desconhecida na nuvem); total pelo `prompt_tokens` do provedor quando vem, senão estimativa
+(marcada com `~`). Gancho de teste: `window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` finge a janela com
+`E2E_MOCK_AI`.
+
+**Restaurar + histórico de conversas.** `src/main/chat-store.ts` guarda dois arquivos cifrados com
+`safeStorage` (regras em `src/shared/chat-history.ts`): as threads **vivas** + nome/cor das sessões
+(`threads-live.enc`, gravado até 1,5 s depois de mudar e ao fechar a janela, antes do "gravei" da sessão
+de abas) e o **🕘 histórico de conversas** (`chat-history.enc`: uma entrada por sessão com nome, cor,
+datas, sites, 1º pedido, as abas e a thread; atualizado conforme você usa, como o histórico de
+navegação). Com ⋮ → Ao abrir o Bah = "Continuar de onde parou" as abas voltam com o mesmo id e
+`sessionId` (o `session.v1` guarda `id`/`sid`) e a thread se prende de novo (`store.ts` `bootTabs`,
+carregada síncrona por `threads:load-live-sync`); com a outra escolha o arquivo vivo é apagado ao abrir.
+⋮ → 🕘 Histórico de conversas (`components/ChatHistoryPanel.tsx`) abre uma sessão passada só pra ler ou a
+**Retoma** (`store.resumeSession`, reabrindo as abas dela se quiser). "Limpar dados de navegação" ganhou
+a caixa "histórico de conversas" (mesmo período). Aba anônima nunca chega a nenhum dos dois. Testes:
+`tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; ponta a ponta `tests/e2e/sessions-thread.spec.ts`.
 
 ## Roteamento dos pedidos e continuações
 

@@ -215,12 +215,43 @@ opens during a task, and links opened in a new tab from a session tab, join that
 right-click menu adds it to another session, starts a new one or removes it; dragging a tab between two
 tabs of a session joins it, dragging it away leaves.
 The conversation is keyed by **thread key** = session id (or the tab id when the tab has none): the
-panel feed (`AgentCommandBar` `feedsByTab`), the main process chat memory (`ai-engine.ts`
-`conversationHistories`, moved with `ai:move-history`) and the recent-requests memory the agent prompt
-starts with (`recentRunsRef`). When a tab's key changes, its conversation moves with it
-(`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in `tests/unit/agent-sessions.test.ts`);
-state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to end: `tests/e2e/agent-sessions.spec.ts`.
-Sessions live in memory for now (restore + chat history come next).
+panel feed (`AgentCommandBar` `feedsByTab`) and the session's **thread**. When a tab's key changes, its
+conversation moves with it (`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in
+`tests/unit/agent-sessions.test.ts`); state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to
+end: `tests/e2e/agent-sessions.spec.ts`.
+
+**One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
+`src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
+clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site, jobs looked at) plus 📌
+**pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
+chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
+skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
+fixed **token budget per prompt** — ~15% of the model's window, 512–4096 tokens, 3000 when the window is
+unknown — so the current page is never crowded out. At 80% the feed warns and offers 📌; over budget,
+the oldest items fold into a running summary and the feed says "🗜 Summarized N older turns", which
+expands to the exact text that replaced them; `/compact` and 🗑 do the same, visibly. When the
+observation must be trimmed to fit the window, the page is trimmed (never the thread) and the feed says
+"✂️ page trimmed to fit".
+**Context meter** (`components/ContextMeter.tsx`, math in `src/shared/context-meter.ts`): next to the
+model name, `context 6.1k / 16k · thread 2.3k`; the bar goes amber/red and names what crowds it; a tap
+shows the last call's breakdown (instructions, skills, thread, page). Window from the engine's detection
+(`ai:context-window` → `resolveContextBudget`: `/props` on llama.cpp or the configured size; unknown on
+cloud); total from the provider's `prompt_tokens` when reported, else an estimate (marked `~`). Test hook:
+`window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` fakes the window under `E2E_MOCK_AI`.
+
+**Restore + chat history.** `src/main/chat-store.ts` keeps two `safeStorage`-encrypted files (rules in
+`src/shared/chat-history.ts`): the **live** threads + session names/colours (`threads-live.enc`, saved
+≤1.5 s after a change and on window close, before the tab session's "saved" reply) and the **🕘 chat
+history** (`chat-history.enc`: one entry per session with name, colour, dates, sites, first request, its
+tabs and thread; updated as you go, like browsing history). With ⋮ → When Bah opens = "Continue where you
+left off" the tabs come back with the same tab id and `sessionId` (`session.v1` stores `id`/`sid`) and
+the thread re-attaches (`store.ts` `bootTabs`, loaded synchronously via `threads:load-live-sync`); any
+other choice deletes the live file at startup. ⋮ → 🕘 Chat history (`components/ChatHistoryPanel.tsx`)
+opens a past session read-only or **Resumes** it (`store.resumeSession`, optionally reopening its tabs).
+"Clear browsing data" has a "chat history" box (same time range). Incognito never reaches either file.
+Tests: `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; end to end `tests/e2e/sessions-thread.spec.ts`.
 
 ## Command routing & follow-ups
 
