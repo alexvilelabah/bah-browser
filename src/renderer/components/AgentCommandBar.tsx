@@ -295,11 +295,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const phRunning = (panelOpen ?? true) && winVisible;
   useEffect(() => {
     if (!phRunning) { setPh(''); return; }   // ninguém pode ver → não anima (recomeça limpo ao voltar)
+    // Exemplos = casos de uso já testados (vagas, carrinho, melhor preço, peça compatível, viagem…),
+    // intercalados com o que o Bah é (open source, bloqueador): quem olha aprende o que pode pedir.
     const phrases = [
       t('composer.phLead'),
-      t('composer.phEx1'),
-      t('composer.phEx2'),
-      t('composer.phEx3'),
+      t('composer.phEx4'), t('composer.phEx6'), t('composer.phEx1'),
+      t('composer.phEx7'), t('composer.phEx5'), t('composer.phEx2'),
+      t('composer.phEx8'), t('composer.phEx9'), t('composer.phEx3'),
+      t('composer.phEx10'), t('composer.phEx11'), t('composer.phEx12'),
     ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
