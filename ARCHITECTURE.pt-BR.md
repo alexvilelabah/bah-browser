@@ -360,6 +360,42 @@ isolado** 1047 do Bah via `page:eval-isolated` no `main.ts`, o mecanismo dos con
 lembrado até a aba mudar de endereço). Testes: `tests/unit/page-eval.test.ts`,
 `tests/e2e/no-js-page.spec.ts`.
 
+### Roteador local (Qwen2.5-1.5B, opcional)
+
+Com o modelo de roteamento baixado, um LLM pequeno local rotula **toda** mensagem antes de qualquer
+coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de palavras acima viram reserva.
+- **Modelo:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1.117.320.736 bytes, sha256
+  `6a1a2eb6…9407e`) em `<userData>/models/`. Nunca vem no instalador: as configurações do assistente
+  mostram um card ("Baixar o modelo de roteamento de 1,1 GB?"); o `router:download` só roda depois
+  desse clique, retoma o `.part` com `Range` e confere tamanho + sha256 antes de renomear
+  (`src/main/router/model-download.ts`).
+- **Motor:** `src/main/router/engine.mjs` (bundle esbuild, `node-llama-cpp` externo) num
+  `utilityProcess`, que sobe 3 s depois que a janela aparece, só se o arquivo existir. `gpu: 'auto'`
+  (Metal / Vulkan / CPU); se não carregar, tenta uma vez só CPU, e então `router:status` = `error` e as
+  regras de palavras decidem. Se cair, morre só esse processo. No Windows/Linux o node-llama-cpp testa o
+  binário nativo num processo filho; de dentro de um utilityProcess esse fork abriria outro Bah (fuse
+  `RunAsNode` desligado), então o motor repassa o fork pro `router-manager.ts`, que abre o arquivo de
+  teste como outro utilityProcess.
+- **Prompt** (`src/shared/router-routes.ts`, ideia do Arch-Router, nada dos pesos nem do texto): rotas
+  `{name, description}` com nomes descritivos que o modelo escreve (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), regras e alguns
+  exemplos. Esse system é o prefixo fixo, avaliado uma vez; por mensagem só
+  `Open page / Last task / Message` é processado. A saída é presa por gramática (JSON schema) a
+  `{"route": "<uma key>"}`. LAST_RUN x FIX depois é decidido pela forma da frase (pergunta → LAST_RUN,
+  afirmação → FIX). O roteador só rotula texto; nunca age, e o texto nunca sai do computador.
+- **Mapeamento** (`classifyIntent` → `routeCommand`): ACTION → agente, PAGE/CHAT → chat (com a página),
+  WEB → resposta da web, LAST_RUN → chat com o registro da última tarefa, FIX → agente; `other` /
+  demora (5 s) → o caminho de antes. Continuam antes do roteador: saudação curta, o "IA dirige",
+  repetir/macro, a dica de pedido vago e os atalhos de 0 token.
+- **Eval:** `npm run router:eval` roda o mesmo núcleo (`router-core.mjs`) em node puro sobre
+  `tests/fixtures/routing-cases.json` (82 casos en/pt/es) e pontua as regras de palavras no mesmo
+  conjunto. Num Intel i7-9750H (CPU): roteador 89,0 % (90,2 % com a saudação antes) x regras 84,1 %, p50 ≈ 0,6–0,9 s, p95 ≈ 1,0–1,4 s,
+  carga ≈ 9 s, ≈ 0,9 GB de RSS no Node (≈ 2 GB no utilityProcess, com o arquivo mapeado em memória).
+  Smoke: `tests/e2e/router-local.spec.ts` (pula sem o modelo).
+- **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
+  node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
+  pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.
+
 ## Skills de navegação (`skills/*/SKILL.md`)
 
 Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que

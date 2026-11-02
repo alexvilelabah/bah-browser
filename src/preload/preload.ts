@@ -290,6 +290,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
   torrentSetBuiltin: (on: boolean) => ipcRenderer.invoke('torrent:set-builtin', on),
   torrentOpen: (uri: string) => ipcRenderer.invoke('torrent:open', uri),
+  // Roteador local (Qwen2.5-1.5B): só rotula o texto da caixa. download só depois do "sim" da pessoa.
+  routerStatus: () => ipcRenderer.invoke('router:status'),
+  routerClassify: (text: string, ctx?: { url?: string; title?: string; lastRun?: { request: string; outcome: string } | null }) => ipcRenderer.invoke('router:classify', text, ctx),
+  routerDownload: () => ipcRenderer.invoke('router:download'),
+  onRouterStatus: (cb: (s: any) => void) => {
+    const listener = (_e: any, s: any) => cb(s);
+    ipcRenderer.on('router:status', listener);
+    return () => ipcRenderer.removeListener('router:status', listener);
+  },
   setYoutubeSkipAds: (on: boolean) => ipcRenderer.invoke('youtube:set-skip-ads', on),
   // Botão "Baixar" em cima do vídeo do YouTube: liga/desliga + os textos no idioma da UI.
   setYoutubeDlButton: (on: boolean, labels?: Record<string, string>) => ipcRenderer.invoke('youtube:set-dl-button', on, labels),
