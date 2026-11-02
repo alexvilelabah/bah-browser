@@ -36,6 +36,7 @@ import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBa
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
 import { commandHasFollowUp, commandWantsSeveralFiles } from './download-steps';
+import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
@@ -260,7 +261,7 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { id?: string; path: string; bytes?: number; totalBytes?: number; contentType?: string; background?: boolean }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number; vcodec?: string; acodec?: string }) => void) => void;
       getDownloadEngine?: () => Promise<DlEngineSettings>;
       setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
       setDownloadDir?: (dir: string | null) => Promise<string>;
@@ -489,6 +490,7 @@ export default function App() {
   // arquivo uns segundos após carregar) ainda é do agente — o fim dele vai pra próxima tarefa.
   const taskEndedAtRef = useRef(0);
   const DL_GRACE_MS = 30_000;
+  const agentDlThreadRef = useRef(new Map<string, string>());   // download do agente → conversa onde avisar o fim
   const dlLatestRef = useRef<Map<string, { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; etaSec?: number | null }>>(new Map());
   const downloadEventsRef = useRef<Array<{ id?: string; kind?: string; state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; reason?: string; stalled?: boolean; stalledForSec?: number }>>([]);
 
@@ -735,7 +737,19 @@ export default function App() {
       // startedAt = quando o download apareceu pela 1ª vez → a qual tarefa ele pertence.
       dlLatestRef.current.set(dlKey, { ...info, at: Date.now(), startedAt: (dlLatestRef.current.get(dlKey) as any)?.startedAt ?? Date.now() } as any);
       const agentWindow = taskRunningRef.current || Date.now() - taskEndedAtRef.current < DL_GRACE_MS;
-      if (agentWindow && (info.state === 'started' || info.state === 'queued' || info.kind === 'agent')) agentDlIdsRef.current.add(dlKey);
+      if (agentWindow && (info.state === 'started' || info.state === 'queued' || info.kind === 'agent' || info.kind === 'video')) {
+        if (!agentDlIdsRef.current.has(dlKey)) agentDlThreadRef.current.set(dlKey, store.threadKeyOf(activeTabIdRef.current));
+        agentDlIdsRef.current.add(dlKey);
+      }
+      // Download que o AGENTE começou terminou (a tarefa já acabou quando ele começou): avisa na mesma conversa,
+      // com os codecs — 4K do YouTube vem em AV1/VP9 e o QuickTime só toca o som (shared/media-codecs.ts).
+      if (info.state === 'completed' && agentDlThreadRef.current.has(dlKey)) {
+        const key = agentDlThreadRef.current.get(dlKey)!;
+        agentDlThreadRef.current.delete(dlKey);
+        const rep = codecReport(info.vcodec, info.acodec);
+        const text = `✅ ${t('dl.agentDone', { file: info.filename })}${rep ? ' — ' + rep.label + '.' : ''}${rep && rep.label && !rep.quicktime ? ' ' + t('dl.useVlc', { codec: rep.blocker }) : ''}`;
+        window.dispatchEvent(new CustomEvent('bah:agent-note', { detail: { key, text } }));
+      }
       if (info.state !== 'progress' || info.notify) downloadEventsRef.current.push(info);
       if (info.state === 'duplicate') return;   // só pro agente; o painel já tem a linha do original
       setDownloads(prev => {
@@ -762,6 +776,8 @@ export default function App() {
           etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec ?? undefined),
           stalled: done ? false : (info.stalled ?? existing?.stalled),
           reasonCode: info.state === 'failed' ? info.reasonCode : undefined,
+          vcodec: info.vcodec ?? existing?.vcodec,
+          acodec: info.acodec ?? existing?.acodec,
         };
         return [merged, ...rest].slice(0, 50);
       });
@@ -1086,7 +1102,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean; reasonCode?: string }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean; reasonCode?: string; vcodec?: string; acodec?: string }>>([]);
   // Espelho do painel pro loop do agente (o state fica velho dentro do loop async): list_downloads.
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
@@ -2006,6 +2022,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               {active && !d.paused && d.engine && d.connections ? ` · ${d.connections} ${t('dl.conns')}` : ''}
                               {d.state === 'failed' && d.reasonCode === 'not-merged' ? t('dl.notMerged') : ''}
                               {d.state === 'failed' && d.reasonCode === 'no-audio' ? t('dl.noAudio') : ''}
+                              {d.state === 'completed' && (d.vcodec || d.acodec) ? (() => { const r = codecReport(d.vcodec, d.acodec); return r ? ` · ${r.label}${r.quicktime ? '' : ' — ' + t('dl.useVlcShort', { codec: r.blocker })}` : ''; })() : ''}
                             </span>
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar

@@ -13,11 +13,22 @@
 import { app, ipcMain, shell, webContents, webFrameMain, type BrowserWindow, type Session, type WebContents, type WebFrameMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { downloadVideo, fetchVideoInfo, looksYtDlpMissing, recoverInterruptedDownloads, INTERRUPTED_ERROR, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, fetchVideoInfo, findFfmpegDir, looksYtDlpMissing, probeStreams, recoverInterruptedDownloads, INTERRUPTED_ERROR, type VideoDownloadProgress } from './media-downloader';
 import { buildVideoChoices, formatBytes, PartsProgress, youtubeVideoId, youtubeWatchUrl, type VideoChoice } from './video-formats';
 import { buildVideoButtonScript, DEFAULT_VIDEO_BUTTON_LABELS, sanitizeVideoButtonLabels, type VideoButtonLabels } from './video-button-script';
 import { buildGenericVideoButtonScript } from './generic-video-button-script';
 import { classifyMediaResponse, MediaLog, sameSite, siteOf, toNetscapeCookies, type SniffedMedia } from './media-sniff';
+
+// Codecs do arquivo pronto (vai no evento 'completed'): a tela diz "AV1 + Opus — abre no VLC, o QuickTime
+// não lê AV1" (shared/media-codecs.ts). Falha do ffprobe = sem codecs; nunca atrapalha o download.
+async function codecsOf(file: string): Promise<{ vcodec?: string; acodec?: string }> {
+  try {
+    const dir = await findFfmpegDir();
+    if (!dir) return {};
+    const p = await probeStreams(dir, file);
+    return p ? { vcodec: p.video || undefined, acodec: p.audio || undefined } : {};
+  } catch { return {}; }
+}
 
 interface Deps {
   getMainWindow: () => BrowserWindow | null;
@@ -299,7 +310,7 @@ export function setupVideoButton(deps: Deps) {
         job.state = 'done'; job.path = r.path;
         let size = 0;
         try { size = fs.statSync(r.path).size; } catch {}
-        toRenderer({ id, state: 'completed', path: r.path, filename: path.basename(r.path), bytes: size, totalBytes: size, speedBps: 0 });
+        toRenderer({ id, state: 'completed', path: r.path, filename: path.basename(r.path), bytes: size, totalBytes: size, speedBps: 0, ...(await codecsOf(r.path)) });
         jobPage(job, { state: 'done' });
         return;
       }
@@ -520,11 +531,12 @@ export function setupVideoButton(deps: Deps) {
       job.state = 'done';
       // Várias músicas de uma vez: a 1ª fica nesta linha, as outras ganham linha própria.
       const files = r.paths?.length ? r.paths : [r.path as string];
-      files.forEach((f, i) => {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
         let size = 0;
         try { size = fs.statSync(f).size; } catch {}
-        toRenderer({ id: i === 0 ? id : `${id}_${i}`, state: 'completed', path: f, filename: path.basename(f), bytes: size, totalBytes: size, speedBps: 0 });
-      });
+        toRenderer({ id: i === 0 ? id : `${id}_${i}`, state: 'completed', path: f, filename: path.basename(f), bytes: size, totalBytes: size, speedBps: 0, ...(await codecsOf(f)) });
+      }
       return r;
     }
     await removePartials(r.partials);
