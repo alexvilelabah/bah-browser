@@ -124,7 +124,9 @@ a.href = /Mac/.test(p) ? '/files/Steam.dmg' : /Win/.test(p) ? '/files/SteamSetup
     await page.evaluate((d) => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); localStorage.setItem('dlDir', d); }, dlDir);
     await page.reload(); await page.waitForLoadState('domcontentloaded'); await sleep(2000);
     if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
-    await page.getByTestId('agent-command-input').fill('download the latest version of the software for this computer');
+    // Vários downloads numa tarefa só (Steam, lista de builds, impressora, parede de login): o pedido tem que ser
+    // de VÁRIOS arquivos — um download único agora encerra a tarefa assim que começa (download-steps.ts).
+    await page.getByTestId('agent-command-input').fill('download every program on these pages for this computer');
     await page.getByTestId('agent-command-input').press('Enter');
     const cont = page.getByTestId('agent-manual-continue');
     for (let i = 0; i < 360 && !(await cont.isVisible().catch(() => false)); i++) {

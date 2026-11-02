@@ -16,3 +16,18 @@ test('follow-up steps or several files keep the agent engaged until the download
   assert.ok(commandWantsSeveralFiles('download all the episodes'));
   assert.ok(!commandHasFollowUp('download the installer'));   // "installer" is not "install"
 });
+
+test('collections: detection, audio vs video, list parsing, subject and queries', async () => {
+  const m = await import('../../src/renderer/download-steps.ts');
+  const cmd = 'find all the music videos from the movie top gun with tom cruise and download them';
+  assert.ok(m.isMediaCollectionRequest(cmd));
+  assert.ok(!m.isMediaCollectionRequest('download the beat it music video'));
+  assert.equal(m.collectionWantsAudioOnly(cmd), false);
+  assert.equal(m.collectionWantsAudioOnly('download all the songs from the album thriller'), true);
+  assert.deepEqual(m.listItems(['Danger Zone', 'Take My Breath Away', 'Danger Zone']), ['Danger Zone', 'Take My Breath Away']);
+  assert.deepEqual(m.listItems('1. Danger Zone\n2. Mighty Wings\n- Playing with the Boys'), ['Danger Zone', 'Mighty Wings', 'Playing with the Boys']);
+  assert.equal(m.collectionSubject(cmd), 'top gun');
+  assert.equal(m.collectionSubject('download every song from the album thriller'), 'thriller');
+  assert.equal(m.collectionQuery('Danger Zone', 'top gun', false), 'Danger Zone top gun official music video');
+  assert.equal(m.collectionQuery('Top Gun Anthem', 'top gun', false), 'Top Gun Anthem official music video');
+});

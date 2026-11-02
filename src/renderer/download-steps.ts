@@ -16,3 +16,46 @@ export function commandWantsSeveralFiles(command: string): boolean {
 export function downloadIsLastStep(command: string): boolean {
   return !commandWantsSeveralFiles(command) && !commandHasFollowUp(command);
 }
+
+// ── Coleção ("todas as músicas/clipes do filme X", "a trilha sonora", "o álbum") ──
+// O modelo pequeno acha a lista (Wikipedia) e guarda com `store`, mas não consegue tocar um laço longo de
+// downloads (nos testes: rodava em círculo em buscas e caía no captcha do IMDb). Quando a lista chega,
+// o BAH baixa faixa por faixa — pergunta a qualidade uma vez e no fim mostra uma tabela.
+
+/** Pedido de COLEÇÃO pra baixar (precisa pesquisar a lista antes). */
+export function isMediaCollectionRequest(command: string): boolean {
+  const c = command.toLowerCase();
+  if (!/\b(down?load\w*|baix[ae]\w*|baixar|descarg\w+)\b/.test(c)) return false;
+  return /\b(all|every|each|whole|entire|complete|full)\b.*\b(songs?|tracks?|music\s+videos?|videos?|clips?)\b/.test(c)
+    || /\b(soundtrack|tracklist|track\s+list|album|discography|trilha\s+sonora|banda\s+sonora|discografia)\b/.test(c)
+    || /\b(todas|todos|cada)\b.*\b(m[uú]sicas?|v[ií]deos?|clipes?|faixas?|canciones)\b/.test(c);
+}
+
+/** Vídeo (com som) ou só áudio? "music video/clipe" = vídeo; "songs/tracks/mp3/músicas" sem vídeo = áudio. */
+export function collectionWantsAudioOnly(command: string): boolean {
+  const c = command.toLowerCase();
+  if (/\b(videos?|v[ií]deos?|clips?|clipes?|videoclipes?)\b/.test(c)) return false;
+  return /\b(songs?|tracks?|mp3|audio|m[uú]sicas?|faixas?|canciones)\b/.test(c);
+}
+
+/** O valor guardado pelo modelo como lista de faixas (array, ou texto com uma por linha / separado por vírgula). */
+export function listItems(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value.map(String)
+    : typeof value === 'string' ? value.split(/\r?\n|;|,(?![^(]*\))/) : [];
+  return raw.map(s => s.replace(/^\s*(\d+[.)]|[-•*])\s*/, '').replace(/\s+/g, ' ').trim())
+    .filter(s => s.length >= 2 && s.length <= 120)
+    .filter((s, i, a) => a.indexOf(s) === i)
+    .slice(0, 30);
+}
+
+/** De quem/de onde é a coleção: "from the movie top gun with tom cruise" → "top gun". */
+export function collectionSubject(command: string): string {
+  const m = command.toLowerCase().match(/\b(?:from|of|do|da|del|de)\s+(?:the\s+|o\s+|a\s+|el\s+|la\s+)?(?:movie|film|filme|pel[ií]cula|album|álbum|soundtrack|trilha sonora|banda sonora|show|series|s[eé]rie)\s+(.+?)(?=\s+(?:with|and|then|by|com|e|y|con|para|for)\b|[.,!?]|$)/);
+  return m ? m[1].replace(/["“”]/g, '').trim().slice(0, 60) : '';
+}
+
+/** Busca no YouTube pra uma faixa da coleção. */
+export function collectionQuery(item: string, subject: string, audioOnly: boolean): string {
+  const s = subject && !item.toLowerCase().includes(subject) ? ` ${subject}` : '';
+  return `${item}${s} ${audioOnly ? 'official audio' : 'official music video'}`.replace(/\s+/g, ' ').trim();
+}

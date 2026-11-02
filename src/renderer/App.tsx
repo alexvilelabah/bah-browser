@@ -37,7 +37,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
-import { commandHasFollowUp, commandWantsSeveralFiles } from './download-steps';
+import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery } from './download-steps';
 import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
@@ -4503,6 +4503,48 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = { success: true, info: { steps: plan.length } };
                   } else if (action.type === 'store') {
                     memory.push({ key: action.key, value: action.value, source: action.source, ts: Date.now() });
+                    // COLEÇÃO: o modelo achou e guardou a lista de faixas → o Bah baixa uma a uma (download-steps.ts).
+                    // O modelo pequeno não sustenta esse laço sozinho (rodava em círculo e caía em captcha).
+                    const collectionItems = isMediaCollectionRequest(command) ? listItems(action.value) : [];
+                    if (collectionItems.length >= 2) {
+                      const audioOnly = collectionWantsAudioOnly(command);
+                      const subject = collectionSubject(command);
+                      const noun = audioOnly ? 'songs' : 'music videos';
+                      const choice = await new Promise<string>((resolve) => {
+                        onProgress({ kind: 'confirm', risk: 'choice', label: noun,
+                          title: `🎬 ${collectionItems.length} ${noun} found`,
+                          message: `${collectionItems.map((x, i) => `${i + 1}. ${x}`).join('\n')}\n\nDownload them all? Bah downloads one at a time; follow them on the download button.`,
+                          choices: [
+                            { label: audioOnly ? '🎵 Download all' : '🎬 Best quality (large files)', value: 'best' },
+                            ...(audioOnly ? [] : [{ label: '📼 Smaller files (≤480p)', value: 'low' }]),
+                            { label: 'Cancel', value: 'cancel' },
+                          ],
+                          onChoose: (v: string) => resolve(v), onConfirm: () => resolve('best'), onCancel: () => resolve('cancel') } as any);
+                      });
+                      throwIfCancelled();
+                      if (choice === 'cancel') {
+                        const msg = `Found ${collectionItems.length} ${noun} (${collectionItems.join(', ')}) — not downloaded, as you asked.`;
+                        finishRun('success', msg);
+                        return { thought: msg, results: allResults, done: { type: 'done', success: true, reason: msg } as BrowserAction };
+                      }
+                      const rows: string[] = [];
+                      deadline.suspend();   // esperar downloads não é o modelo demorando
+                      try {
+                        for (let i = 0; i < collectionItems.length; i++) {
+                          throwIfCancelled();
+                          const item = collectionItems[i];
+                          onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
+                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly)}`, audioOnly, 1, choice === 'low' ? 'low' : 'best');
+                          const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
+                          rows.push(`| ${i + 1} | ${item} | ${r?.success ? '✅ ' + (file || 'downloaded') : '❌ ' + String(r?.error || 'failed').slice(0, 80)} |`);
+                        }
+                      } finally { deadline.resume(); }
+                      const ok = rows.filter(r => r.includes('✅')).length;
+                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}` : ''}:\n\n| # | Track | Result |\n|---|---|---|\n${rows.join('\n')}`;
+                      onProgress({ kind: 'status', message: `✅ ${ok}/${collectionItems.length} ${noun} downloaded` });
+                      finishRun(ok ? 'success' : 'failed', report);
+                      return { thought: report, results: allResults, done: { type: 'done', success: ok > 0, reason: report } as BrowserAction };
+                    }
                     // LOCAL: modelo fraco GUARDA a resposta com `store` e depois divaga sem
                     // reportar. Se o pedido é "me diga/qual/explique" e o valor guardado é uma
                     // frase substancial, ENTREGA na hora. Só no local (a nuvem reporta sozinha).
