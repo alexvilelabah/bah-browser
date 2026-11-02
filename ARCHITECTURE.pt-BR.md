@@ -182,6 +182,38 @@ Onde se decide (tudo no processo main, então toda entrada se comporta igual):
 
 A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só importa com o embutido LIGADO.
 
+#### "Baixe o <programa> pra este computador" (instaladores e drivers)
+
+Steam, driver de impressora, Office, SolidWorks… o agente tem que pegar a versão **do site oficial** que roda
+**nesta máquina**. A lógica pura fica em [`src/shared/software-download.ts`](src/shared/software-download.ts)
+(testes em `tests/unit/software-download.test.ts`); [`src/main/machine-info.ts`](src/main/machine-info.ts) lê o
+sistema uma vez (`process.platform`/`arch`, `getSystemVersion()`, Rosetta via `app.runningUnderARM64Translation`,
+`/etc/os-release` no Linux) e entrega ao renderer pelo `machine:info`.
+
+- **Perfil da máquina → agente.** `machineProfile()` dá SO + versão (codinome do macOS, Windows 10 × 11 pelo build,
+  distro Linux e `.deb`/`.rpm`), CPU (Intel x64 / Apple Silicon / ARM64 / 32-bit) e `pickHint()`: uma frase do que
+  escolher (Mac Intel → "Intel / x64 / Universal .dmg ou .pkg, não só-arm64"; Windows x64 → ".exe/.msi x64";
+  Linux → tipo de pacote). Vai no prompt do sistema (`USER'S COMPUTER`) e, em tarefa de download, numa linha
+  `THIS COMPUTER: … PICK: …` ao lado de `DOWNLOADS` a cada passo.
+- **Conferindo o arquivo que começou.** `checkBuild(nome)` classifica pela extensão e por pedaços do nome
+  (`arm64`/`aarch64`/`apple-silicon`, `x64`/`x86_64`/`amd64`/`intel`, `universal`, `win`/`mac`/`darwin`/`linux`).
+  `error` = não roda aqui (SO errado, build arm64 num Mac Intel, `.rpm` no Ubuntu) → `WRONG OS` / `WRONG CPU` /
+  `WRONG PACKAGE` na linha `DOWNLOAD STARTED` (e em `DOWNLOADS`), e esse download nunca conta como sucesso.
+  `warn` = roda, mas não é nativo (Intel no Apple Silicon via Rosetta, x86 no Windows x64) → nota leve.
+- **Sites de "free download"** (Softonic, FileHippo, Uptodown, CNET…): `thirdPartyDownloadSite()` marca a página e
+  os downloads vindos deles com `THIRD-PARTY DOWNLOAD SITE` (instalador velho ou com bundleware) e manda o agente
+  pro fabricante. Qual domínio *é* o oficial fica com o agente (busca) e com o `site-knowledge.ts`.
+- **Parede de login.** Em tarefa de download (depois do 1º passo), `signInWall()` — campo de senha, host de login
+  (`login.*`, `auth.*`, `login.microsoftonline.com`…), caminho `/signin`/`/register` ou o texto "sign in to download" —
+  pausa o agente com o cartão de ajuda manual (`dl.signinWall.*`): a pessoa entra ela mesma ou para. O agente nunca
+  digita senha nem cria conta. Um link "Sign in" no cabeçalho do site não conta.
+- **Nunca executa nada.** Nada abre um download sozinho: `download:open-file` só roda no clique da pessoa no painel de
+  Downloads, e o agente não tem ação de "abrir arquivo". A skill `software-download`
+  (`skills/software-download/SKILL.md`) também diz ao modelo pra nunca abrir nem rodar o instalador.
+
+Testado com `tests/e2e/software-download.spec.ts` (páginas de fabricante sintéticas: botão que detecta o SO, lista
+por SO/CPU, seletor de modelo de impressora, parede de login).
+
 ---
 
 ## `src/renderer/` — UI + loop do agente

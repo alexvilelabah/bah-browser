@@ -11,6 +11,7 @@ import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, ope
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
+import { machineProfile, machineLine, checkBuild, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { ProxySettings, ProxyAuthPrompt } from './components/ProxyPanel';
@@ -241,6 +242,7 @@ declare global {
       cancelDownload?: (id: string) => Promise<any>;
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
+      machineInfo?: () => Promise<MachineInput>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
@@ -2969,7 +2971,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
-                    const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    let manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    // Download atrás de conta (SolidWorks, Altium, Adobe, Office): para JÁ e a pessoa decide.
+                    // A política geral só pausa tarefa "da conta"; "baixe o X" não parece uma — o agente
+                    // seguia e tentava o formulário. Nunca digita senha nem cria conta. Não no 1º passo:
+                    // a aba em que a pessoa estava pode ser qualquer login.
+                    if (!manualHelpNeed && commandWantsDownload && step > 0) {
+                      const wall = signInWall({ url: observation.url, title: observation.title, text: observation.text_sample, elements: observation.interactive_elements as any });
+                      if (wall) {
+                        const host = hostOf(observation.url) || 'this site';
+                        manualHelpNeed = { kind: 'login', reason: t('dl.signinWall.reason', { host }), instruction: t('dl.signinWall.instruction') };
+                        history += `\nSIGN-IN WALL (${wall}) on ${host}: the download needs the user's account. Bah paused and asked the user. Never type a password, never create an account.`;
+                      }
+                    }
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow
@@ -3163,7 +3177,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
                   // Download task: aponta o(s) botão(ões) de baixar DESTA página. O modelo pequeno lia
                   // "Agree to the EULA and Download" como página de confirmação e desistia.
-                  const DL_BUTTON_RE = /^(agree|accept|i agree|i accept)\b.*\bdownload\b|^(download|download now|download free|free download|start download|download for (mac|macos|windows|linux)\b.*|baixar( agora)?|descargar( ahora)?)$/i;
+                  // "Install Steam" / "Download for Mac" = o botão do fabricante que já detecta o computador.
+                  const DL_BUTTON_RE = /^(agree|accept|i agree|i accept)\b.*\bdownload\b|^(download|download now|download free|free download|start download|download for (mac|macos|windows|linux)\b.*|install \S+( \S+)?( now| for (mac|macos|windows|linux))?|download \S+( \S+)? for (mac|macos|windows|linux)\b.*|baixar( agora)?|descargar( ahora)?)$/i;
                   const dlButtons = commandWantsDownload
                     ? observation.interactive_elements.filter(e => DL_BUTTON_RE.test(String(e.text || (e as any).aria || '').trim())).slice(0, 3)
                     : [];
@@ -3347,6 +3362,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
+                    // Download: a máquina e o que escolher bem ao lado dos downloads (o bloco do sistema
+                    // fica longe e o modelo pequeno pegava o .exe num Mac); e o aviso de agregador.
+                    commandWantsDownload ? machineLine(MACHINE) : '',
+                    commandWantsDownload ? thirdPartyNote(thirdPartyDownloadSite(observation.url)) : '',
                     downloadsBlock,
                     dlButtonsBlock,
                     jobsBlock,
@@ -3762,7 +3781,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // download completo). Antes do onProgress, que é quem desenha o rótulo.
                   if (action.type === 'done' && !action.success && commandWantsDownload) {
                     const mine = [...dlLatestRef.current.values()].filter(ofThisTask) as Array<{ state: string; filename: string }>;
-                    const completed = mine.some(d => d.state === 'completed' && !wrongOsNote(d.filename));
+                    const completed = mine.some(d => d.state === 'completed' && !isWrongBuild(d.filename));
                     const running = mine.some(d => d.state === 'started' || d.state === 'progress' || d.state === 'queued');
                     // ...e a mensagem final NÃO admite falha (meta pode ter mudado no meio — um ISO
                     // concluído antes não faz o pedido NOVO de drivers dar "success").
@@ -5662,7 +5681,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     for (const d of dlEvents) {
                       const latest = dlLatestRef.current.get(d.id || d.path || d.filename) as any;
                       const prevTask = latest && (latest.startedAt ?? 0) < taskStartedAt ? ' (from a PREVIOUS task — not this request)' : '';
-                      const osNote = d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '';
+                      // Arquivo errado pra esta máquina, ou baixado de agregador de "free download" (não do fabricante).
+                      const dlFrom = d.state === 'started' && commandWantsDownload ? thirdPartyDownloadSite(String((d as any).url || '')) || thirdPartyDownloadSite(observation.url) : '';
+                      const osNote = (d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '') + (dlFrom ? ' ' + thirdPartyNote(dlFrom) : '');
                       const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const line = d.state === 'completed'
                         ? `DOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready to use at that path. This is SUCCESS — do not download it again.`
@@ -5682,7 +5703,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
                         : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background; DOWNLOAD PROGRESS / COMPLETED lines follow. Do not report it as downloaded until DOWNLOAD COMPLETED.`;
                       history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
-                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${osNote ? ' ⚠️ wrong OS' : ''}` });
+                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${isWrongBuild(d.filename) ? ' ⚠️ ' + t('dl.wrongBuild') : dlFrom ? ' ⚠️ ' + t('dl.thirdParty') : ''}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
                   }
@@ -6016,16 +6037,19 @@ function youtubeWatchId(u: string): string | null {
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
 // Arquivo de OUTRO sistema (o agente baixou o .exe de Windows num Mac): aviso genérico, vale pra
 // qualquer site de driver/instalador.
+// Agora também a CPU (arm64 num Mac Intel não roda) e o tipo de pacote no Linux — o perfil de
+// verdade vem do main (machine:info); até ele chegar, o palpite pelo navigator (só o SO).
 const IS_WINDOWS = typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform || '');
 const IS_LINUX = typeof navigator !== 'undefined' && /Linux/i.test(navigator.platform || '') && !/Android/i.test(navigator.userAgent || '');
+let MACHINE: MachineProfile = machineProfile({ platform: IS_WINDOWS ? 'win32' : IS_LINUX ? 'linux' : (typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '')) ? 'darwin' : 'other', arch: 'other' });
+try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
+/** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
 function wrongOsNote(filename: string): string {
-  const f = (filename || '').toLowerCase();
-  const mine = IS_MAC ? 'macOS' : IS_WINDOWS ? 'Windows' : IS_LINUX ? 'Linux' : '';
-  let other = '';
-  if (/\.(exe|msi|msix|appx)$/.test(f) && !IS_WINDOWS) other = 'a Windows installer';
-  else if (/\.(dmg|pkg)$/.test(f) && !IS_MAC) other = 'a macOS installer';
-  else if (/\.(deb|rpm|appimage)$/.test(f) && !IS_LINUX) other = 'a Linux package';
-  return other && mine ? ` ⚠️ WRONG OS: ${filename} is ${other} but the user's computer is ${mine} — this is NOT what the user needs. Go back and pick the ${mine} download (check the OS selector).` : '';
+  return checkBuild(filename, MACHINE).note;
+}
+/** Só o erro de verdade: um download "concluído" que não roda aqui não conta como sucesso. */
+function isWrongBuild(filename: string): boolean {
+  return checkBuild(filename, MACHINE).level === 'error';
 }
 
 // "Salvar como skill": depois de uma tarefa que deu certo, oferece transformar o que funcionou num

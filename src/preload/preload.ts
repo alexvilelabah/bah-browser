@@ -297,6 +297,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelDownload: (id: string) => ipcRenderer.invoke('download:cancel', id),
   retryDownload: (id: string, url?: string) => ipcRenderer.invoke('download:retry', id, url),
   openFile: (target: string) => ipcRenderer.invoke('download:open-file', target),
+  machineInfo: () => ipcRenderer.invoke('machine:info'),
   downloadVideo: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') =>
     ipcRenderer.invoke('media:download-video', url, audioOnly, count, quality),
   resolveVideo: (query: string) => ipcRenderer.invoke('media:resolve-video', query),
