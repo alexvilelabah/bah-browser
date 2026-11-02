@@ -25,17 +25,22 @@ test('named site: first step gets the official address and the navigate-directly
     if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
 
     // Devolve o 1º prompt do agente pra esse pedido (o que tem "GOAL: <cmd>").
+    // Espera a tarefa TERMINAR (o relatório aparece): pedido enviado com tarefa rodando vira mensagem dela.
+    const reports = page.locator('.result-report', { hasText: 'Site run done.' });
     const run = async (cmd: string): Promise<string> => {
+      const before = await reports.count();
       await page.getByTestId('agent-command-input').fill(cmd);
       await page.getByTestId('agent-command-input').press('Enter');
-      for (let i = 0; i < 120; i++) {
+      let hit: string | undefined;
+      for (let i = 0; i < 120 && !(hit && (await reports.count()) > before); i++) {
         if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
         const ps: string[] = await app.evaluate(() => (global as any).__e2ePrompts || []);
-        const hit = ps.find(p => p.includes(`GOAL: ${cmd}`));
-        if (hit) { await sleep(1500); return hit; }
+        hit = ps.find(p => p.includes(`GOAL: ${cmd}`));
         await sleep(500);
       }
-      throw new Error(`no agent prompt for "${cmd}"`);
+      if (!hit) throw new Error(`no agent prompt for "${cmd}"`);
+      await expect(reports).toHaveCount(before + 1);
+      return hit;
     };
 
     const first = await run('browse to linkedin, find a job as a nurse in Seattle');
