@@ -65,7 +65,8 @@ export function detectManualHelpNeed(
   // Já entrou (Me / Sign out / My account à vista) → nem paywall nem login: "Premium" no cartão do
   // perfil do LinkedIn virava "precisa de assinatura" numa tarefa da própria conta.
   const signedInNow = accountStateOf(observation) === 'signed-in';
-  if (PAYWALL_PATTERNS.test(page) && privateTask && !signedInNow) {
+  // Chamado de suporte não é conteúdo pago: "Change a subscription" na home do suporte da Apple pausava.
+  if (PAYWALL_PATTERNS.test(page) && privateTask && !commandIsSupport(command) && !signedInNow) {
     return {
       kind: 'paywall',
       reason: `The content on ${host || 'this site'} seems to require a subscription or account access.`,

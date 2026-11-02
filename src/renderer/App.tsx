@@ -98,7 +98,7 @@ import {
   type QuickAction,
 } from './site-knowledge';
 import { namedSiteHint } from './known-sites';
-import { supportRequestText, commandIsForum as isForumCommand, supportPromptBlock, formatSupportDraft, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
+import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, supportPromptBlock, formatSupportDraft, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
 import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
@@ -4092,6 +4092,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         refuse(`"${action.type}" is not done automatically on this site.`);
                         continue;
                       }
+                    }
+                  }
+                  // Chamado com fabricante conhecido: só o site dele (o modelo pequeno fugia pra blog/Gmail quando travava).
+                  if (supportText) {
+                    const off = offSupportSite(action as any, supportText);
+                    if (off) {
+                      history += `\nREFUSED: ${off}`;
+                      onProgress({ kind: 'status', message: `🛡️ ${off}` });
+                      allResults.push({ action, result: { success: false, error: off } });
+                      noEffectCount = Math.max(noEffectCount, 1);
+                      continue;
                     }
                   }
                   // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo

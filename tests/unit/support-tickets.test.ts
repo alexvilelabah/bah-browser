@@ -1,7 +1,7 @@
 // Chamado de suporte / post em fórum: detecção do pedido, site oficial, freio do envio e o texto do cartão.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { commandIsSupport, commandIsForum, supportSiteFor, supportPromptBlock, formatSupportDraft, supportRequestText } from '../../src/renderer/support-tickets.ts';
+import { commandIsSupport, commandIsForum, supportSiteFor, supportPromptBlock, formatSupportDraft, supportRequestText, offSupportSite } from '../../src/renderer/support-tickets.ts';
 import { classifyRisk, riskForAction } from '../../src/renderer/risk.ts';
 import { commandLikelyNeedsAccount, detectManualHelpNeed } from '../../src/renderer/agent-login-policy.ts';
 
@@ -134,4 +134,31 @@ test('an address the user wrote wins over the official map', () => {
   const b = supportPromptBlock('Ask the Dell Community (practice copy at http://127.0.0.1:47300/dell/community) why my fan is loud', {});
   assert.match(b, /USER-GIVEN ADDRESS: http:\/\/127\.0\.0\.1:47300\/dell\/community — work there/);
   assert.doesNotMatch(b, /OFFICIAL DELL/);
+});
+
+test('the support home page mentioning subscriptions is not a paywall', () => {
+  const home: any = { url: 'https://support.apple.com/', title: 'Official Apple Support',
+    text_sample: 'Apple Support Need help? Start here. iPhone Mac iPad Reset Apple Account password Change a subscription Billing and payments Search Support',
+    interactive_elements: [{ tag: 'a', text: 'Mac' }, { tag: 'a', text: 'Change a subscription' }, { tag: 'input', text: 'Search Support' }] };
+  assert.strictEqual(detectManualHelpNeed("Open a support ticket with Apple for my MacBook Air's battery", home, 0, 0), null);
+});
+
+test('the send card warns when the description box is still empty', () => {
+  const d = formatSupportDraft([{ label: 'Subject', value: 'Fan noise', type: 'text' }, { label: 'Describe the problem', value: '', type: 'textarea' }]);
+  assert.strictEqual(d, 'Subject: Fan noise\n⚠️ Empty: Describe the problem');
+});
+
+test('a support request with a known vendor stays on that vendor\'s site', () => {
+  const cmd = 'Ask Dell support about my XPS 13 9310 fan noise. Open a support request.';
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/support/home/en-us' }, cmd), null);
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'www.dell.com/community/en' }, cmd), null);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://www.notebookcheck.net/' }, cmd) || '', /not Dell's site/);
+  assert.match(offSupportSite({ type: 'new_tab', url: 'https://mail.google.com' }, cmd) || '', /not Dell's site/);
+  assert.match(offSupportSite({ type: 'web_search' }, cmd) || '', /stay on Dell's own support site/);
+  assert.strictEqual(offSupportSite({ type: 'click_ref' }, cmd), null);
+  // Apple: o login (idmsa.apple.com) é do mesmo dono.
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://idmsa.apple.com/IDMSWebAuth/signin' }, 'open a ticket with Apple for my MacBook'), null);
+  // Sem fabricante conhecido, ou com endereço escrito pela pessoa: não restringe.
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://example.org/' }, 'open a support ticket about my printer'), null);
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/' }, 'ask Dell support (copy at http://127.0.0.1:47300/dell/support)'), null);
 });

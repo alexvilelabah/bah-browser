@@ -108,7 +108,8 @@ test('support ticket: sign-in wall pauses, the form is filled, Submit asks with 
     const answers1 = ["Don't send", '📨 Send it'];
     // Antes de responder: o cartão mostra o texto do formulário.
     const paused = await (async () => {
-      const p = run('open a support ticket with Acme for my MacBook battery, serial C02XK1ABJG5J', answers1, 7);
+      // Sem fabricante conhecido (MacBook/XPS): com um, o agente só pode navegar no site oficial dele.
+      const p = run('open a support ticket with Acme for my laptop battery, serial C02XK1ABJG5J', answers1, 7);
       for (let i = 0; i < 300 && !(await page.getByText(/Send this on your behalf\?/).last().isVisible().catch(() => false)); i++) await sleep(300);
       await expect(page.getByText(/Battery drains from 100% to 20%/).last()).toBeVisible();
       await expect(page.getByText(/Serial number: C02XK1ABJG5J/).last()).toBeVisible();
@@ -128,7 +129,7 @@ test('support ticket: sign-in wall pauses, the form is filled, Submit asks with 
     await sleep(1500);
 
     // Fórum: o "Post" pergunta; "Don't send" → nada publicado.
-    await run("post a question in the Acme community about my XPS fan noise", ["Don't send"], 0);
+    await run("post a question in the Acme community about my laptop fan noise", ["Don't send"], 0);
     const cancelled = /GOAL: post a question[\s\S]*click_ref\(@\d+\)\nRESULT: \{"success":false,"reason":"user_cancelled"/;
     for (let i = 0; i < 60 && !(await prompts()).some(p => cancelled.test(p)); i++) await sleep(500);
     expect(posts.length).toBe(0);

@@ -34,13 +34,13 @@ export function supportRequestText(command: string, previousGoal?: string | null
 
 // Endereços de suporte conferidos à mão. Golpe de "suporte técnico" é comum (anúncio com
 // telefone falso no topo da busca): o agente vai direto ao domínio do fabricante.
-export interface SupportSite { vendor: string; names: string[]; support: string; community?: string }
+export interface SupportSite { vendor: string; names: string[]; support: string; community?: string; domains: string[] }
 export const SUPPORT_SITES: SupportSite[] = [
-  { vendor: 'Apple', names: ['apple', 'macbook', 'imac', 'iphone', 'ipad', 'airpods', 'apple watch', 'mac mini', 'mac studio'], support: 'https://support.apple.com/', community: 'https://discussions.apple.com/' },
-  { vendor: 'Dell', names: ['dell', 'xps', 'alienware', 'inspiron', 'latitude', 'precision', 'optiplex'], support: 'https://www.dell.com/support/home/', community: 'https://www.dell.com/community/' },
-  { vendor: 'HP', names: ['hp', 'hewlett-packard', 'hewlett packard', 'pavilion', 'elitebook', 'omen', 'spectre', 'envy'], support: 'https://support.hp.com/', community: 'https://h30434.www3.hp.com/' },
-  { vendor: 'Lenovo', names: ['lenovo', 'thinkpad', 'ideapad', 'legion', 'yoga'], support: 'https://support.lenovo.com/', community: 'https://forums.lenovo.com/' },
-  { vendor: 'Microsoft', names: ['microsoft', 'surface', 'xbox'], support: 'https://support.microsoft.com/', community: 'https://answers.microsoft.com/' },
+  { vendor: 'Apple', names: ['apple', 'macbook', 'imac', 'iphone', 'ipad', 'airpods', 'apple watch', 'mac mini', 'mac studio'], support: 'https://support.apple.com/', community: 'https://discussions.apple.com/', domains: ['apple.com'] },
+  { vendor: 'Dell', names: ['dell', 'xps', 'alienware', 'inspiron', 'latitude', 'precision', 'optiplex'], support: 'https://www.dell.com/support/home/', community: 'https://www.dell.com/community/', domains: ['dell.com', 'delltechnologies.com'] },
+  { vendor: 'HP', names: ['hp', 'hewlett-packard', 'hewlett packard', 'pavilion', 'elitebook', 'omen', 'spectre', 'envy'], support: 'https://support.hp.com/', community: 'https://h30434.www3.hp.com/', domains: ['hp.com'] },
+  { vendor: 'Lenovo', names: ['lenovo', 'thinkpad', 'ideapad', 'legion', 'yoga'], support: 'https://support.lenovo.com/', community: 'https://forums.lenovo.com/', domains: ['lenovo.com'] },
+  { vendor: 'Microsoft', names: ['microsoft', 'surface', 'xbox'], support: 'https://support.microsoft.com/', community: 'https://answers.microsoft.com/', domains: ['microsoft.com', 'live.com'] },
 ];
 
 /** Fabricante citado no pedido (nome ou linha de produto) → site oficial; nenhum → null, nunca palpite. */
@@ -53,6 +53,19 @@ export function supportSiteFor(command: string): SupportSite | null {
     if (m && (!best || m.index < best.at)) best = { s, at: m.index };
   }
   return best?.s ?? null;
+}
+
+/** Chamado com fabricante conhecido: sair do domínio dele (notebookcheck, Gmail, busca) é recusado.
+ *  Devolve o motivo, ou null se pode. Endereço escrito pela pessoa libera (ela escolheu). */
+export function offSupportSite(action: { type: string; url?: string }, supportText: string): string | null {
+  const site = supportSiteFor(supportText);
+  if (!site || /https?:\/\//i.test(supportText)) return null;
+  if (action.type === 'web_search') return `stay on ${site.vendor}'s own support site (${site.support}) — use its search or menus instead of a web search.`;
+  if (action.type !== 'navigate' && action.type !== 'new_tab') return null;
+  let host = '';
+  try { host = new URL(/^https?:\/\//i.test(action.url || '') ? String(action.url) : `https://${action.url || ''}`).hostname.toLowerCase(); } catch { return null; }
+  if (site.domains.some(d => host === d || host.endsWith('.' + d))) return null;
+  return `${host} is not ${site.vendor}'s site — a support request goes only through ${site.support}. Stay there; if stuck, tell the user what blocks you.`;
 }
 
 export interface ContactProfile { firstName?: string; lastName?: string; email?: string; phone?: string; country?: string; postalCode?: string }
@@ -90,7 +103,11 @@ export function formatSupportDraft(fields: DraftField[], max = 1400): string {
     ...short.map(f => `${clean(f.label).slice(0, 50) || 'field'}: ${clean(f.value).slice(0, 120)}`),
     ...long.map(f => `${clean(f.label).slice(0, 50) || 'message'}:\n${String(f.value).trim()}`),
   ].join('\n');
-  return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+  // Ensaio: o modelo mandava o chamado só com o assunto e a caixa de descrição vazia.
+  const empty = (fields || []).filter(f => f && f.type === 'textarea' && !clean(f.value) && !/\b(search|pesquisa|buscar)\b/i.test(f.label));
+  const warn = empty.length ? `\n⚠️ Empty: ${empty.map(f => clean(f.label).slice(0, 50) || 'message box').join(', ')}` : '';
+  const body = out.length > max ? `${out.slice(0, max - 1)}…` : out;
+  return body + warn;
 }
 
 /** Na página: os campos visíveis preenchidos (rótulo + valor), sem senha nem campo oculto. */
@@ -114,6 +131,7 @@ export const SUPPORT_DRAFT_SCRIPT = `(function(){
     else if (type === 'contenteditable') v = e.innerText;
     else v = e.value;
     if (v && String(v).trim()) out.push({ label: lab(e), value: String(v).slice(0, 4000), type: type });
+    else if (type === 'textarea') out.push({ label: lab(e), value: '', type: type });   // caixa vazia: o cartão avisa
   });
   return out.slice(0, 30);
 })()`;
