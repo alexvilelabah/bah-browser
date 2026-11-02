@@ -3291,8 +3291,11 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Sobe DEPOIS que a janela aparece, e só se o modelo já estiver baixado (baixar pede um "sim").
   routerManager = setupRouterManager({ getMainWindow: () => mainWindow, modelsDir: path.join(app.getPath('userData'), 'models') });
   {
-    const startRouter = () => setTimeout(() => routerManager?.start(), 3000);
-    if (mainWindow?.isVisible()) startRouter(); else mainWindow?.once('show', startRouter);
+    // 'show' nem sempre vem no macOS (show() no ready-to-show às vezes não emite): vale o que chegar primeiro.
+    let routerQueued = false;
+    const startRouter = () => { if (routerQueued) return; routerQueued = true; setTimeout(() => routerManager?.start(), 3000); };
+    if (mainWindow?.isVisible()) startRouter();
+    else { mainWindow?.once('show', startRouter); mainWindow?.once('ready-to-show', startRouter); }
   }
   // ═══ Ação `download` do agente — roda numa worker thread (agent-download-worker.ts) ═══
   // Devolve assim que o download COMEÇA (caminho final + tamanho) e segue em background. O

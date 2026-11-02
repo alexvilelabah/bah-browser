@@ -111,6 +111,10 @@ test('an ADD that no missing list item asks for is flagged (the out-of-stock loo
   assert.strictEqual(offListAdd(t, e, 13, list, new Map()), null);
   assert.strictEqual(offListAdd(t, e, 99, list, inCart), null);                       // not an ADD button
   assert.strictEqual(offListAdd(t, e, 11, [], inCart), null);                         // no parsed list: no opinion
+  // name guessed from the page's h1 outside the tile ("Shop"): not enough to hold the click back
+  const g: ProductTile[] = [{ name: 'Shop', guessed: true, price: '', unit: '', oos: false, sponsored: false, inCart: 0, href: '', add: { x: 10, y: 10 } }];
+  assert.strictEqual(offListAdd(g, e, 11, parseGroceryList('add the toaster to the cart'), new Map()), null);
+  assert.deepStrictEqual(parseGroceryList('add the toaster to the cart').map(i => i.text), ['toaster']);
 });
 
 test('quantities: pack sizes from names, and a short count asks for more +', () => {

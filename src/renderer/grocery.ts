@@ -15,6 +15,8 @@ export interface ProductTile {
   inCart: number;
   href: string;
   add?: Pt; inc?: Pt; dec?: Pt;
+  /** Nome tirado do h1 da página, fora do cartão: palpite, não barra um ADD. */
+  guessed?: boolean;
 }
 export interface CartLine { name: string; qty: number; price: string; inc?: Pt; dec?: Pt; select?: Pt }
 export interface CartPage { isCart: boolean; lines: CartLine[]; subtotal: string; count: number; checkout?: Pt & { label: string } }
@@ -46,7 +48,7 @@ export function parseGroceryList(command: string): ListItem[] {
   const parts = s.split(/,|;|\n|\s+and\s+|\s+e\s+|\s+y\s+|\s*&\s*/i).map(x => x.trim()).filter(Boolean);
   const out: ListItem[] = [];
   for (const raw of parts.slice(0, 30)) {
-    let t = raw.replace(/^(some|a few|uns|umas|algun[oa]s)\s+/i, '');
+    let t = raw.replace(/^(some|a few|the|this|that|these|those|my|our|uns|umas|algun[oa]s)\s+/i, '');
     let count: number | undefined;
     const doz = /^(a|one|\d+|two|three|half a)?\s*dozen\s+(of\s+)?/i.exec(t);
     if (doz) {
@@ -111,14 +113,18 @@ export const GROCERY_TILES_SCRIPT = `(function(){
     var add = null, inc = null, dec = null;
     bs.forEach(function(b){ var k = kind(b); if (k === 'add' && !add) add = b; else if (k === 'inc' && !inc) inc = b; else if ((k === 'dec' || k === 'del') && !dec) dec = b; });
     if (!name && add) name = lab(add).replace(/^(add( to (cart|basket|trolley|bag))?)\\s*[-–:]?\\s*/i, '').replace(/\\s+to (cart|basket)$/i, '');
-    if ((!name || name.length < 6) && h1) name = (h1.innerText || '').trim();
+    // Cartão sem título (só "Toaster [Add to cart]"): o texto do próprio cartão sem os botões e preços.
+    if (!name) { var own = text; bs.forEach(function(b){ var l = lab(b); if (l) own = own.split(l).join(' '); }); own = own.replace(/\\$\\s?\\d[\\d.,]*/g, ' ').replace(/\\s+/g, ' ').trim(); if (own.length >= 3 && own.length <= 80) name = own; }
+    // O h1 da página fora do cartão é palpite (página de produto: o h1 é o produto; numa lista é "Shop").
+    var guessed = false;
+    if ((!name || name.length < 6) && h1) { guessed = !t.contains(h1); name = (h1.innerText || '').trim(); }
     var price = (/\\$\\s?\\d{1,4}(?:[.,]\\d{2})?/.exec(text) || [''])[0].replace(/\\s/g, '');
     var unit = (/\\(?((?:\\$\\s?\\d+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?\\s?¢)\\s?\\/\\s?(?:fl\\.? ?oz|fluid ounce|ounce|oz|lb|pound|count|ct|each|ea|item|kg|g|l|ml))\\)?/i.exec(text) || ['', ''])[1];
     var q = /(\\d+)\\s+in cart\\b/i.exec(text) || /current quantity\\s*(\\d+)/i.exec(bs.map(lab).join(' ')) || /quantity is\\s*(\\d+)/i.exec(Array.prototype.map.call(t.querySelectorAll('[aria-label]'), function(e){ return e.getAttribute('aria-label'); }).join(' '));
     var inCart = q ? +q[1] : (inc && !add ? 1 : 0);
     var a0 = t.querySelector('a[href]');
     if (!name) return;
-    tiles.push({ el: t, name: name.slice(0, 160), price: price, unit: unit, oos: !add && !inc && OOS.test(text), sponsored: text.length < 700 && /\\bsponsored\\b/i.test(text), inCart: inCart,
+    tiles.push({ el: t, name: name.slice(0, 160), guessed: guessed, price: price, unit: unit, oos: !add && !inc && OOS.test(text), sponsored: text.length < 700 && /\\bsponsored\\b/i.test(text), inCart: inCart,
       href: a0 ? a0.href : '', add: add ? at(add) : undefined, inc: inc ? at(inc) : undefined, dec: dec ? at(dec) : undefined });
   });
   // ordem da página (os esgotados entraram por último na lista de âncoras)
@@ -269,7 +275,7 @@ export function formatListProgress(list: ListItem[], inCart: ReadonlyMap<string,
 export function offListAdd(tiles: ProductTile[], els: Elems, ref: number, list: ListItem[], inCart: ReadonlyMap<string, number>): string | null {
   if (!list?.length) return null;
   const tile = (tiles || []).find(t => t.add && refAt(els, t.add) === ref);
-  if (!tile) return null;
+  if (!tile || tile.guessed) return null;
   const pending = list.filter(it => ![...inCart.entries()].some(([n, q]) => q > 0 && matchesListItem(it, n)));
   return pending.some(it => matchesListItem(it, tile.name)) ? null : tile.name;
 }
