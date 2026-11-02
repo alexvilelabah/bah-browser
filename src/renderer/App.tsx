@@ -3196,7 +3196,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (profile.email || lastReadFile) {
                       autoFilledForms.add(observation.url);
                       const scanFields = await withTimeout(wv.executeJavaScript(FORM_SCAN_SCRIPT), 4000, [] as FieldInfo[]).catch(() => [] as FieldInfo[]);
-                      const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts);
+                      const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts, { url: observation.url });   // URL → tabela do ATS (ats-tables.ts)
                       const did: number[] = plan.fill.length ? await withTimeout(wv.executeJavaScript(formApplyScript(plan.fill)), 4000, [] as number[]).catch(() => [] as number[]) : [];
                       const filledNow = plan.fill.filter(d => did.includes(d.idx));
                       // Pergunta à pessoa: o que falta e o modelo não deve inventar (obrigatórias e escolhas; não arquivo).

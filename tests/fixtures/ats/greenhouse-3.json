@@ -1,0 +1,146 @@
+{
+ "ats": "greenhouse",
+ "source": "https://boards.greenhouse.io/cloudflare/jobs/7695702",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "boards.greenhouse.io/<board>/jobs/<id> redirects (301) to job-boards.greenhouse.io: the legacy job_application[...] form names were not seen on any live board. Standard EEO ids (gender, hispanic_ethnicity, veteran_status).",
+ "fields": [
+  {
+   "label": "First Name",
+   "type": "text",
+   "id": "first_name",
+   "autocomplete": "given-name",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last Name",
+   "type": "text",
+   "id": "last_name",
+   "autocomplete": "family-name",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "Email",
+   "type": "text",
+   "id": "email",
+   "autocomplete": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Country",
+   "type": "combobox",
+   "id": "country",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "country"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Phone",
+   "type": "tel",
+   "id": "phone",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Location (City)",
+   "type": "combobox",
+   "id": "candidate-location",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "resume",
+   "expect": null
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "cover_letter",
+   "expect": null
+  },
+  {
+   "label": "Legal Name (if different than above)",
+   "type": "text",
+   "id": "question_64278780",
+   "expect": "skip"
+  },
+  {
+   "label": "How did you hear about this job?",
+   "type": "text",
+   "id": "question_64278781",
+   "required": true,
+   "expect": "howHeard"
+  },
+  {
+   "label": "Would you like to include your LinkedIn profile, personal website or blog?",
+   "type": "text",
+   "id": "question_64278782",
+   "expect": "linkedin"
+  },
+  {
+   "label": "Do you now or will you in the future require immigration sponsorship to work at Cloudflare?",
+   "type": "combobox",
+   "id": "question_64278783",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "needsSponsorship"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Acknowledge/Confirm",
+   "type": "checkbox",
+   "name": "question_64278784[]",
+   "id": "question_64278784[]_645057074",
+   "required": true,
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Gender",
+   "type": "combobox",
+   "id": "gender",
+   "autocomplete": "off",
+   "expect": "voluntary"
+  },
+  {
+   "label": "Are you Hispanic/Latino?",
+   "type": "combobox",
+   "id": "hispanic_ethnicity",
+   "autocomplete": "off",
+   "expect": "voluntary"
+  },
+  {
+   "label": "Veteran Status",
+   "type": "combobox",
+   "id": "veteran_status",
+   "autocomplete": "off",
+   "expect": "voluntary"
+  }
+ ]
+}
