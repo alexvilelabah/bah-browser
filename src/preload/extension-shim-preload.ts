@@ -784,6 +784,26 @@
         hasDocument: api('offscreen.hasDocument', () => ({})),
       });
     }
+    // ── chrome.permissions: o que o manifesto pede é o que ela tem (o Bah não concede opcional) ─
+    // O Bitwarden e o 1Password chamam permissions.contains logo no começo (TypeError sem isto).
+    if (!chrome.permissions) {
+      const granted = new Set<string>(perms);
+      const hosts: string[] = Array.isArray(manifest.host_permissions) ? manifest.host_permissions.filter((x: unknown) => typeof x === 'string') : [];
+      const glob = (pat: string) => new RegExp('^' + pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+      const originOk = (o: unknown) => typeof o === 'string' && hosts.some(h => h === '<all_urls>' || h === o || glob(h).test(o));
+      defineNs('permissions', {
+        contains: local((q?: any) => {
+          const ps = Array.isArray(q?.permissions) ? q.permissions : [];
+          const os = Array.isArray(q?.origins) ? q.origins : [];
+          return ps.every((x: unknown) => typeof x === 'string' && granted.has(x)) && os.every(originOk);
+        }),
+        getAll: local(() => ({ permissions: Array.from(granted), origins: hosts.slice() })),
+        request: local(() => false),
+        remove: local(() => false),
+        onAdded: makeEvent(),
+        onRemoved: makeEvent(),
+      });
+    }
     if (chrome.runtime && !chrome.runtime.getContexts) {
       define(chrome.runtime, 'getContexts', api('runtime.getContexts', (filter?: unknown) => ({ filter })));
     }

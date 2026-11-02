@@ -76,13 +76,18 @@ function makeExtension(mode: Mode) {
       document.body.appendChild(f);
       const MODE = ${JSON.stringify(mode)};
       if (MODE === 'off') return;
-      setTimeout(() => {
+      const go = () => {
         user.value = 'ada@example.com';
         pw.value = ${JSON.stringify(FIXTURE_PASSWORD)};
         for (const el of [user, pw]) el.dispatchEvent(new Event('input', { bubbles: true }));
         f.remove();
         if (MODE === 'submit') pw.form.requestSubmit();
-      }, MODE === 'submit' ? 10000 : 1200);   // devagar o bastante pro agente chegar no formulário e esperar
+      };
+      // "submit": o auto-login dispara quando o teste manda (evento na página), DEPOIS que o Bah já
+      // está esperando — o agente leva segundos até olhar a página e a extensão de verdade pode ser
+      // mais rápida (aí ele nem vê o formulário, o que também está certo). "fill": logo na carga.
+      if (MODE === 'submit') document.addEventListener('fakepass-go', go, { once: true });
+      else setTimeout(go, 1200);
     })();`;
   const files: Record<string, string> = {
     'manifest.json': JSON.stringify(manifest, null, 1),
@@ -187,6 +192,10 @@ async function runSignedIn(mode: 'submit' | 'fill', kind: 'lastpass' | 'bitwarde
       if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
       ps = await app.evaluate(() => (global as any).__e2ePrompts || []);
       if (ps.some(p => /SIGN-IN: /.test(p))) break;
+      // O Bah está esperando a extensão → a extensão entra (só no modo "submit").
+      if (mode === 'submit' && await page.getByText(/Waiting for LastPass to sign you in/).last().isVisible().catch(() => false)) {
+        await tabEval(app, `document.dispatchEvent(new CustomEvent('fakepass-go')); 1`).catch(() => {});
+      }
       // Nunca pode pausar pedindo login: a extensão é quem entra.
       expect(await page.getByTestId('agent-manual-continue').isVisible().catch(() => false)).toBe(false);
       await sleep(500);
