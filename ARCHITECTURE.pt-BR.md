@@ -54,7 +54,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
 | `agent-download-worker.ts`, `download-progress.ts` | A ação `download` do agente: uma worker de `worker_threads` por download; política de cadência do progresso + travamento. Ver [Downloads e torrents](#downloads-e-torrents) |
 | `torrent-manager.ts`, `torrent/engine.mjs` | Cliente de torrent embutido **opcional** (desligado por padrão): ponte IPC + o motor, isolado num `utilityProcess` que só sobe quando usado. Ver [Downloads e torrents](#downloads-e-torrents) |
-| `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
+| `media-downloader.ts`, `media-parts.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio); pedaços/merge/downloads interrompidos. Ver [Downloads e torrents](#downloads-e-torrents) |
 | `proxy.ts`, `proxy-config.ts` | Proxy pra **todas** as sessões (sistema / manual http·https·socks5 / PAC / direto), caixa de login 407 com credencial salva cifrada no chaveiro, IPC `proxy:*`. O `fetch` do processo principal passa pelo `session.fetch` da sessão `persist:browser`, e downloads do agente que precisam de proxy usam `session.downloadURL` — uma configuração vale pra tudo |
 | `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Handlers de permissão das sessões dos sites: o sensível fica negado até a pessoa responder na barra do Bah (desta vez / sempre / nunca, por origem), abas em segundo plano/ocultas negadas direto, permissões desconhecidas negadas |
 | `frames.ts` | Conteúdo de iframes pro agente (formulário de vaga/pagamento/reserva embutido): árvores de acessibilidade dos frames do mesmo processo (por `frameId`) e dos cross-origin (sessões CDP achatadas via `Target.setAutoAttach`), coordenadas na viewport da página; elementos aparecem com `frame="host"`. Preencher grava no nó dentro do frame (sem depender de foco); clique em frame cross-origin usa CDP `Input` na sessão do frame (`sendInputEvent` para no `<iframe>`) |
@@ -214,6 +214,31 @@ sistema uma vez (`process.platform`/`arch`, `getSystemVersion()`, Rosetta via `a
 Testado com `tests/e2e/software-download.spec.ts` (páginas de fabricante sintéticas: botão que detecta o SO, lista
 por SO/CPU, seletor de modelo de impressora, parede de login).
 
+#### Vídeo / áudio (`media-downloader.ts`, `media-parts.ts`)
+
+O yt-dlp baixa um vídeo em alta resolução em dois **pedaços** — `Título [id].f313.webm` (só imagem) e
+`Título [id].f140.m4a` (só som) — e depois o ffmpeg junta em `Título [id].mp4`. Com `--no-part` os
+pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode passar por resultado:
+
+1. O yt-dlp roda com `--no-quiet` (o `--print after_move:filepath` sozinho liga o modo quieto e some com as
+   linhas `Destination:` / `Merging formats into`). Essas linhas são a lista exata do que **este** download
+   gravou; nada fora dela é apagado.
+2. Depois de cada disparo, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decide: sucesso só
+   com um arquivo final que existe e não é pedaço `.f<id>.`. Sobrou pedaço (saída ≠ 0, ou 0 sem merge) =
+   **"o áudio e o vídeo não foram juntados"** — falha, e os pedaços saem do disco. Se as duas partes estão
+   completas (100% no progresso, ou o yt-dlp saiu 0), o Bah junta sozinho com `ffmpeg -c copy` (mp4 quando
+   os codecs cabem, senão mkv) em vez de falhar.
+3. Pedido normal de vídeo (não mp3) é conferido com o `ffprobe` da mesma pasta do ffmpeg. Sem faixa de
+   áudio → uma nova tentativa com `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; se a origem não tem
+   formato nenhum com áudio, o arquivo fica e o agente é avisado de que não tem som; senão é falha.
+4. Sair / crash: o yt-dlp roda em grupo de processos próprio (`detached`) e não morre com o Bah. No
+   `before-quit`, `stopAllMediaDownloads()` mata todos os grupos do yt-dlp. Cada download fica anotado em
+   `userData/media-downloads.json` (pasta, início, arquivos gravados, pid, o que o "tentar de novo"
+   precisa); arquivo final sai da anotação assim que é impresso. No boot seguinte
+   `recoverInterruptedDownloads()` para um yt-dlp que sobrou, apaga só os arquivos anotados que estão na
+   pasta daquele download e não são mais velhos que ele, e a lista de Downloads mostra o download como
+   **Interrompido** com ↻.
+
 ---
 
 ## `src/renderer/` — UI + loop do agente
@@ -226,11 +251,13 @@ por SO/CPU, seletor de modelo de impressora, parede de login).
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |
 | `page-executor.ts` | Executa as ações do navegador dentro da página |
 | `risk.ts` | O classificador do freio de segurança (`riskForAction`) |
+| `form-filler.ts`, `dropdown-page.ts` | Formulário de candidatura preenchido **por código** (regras em `shared/form-fill.ts`): ler → planejar → aplicar. Listas suspensas com busca (react-select `input[role=combobox]`, combobox ARIA, "prompt" do Workday `button[aria-haspopup=listbox]`, inclusive com caixa de busca) vão uma a uma por `shared/dropdown-fill.ts`: digita o valor, espera (com teto) a lista de `role=option` — que pode carregar com atraso e vir num portal —, escolhe a melhor opção (semântica do `pickOption` + apelidos de país + palavra única) com a sequência completa de eventos de ponteiro/mouse e confere que o campo mostra o valor. Nada casou → as opções da lista vão como escolhas pro cartão único de perguntas. Fecha a lista com blur/clique fora, nunca Escape dentro de diálogo (fecharia o modal do Easy Apply). Documento principal + diálogo aberto, como o resto do preenchimento |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Recuperação de estado travado + detecção de login/captcha |
 | `agent-run-logger.ts` | Log de corridas opt-in (coletor de dados de treino, local) |
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Candidatura preenchida por código a partir do 📝 perfil de candidato. O scan da página (`FORM_SCAN_SCRIPT`) devolve `FieldInfo[]`, com um `automationId` estável (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` reconhece o ATS (`detectAts`: pela URL ou, no formulário embutido, pelos nomes dos campos) e classifica cada campo **primeiro pela tabela desse ATS** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), depois pelas regras genéricas de rótulo/nome/autocomplete. A tabela também pode dizer `skip` (honeypot como o `beecatcher` do Workday, senha, peças internas do react-select): o campo não é preenchido nem perguntado. Tabelas montadas a partir de formulários públicos; o inventário mínimo de cada um fica em `tests/fixtures/ats/*.json`, e `tests/unit/ats-tables.test.ts` confere e mostra a cobertura por ATS |
 
 ---
 
@@ -244,11 +271,74 @@ mostra o mesmo chip (clique renomeia). Abas que o agente abre na tarefa e links 
 de uma aba da sessão entram nela; o menu do botão direito da aba adiciona a outra sessão, cria uma nova ou
 tira dela; arrastar a aba pra entre duas abas de uma sessão entra, pra longe sai.
 A conversa é chaveada pela **chave da thread** = id da sessão (ou da aba, sem sessão): o feed do painel
-(`feedsByTab`), a memória de chat do main (`conversationHistories`, movida com `ai:move-history`) e os
-pedidos recentes do prompt do agente (`recentRunsRef`). Mudou a chave da aba → a conversa vai junto
-(`bah:move-thread`). Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`);
-estado: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
-Por enquanto só na memória (restaurar + histórico de conversas vêm a seguir).
+(`feedsByTab`) e a **thread** da sessão. Mudou a chave da aba → a conversa vai junto (`bah:move-thread`).
+Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`); estado: `store.ts`;
+UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
+
+**Uma thread por sessão.** `src/renderer/threads.ts` guarda uma thread por chave (regras em
+`src/shared/thread-store.ts`): **turnos** (o que você pediu, o que o chat respondeu — os recentes palavra
+por palavra, com teto), **resumos das tarefas do agente** (objetivo, últimos passos-chave, desfecho, o
+último alvo — não cada passo; gravados pelo `finishRun` do `App.tsx`) e **fatos** (logado ou não em cada
+site, vagas vistas) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
+REQUESTS THIS SESSION") e o chat leem o mesmo bloco (`promptBlock`); o chat o manda pro `ai:chat` e o
+`ai-engine.ts` deixa de usar o próprio histórico por aba (lá só fica o arquivo anexado, `lastDocs`). A
+thread tem um **orçamento fixo de tokens por prompt** — ~15% da janela do modelo, de 512 a 4096; 3000 com
+janela desconhecida — e a página atual nunca perde espaço pra ela. Nos 80% o feed avisa e oferece 📌;
+passou, os itens mais velhos viram um resumo corrido e o feed diz "🗜 N itens antigos resumidos", que abre
+o texto exato que ficou no lugar; `/compact` e o 🗑 fazem o mesmo, à vista. Quando a observação precisa
+ser cortada pra caber, corta-se a página (nunca a thread) e o feed mostra "✂️ página cortada".
+**Medidor de contexto** (`components/ContextMeter.tsx`, conta em `src/shared/context-meter.ts`): ao lado
+do nome do modelo, `contexto 6.1k / 16k · conversa 2.3k`; a barra fica âmbar/vermelha dizendo quem ocupa a
+janela; um toque mostra o detalhe da última chamada (instruções, skills, conversa, página). Janela pela
+detecção do engine (`ai:context-window` → `resolveContextBudget`: `/props` no llama.cpp ou o tamanho
+configurado; desconhecida na nuvem); total pelo `prompt_tokens` do provedor quando vem, senão estimativa
+(marcada com `~`). Gancho de teste: `window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` finge a janela com
+`E2E_MOCK_AI`.
+
+**Restaurar + histórico de conversas.** `src/main/chat-store.ts` guarda dois arquivos cifrados com
+`safeStorage` (regras em `src/shared/chat-history.ts`): as threads **vivas** + nome/cor das sessões
+(`threads-live.enc`, gravado até 1,5 s depois de mudar e ao fechar a janela, antes do "gravei" da sessão
+de abas) e o **🕘 histórico de conversas** (`chat-history.enc`: uma entrada por sessão com nome, cor,
+datas, sites, 1º pedido, as abas e a thread; atualizado conforme você usa, como o histórico de
+navegação). Com ⋮ → Ao abrir o Bah = "Continuar de onde parou" as abas voltam com o mesmo id e
+`sessionId` (o `session.v1` guarda `id`/`sid`) e a thread se prende de novo (`store.ts` `bootTabs`,
+carregada síncrona por `threads:load-live-sync`); com a outra escolha o arquivo vivo é apagado ao abrir.
+⋮ → 🕘 Histórico de conversas (`components/ChatHistoryPanel.tsx`) abre uma sessão passada só pra ler ou a
+**Retoma** (`store.resumeSession`, reabrindo as abas dela se quiser). "Limpar dados de navegação" ganhou
+a caixa "histórico de conversas" (mesmo período). Aba anônima nunca chega a nenhum dos dois. Testes:
+`tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; ponta a ponta `tests/e2e/sessions-thread.spec.ts`.
+
+## Tarefas agendadas (com o Bah aberto)
+
+O assistente roda um pedido nos horários marcados — "every weekday at 8am check my Indeed recommendations",
+"toda segunda às 9h resuma as notícias", "a cada 2 horas …" — ou pelo ⋮ → ⏰ **Tarefas agendadas** (criar,
+editar, pausar, apagar, rodar agora, histórico). Regras puras em `src/shared/schedule.ts` (testadas em
+`tests/unit/schedule.test.ts`): parser en/pt/es (todo dia, dias úteis, fim de semana, dias da semana,
+a cada N minutos/horas com mínimo de 15 minutos, às HH:MM / 8am / 8h / meio-dia), próxima vez em **hora
+local** (8h continua 8h na troca do horário de verão; a hora pulada na primavera roda logo depois; a hora
+repetida no outono roda uma vez), vezes perdidas e validação/tetos do que vai pro disco. Pedido ambíguo
+(sem hora, "at 9" manhã ou noite, intervalo abaixo do mínimo) ganha um cartão com as próximas 3 vezes antes
+de salvar; o claro é salvo e a resposta diz a próxima vez. A checagem cedo fica em
+`AgentCommandBar.runUnified` (antes do roteador).
+- **Onde fica**: `src/main/scheduled-tasks.ts` — `userData/scheduled-tasks.enc`, cifrado com `safeStorage`
+  (sem cofre → só na memória), ≤50 tarefas, pedido ≤1000 caracteres, ≤20 entradas de histórico cada.
+- **Execução**: `src/renderer/scheduler.ts` (`useScheduler`). Um tique (15 s) acha as que venceram e põe
+  na fila; uma por vez e só com o painel do assistente livre (tarefa ou chat da pessoa nunca é
+  atropelado: eventos `bah:sched-busy` / `bah:sched-run` no `AgentCommandBar`). Cada tarefa roda na sua
+  aba e sessão (chip "⏰ <nome>"), reaproveitada nas próximas vezes enquanto estiver aberta. O loop do
+  agente recebe `unattended: true`: o freio também para num "Send/Post/Book/Order" puro (`risk.ts`) e os
+  assistentes de envio automático do Gmail/YouTube ficam desligados. Resultado + resumo curto vão pro
+  histórico da tarefa.
+- **Esperando a pessoa**: um cartão de confirmação (freio, permissão, perguntas) ou uma pausa de login
+  para a vez; o agendador marca "esperando você" no painel/menu e manda uma notificação do sistema
+  (`sched:notify`; clique → a aba da tarefa). O relógio da tarefa (`task-deadline.ts`) dorme enquanto o
+  cartão espera. Nada arriscado acontece até a pessoa responder.
+- **Vezes perdidas**: na abertura, toda tarefa ligada cuja hora já passou é oferecida (`MissedRunsCard`:
+  Rodar agora / Pular), nunca roda escondida. Com o Bah aberto, uma hora perdida por mais de 10 minutos
+  (o computador dormiu) é oferecida do mesmo jeito. Pular grava "pulado" e vai pra próxima vez.
+- **Testes**: `tests/e2e/scheduled-tasks.spec.ts` usa um relógio injetável (`E2E_SCHED_NOW` e
+  `window.__bahSched.setNow`, só com `NODE_ENV=test`).
 
 ## Roteamento dos pedidos e continuações
 
@@ -266,6 +356,27 @@ Cada tarefa terminada guarda a última coisa em que agiu, e o prompt diz que "is
 testado empacotando em `tests/unit/quick-video.test.ts`). As respostas da web tiram páginas de buscador
 das fontes e nunca mostram `[[ACTION: …]]` cru; ação sugerida "none" não vira botão.
 
+**Site nomeado vai direto pro endereço oficial.** `src/renderer/known-sites.ts` é uma lista curta,
+conferida à mão, de sites conhecidos (LinkedIn, Indeed, GitHub, a Amazon do seu país, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → endereço oficial. Quando o pedido cita um deles ("browse to linkedin,
+find a job…"), o primeiro prompt do agente ganha a linha `NAMED SITE:` com o endereço e a regra "navegue,
+não faça web_search do nome"; todo prompt traz a lista em `OFFICIAL SITES`; com IA local o atalho abre
+direto (`getInitialShortcutAction`). Nome que também é palavra comum ("indeed", "target") só conta depois
+de "go to / on / at / abra…". Nome fora da lista nunca vira domínio chutado (golpe de domínio parecido):
+continua indo pro `web_search`. Testes: `tests/unit/known-sites.test.ts`,
+`tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
+
+**"Resuma minhas abas abertas".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) transforma o
+pedido na ação `summarize_tabs`, mesmo com a IA no comando (senão o modelo visitaria aba por aba com
+`switch_tab`). O executor no `App.tsx` escolhe as abas (`selectTabsForSummary`: sem abas anônimas, sem
+páginas internas como `about:`, `file:` ou o player do Bah; aba dormindo aparece como dormindo e só é
+acordada se a pessoa pedir, ex.: "inclusive as dormindo"), confere a permissão **suas abas** uma vez pro
+conjunto (`tabsAccessDecision`: perguntar / sempre / nunca do menu; a aba da própria tarefa não precisa),
+lê o texto de cada aba com `<webview>.executeJavaScript` (que recua pro mundo isolado em página que proíbe
+script) e faz uma chamada sem histórico ao modelo pra uma linha por aba e um resumo geral. O painel mostra
+um cartão com um link por aba que troca pra ela. Testes: `tests/unit/tabs-summary.test.ts`,
+`tests/e2e/tabs-summary.spec.ts`.
+
 **Arquivos de texto puro no tema escuro.** O visualizador de texto do Chromium clareia o texto no tema
 escuro, mas site que manda `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub
 raw) não ganha o fundo escuro → branco no branco. O `main.ts` insere uma folha de usuário
@@ -280,6 +391,42 @@ script (repassado, nunca roda de novo) de página que bloqueia scripts (→ o me
 isolado** 1047 do Bah via `page:eval-isolated` no `main.ts`, o mecanismo dos content scripts de extensão,
 lembrado até a aba mudar de endereço). Testes: `tests/unit/page-eval.test.ts`,
 `tests/e2e/no-js-page.spec.ts`.
+
+### Roteador local (Qwen2.5-1.5B, opcional)
+
+Com o modelo de roteamento baixado, um LLM pequeno local rotula **toda** mensagem antes de qualquer
+coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de palavras acima viram reserva.
+- **Modelo:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1.117.320.736 bytes, sha256
+  `6a1a2eb6…9407e`) em `<userData>/models/`. Nunca vem no instalador: as configurações do assistente
+  mostram um card ("Baixar o modelo de roteamento de 1,1 GB?"); o `router:download` só roda depois
+  desse clique, retoma o `.part` com `Range` e confere tamanho + sha256 antes de renomear
+  (`src/main/router/model-download.ts`).
+- **Motor:** `src/main/router/engine.mjs` (bundle esbuild, `node-llama-cpp` externo) num
+  `utilityProcess`, que sobe 3 s depois que a janela aparece, só se o arquivo existir. `gpu: 'auto'`
+  (Metal / Vulkan / CPU); se não carregar, tenta uma vez só CPU, e então `router:status` = `error` e as
+  regras de palavras decidem. Se cair, morre só esse processo. No Windows/Linux o node-llama-cpp testa o
+  binário nativo num processo filho; de dentro de um utilityProcess esse fork abriria outro Bah (fuse
+  `RunAsNode` desligado), então o motor repassa o fork pro `router-manager.ts`, que abre o arquivo de
+  teste como outro utilityProcess.
+- **Prompt** (`src/shared/router-routes.ts`, ideia do Arch-Router, nada dos pesos nem do texto): rotas
+  `{name, description}` com nomes descritivos que o modelo escreve (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), regras e alguns
+  exemplos. Esse system é o prefixo fixo, avaliado uma vez; por mensagem só
+  `Open page / Last task / Message` é processado. A saída é presa por gramática (JSON schema) a
+  `{"route": "<uma key>"}`. LAST_RUN x FIX depois é decidido pela forma da frase (pergunta → LAST_RUN,
+  afirmação → FIX). O roteador só rotula texto; nunca age, e o texto nunca sai do computador.
+- **Mapeamento** (`classifyIntent` → `routeCommand`): ACTION → agente, PAGE/CHAT → chat (com a página),
+  WEB → resposta da web, LAST_RUN → chat com o registro da última tarefa, FIX → agente; `other` /
+  demora (5 s) → o caminho de antes. Continuam antes do roteador: saudação curta, o "IA dirige",
+  repetir/macro, a dica de pedido vago e os atalhos de 0 token.
+- **Eval:** `npm run router:eval` roda o mesmo núcleo (`router-core.mjs`) em node puro sobre
+  `tests/fixtures/routing-cases.json` (82 casos en/pt/es) e pontua as regras de palavras no mesmo
+  conjunto. Num Intel i7-9750H (CPU): roteador 89,0 % (90,2 % com a saudação antes) x regras 84,1 %, p50 ≈ 0,6–0,9 s, p95 ≈ 1,0–1,4 s,
+  carga ≈ 9 s, ≈ 0,9 GB de RSS no Node (≈ 2 GB no utilityProcess, com o arquivo mapeado em memória).
+  Smoke: `tests/e2e/router-local.spec.ts` (pula sem o modelo).
+- **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
+  node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
+  pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.
 
 ## Skills de navegação (`skills/*/SKILL.md`)
 

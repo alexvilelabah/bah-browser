@@ -31,8 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:zoom', listener);
     return () => ipcRenderer.removeListener('app:zoom', listener);
   },
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image, thread),
+  contextWindow: (local?: boolean) => ipcRenderer.invoke('ai:context-window', local),
   // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
   chatCancel: (streamId: string) => ipcRenderer.invoke('ai:chat-cancel', streamId),
   // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
@@ -219,6 +220,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   applicantSaveAnswers: (a: Record<string, string>) => ipcRenderer.invoke('applicant:save-answers', a),
   applicantDeleteAnswer: (key: string) => ipcRenderer.invoke('applicant:delete-answer', key),
   applicantClear: () => ipcRenderer.invoke('applicant:clear'),
+  // Tarefas agendadas (guardadas cifradas no main; relógio/fila no renderer)
+  schedList: () => ipcRenderer.invoke('sched:list'),
+  schedSave: (list: any[]) => ipcRenderer.invoke('sched:save', list),
+  schedClock: () => ipcRenderer.invoke('sched:clock'),
+  schedNotify: (n: { title: string; body: string; taskId?: string }) => ipcRenderer.invoke('sched:notify', n),
+  onSchedFocus: (cb: (taskId: string) => void) => {
+    const listener = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('sched:focus', listener);
+    return () => ipcRenderer.removeListener('sched:focus', listener);
+  },
+  // Conversas do assistente (main/chat-store.ts): a viva (só volta com "Continuar de onde parou") e o
+  // 🕘 histórico de conversas. Tudo cifrado no disco pelo main.
+  threadsLoadLiveSync: () => { try { return ipcRenderer.sendSync('threads:load-live-sync'); } catch { return null; } },
+  threadsSaveLive: (payload: unknown) => ipcRenderer.send('threads:save-live', payload),
+  threadsClearLive: () => ipcRenderer.invoke('threads:clear-live'),
+  chatHistoryList: () => ipcRenderer.invoke('chat-history:list'),
+  chatHistoryGet: (id: string) => ipcRenderer.invoke('chat-history:get', id),
+  chatHistoryDelete: (id: string) => ipcRenderer.invoke('chat-history:delete', id),
+  chatHistoryClear: (since: number | null) => ipcRenderer.invoke('chat-history:clear', since),
   proxyGet: () => ipcRenderer.invoke('proxy:get'),
   proxySet: (c: any) => ipcRenderer.invoke('proxy:set', c),
   proxyTest: (url?: string) => ipcRenderer.invoke('proxy:test', url),
@@ -257,7 +277,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
     ipcRenderer.invoke('images:search', query, minWidth, count),
-  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => {
+  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:download-event', listener);
     return () => ipcRenderer.removeListener('agent:download-event', listener);
@@ -270,11 +290,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
   torrentSetBuiltin: (on: boolean) => ipcRenderer.invoke('torrent:set-builtin', on),
   torrentOpen: (uri: string) => ipcRenderer.invoke('torrent:open', uri),
+  // Roteador local (Qwen2.5-1.5B): só rotula o texto da caixa. download só depois do "sim" da pessoa.
+  routerStatus: () => ipcRenderer.invoke('router:status'),
+  routerClassify: (text: string, ctx?: { url?: string; title?: string; lastRun?: { request: string; outcome: string } | null }) => ipcRenderer.invoke('router:classify', text, ctx),
+  routerDownload: () => ipcRenderer.invoke('router:download'),
+  onRouterStatus: (cb: (s: any) => void) => {
+    const listener = (_e: any, s: any) => cb(s);
+    ipcRenderer.on('router:status', listener);
+    return () => ipcRenderer.removeListener('router:status', listener);
+  },
   setYoutubeSkipAds: (on: boolean) => ipcRenderer.invoke('youtube:set-skip-ads', on),
   // Botão "Baixar" em cima do vídeo do YouTube: liga/desliga + os textos no idioma da UI.
   setYoutubeDlButton: (on: boolean, labels?: Record<string, string>) => ipcRenderer.invoke('youtube:set-dl-button', on, labels),
   cancelVideoDownload: (id: string) => ipcRenderer.invoke('media:cancel-video', id),
   retryVideoDownload: (id: string) => ipcRenderer.invoke('media:retry-video', id),
+  // Downloads de vídeo que o Bah fechou no meio (sessão anterior) → voltam pra lista como eventos.
+  takeInterruptedVideoDownloads: () => ipcRenderer.invoke('media:interrupted'),
   onTorrentEvent: (cb: (info: any) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:torrent-event', listener);

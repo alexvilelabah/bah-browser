@@ -4,12 +4,17 @@ import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
 import { namesStore } from './stores';
 // Rótulo de botão que abre o seletor de arquivos do SO.
 const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-]{0,25}\b(files?|r[eé]sum[eé]s?|cv|documents?|cover letter|attachments?)(?![a-z0-9])|^(upload|attach|browse|choose files?|anexar|enviar arquivo)\.{0,3}$/i;
-import { FORM_SCAN_SCRIPT, formApplyScript } from './form-filler';
+import { FORM_SCAN_SCRIPT, applyFill, readDropdownOptions } from './form-filler';
 import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
 import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
+import {
+  promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
+  noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
+  contextWindow as contextWindowNow, setContextWindow,
+} from './threads';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
 import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
 import { machineProfile, machineLine, checkBuild, isDownloadControl, installerFileOf, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
@@ -31,6 +36,7 @@ import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/t
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
+import DownloadButtonIcon from './components/DownloadButtonIcon';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
@@ -42,13 +48,18 @@ import PasswordSuggest from './components/PasswordSuggest';
 import PasswordsPanel from './components/PasswordsPanel';
 import type { PasswordsBridge, PwOffer, PwSuggest } from '../shared/password-types';
 import MonitorsPanel from './components/MonitorsPanel';
+import { ScheduledTasksPanel, MissedRunsCard } from './components/ScheduledTasksPanel';
+import { useScheduler } from './scheduler';
 import ClearDataDialog, { type ClearChoice } from './components/ClearDataDialog';
 import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange } from '../shared/clear-data';
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
 import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
+import ChatHistoryPanel from './components/ChatHistoryPanel';
 import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
+import { parseRoute, routeToIntent, type RoutedIntent, type RouteContext, type RouterStatus } from '../shared/router-routes';
+import { isAboutLastRun, reportsIncompleteRun } from './last-run';
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
@@ -84,12 +95,15 @@ import {
   buildKnownSitesBlock,
   detectQuickAction,
   getInitialShortcutAction,
+  commandHasExplicitUrl,
   pointsAtOpenScreen,
   isTaskDataAction,
   rememberActionForSite,
   rememberObservedSite,
   type QuickAction,
 } from './site-knowledge';
+import { namedSiteHint } from './known-sites';
+import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
 import {
@@ -150,7 +164,16 @@ declare global {
       setLocalWarmup?: (on: boolean) => Promise<boolean>;
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) => Promise<{ response?: string; error?: string; ctx?: { system: number } }>;
+      contextWindow?: (local?: boolean) => Promise<{ tokens: number; source: string } | null>;
+      // Conversas do assistente (main/chat-store.ts, cifradas no disco).
+      threadsLoadLiveSync?: () => unknown;
+      threadsSaveLive?: (payload: unknown) => void;
+      threadsClearLive?: () => Promise<{ ok: boolean }>;
+      chatHistoryList?: () => Promise<{ rows: import('../shared/chat-history').ChatHistoryRow[]; available: boolean }>;
+      chatHistoryGet?: (id: string) => Promise<import('../shared/chat-history').ChatHistoryEntry | null>;
+      chatHistoryDelete?: (id: string) => Promise<{ ok: boolean }>;
+      chatHistoryClear?: (since: number | null) => Promise<{ ok: boolean }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
@@ -199,10 +222,15 @@ declare global {
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
       torrentSetBuiltin?: (on: boolean) => Promise<{ ok: boolean; builtin: boolean }>;
       torrentOpen?: (uri: string) => Promise<{ ok: boolean }>;
+      routerStatus?: () => Promise<RouterStatus & { rss?: number }>;
+      routerClassify?: (text: string, ctx?: RouteContext) => Promise<{ route: string; ms: number } | null>;
+      routerDownload?: () => Promise<{ ok: boolean; error?: string }>;
+      onRouterStatus?: (cb: (s: RouterStatus) => void) => (() => void);
       setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
       setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
       cancelVideoDownload?: (id: string) => Promise<any>;
       retryVideoDownload?: (id: string) => Promise<any>;
+      takeInterruptedVideoDownloads?: () => Promise<number>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -233,7 +261,7 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { id?: string; path: string; bytes?: number; totalBytes?: number; contentType?: string; background?: boolean }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
       getDownloadEngine?: () => Promise<DlEngineSettings>;
       setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
       setDownloadDir?: (dir: string | null) => Promise<string>;
@@ -245,7 +273,7 @@ declare global {
       openFile?: (target: string) => Promise<any>;
       machineInfo?: () => Promise<MachineInput>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
-      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
+      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
       resolveVideos?: (queries: string[]) => Promise<Array<{ query: string; id?: string; title?: string }>>;
       resolveManyVideos?: (query: string, count: number) => Promise<{ ok: boolean; videos: Array<{ id: string; title: string; url: string }>; error?: string }>;
@@ -290,6 +318,11 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
+      schedList?: () => Promise<{ tasks: import('../shared/schedule').ScheduledTask[]; available: boolean }>;
+      schedSave?: (list: import('../shared/schedule').ScheduledTask[]) => Promise<{ ok: boolean; tasks: import('../shared/schedule').ScheduledTask[] }>;
+      schedClock?: () => Promise<{ offset: number; test: boolean }>;
+      schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
+      onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       applicantGet?: () => Promise<{ profile: import('../shared/form-fill').ApplicantProfile; answers: Record<string, string>; available: boolean }>;
       applicantSetProfile?: (p: any) => Promise<{ ok: boolean }>;
       applicantSaveAnswers?: (a: Record<string, string>) => Promise<{ ok: boolean }>;
@@ -472,21 +505,8 @@ export default function App() {
   // O usuário emenda pedidos ("e com a palavra bom dia?") esperando que o agente
   // lembre do anterior. Guardamos os últimos comandos+desfechos (vai no GOAL do
   // modelo) e a última quick action (pra follow-up determinístico sem IA).
-  // Memória curta de tarefas do agente POR ABA (tabId → últimos comandos+desfecho).
-  // Antes era uma lista global → follow-up de agente vazava entre abas.
-  const recentRunsRef = useRef<Map<string, Array<{ cmd: string; outcome: string }>>>(new Map());
-  // A conversa de uma aba mudou de chave (ganhou sessão / entrou em outra): os pedidos recentes vão junto.
-  useEffect(() => {
-    const onMove = (e: Event) => {
-      const { from, to } = (e as CustomEvent).detail || {};
-      const m = recentRunsRef.current, a = m.get(from);
-      if (!a?.length || !to || from === to) { m.delete(from); return; }
-      m.set(to, [...(m.get(to) ?? []), ...a].slice(-5));
-      m.delete(from);
-    };
-    window.addEventListener('bah:move-thread', onMove);
-    return () => window.removeEventListener('bah:move-thread', onMove);
-  }, []);
+  // Os pedidos anteriores (e o que o chat respondeu) moram na thread da sessão (renderer/threads.ts):
+  // o agente lê o bloco dela no começo do prompt e grava o resumo da tarefa no fim.
   const lastQuickActionRef = useRef<QuickAction | null>(null);
   // Gravação de macro: ações duráveis executadas com sucesso no run atual.
   // No fim (sucesso), vira a "receita" que o usuário repete sem gastar IA.
@@ -743,10 +763,13 @@ export default function App() {
           speedBps: done ? 0 : (info.speedBps ?? existing?.speedBps),
           etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec ?? undefined),
           stalled: done ? false : (info.stalled ?? existing?.stalled),
+          reasonCode: info.state === 'failed' ? info.reasonCode : undefined,
         };
         return [merged, ...rest].slice(0, 50);
       });
     }) as any);
+    // Downloads de vídeo que o Bah fechou no meio da última vez: chegam como eventos acima.
+    window.electronAPI?.takeInterruptedVideoDownloads?.()?.catch(() => {});
     return () => { for (const off of offs) { try { off?.(); } catch {} } };
   }, []);
 
@@ -838,6 +861,15 @@ export default function App() {
   //   LOCAL: atalhos LIGADOS (agentDrive=false). Modelo fraco erra o roteamento e é lento;
   //          o atalho acerta o óbvio de graça. Continua desligável no botão do compositor.
   // Escolha explícita já salva manda sempre — o padrão só vale pra quem nunca mexeu.
+  // Roteador local: estado vindo do main (baixar / carregando / pronto). Pronto → classifyIntent usa ele.
+  const [routerStatus, setRouterStatus] = useState<RouterStatus>({ state: 'not-downloaded' });
+  const routerReadyRef = useRef(false);
+  useEffect(() => {
+    const api = window.electronAPI;
+    const apply = (st: RouterStatus) => { routerReadyRef.current = st?.state === 'ready'; setRouterStatus(st); };
+    api?.routerStatus?.().then((st) => { if (st) apply(st); }).catch(() => {});
+    return api?.onRouterStatus?.(apply);
+  }, []);
   const [agentDrive, setAgentDrive] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem('agentDrive');
@@ -1056,7 +1088,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean; reasonCode?: string }>>([]);
   // Espelho do painel pro loop do agente (o state fica velho dentro do loop async): list_downloads.
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
@@ -1084,6 +1116,25 @@ export default function App() {
   }, []);
   const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
+  // ⏰ Tarefas agendadas (renderer/scheduler.ts): cada uma roda numa aba com sessão própria.
+  const [schedOpen, setSchedOpen] = useState(false);
+  const sched = useScheduler({
+    openRunTab: (_task, reuse) => {
+      if (reuse && tabsRef.current.some(x => x.id === reuse && !x.hidden)) { store.setActiveTabId(reuse); return reuse; }
+      return store.addTab();
+    },
+    ensureRunSession: (tabId, task) => {
+      if (!tabsRef.current.some(x => x.id === tabId)) return false;   // a aba nova ainda não chegou no estado
+      const had = store.threadKeyOf(tabId) !== tabId;
+      const sid = store.ensureSession(tabId, { command: task.command });
+      if (sid === tabId) return false;
+      // Nome reconhecível no chip ("⏰ News"); se a pessoa renomeou a sessão depois, fica o nome dela.
+      if (!had) store.renameSession(sid, `⏰ ${task.name}`);
+      return true;
+    },
+    focusTab: (id) => { if (tabsRef.current.some(x => x.id === id && !x.hidden)) store.setActiveTabId(id); },
+    openPanel: () => store.setSidebarOpen(true),
+  });
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
   const zoomBadgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1145,6 +1196,15 @@ export default function App() {
   // Trocou o mecanismo de pesquisa (⋮) → placeholder da barra e o próprio menu se redesenham.
   // Ao abrir, o main recebe o escolhido (pro "Pesquisar no … por" do clique direito).
   useEffect(() => { syncSearchEngineToMain(); return onSearchEngineChange(() => forceI18n(n => n + 1)); }, []);
+  // Janela de contexto do modelo (a detecção do engine: /props no llama.cpp, ou o tamanho configurado)
+  // → orçamento da thread da sessão e o medidor do painel. Nuvem: desconhecida (orçamento padrão).
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      try { const r = await window.electronAPI?.contextWindow?.(store.localSettings.enabled); if (alive) setContextWindow(r?.tokens); } catch {}
+    }, 1200);
+    return () => { alive = false; clearTimeout(t); };
+  }, [store.localSettings.enabled, store.localSettings.model, store.localSettings.baseUrl, store.localSettings.contextMode, store.localSettings.contextTokens]);
 
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
@@ -1157,6 +1217,7 @@ export default function App() {
   // Histórico e lista de downloads são daqui (renderer); cookies/cache vão pro main, que só
   // mexe na sessão das abas. Os sites do período saem do histórico ANTES de apagá-lo.
   const [clearDataOpen, setClearDataOpen] = useState(false);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);   // ⋮ → 🕘 Histórico de conversas
   const closeClearData = useCallback(() => setClearDataOpen(false), []);
   const sitesInRange = useCallback((range: TimeRange) => originsVisited(historyRef.current, rangeSince(range, Date.now())).length, []);
   const runClearData = useCallback(async (c: ClearChoice): Promise<boolean> => {
@@ -1178,6 +1239,8 @@ export default function App() {
       store.forgetClosedTabs(u => c.range === 'all' || gone.has(u));
     }
     if (c.downloads) setDownloads(prev => keepDownloads(prev, since));
+    // 🕘 Histórico de conversas do assistente (cifrado no main): o mesmo período.
+    if (c.chats) { try { const r = await window.electronAPI?.chatHistoryClear?.(since === -Infinity ? null : since); if (!r?.ok) ok = false; } catch { ok = false; } }
     // Cookies do Google podem ter saído → o menu ⋮ volta a mostrar "Entrar no Google".
     if (c.cookies) checkGoogleLogin();
     return ok;
@@ -1466,15 +1529,36 @@ export default function App() {
   // Classificador de intenção por IA: lê o contexto da aba atual (url+título) e decide o caminho
   // da caixa (agir / página atual / web / chat). Chamada barata (resposta de UMA palavra, stateless).
   // Retorna null em qualquer falha/timeout → o AgentCommandBar usa o roteador determinístico.
-  const classifyIntent = useCallback(async (msg: string): Promise<'action' | 'page' | 'web' | 'chat' | null> => {
+  const classifyIntent = useCallback(async (msg: string, rctx?: { lastRun?: RouteContext['lastRun'] }): Promise<RoutedIntent | null> => {
+    // ── Roteador local (Qwen2.5-1.5B no utilityProcess), quando pronto: decide PRIMEIRO, na nuvem e
+    // no local. Entende erro de digitação e follow-up ("só abriu uma janela") melhor que as regras.
+    // Só rotula; falhou / "other" / demorou → segue o caminho de antes, abaixo.
+    // Saudação/agradecimento curto ("valeu!", "thanks") → chat na hora, antes até do roteador:
+    // 0 latência, e um "obrigado" nunca pode virar tarefa do agente.
+    if (isGreeting(msg.trim().toLowerCase())) return 'chat';
+    if (routerReadyRef.current && window.electronAPI?.routerClassify) {
+      const tabUrl = store.activeTab?.url || '';
+      const ctx: RouteContext = {
+        url: isNewTabPage(tabUrl) ? '' : tabUrl,
+        title: (store.activeTab as any)?.title || '',
+        lastRun: rctx?.lastRun ?? null,
+      };
+      const r = await raceTimeout(window.electronAPI.routerClassify(msg, ctx).catch(() => null), 5000, null);
+      const intent = routeToIntent(parseRoute(r?.route), !!ctx.lastRun);
+      if (intent) return intent;
+      // O AgentCommandBar pulou as regras de "última tarefa" contando com o roteador → aplica aqui.
+      if (ctx.lastRun) {
+        if (reportsIncompleteRun(msg)) return 'fix';
+        if (isAboutLastRun(msg)) return 'last_run';
+      }
+    }
     // ── Pré-classificador determinístico (0 token, 0 latência) ──
     // Padrões de ALTA precisão resolvem na hora os casos óbvios — a resposta começa já,
     // sem esperar o round-trip (até 6s) do classificador na nuvem. Só entra aqui o que é
     // inequívoco; qualquer dúvida segue pro classificador de sempre (conservador).
     try {
       const m = msg.trim().toLowerCase();
-      const greeting = m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
-      if (greeting) return 'chat';
+      if (isGreeting(m)) return 'chat';
       const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
       const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|browse|browsing|navigate|visit|apply|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
       if (!actionVerb && !hasUrl) {
@@ -1831,7 +1915,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onClick={() => { setDownloadsOpen(o => !o); setDlSettingsOpen(false); }}
             title={t('downloads.open')}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            {/* Seta normal; com download ativo, o anel de progresso do Chrome em volta dela. */}
+            <DownloadButtonIcon downloads={downloads} />
           </button>
           {downloadsOpen && (
             <>
@@ -1898,6 +1983,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         : d.state === 'completed' ? t('dl.done')
                         : d.state === 'blocked' ? t('dl.blocked')
                         : d.state === 'cancelled' ? t('dl.cancelled')
+                        : d.reasonCode === 'interrupted' ? t('dl.interrupted')
                         : t('dl.failed');
                       return (
                         <li key={d.id || d.path || d.filename || String(i)} className="dl-item" title={d.path || d.filename}>
@@ -1920,6 +2006,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               {active && !d.paused && d.speedBps ? ' · ' + fmtSpeed(d.speedBps) : ''}
                               {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
                               {active && !d.paused && d.engine && d.connections ? ` · ${d.connections} ${t('dl.conns')}` : ''}
+                              {d.state === 'failed' && d.reasonCode === 'not-merged' ? t('dl.notMerged') : ''}
+                              {d.state === 'failed' && d.reasonCode === 'no-audio' ? t('dl.noAudio') : ''}
                             </span>
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
@@ -2087,6 +2175,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">📄</span>
                   <span className="menu-label">{t('menu.savePdf')}</span>
                 </button>
+                <button className="menu-item" data-testid="menu-chat-history" onClick={() => { setMenuOpen(false); setChatHistoryOpen(true); }} title={t('chats.menuTitle')}>
+                  <span className="menu-ic">🕘</span>
+                  <span className="menu-label">{t('chats.menu')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setClearDataOpen(true); }} title={t('menu.clearDataTitle', { key: CLEAR_DATA_KEY })}>
                   <span className="menu-ic">🧹</span>
                   <span className="menu-label">{t('menu.clearData')}</span>
@@ -2110,6 +2202,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 <button className="menu-item" disabled={activeIncognito} onClick={() => { setMenuOpen(false); handleSiteLogin(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.siteLoginTitle')}>
                   <span className="menu-ic">🔓</span>
                   <span className="menu-label">{t('menu.siteLogin')}</span>
+                </button>
+                <button className="menu-item" data-testid="menu-scheduled" onClick={() => { setMenuOpen(false); setSchedOpen(true); }} title={t('sched.menuTitle')}>
+                  <span className="menu-ic">⏰</span>
+                  <span className="menu-label">{t('sched.title')}</span>
+                  {sched.run?.status === 'waiting' && <span className="menu-kbd">{t('sched.waiting')}</span>}
                 </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setMonitorsOpen(true); }} title={t('mon.menuTitle')}>
                   <span className="menu-ic">🛰️</span>
@@ -2256,6 +2353,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {proxyOpen && <ProxySettings onClose={() => setProxyOpen(false)} />}
           {regionOpen && <RegionPanel onClose={() => setRegionOpen(false)} />}
           {applicantOpen && <ApplicantPanel onClose={() => setApplicantOpen(false)} />}
+          {schedOpen && <ScheduledTasksPanel sched={sched} onClose={() => setSchedOpen(false)} />}
+          <MissedRunsCard sched={sched} />
           <JsDialogHost />
           <ProxyAuthPrompt />
           {showGuide && (
@@ -2291,6 +2390,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             tabIds={store.tabs.map(t => t.sessionId || t.id).join(',')}
             threadKeyOf={store.threadKeyOf}
             onEnsureSession={(tabId, text) => { store.ensureSession(tabId, { command: text }); }}
+            onCreateSchedule={(command, spec) => { const task = sched.add(command, spec); return task ? { nextAt: task.nextAt } : null; }}
+            schedNow={sched.now}
             viewSession={(() => {
               const sid = store.activeTab?.sessionId;
               const s = sid ? store.sessions.find(x => x.id === sid) : undefined;
@@ -2346,6 +2447,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               } catch { return []; }
             }}
             agentDrive={agentDrive}
+            routerReady={routerStatus.state === 'ready'}
+            routerStatus={routerStatus}
             panelOpen={store.sidebarOpen}
             onExecute={async (command, onProgress, signal, opts) => {
               const taskTabId = activeTabIdRef.current;   // aba de origem desta tarefa (não muda se o agente abrir abas)
@@ -2399,9 +2502,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
-              const convoCtx = (recentRunsRef.current.get(store.threadKeyOf(taskTabId)) ?? []).slice(-3)
-                .map(r => `- "${r.cmd}" → ${r.outcome}`)
-                .join('\n');
+              // A thread da sessão (pedidos, respostas do chat, tarefas, fatos, 📌), já no orçamento dela.
+              const threadKey = store.threadKeyOf(taskTabId);
+              const convoCtx = threadPromptBlock(threadKey);
+              const threadTok = estimateThreadTokens(convoCtx);
+              let trimNoticeShown = false;
               let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
               let previousStateKey = '';
               let noEffectCount = 0;
@@ -2507,7 +2612,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
               // Candidatura a vaga: liga a skill job-apply e o freio do "Submit" puro do formulário.
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
-              const riskOpts = { jobs: commandIsJobs };
+              // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
+              const unattended = !!opts?.unattended;
+              const riskOpts = { jobs: commandIsJobs, unattended };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
               const openedJobs: OpenedJob[] = [];
@@ -2626,12 +2733,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   : status === 'max_steps' ? 'Step limit reached.'
                   : "The task stopped before finishing and the model gave no reason. Try rephrasing it."
                 );
-                // Memória curta da conversa: o próximo pedido pode ser um follow-up.
+                // A thread da sessão guarda o RESUMO da tarefa (o próximo pedido pode ser um follow-up):
+                // objetivo, os últimos passos que deram certo, desfecho e o último alvo — não cada passo.
                 const runsKey = store.threadKeyOf(taskTabId);   // sessão da aba de origem (abas da sessão dividem)
-                const tabRuns = recentRunsRef.current.get(runsKey) ?? [];
-                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}${lastTarget ? ` — last thing acted on: ${lastTarget}` : ''}` });
-                if (tabRuns.length > 5) tabRuns.shift();
-                recentRunsRef.current.set(runsKey, tabRuns);
+                const keySteps = allResults.filter(r => r.result?.success !== false && r.action?.type !== 'done' && r.action?.type !== 'report')
+                  .slice(-4).map(r => { try { return formatAction(r.action); } catch { return String(r.action?.type || ''); } });
+                noteThreadTask(runsKey, { goal: command, status, outcome: reason.slice(0, 300), steps: keySteps, target: lastTarget || undefined });
+                if (commandIsJobs && lastTarget) noteThreadFact(runsKey, `job:${lastTarget.slice(0, 60)}`, `looked at job ${lastTarget}`);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
@@ -2727,9 +2835,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const message = risk.kind === 'application'
                   ? `📨 Ready to send your application. Check the form in the tab first: I will click "${risk.label}" and it goes to the employer. Send it?`
                   : `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`;
+                // Pessoa pensando não é o modelo lento: o relógio da tarefa dorme enquanto o cartão espera
+                // (numa tarefa agendada ele pode esperar horas, até a pessoa voltar).
+                deadline.suspend();
                 return new Promise<boolean>((resolve) => {
                   let done = false;
-                  const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+                  const finish = (v: boolean) => { if (!done) { done = true; deadline.resume(); resolve(v); } };
                   if (signal) signal.addEventListener('abort', () => finish(false), { once: true });
                   onProgress({
                     kind: 'confirm',
@@ -2830,8 +2941,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // EXPLÍCITA do usuário, não palpite de heurística. Sem esta exceção, marcar
                 // "gerar imagem" e escrever "gato" virava uma busca na web — o pedido sumia.
                 // (Mesmo caso do "repete N vezes": ordem explícita nunca é muleta de atalho.)
+                // "Resuma minhas abas" também passa com a IA no comando: o modelo não lê aba por aba sem
+                // trocar de aba (switch_tab, uma pergunta de permissão por aba); o executor lê todas de uma vez.
                 let quickAction = (aiDrive && !opts?.forceImage)
-                  ? null
+                  ? (wantsTabsSummary(command) ? { type: 'summarize_tabs', wake: wantsWakeTabs(command) } as QuickAction : null)
                   : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
@@ -2892,6 +3005,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   history += `\nFAST PATH: ${initialShortcut.reason}\nRESULT: ${JSON.stringify(shortcutResult).slice(0, 500)}`;
                   usedInitialShortcut = true;
+                } else if (!quickAction && !commandHasExplicitUrl(command)) {
+                  // Sem atalho (nuvem: a IA decide): o site nomeado da lista curada vira dica do 1º passo.
+                  // Medido: "browse to linkedin…" → web_search("LinkedIn") (~25s) antes do navigate.
+                  const siteHint = namedSiteHint(command);
+                  if (siteHint) history += `\n${siteHint}`;
                 }
 
                 for (let step = 0; step < MAX_STEPS; step++) {
@@ -2993,7 +3111,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
-                  if (!aiDrive && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
+                  if (!aiDrive && !unattended && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
                     gmailComposeAttempted = true;
                     const compose = await tryComposeGmailDraft(wv, parsedEmailDraft);
                     if (compose.success) {
@@ -3010,7 +3128,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `Gmail: draft assistant could not fill it (${compose.reason || 'no detail'}).` });
                     }
                   }
-                  if (!aiDrive && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
+                  if (!aiDrive && !unattended && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
                     const assist = await tryRevealYouTubeCommentBox(wv);
                     if (assist.success) {
                       onProgress({ kind: 'status', message: 'YouTube: comment box located/activated.' });
@@ -3227,11 +3345,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (profile.email || lastReadFile) {
                       autoFilledForms.add(observation.url);
                       const scanFields = await withTimeout(wv.executeJavaScript(FORM_SCAN_SCRIPT), 4000, [] as FieldInfo[]).catch(() => [] as FieldInfo[]);
-                      const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts);
-                      const did: number[] = plan.fill.length ? await withTimeout(wv.executeJavaScript(formApplyScript(plan.fill)), 4000, [] as number[]).catch(() => [] as number[]) : [];
-                      const filledNow = plan.fill.filter(d => did.includes(d.idx));
+                      const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts, { url: observation.url });   // URL → tabela do ATS (ats-tables.ts)
+                      // Cada chamada à página com teto próprio; lista suspensa (react-select/Workday) vai uma a uma.
+                      const pageExec = (js: string) => withTimeout(wv.executeJavaScript(js), 6000, null as any);
+                      const first = plan.fill.length ? await applyFill(pageExec, plan.fill, scanFields || []).catch(() => ({ done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> })) : { done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> };
+                      const pickedText: Record<number, string> = { ...first.texts };
+                      const filledNow = plan.fill.filter(d => first.done.includes(d.idx));
                       // Pergunta à pessoa: o que falta e o modelo não deve inventar (obrigatórias e escolhas; não arquivo).
-                      const ask = plan.missing.filter(f => f.type !== 'file' && f.type !== 'combobox' && (f.required || (f.options && f.options.length))).slice(0, 12);
+                      // Lista suspensa cujo valor do perfil não estava nas opções também vem pra cá, com as opções lidas.
+                      const missingAll = [...plan.missing.filter(f => !first.failed.some(x => x.idx === f.idx)), ...first.failed]
+                        .filter(f => f.type !== 'file' && (f.required || (f.options && f.options.length) || first.failed.includes(f)));
+                      const ask = (await readDropdownOptions(pageExec, missingAll.slice(0, 12)).catch(() => missingAll.slice(0, 12)));
                       let answered: FillDecision[] = [];
                       if (ask.length) {
                         const reply = await new Promise<string>((resolve) => onProgress({ kind: 'confirm', risk: 'form', label: 'application questions',
@@ -3244,13 +3368,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         try { got = JSON.parse(reply || '{}'); } catch {}
                         if (got.answers && Object.keys(got.answers).length) {
                           if (got.save) await window.electronAPI?.applicantSaveAnswers?.(got.answers).catch(() => null);
-                          const second = planFill(ask, {}, got.answers);
-                          const did2: number[] = second.fill.length ? await withTimeout(wv.executeJavaScript(formApplyScript(second.fill)), 4000, [] as number[]).catch(() => [] as number[]) : [];
-                          answered = second.fill.filter(d => did2.includes(d.idx));
+                          const second = planFill(ask.map(f => ({ ...f, filled: false })), {}, got.answers);
+                          const r2 = second.fill.length ? await applyFill(pageExec, second.fill, ask).catch(() => null) : null;
+                          Object.assign(pickedText, r2?.texts || {});
+                          answered = second.fill.filter(d => (r2?.done || []).includes(d.idx));
                         }
                       }
                       if (filledNow.length || answered.length) {
-                        history += `\nFORM FILLED BY BAH (from ${profile.email ? 'the user\'s profile' : 'the résumé'} and saved answers — do not retype these): ${[...filledNow, ...answered].map(d => `${d.label} = ${d.value ?? (scanFields.find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] ?? '✓'}`).join('; ')}.`;
+                        history += `\nFORM FILLED BY BAH (from ${profile.email ? 'the user\'s profile' : 'the résumé'} and saved answers — do not retype these): ${[...filledNow, ...answered].map(d => `${d.label} = ${pickedText[d.idx] ?? d.value ?? ([...ask, ...scanFields].find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] ?? '✓'}`).join('; ')}.`;
                         onProgress({ kind: 'status', message: `✍️ Filled ${filledNow.length + answered.length} field(s) from ${profile.email ? 'your profile' : 'the résumé'}${answered.length ? ' and your answers' : ''}` });
                         formFields = await withTimeout(wv.executeJavaScript(FORM_FIELDS_SCRIPT), 3000, formFields).catch(() => formFields);
                         isAppForm = !!formFields && (formFields.some((f: FormField) => f.kind === "file") || formFields.length >= 4);
@@ -3398,7 +3523,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (eng && SEARCH_BLOCK_RE.test(`${observation.url} ${observation.title} ${(observation.text_sample || '').slice(0, 1500)}`)) markBlocked(eng); }
                   agentDialogsTab((wv as any).getWebContentsId?.());
                   history += drainDialogLog();
-                  noteAccountState(observation);
+                  { const acct = noteAccountState(observation); const h = hostOf(observation.url);
+                    // Fato da sessão: em que site a pessoa está (ou não) logada.
+                    if (acct && h) noteThreadFact(threadKey, `account:${h}`, `${acct === 'signed-in' ? 'signed in' : 'signed out'} on ${h}`); }
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
                     '',
@@ -3694,6 +3821,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (c) bumpSessionCost(c.usd, c.est);
                     const money = c && c.usd > 0 ? ` • ${fmtUsd(c.usd, c.est)}` : '';
                     onProgress({ kind: 'status', message: `📊 ${m.model} • ${inT} in / ${outT} out / ${cached} cached • ${sec}s${money}` });
+                  }
+                  // Medidor de contexto do painel: as partes desta chamada (estimadas) + o total que o
+                  // provedor informou, quando informou. A página é a que foi de fato (cortada, se precisou).
+                  {
+                    const m = result?.metrics || {};
+                    const pp = m.promptParts || {};
+                    const skillsTok = estimateThreadTokens(skillsBlock);
+                    const pageTok = Math.max(0, (typeof pp.page === 'number' ? pp.page : estimateThreadTokens(observedPayload)) - skillsTok) + (pp.image || 0);
+                    const reported = Number(m.usage?.prompt_tokens ?? m.usage?.input_tokens ?? 0);
+                    noteContextUsage(threadKey, {
+                      window: m.contextTokens || contextWindowNow(),
+                      parts: { instructions: (pp.system || 0) + Math.max(0, estimateThreadTokens(prompt) - threadTok), skills: skillsTok, thread: threadTok, page: pageTok },
+                      reported: reported > 0 ? reported : undefined,
+                    });
+                    if (m.contextTrimmed && !trimNoticeShown) { trimNoticeShown = true; noteThreadTrimmed(threadKey, `task:${actionId}`); }
                   }
                   action = result?.action as BrowserAction | undefined;
                   // FAST MODE: enqueue the remaining batched actions (if any), capturing each
@@ -4421,11 +4563,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           .map(p => p.split(/[\\/]/).pop());
                         const nFiles = files.length || 1;
                         const list = files.join(', ') || vr.title;
-                        const doneMsg = nFiles > 1
+                        const doneMsg = (nFiles > 1
                           ? (action.audio_only
                               ? `${nFiles} songs downloaded and saved to Downloads: ${list}`
                               : `${nFiles} videos downloaded and saved to Downloads: ${list}`)
-                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`;
+                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`)
+                          + (vr.warning === 'source-has-no-audio' ? ' (note: the original video has no sound track)' : '');
                         // miniaturas clicáveis no feed (clique → abre a pasta Downloads)
                         const fullPaths = (vr.paths && vr.paths.length ? vr.paths : (vr.path ? [vr.path] : []));
                         if (fullPaths.length) {
@@ -4794,6 +4937,67 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nPRICE COMPARE: auto-extraction from Google Shopping returned nothing for "${q}". The Shopping page IS OPEN — use extract_text to read the visible prices and answer, or report the cheapest you can see.`;
                       toolResult = { success: false, error: 'Could not scrape the prices automatically. The Google Shopping page is open — I will read it.' };
                     }
+                  } else if (action.type === 'summarize_tabs') {
+                    // Resumo das abas abertas da pessoa. Anônimas e páginas internas ficam fora; as
+                    // dormindo (Memory Saver) só aparecem como "dormindo" — acordar todas de uma vez
+                    // custaria RAM/rede que a pessoa não pediu (acorda só se ela pedir). Ler aba que não é
+                    // da tarefa passa pela permissão das abas (perguntar / sempre / nunca). Auto-done.
+                    setAgentVisual('acting');
+                    const sel = selectTabsForSummary(tabsRef.current, { wake: !!action.wake });
+                    let readable = sel.toRead;
+                    let noAccess: typeof readable = [];
+                    const decision = tabsAccessDecision(getPerm('userTabs'), readable.map(x => x.id), grantedTabs);
+                    const mayRead = decision === 'read'
+                      || (decision === 'ask' && await askPermission('userTabs', `Read the text of your ${readable.length} open tab(s) to summarize them.`));
+                    if (mayRead) readable.forEach(x => grantedTabs.add(x.id));
+                    else { noAccess = readable.filter(x => !grantedTabs.has(x.id)); readable = readable.filter(x => grantedTabs.has(x.id)); }
+                    onProgress({ kind: 'status', message: `🗂️ Reading ${readable.length} tab(s)…` });
+                    // Acordar (só quando pedido): tira o "dormindo" e espera a <webview> montar e carregar.
+                    for (const tb of readable) {
+                      if (!(tb.discarded || tb.restored)) continue;
+                      store.updateTab(tb.id, { discarded: false, restored: false, lastActiveAt: Date.now() });
+                    }
+                    const readTab = async (id: string): Promise<string | null> => {
+                      for (let i = 0; i < 30 && !webviewRefs.current.get(id); i++) await sleep(300);
+                      const w = webviewRefs.current.get(id) as any;
+                      if (!w) return null;
+                      for (let i = 0; i < 30; i++) { try { if (!w.isLoading()) break; } catch { break; } await sleep(300); }
+                      try {
+                        // executeJavaScript da aba: já recua pro mundo isolado em página que bloqueia script (page-eval.ts).
+                        const txt = await withTimeout(w.executeJavaScript(`(document.body ? document.body.innerText : '').slice(0, 6000)`), 8000, null as any);
+                        return typeof txt === 'string' ? txt : null;
+                      } catch { return null; }
+                    };
+                    const texts: Array<TabText & { id: string; ok: boolean }> = [];
+                    for (const tb of readable) {
+                      throwIfCancelled();
+                      const txt = await readTab(tb.id);
+                      const live = tabsRef.current.find(x => x.id === tb.id) ?? tb;
+                      texts.push({ id: tb.id, title: live.title || tb.title, url: live.url || tb.url, text: txt || '', ok: txt != null });
+                    }
+                    const okTexts = texts.filter(x => x.ok);
+                    let parsed = { perTab: okTexts.map(() => ''), overall: '' };
+                    if (okTexts.length) {
+                      onProgress({ kind: 'status', message: `🧠 Summarizing ${okTexts.length} tab(s)…` });
+                      const r = await raceTimeout(window.electronAPI?.aiChat(buildTabsSummaryPrompt(okTexts, uiLangName()), '', true, store.localSettings.enabled) ?? Promise.resolve(undefined), 90000, undefined);
+                      throwIfCancelled();
+                      parsed = parseTabsSummary(String(r?.response || ''), okTexts);
+                      if (!parsed.overall && r?.error) parsed.overall = `(${r.error})`;
+                    }
+                    const summaryOf = new Map(okTexts.map((x, i) => [x.id, parsed.perTab[i]]));
+                    const entries = [
+                      ...texts.map(x => ({ id: x.id, title: x.title, url: x.url, state: x.ok ? 'read' as const : 'unreadable' as const, summary: summaryOf.get(x.id) || '' })),
+                      ...noAccess.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'no_access' as const, summary: '' })),
+                      ...sel.asleep.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'asleep' as const, summary: '' })),
+                    ];
+                    onProgress({ kind: 'tabs_summary', tabs: entries, overall: parsed.overall,
+                      skippedIncognito: sel.skippedIncognito, skippedInternal: sel.skippedInternal,
+                      onOpen: (id: string) => { if (tabsRef.current.some(x => x.id === id)) store.setActiveTabId(id); } });
+                    const doneMsg = parsed.overall
+                      || (entries.length ? `${okTexts.length} tab(s) read${sel.asleep.length ? `, ${sel.asleep.length} asleep` : ''}${noAccess.length ? `, ${noAccess.length} without access` : ''}.` : 'No open web pages to summarize.');
+                    allResults.push({ action, result: { success: true, info: { read: okTexts.length, asleep: sel.asleep.length, noAccess: noAccess.length } } });
+                    finishRun('success', doneMsg);
+                    return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                   } else if (action.type === 'google_news') {
                     // Vertical Notícias do Google (udm=12) — raspa as manchetes do DOM
                     // renderizado e monta um painel clicável. Determinístico → auto-done.
@@ -5495,7 +5699,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
                     const rows = [...all.filter(isActive), ...all.filter(d => !isActive(d))].slice(0, 20).map(d => {
                       const key = d.id || d.path || d.filename;
-                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING' : d.state.toUpperCase();
+                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING'
+                        : d.state === 'failed' && d.reasonCode ? `FAILED (${d.reasonCode})` : d.state.toUpperCase();
                       const pct = d.totalBytes ? ` ${Math.floor(((d.bytes || 0) / d.totalBytes) * 100)}%,` : '';
                       const size = ` ${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const live = isActive(d) && !d.paused ? `${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}` : '';
@@ -5930,14 +6135,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
               }
             }}
-            onSendChat={async (msg, docText, streamId, skipPageContext) => {
+            onSendChat={async (msg, docText, streamId, skipPageContext, docIsFile) => {
               const chatTabId = store.threadKeyOf(store.activeTabId);   // a conversa pertence à SESSÃO desta aba (ou a ela, sem sessão)
+              // A thread da sessão (a mesma que o agente lê), já no orçamento. Quem grava a troca nela é o
+              // AgentCommandBar, depois da resposta.
+              const threadText = threadPromptBlock(chatTabId);
+              const threadTok = estimateThreadTokens(threadText);
+              const noteChatUsage = (r: { ctx?: { system: number } } | undefined, pageText: string, cap = 8000) => {
+                // O main corta o contexto da página em 8000 caracteres (o documento em 24000): a página cede, a thread nunca.
+                if (pageText.length > cap) noteThreadTrimmed(chatTabId, `chat:${store.activeTab?.url || ''}`);
+                noteContextUsage(chatTabId, {
+                  window: contextWindowNow(),
+                  parts: { instructions: (r?.ctx?.system || 0) + estimateThreadTokens(msg), thread: threadTok, page: estimateThreadTokens(pageText.slice(0, cap)) },
+                });
+              };
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
                 // docText = self-contained doc context (rawContext). Non-stateless so the doc
                 // stays in THIS tab's history → follow-up questions still work after the chip clears.
-                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId);
+                // keepDoc: um ARQUIVO anexado fica lembrado pelo main pras perguntas seguintes (não cabe na thread);
+                // o resumo da última tarefa (pergunta sobre ela) não.
+                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId, undefined, { text: threadText, keepDoc: !!docIsFile });
+                noteChatUsage(r, docText, 24000);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 return { reply, isError: !!r?.error };
               }
@@ -5972,7 +6192,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 chatShot = fr?.image;
                 if (!chatShot) console.log(`[chat] vision skipped: ${chatShotDec.reason} (capture failed)`);
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot);
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot, threadText);
+              noteChatUsage(result, pageContent || '');
               const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
@@ -6052,6 +6273,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           </div>
         </div>
       )}
+      {chatHistoryOpen && <ChatHistoryPanel onClose={() => setChatHistoryOpen(false)} onResume={(e, reopen) => store.resumeSession(e, reopen)} />}
       {clearDataOpen && <ClearDataDialog onClose={closeClearData} sitesInRange={sitesInRange} onClear={runClearData} />}
       {/* ⋮ → Senhas (ou "Gerenciar senhas…" da lista em cima do campo, já filtrado pelo site). */}
       {passwordsOpen && <PasswordsPanel initialQuery={passwordsOpen.query} onClose={() => setPasswordsOpen(null)} />}
@@ -6411,6 +6633,10 @@ function fallbackThreeBullets(text: string): string[] {
 // Module-level bounded await — for helpers outside the agent-loop closure.
 // On hung pages (ad/video scripts holding the main thread) executeJavaScript never
 // resolves; every page-touching await must be raced against a budget.
+function isGreeting(m: string): boolean {
+  return m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m);
+}
+
 function raceTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   let id: ReturnType<typeof setTimeout>;
   const t = new Promise<T>(r => { id = setTimeout(() => r(fallback), ms); });

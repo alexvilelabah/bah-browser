@@ -219,7 +219,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - read_aloud: { "action": "read_aloud", "text"?: string } — reads text ALOUD with the computer's voice (text-to-speech, pt-BR). With no "text" it reads the current page's main content. Use for "leia isso pra mim", "leia a notícia em voz alta".
 - report: { "action": "report", "summary": string } — FINAL action. Delivers your synthesized answer/summary to the user and ends the task.
 - history_search: { "action": "history_search", "query": "..." } — finds pages the USER visited before in this browser (title + URL), e.g. "the laptop page I looked at yesterday". Asks the user's permission (or follows their saved choice). Then navigate/new_tab to the link.
-- web_search: { "action": "web_search", "query": "..." } — searches the web WITHOUT leaving the page: Bah tries several search engines (skipping any that block this connection) and returns the top results (title, URL, snippet) as text. Then navigate to the best result. Prefer this over opening a search engine page.
+- web_search: { "action": "web_search", "query": "..." } — searches the web WITHOUT leaving the page: Bah tries several search engines (skipping any that block this connection) and returns the top results (title, URL, snippet) as text. Then navigate to the best result. Prefer this over opening a search engine page. NOT for finding a site the user named that appears in KNOWN SITE SHORTCUTS / OFFICIAL SITES (or a NAMED SITE line): navigate to that address directly.
 - look_at: { "action": "look_at", "ref": number } or { "action": "look_at", "x": n, "y": n, "w": n, "h": n } — ZOOM: the NEXT screenshot is a sharp, full-resolution crop of that element's area (or that viewport rectangle) instead of the whole shrunken page. Use it when text/buttons in the screenshot are too small to read (download tables, OS/version lists, form fields). One step only; while zoomed, act with refs (click_ref/select_option), not click_at.
 - find: { "action": "find", "text": "Agree to the EULA" } — searches the WHOLE page (including off-screen parts and items missing from INTERACTIVE ELEMENTS) for controls/labels containing that text, scrolls the best match into view so it appears in the element list next step, and reports the other matches. Use it when the button/link you need is not in the list.
 - hover: { "action": "hover", "ref": number } — move the mouse over an element and stay (opens hover menus / tooltips). Next step, the menu's items appear in INTERACTIVE ELEMENTS.
@@ -327,7 +327,8 @@ LEAN ON THE GIANTS (be street-smart, not heroic):
 - Google answers most questions directly in the results page (featured snippets, conversion boxes, weather).
 - SKILLS: when a "SKILLS FOR THIS PAGE" section appears at the top of the page state, follow it — it is short, tested guidance for exactly this kind of page (download chains, license prompts, OS selectors, popups, autocomplete, date pickers, specific sites). Its URL patterns are known-good, so using them is not "inventing" a URL.
 - DOWNLOAD tasks are not research: open the official vendor/download page from the results and keep going.
-- If the user names a store, brand or site whose web address you do not know (any country), use web_search for its name and open its OFFICIAL site, then use that site's own search. Do not answer from search snippets when the user asked you to look on a specific site.
+- If the user names a site listed under KNOWN SITE SHORTCUTS / OFFICIAL SITES (LinkedIn, Indeed, Walmart, GitHub…), navigate straight to its listed address — no web_search first.
+- If the user names a store, brand or site that is NOT listed and whose web address you do not know (any country), never guess a domain: use web_search for its name and open its OFFICIAL site, then use that site's own search. Do not answer from search snippets when the user asked you to look on a specific site.
 - RESEARCH / RECOMMENDATION questions ("qual a melhor X", "procure um Y barato", "compare Z", "quanto custa W"): after the Google search, your NEXT action is extract_text to READ THE SNIPPETS, then answer. The snippets already contain product names, prices, specs and recommendations. Do NOT click the result links — they are slow, frequently fail (Google truncates/overlays them), and waste many steps. Only open a specific site if the snippets are truly insufficient.
 - When the answer is a list/comparison (several products with prices/specs, a ranking), finish with render_view (a clean table) instead of a long text report — gather the data from snippets, then render it.
 - Google Images: https://www.google.com/search?q={query}&udm=2 — then extract_images to get URLs.
@@ -452,6 +453,9 @@ export class AIEngine {
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
+  // Com a thread da sessão (renderer/threads.ts) a memória do chat vem da tela a cada pedido. Só o
+  // documento anexado fica aqui (é grande demais pra thread): a pergunta seguinte ainda o enxerga.
+  private lastDocs = new Map<string, string>();
   // Models whose server refused an image (`${baseUrl}::${model}`). Discovery often says
   // "unknown"; the first real rejection is the ground truth, so later steps go text-only
   // instead of failing (and retrying) every single call.
@@ -716,6 +720,7 @@ export class AIEngine {
   /** A conversa de uma aba passou pra sessão (ou a aba entrou em outra): junta no destino, nesta ordem. */
   moveHistory(from: string, to: string): void {
     if (!from || !to || from === to) return;
+    this.moveDoc(from, to);
     const a = this.conversationHistories.get(from);
     if (!a?.length) { this.conversationHistories.delete(from); return; }
     const merged = [...(this.conversationHistories.get(to) ?? []), ...a];
@@ -723,10 +728,20 @@ export class AIEngine {
     this.conversationHistories.delete(from);
   }
 
-  clearHistory(tabId?: string): void {
-    if (tabId) this.conversationHistories.delete(tabId);
-    else this.conversationHistories.clear();
+  /** Documento anexado: segue pra chave nova junto com a conversa. */
+  private moveDoc(from: string, to: string): void {
+    const d = this.lastDocs.get(from);
+    if (d && !this.lastDocs.has(to)) this.lastDocs.set(to, d);
+    this.lastDocs.delete(from);
   }
+
+  clearHistory(tabId?: string): void {
+    if (tabId) { this.conversationHistories.delete(tabId); this.lastDocs.delete(tabId); }
+    else { this.conversationHistories.clear(); this.lastDocs.clear(); }
+  }
+
+  /** Tokens (estimados) das instruções fixas do chat — pro medidor de contexto do painel. */
+  chatSystemTokens(): number { return estimateTokens(this.systemPromptText(false)); }
 
   // Chama o LLM em modo chat com streaming quando há onDelta; se o stream falhar ANTES
   // do primeiro pedaço, refaz sem stream (fallback transparente — nunca pior que antes).
@@ -747,15 +762,25 @@ export class AIEngine {
     }
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal, image?: VisionImage): Promise<string> {
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal, image?: VisionImage, threadOpt?: { text: string; keepDoc?: boolean }): Promise<string> {
+    // thread = a conversa da sessão (renderer/threads.ts), já no orçamento dela. Com ela, o histórico
+    // deste engine NÃO entra: a mesma conversa que o agente lê, uma memória só.
+    const threadMode = !!threadOpt && !stateless;
+    const thread = threadOpt?.text ?? '';
+    if (threadMode && rawContext && threadOpt?.keepDoc) this.lastDocs.set(tabId, rawContext.slice(0, 24000));
+    const earlierDoc = threadMode && !rawContext ? this.lastDocs.get(tabId) : undefined;
     // rawContext = a self-contained block the caller already wrote (e.g. an attached
     // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
     // label — that label made weak models think there was an attachment they couldn't open.
-    const contextNote = rawContext
+    const docNote = earlierDoc ? `\n\n[Document attached earlier in this conversation — use it only if the message is about it]\n${earlierDoc.slice(0, 8000)}` : '';
+    const contextNote = docNote + (rawContext
       ? `\n\n${rawContext.slice(0, 24000)}`
       : pageContext
         ? `\n\n[Current page context]\n${pageContext.slice(0, 8000)}`
-        : '';
+        : '');
+    const threadNote = threadMode && thread
+      ? `[THIS SESSION SO FAR — the message below may refer to it ("it", "that one", "the job")]\n${thread}\n\n[NEW MESSAGE]\n`
+      : '';
 
     // Stateless: usado pela Pesquisa Rápida (síntese de snippets), classificador de
     // intenção e monitores. NÃO entra no histórico — e o retorno vai LIMPO de <think>:
@@ -769,7 +794,7 @@ export class AIEngine {
     // Conversa DAQUELA aba (chaveada por tabId). O turno do usuário vai numa CÓPIA pra
     // chamada e só entra no histórico DEPOIS do sucesso — uma falha do provedor não pode
     // deixar um 'user' órfão (dois 'user' seguidos quebram provedores estritos/Anthropic).
-    const history = this.conversationHistories.get(tabId) ?? [];
+    const history = threadMode ? [] : (this.conversationHistories.get(tabId) ?? []);
     // Chat vision: attach the page screenshot when mode+gate allow, and state it plainly
     // so the model neither refuses to look nor invents what it "sees".
     const vision = await this.resolveVision(image);
@@ -777,7 +802,7 @@ export class AIEngine {
     const visionNote = vision.attached
       ? `\n\n[PAGE SCREENSHOT attached: ${vision.width ?? '?'}x${vision.height ?? '?'} — answer from it when the question is visual.]`
       : (image ? noImageNote(vision.reason) : '');
-    let userTurn: Message = { role: 'user', content: userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
+    let userTurn: Message = { role: 'user', content: threadNote + userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
 
     // A new screenshot supersedes the one kept in history: never send two frames per call.
     const priorTurns = userTurn.image ? history.map(h => (h.image ? { ...h, image: undefined } : h)) : history;
@@ -786,7 +811,7 @@ export class AIEngine {
       msgs => this.callChatLLM(msgs, onDelta, signal),
       msgs => {
         // Restate honestly: the model is now on text only.
-        userTurn = { role: 'user', content: userMessage + contextNote + noImageNote('model_rejected_image') };
+        userTurn = { role: 'user', content: threadNote + userMessage + contextNote + noImageNote('model_rejected_image') };
         return [...msgs.slice(0, -1), userTurn];
       },
       signal,
@@ -795,6 +820,8 @@ export class AIEngine {
     // Cancelado no meio (Parar)? NÃO comita nada: o usuário não viu essa resposta, e gravar
     // deixaria um turno-fantasma que sobrescreveria a memória da PRÓXIMA mensagem daquela aba.
     if (signal?.aborted) return text;
+    // Na thread, quem guarda o turno é a tela (renderer/threads.ts).
+    if (threadMode) return text;
     // Higiene: modelos de raciocínio (qwen3 etc.) prefixam <think>…</think> na resposta.
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
@@ -809,7 +836,7 @@ export class AIEngine {
     return text;
   }
 
-  async generateAction(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean; vision?: VisionReport }> {
+  async generateAction(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean; vision?: VisionReport; promptParts?: { system: number; page: number; image: number } }> {
     const vision = await this.resolveVision(screenshot);
     // Context budget: LOCAL path only, where the window is small and knowable. Fits the
     // observation to the real context (trims page text first, then history, never the
@@ -870,7 +897,9 @@ export class AIEngine {
       signal,
     );
     const finalVision: VisionReport = rejected ? { ...vision, attached: false, reason: 'model_rejected_image' } : vision;
-    const meta = { contextTokens, contextSource, contextTrimmed, vision: finalVision };
+    // Medidor de contexto do painel: instruções fixas e a página que foi de fato (já cortada pra caber).
+    const promptParts = { system: estimateTokens(this.systemPromptText(true)), page: estimateTokens(state), image: finalVision.attached ? imageTokens : 0 };
+    const meta = { contextTokens, contextSource, contextTrimmed, vision: finalVision, promptParts };
     if (typeof reply === 'string') {
       return { text: reply, latencyMs: Date.now() - t0, model: this.provider, ...meta };
     }

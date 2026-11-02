@@ -3,6 +3,8 @@
 // currículo não tinha e-mail). Ordem: (1) ler o formulário, (2) casar cada campo com o perfil /
 // respostas salvas / fatos do currículo, (3) o que sobrar a pessoa responde uma vez (e fica salvo).
 // Ideia de "tabela de campos" inspirada em extensões de autopreenchimento; regras escritas aqui.
+// Antes das regras por rótulo vem a tabela do ATS reconhecido (ats-tables.ts): identificador estável ganha.
+import { classifyAtsField, detectAts, type AtsId } from './ats-tables.ts';
 
 export interface ApplicantProfile {
   firstName?: string; lastName?: string; preferredName?: string;
@@ -36,6 +38,8 @@ export interface FieldInfo {
   options?: string[];
   /** já tem valor */
   filled?: boolean;
+  /** Identificador estável do sistema: data-automation-id (Workday), data-field-path (Ashby), data-input (Rippling). */
+  automationId?: string;
 }
 
 export interface FillDecision { idx: number; label: string; value?: string; option?: number; source: 'profile' | 'saved' | 'resume' | 'voluntary' }
@@ -87,7 +91,13 @@ const RULES: Array<[RegExp, ProfileKey]> = [
 /** Autoidentificação voluntária (EEO): gênero, raça/etnia, veterano, deficiência, orientação. */
 export const VOLUNTARY_RE = /\b(gender|sex|race|ethnic\w*|hispanic|latino|veteran|disabilit\w*|self ?identif\w*|sexual orientation|transgender|lgbt)\b/;
 
-export function classifyField(f: Pick<FieldInfo, 'label' | 'name' | 'autocomplete' | 'type' | 'options'>): ProfileKey | 'voluntary' | null {
+/**
+ * Item do perfil pra um campo. Com o ATS (detectAts), a tabela dele vem primeiro; 'skip' = não
+ * preencher nem perguntar (honeypot, senha, peça interna do widget).
+ */
+export function classifyField(f: Pick<FieldInfo, 'label' | 'name' | 'autocomplete' | 'type' | 'options' | 'automationId'>, ats?: AtsId | null): ProfileKey | 'voluntary' | 'skip' | null {
+  const byAts = classifyAtsField(f, ats);
+  if (byAts) return byAts;
   const ac = String(f.autocomplete || '').toLowerCase().trim().split(/\s+/).pop() || '';   // "section-x shipping given-name" → given-name
   if (AUTOCOMPLETE[ac]) return AUTOCOMPLETE[ac];
   if (f.type === 'email') return 'email';
@@ -121,20 +131,23 @@ export function pickOption(options: string[], value: string): number {
  * O que preencher em cada campo (só os vazios). saved = respostas salvas por questionKey.
  * facts = do currículo lido (nome/e-mail/telefone) quando o perfil não tem.
  */
-export function planFill(fields: FieldInfo[], profile: ApplicantProfile, saved: Record<string, string> = {}, facts: { name?: string; email?: string; phone?: string } = {}): { fill: FillDecision[]; missing: FieldInfo[] } {
+export function planFill(fields: FieldInfo[], profile: ApplicantProfile, saved: Record<string, string> = {}, facts: { name?: string; email?: string; phone?: string } = {}, opts: { url?: string; ats?: AtsId | null } = {}): { fill: FillDecision[]; missing: FieldInfo[] } {
   const fill: FillDecision[] = [], missing: FieldInfo[] = [];
+  // ATS pela URL ou, no formulário embutido no site da empresa, pelos próprios campos.
+  const ats = opts.ats !== undefined ? opts.ats : detectAts(opts.url || '', { names: fields.map(f => f.name || ''), automationIds: fields.map(f => f.automationId || '') });
   const [factFirst, ...factRest] = String(facts.name || '').split(' ');
   for (const f of fields) {
-    if (f.filled || f.type === 'file' || f.type === 'hidden') continue;
+    if (f.filled || f.type === 'file' || f.type === 'hidden' || f.type === 'password') continue;
     const choice = !!(f.options && f.options.length);
     const set = (value: string, source: FillDecision['source']): boolean => {
       if (!value) return false;
       if (choice) { const o = pickOption(f.options!, value); if (o < 0) return false; fill.push({ idx: f.idx, label: f.label, option: o, source }); return true; }
       fill.push({ idx: f.idx, label: f.label, value, source }); return true;
     };
+    const key = classifyField(f, ats);
+    if (key === 'skip') continue;
     const savedAns = saved[questionKey(f.label)];
     if (savedAns != null && set(savedAns, 'saved')) continue;
-    const key = classifyField(f);
     if (key === 'voluntary') {
       if ((profile.voluntary || 'decline') === 'decline' && set('decline', 'voluntary')) continue;
       missing.push(f); continue;

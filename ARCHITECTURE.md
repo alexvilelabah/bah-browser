@@ -56,7 +56,7 @@ sites behave exactly as they would for a human.
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
 | `agent-download-worker.ts`, `download-progress.ts` | The agent's `download` action: one `worker_threads` worker per download; progress cadence + stall policy. See [Downloads & torrents](#downloads--torrents) |
 | `torrent-manager.ts`, `torrent/engine.mjs` | **Optional** built-in torrent client (off by default): IPC bridge + the engine, isolated in a `utilityProcess` that only starts when used. See [Downloads & torrents](#downloads--torrents) |
-| `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |
+| `media-downloader.ts`, `media-parts.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download); parts/merge/interrupted-download logic. See [Downloads & torrents](#downloads--torrents) |
 | `proxy.ts`, `proxy-config.ts` | Proxy for **every** session (system / manual http·https·socks5 / PAC / direct), 407 sign-in prompt with keychain-encrypted saved credentials, `proxy:*` IPC. Main-process `fetch` is routed through the `persist:browser` session's `session.fetch`, and agent downloads that need a proxy use `session.downloadURL`, so one setting covers everything |
 | `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Permission handlers for the sites' sessions: sensitive permissions denied until the user answers the Bah bar (once / always / never, per origin), background/hidden tabs auto-denied, unknown permissions denied |
 | `frames.ts` | Iframe content for the agent (embedded job/payment/booking forms): accessibility trees of same-process frames (by `frameId`) and cross-origin frames (flattened CDP sessions via `Target.setAutoAttach`), coordinates mapped to the page viewport; elements are listed with `frame="host"`. Fills set the value on the node inside its frame (focus-independent); clicks in cross-origin frames use CDP `Input` on the frame's session (`sendInputEvent` stops at the `<iframe>`) |
@@ -217,6 +217,32 @@ reads the system once (`process.platform`/`arch`, `getSystemVersion()`, Rosetta 
 Tested with `tests/e2e/software-download.spec.ts` (synthetic vendor pages: auto-detect button, OS/CPU list,
 printer model picker, sign-in wall).
 
+#### Video / audio (`media-downloader.ts`, `media-parts.ts`)
+
+yt-dlp downloads a high-resolution video as two **component files** — `Title [id].f313.webm` (picture
+only) and `Title [id].f140.m4a` (sound only) — and then ffmpeg joins them into `Title [id].mp4`. With
+`--no-part` the parts carry those names while they are being written, so a part must never be taken
+for the result:
+
+1. yt-dlp runs with `--no-quiet` (the `--print after_move:filepath` alone switches on quiet mode and hides
+   the `Destination:` / `Merging formats into` lines). Those lines are the exact list of files **this**
+   download wrote; nothing else is ever deleted.
+2. After each run, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decides: success only with a
+   final file that exists and is not a `.f<id>.` part. Parts left over (non-zero exit, or exit 0 without a
+   merge) mean **"the audio and video parts were not joined"** — a failure, and the parts are removed. If
+   both parts are complete (100% in the progress, or yt-dlp exited 0), Bah joins them itself with
+   `ffmpeg -c copy` (mp4 when the codecs fit, otherwise mkv) instead of failing.
+3. A normal video request (not mp3) is checked with `ffprobe` from the same ffmpeg folder. No audio
+   stream → one retry with `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; if the source has no audio
+   format at all the file is kept and the agent is told it has no sound; otherwise it is a failure.
+4. Quit / crash: yt-dlp runs in its own process group (`detached`), so it does not die with Bah. On
+   `before-quit`, `stopAllMediaDownloads()` kills every yt-dlp group. Each download is recorded in
+   `userData/media-downloads.json` (folder, start time, files written, pid, what "retry" needs); a
+   finished file leaves the record as soon as it is printed. At the next launch
+   `recoverInterruptedDownloads()` stops a leftover yt-dlp, deletes only the recorded files that are in
+   that download's folder and not older than it, and the Downloads list shows the download as
+   **Interrupted** with ↻.
+
 ---
 
 ## `src/renderer/` — UI + agent loop
@@ -227,13 +253,17 @@ printer model picker, sign-in wall).
 | `components/AgentCommandBar.tsx` | The unified command box, the activity feed, and settings |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
+| `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
+| `tabs-summary.ts` | "Summarize my open tabs": tab selection, permission, prompt and reply parsing |
 | `page-executor.ts` | Executes browser actions inside the page |
 | `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
 | `agent-run-logger.ts` | Opt-in run logging (local training-data collector) |
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Job applications filled by code from the 📝 applicant profile. The page scan (`FORM_SCAN_SCRIPT`) returns `FieldInfo[]`, including a stable `automationId` (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` detects the ATS (`detectAts`: URL, or field names for embedded forms) and classifies each field with **that ATS's table first** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), then the generic label/name/autocomplete rules. A table can also say `skip` (honeypots such as Workday's `beecatcher`, passwords, react-select internals) so a field is neither filled nor asked. Tables are built from public forms; their minimized field inventories live in `tests/fixtures/ats/*.json` and `tests/unit/ats-tables.test.ts` checks them and prints coverage per ATS |
 
 ---
 
@@ -248,18 +278,80 @@ opens during a task, and links opened in a new tab from a session tab, join that
 right-click menu adds it to another session, starts a new one or removes it; dragging a tab between two
 tabs of a session joins it, dragging it away leaves.
 The conversation is keyed by **thread key** = session id (or the tab id when the tab has none): the
-panel feed (`AgentCommandBar` `feedsByTab`), the main process chat memory (`ai-engine.ts`
-`conversationHistories`, moved with `ai:move-history`) and the recent-requests memory the agent prompt
-starts with (`recentRunsRef`). When a tab's key changes, its conversation moves with it
-(`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in `tests/unit/agent-sessions.test.ts`);
-state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to end: `tests/e2e/agent-sessions.spec.ts`.
-Sessions live in memory for now (restore + chat history come next).
+panel feed (`AgentCommandBar` `feedsByTab`) and the session's **thread**. When a tab's key changes, its
+conversation moves with it (`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in
+`tests/unit/agent-sessions.test.ts`); state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to
+end: `tests/e2e/agent-sessions.spec.ts`.
+
+**One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
+`src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
+clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site, jobs looked at) plus 📌
+**pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
+chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
+skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
+fixed **token budget per prompt** — ~15% of the model's window, 512–4096 tokens, 3000 when the window is
+unknown — so the current page is never crowded out. At 80% the feed warns and offers 📌; over budget,
+the oldest items fold into a running summary and the feed says "🗜 Summarized N older turns", which
+expands to the exact text that replaced them; `/compact` and 🗑 do the same, visibly. When the
+observation must be trimmed to fit the window, the page is trimmed (never the thread) and the feed says
+"✂️ page trimmed to fit".
+**Context meter** (`components/ContextMeter.tsx`, math in `src/shared/context-meter.ts`): next to the
+model name, `context 6.1k / 16k · thread 2.3k`; the bar goes amber/red and names what crowds it; a tap
+shows the last call's breakdown (instructions, skills, thread, page). Window from the engine's detection
+(`ai:context-window` → `resolveContextBudget`: `/props` on llama.cpp or the configured size; unknown on
+cloud); total from the provider's `prompt_tokens` when reported, else an estimate (marked `~`). Test hook:
+`window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` fakes the window under `E2E_MOCK_AI`.
+
+**Restore + chat history.** `src/main/chat-store.ts` keeps two `safeStorage`-encrypted files (rules in
+`src/shared/chat-history.ts`): the **live** threads + session names/colours (`threads-live.enc`, saved
+≤1.5 s after a change and on window close, before the tab session's "saved" reply) and the **🕘 chat
+history** (`chat-history.enc`: one entry per session with name, colour, dates, sites, first request, its
+tabs and thread; updated as you go, like browsing history). With ⋮ → When Bah opens = "Continue where you
+left off" the tabs come back with the same tab id and `sessionId` (`session.v1` stores `id`/`sid`) and
+the thread re-attaches (`store.ts` `bootTabs`, loaded synchronously via `threads:load-live-sync`); any
+other choice deletes the live file at startup. ⋮ → 🕘 Chat history (`components/ChatHistoryPanel.tsx`)
+opens a past session read-only or **Resumes** it (`store.resumeSession`, optionally reopening its tabs).
+"Clear browsing data" has a "chat history" box (same time range). Incognito never reaches either file.
+Tests: `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; end to end `tests/e2e/sessions-thread.spec.ts`.
+
+## Scheduled tasks (while Bah is open)
+
+The assistant can run a request on a schedule — "every weekday at 8am check my Indeed recommendations",
+"toda segunda às 9h resuma as notícias", "cada 2 horas …" — or from ⋮ → ⏰ **Scheduled tasks** (add, edit,
+pause, delete, run now, history). Pure rules in `src/shared/schedule.ts` (tested in
+`tests/unit/schedule.test.ts`): the en/pt/es parser (daily, weekdays, weekends, weekly on named days, every
+N minutes/hours with a 15-minute minimum, at HH:MM / 8am / 8h / noon), next-run computation in **local
+wall-clock time** (8:00 stays 8:00 across DST; a time skipped by the spring jump runs right after it; the
+repeated fall-back hour runs once), missed-run detection and the storage validation/caps. An ambiguous
+request (no time, "at 9" morning or evening, interval below the minimum) gets a confirm card with the next
+3 run times before saving; a clear one is saved and the reply says when it runs next. The early check is in
+`AgentCommandBar.runUnified` (before the router).
+- **Storage**: `src/main/scheduled-tasks.ts` — `userData/scheduled-tasks.enc`, encrypted with `safeStorage`
+  (no keychain → kept in memory only), ≤50 tasks, ≤1000-char command, ≤20 history entries each.
+- **Runner**: `src/renderer/scheduler.ts` (`useScheduler`). A tick (15 s) finds due tasks and queues them;
+  one runs at a time and only when the assistant panel is idle (a person's task or chat is never
+  interrupted: `bah:sched-busy` / `bah:sched-run` events into `AgentCommandBar`). Each task runs in its own
+  tab and session (chip "⏰ <name>"), reused on later runs while it stays open. The agent loop gets
+  `unattended: true`: the risk brake also stops at a bare Send/Post/Book/Order (`risk.ts`), and the
+  Gmail/YouTube auto-send helpers are off. Outcome + short summary go to the task history.
+- **Waiting for the user**: a confirm card (risk brake, permission, questions card) or a sign-in pause
+  stops the run; the scheduler marks it "waiting for you" in the panel/menu and posts a system notification
+  (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
+  waits. Nothing risky happens until the person answers.
+- **Missed runs**: at launch every enabled task whose time already passed is offered (`MissedRunsCard`:
+  Run now / Skip), never run silently. While open, a time missed by more than 10 minutes (the computer
+  slept) is offered the same way. Skip records a "skipped" entry and moves to the next time.
+- **Tests**: `tests/e2e/scheduled-tasks.spec.ts` uses an injectable clock (`E2E_SCHED_NOW` and
+  `window.__bahSched.setNow`, only with `NODE_ENV=test`).
 
 ## Command routing & follow-ups
 
 The box under the assistant decides per message: agent task, answer about the page, web answer or chat
 (`routeCommand` in `AgentCommandBar.tsx`; with a cloud AI a one-word classifier in `App.tsx`
-`classifyIntent` goes first, with a local AI the word rules decide). Before any of that:
+`classifyIntent` goes first, with a local AI the word rules decide; with the optional
+[local router](#local-router-qwen25-15b-optional) downloaded, it goes first in both modes). Before any of that:
 - a **question about the last run** ("did you click it?", "what happened?") → chat with a log of that
   run (`src/renderer/last-run.ts` `lastRunDigest`), never a web search;
 - a **report that the last run fell short** ("one window was opened, but not the second") → back to the
@@ -270,6 +362,27 @@ Each finished run records the last thing it acted on, and the prompt says "it / 
 "N <anything> … each / different" opens N videos even with a typo (`site-knowledge.ts`, tested by
 bundling in `tests/unit/quick-video.test.ts`). Web answers drop search-engine pages from their sources
 and never show a raw `[[ACTION: …]]` tag; a suggested action of "none" is not shown as a button.
+
+**Named sites go straight to their official address.** `src/renderer/known-sites.ts` is a short,
+hand-checked map of well-known sites (LinkedIn, Indeed, GitHub, Amazon for your country, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → official URL. When a command names one ("browse to linkedin, find a
+job…"), the agent's first prompt gets a `NAMED SITE:` line with the address and the rule "navigate,
+don't web_search the name"; every prompt lists the map under `OFFICIAL SITES`; with a local AI the fast
+path opens it directly (`getInitialShortcutAction`). Names that are also common words ("indeed",
+"target") only count after "go to / on / at / abra…". A name that is not on the list is never turned
+into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
+`tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
+
+**"Summarize my open tabs".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) turns the request
+into the `summarize_tabs` action, even with the AI in charge (otherwise the model would visit every tab
+with `switch_tab`). The executor in `App.tsx` picks the tabs (`selectTabsForSummary`: no incognito tabs,
+no internal pages such as `about:`, `file:` or Bah's own player; sleeping tabs are listed as asleep and
+only woken when the user asks, e.g. "including the sleeping ones"), checks the **your tabs** permission
+once for the set (`tabsAccessDecision`: ask / always / never from the menu; the task's own tab needs
+none), reads each tab's text with `<webview>.executeJavaScript` (which falls back to the isolated
+world on pages that forbid scripts) and makes one stateless model call for a per-tab line plus an
+overall summary. The panel shows a card with one link per tab that switches to it. Tests:
+`tests/unit/tabs-summary.test.ts`, `tests/e2e/tabs-summary.spec.ts`.
 
 **Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
 site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub raw) never
@@ -285,6 +398,41 @@ listings, forms). `src/renderer/page-eval.ts` wraps `executeJavaScript` on every
 world** 1047 through `page:eval-isolated` in `main.ts`, the mechanism extension content scripts use,
 remembered until the tab's address changes). Tests: `tests/unit/page-eval.test.ts`,
 `tests/e2e/no-js-page.spec.ts`.
+
+### Local router (Qwen2.5-1.5B, optional)
+
+When the routing model is downloaded, a small local LLM labels **every** message before anything
+reaches the big model — in cloud *and* local mode — and the word rules above become the fallback.
+- **Model:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1,117,320,736 bytes, sha256
+  `6a1a2eb6…9407e`) in `<userData>/models/`. Never bundled: the assistant settings show a card
+  ("Download the 1.1 GB routing model?"); `router:download` runs only after that click, resumes a
+  `.part` with `Range`, and checks size + sha256 before renaming (`src/main/router/model-download.ts`).
+- **Engine:** `src/main/router/engine.mjs` (esbuild bundle, `node-llama-cpp` external) in a
+  `utilityProcess`, started 3 s after the window shows, only if the file is there. `gpu: 'auto'`
+  (Metal / Vulkan / CPU); if it fails to load it retries once on CPU, then `router:status` = `error`
+  and the word rules route. A crash only kills that process. node-llama-cpp tests its native binary in a
+  child process on Windows/Linux; from a utility process that fork would start another Bah (the
+  `RunAsNode` fuse is off), so the engine forwards that fork to `router-manager.ts`, which opens the
+  test file as another utility process.
+- **Prompt** (`src/shared/router-routes.ts`, idea from Arch-Router, none of its weights or text): routes
+  `{name, description}` with descriptive keys the model writes (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), rules and a few
+  examples. That system prompt is the fixed prefix, evaluated once; per message only
+  `Open page / Last task / Message` is processed. Output is held by a JSON-schema grammar to
+  `{"route": "<one key>"}`. LAST_RUN vs FIX is then settled by the sentence's shape (question →
+  LAST_RUN, statement → FIX). The router only labels text; it never acts, and the text never leaves the machine.
+- **Mapping** (`classifyIntent` → `routeCommand`): ACTION → agent, PAGE/CHAT → chat (page attached),
+  WEB → web answer, LAST_RUN → chat with the last run's log, FIX → agent; `other` / timeout (5 s) →
+  the previous path. Still ahead of the router: short greetings, the agent-drive toggle,
+  repeat/macro intents, vague-request hints and the zero-token quick actions.
+- **Eval:** `npm run router:eval` runs the same core (`router-core.mjs`) in plain Node over
+  `tests/fixtures/routing-cases.json` (82 en/pt/es cases) and scores the word rules on the same set.
+  On an Intel i7-9750H (CPU): router 89.0 % (90.2 % with the greeting fast path) vs word rules 84.1 %, p50 ≈ 0.6–0.9 s, p95 ≈ 1.0–1.4 s,
+  load ≈ 9 s, ≈ 0.9 GB RSS in Node (≈ 2 GB reported for the utility process, model file mmapped).
+  Smoke: `tests/e2e/router-local.spec.ts` (skips without the model).
+- **Packaging:** `@node-llama-cpp/*` (and node-llama-cpp `bins/`) are `asarUnpack`ed; node-llama-cpp's JS
+  and the engine stay in the asar, where its ~120 dependencies resolve. CUDA packages, the llama.cpp
+  source bundle and CLI templates are excluded.
 
 ## Navigation skills (`skills/*/SKILL.md`)
 

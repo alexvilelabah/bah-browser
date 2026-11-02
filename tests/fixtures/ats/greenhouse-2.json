@@ -1,0 +1,213 @@
+{
+ "ats": "greenhouse",
+ "source": "https://boards.greenhouse.io/embed/job_app?for=airbnb&token=8306554",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "Greenhouse embed URL (boards.greenhouse.io/embed/job_app) now redirects to job-boards.greenhouse.io; same React form, with education (degree--0, discipline--0).",
+ "fields": [
+  {
+   "label": "First Name",
+   "type": "text",
+   "id": "first_name",
+   "autocomplete": "given-name",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last Name",
+   "type": "text",
+   "id": "last_name",
+   "autocomplete": "family-name",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "Email",
+   "type": "text",
+   "id": "email",
+   "autocomplete": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Country",
+   "type": "combobox",
+   "id": "country",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "country"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Phone",
+   "type": "tel",
+   "id": "phone",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Location (City)",
+   "type": "combobox",
+   "id": "candidate-location",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "resume",
+   "expect": null
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "cover_letter",
+   "expect": null
+  },
+  {
+   "label": "Degree",
+   "type": "combobox",
+   "id": "degree--0",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Discipline",
+   "type": "combobox",
+   "id": "discipline--0",
+   "autocomplete": "off",
+   "expect": null
+  },
+  {
+   "label": "LinkedIn Profile",
+   "type": "text",
+   "id": "question_70057854",
+   "expect": "linkedin"
+  },
+  {
+   "label": "How did your hear about this position?",
+   "type": "text",
+   "id": "question_70057855",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Are you legally entitled to work in Canada?",
+   "type": "combobox",
+   "id": "question_70057856",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Are you legally authorized to work in the country where the job is located?",
+   "type": "combobox",
+   "id": "question_70057857",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "workAuthorized"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Will you now or in the future require company sponsorship to retain or extend your work authorization in the country whe",
+   "type": "combobox",
+   "id": "question_70057858",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "needsSponsorship"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Airbnb Candidate Privacy Policy",
+   "type": "combobox",
+   "id": "question_70057859",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Are you currently subject to any non-compete or non-solicitation agreement that would impact your ability to work at Air",
+   "type": "combobox",
+   "id": "question_70057860",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Are you currently or have you ever worked for Airbnb in any capacity? This could include, but is not limited to, a full-",
+   "type": "combobox",
+   "id": "question_70057861",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Candidate AI Usage Attestation:",
+   "type": "combobox",
+   "id": "question_70057862",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  }
+ ]
+}

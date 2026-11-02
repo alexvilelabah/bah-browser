@@ -1,0 +1,248 @@
+{
+ "ats": "workday",
+ "source": "https://example.wd5.myworkdayjobs.com/en-US/External/job/Remote/Example_JR0001/apply/applyManually",
+ "fetched": "2026-11-01",
+ "reachable": false,
+ "synthetic": true,
+ "notes": "SYNTHETIC. Workday's 'My Information' / 'Voluntary Disclosures' steps are only shown after creating an account or signing in, which we do not do. Field ids here are assembled from (a) the data-automation-id pattern formField-<id> found in Workday's public candidate-experience JS bundle (cx-jobs.min.js), (b) field tokens present in that bundle (legalName, firstName, lastName, preferredName, phoneNumber, countryPhoneCode, source, gender, ethnicity, hispanicOrLatino, disabilityStatus, candidateIsPreviousWorker), and (c) the older <section>Section_<field> form. Address and veteranStatus ids are unverified.",
+ "fields": [
+  {
+   "label": "How Did You Hear About Us?",
+   "type": "combobox",
+   "id": "source--source",
+   "automationId": "formField-source",
+   "required": true,
+   "expect": "howHeard"
+  },
+  {
+   "label": "Have you previously worked for this company?",
+   "type": "radio",
+   "name": "candidateIsPreviousWorker",
+   "automationId": "formField-candidateIsPreviousWorker",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Country",
+   "type": "select",
+   "id": "country--country",
+   "automationId": "formField-country",
+   "required": true,
+   "options": [
+    "Select One",
+    "United States of America",
+    "Canada"
+   ],
+   "expect": "country"
+  },
+  {
+   "label": "First Name",
+   "type": "text",
+   "id": "name--legalName--firstName",
+   "automationId": "formField-legalName--firstName",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last Name",
+   "type": "text",
+   "id": "name--legalName--lastName",
+   "automationId": "formField-legalName--lastName",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "Middle Name",
+   "type": "text",
+   "id": "name--legalName--middleName",
+   "automationId": "formField-legalName--middleName",
+   "expect": "skip"
+  },
+  {
+   "label": "I have a preferred name",
+   "type": "checkbox",
+   "id": "name--preferredCheck",
+   "automationId": "formField-preferredCheck",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Address Line 1",
+   "type": "text",
+   "id": "address--addressLine1",
+   "automationId": "formField-addressLine1",
+   "required": true,
+   "expect": "address"
+  },
+  {
+   "label": "City",
+   "type": "text",
+   "id": "address--city",
+   "automationId": "formField-city",
+   "required": true,
+   "expect": "city"
+  },
+  {
+   "label": "State",
+   "type": "select",
+   "id": "address--countryRegion",
+   "automationId": "formField-countryRegion",
+   "required": true,
+   "options": [
+    "Select One",
+    "California",
+    "New York"
+   ],
+   "expect": "state"
+  },
+  {
+   "label": "Postal Code",
+   "type": "text",
+   "id": "address--postalCode",
+   "automationId": "formField-postalCode",
+   "required": true,
+   "expect": "postalCode"
+  },
+  {
+   "label": "Email Address",
+   "type": "text",
+   "id": "emailAddress--emailAddress",
+   "automationId": "formField-emailAddress",
+   "expect": "email"
+  },
+  {
+   "label": "Phone Device Type",
+   "type": "select",
+   "id": "phoneNumber--phoneType",
+   "automationId": "formField-phoneType",
+   "required": true,
+   "options": [
+    "Select One",
+    "Mobile",
+    "Home"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Country Phone Code",
+   "type": "combobox",
+   "id": "phoneNumber--countryPhoneCode",
+   "automationId": "formField-countryPhoneCode",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Phone Number",
+   "type": "text",
+   "id": "phoneNumber--phoneNumber",
+   "automationId": "formField-phoneNumber",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Phone Extension",
+   "type": "text",
+   "id": "phoneNumber--extension",
+   "automationId": "formField-extension",
+   "expect": "skip"
+  },
+  {
+   "label": "Gender",
+   "type": "select",
+   "id": "personalInfoUS--gender",
+   "automationId": "formField-gender",
+   "required": true,
+   "options": [
+    "Select One",
+    "Female",
+    "Male",
+    "I do not wish to self-identify"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Are you Hispanic or Latino?",
+   "type": "radio",
+   "name": "personalInfoUS--hispanicOrLatino",
+   "automationId": "formField-hispanicOrLatino",
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Race/Ethnicity",
+   "type": "select",
+   "id": "personalInfoUS--ethnicity",
+   "automationId": "formField-ethnicity",
+   "options": [
+    "Select One",
+    "Asian",
+    "White",
+    "I do not wish to self-identify"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Please select the veteran status which most accurately describes your status",
+   "type": "select",
+   "id": "personalInfoUS--veteranStatus",
+   "automationId": "formField-veteranStatus",
+   "options": [
+    "Select One",
+    "I am not a protected veteran",
+    "I do not wish to self-identify"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Please check one of the boxes below",
+   "type": "radio",
+   "name": "selfIdentifiedDisabilityData--disabilityStatus",
+   "automationId": "formField-disabilityStatus",
+   "options": [
+    "Yes, I have a disability",
+    "No, I do not have a disability",
+    "I do not want to answer"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "First Name",
+   "type": "text",
+   "name": "legalNameSection_firstName",
+   "automationId": "legalNameSection_firstName",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last Name",
+   "type": "text",
+   "name": "legalNameSection_lastName",
+   "automationId": "legalNameSection_lastName",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "City",
+   "type": "text",
+   "name": "addressSection_city",
+   "automationId": "addressSection_city",
+   "expect": "city"
+  },
+  {
+   "label": "Enter website. This input is for robots only, do not enter if you're human.",
+   "type": "text",
+   "name": "website",
+   "automationId": "beecatcher",
+   "expect": "skip"
+  }
+ ]
+}

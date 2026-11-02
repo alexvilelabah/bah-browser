@@ -42,8 +42,8 @@ test('salvar: abas da barra na ordem, sem as escondidas do agente, nome cortado'
     tab('c', 'https://c.com/', { title: undefined }),
   ], 'a');
   assert.equal(urls(s), 'p.com a.com b.com c.com');
-  assert.deepEqual(s.tabs[0], { url: 'https://p.com/', title: 'P', pinned: true });
-  assert.deepEqual(s.tabs[1], { url: 'https://a.com/', title: 'A' });   // sem "pinned: false" no disco
+  assert.deepEqual(s.tabs[0], { url: 'https://p.com/', title: 'P', pinned: true, id: 'p' });
+  assert.deepEqual(s.tabs[1], { url: 'https://a.com/', title: 'A', id: 'a' });   // sem "pinned: false" no disco
   assert.equal(s.tabs[2].title.length, MAX_SESSION_TITLE);
   assert.equal(s.tabs[3].title, '');
   assert.equal(s.active, 1);
@@ -185,4 +185,16 @@ test('esqueleto: muda com endereço, fixada, ordem e ativa — não com o nome',
   assert.notEqual(sessionShape({ ...base, tabs: [base.tabs[1], base.tabs[0]] }), shape);
   assert.notEqual(sessionShape({ ...base, tabs: [{ ...base.tabs[0], pinned: true }, base.tabs[1]] }), shape);
   assert.notEqual(sessionShape({ ...base, tabs: [{ url: 'https://a.com/x', title: 'A' }, base.tabs[1]] }), shape);
+});
+
+test('aba volta com o mesmo id e a sessão do assistente dela; id estranho do disco é descartado', () => {
+  const s = sessionToSave([tab('t-1', 'https://a.com/', { sessionId: 's-9' }), tab('t-2', 'https://b.com/')], 't-1');
+  assert.equal(s.tabs[0].id, 't-1');
+  assert.equal(s.tabs[0].sid, 's-9');
+  assert.equal(s.tabs[1].sid, undefined);
+  const back = sanitizeSession({ tabs: [{ url: 'https://a.com/', title: '', id: '../evil', sid: 'x'.repeat(65) }, { url: 'https://b.com/', title: '', id: 'ok', sid: 'fine' }], active: 0 })!;
+  assert.equal(back.tabs[0].id, undefined);
+  assert.equal(back.tabs[0].sid, undefined);
+  assert.equal(back.tabs[1].id, 'ok');
+  assert.equal(back.tabs[1].sid, 'fine');
 });

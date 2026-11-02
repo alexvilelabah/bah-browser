@@ -1,0 +1,54 @@
+{
+ "ats": "workday",
+ "source": "https://salesforce.wd12.myworkdayjobs.com/en-US/External_Career_Site/job/India---Hyderabad/Software-Engineering-PMTS---Cloud-Security---Hyderabad_JR357893/apply/applyManually",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "Workday apply/applyManually: step 1 of 6 is Create Account/Sign In; My Information, My Experience, Application Questions and Voluntary Disclosures need an account. Captured the create-account step only, including the \"beecatcher\" honeypot field (name=website).",
+ "fields": [
+  {
+   "label": "Email Address",
+   "type": "text",
+   "id": "input-4",
+   "automationId": "email",
+   "autocomplete": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Password",
+   "type": "password",
+   "id": "input-5",
+   "automationId": "password",
+   "autocomplete": "new-password",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Verify New Password",
+   "type": "password",
+   "id": "input-6",
+   "automationId": "verifyPassword",
+   "autocomplete": "new-password",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "I acknowledge and agree to Salesforce's Candidate Privacy Notice",
+   "type": "checkbox",
+   "id": "input-9",
+   "automationId": "createAccountCheckbox",
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Enter website. This input is for robots only, do not enter if you're human.",
+   "type": "text",
+   "name": "website",
+   "id": "355f8a11-9d19-48c5-8ee0-5546a4a0392e",
+   "automationId": "beecatcher",
+   "expect": "skip"
+  }
+ ]
+}
