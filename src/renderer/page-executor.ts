@@ -43,6 +43,7 @@ export type BrowserAction =
   | { type: 'find'; text: string }
   | { type: 'web_search'; query: string }
   | { type: 'history_search'; query: string }
+  | { type: 'summarize_tabs'; wake?: boolean }
   | { type: 'suggest_time_zone'; zone: string; reason: string }
   | { type: 'back' }
   | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
@@ -144,6 +145,7 @@ export function formatAction(action: BrowserAction): string {
     case 'read_file': return `read_file(${shorten(action.file, 60)})`;
     case 'suggest_time_zone': return `suggest_time_zone(${action.zone})`;
     case 'web_search': return `web_search("${shorten(action.query, 60)}")`;
+    case 'summarize_tabs': return `summarize_tabs(${action.wake ? 'wake sleeping' : 'open tabs'})`;
     case 'find': return `find("${shorten(action.text, 50)}")`;
     case 'back': return 'back()';
     case 'forward': return 'forward()';
