@@ -18,3 +18,9 @@ test('times, days and dates after at/on are not stores', () => {
     assert.strictEqual(namesStore(t), false, t);
   assert.strictEqual(namesStore('what is the tallest building?'), false);
 });
+
+test('a movie/album after "from" is not a store ("all the music videos from the movie top gun")', () => {
+  assert.equal(namedPlace('find all the music videos from the movie top gun with tom cruise and download them'), null);
+  assert.equal(namedPlace('download every song from the album thriller'), null);
+  assert.equal(namedPlace('buy running shoes at nike'), 'nike');   // a real store still counts
+});
