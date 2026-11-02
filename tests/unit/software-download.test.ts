@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   machineProfile, pickHint, machineLine, macosCodename, windowsName, linuxPackageType,
-  classifyBuild, checkBuild, thirdPartyDownloadSite, thirdPartyNote, signInWall,
+  classifyBuild, checkBuild, thirdPartyDownloadSite, thirdPartyNote, signInWall, isDownloadControl, installerFileOf,
 } from '../../src/shared/software-download.ts';
 
 const macIntel = machineProfile({ platform: 'darwin', arch: 'x64', osVersion: '15.6.1' });
@@ -96,6 +96,35 @@ test('build check elsewhere: Rosetta/emulation is a warning, wrong package type 
   assert.match(checkBuild('tool.x86_64.rpm', ubuntu).note, /WRONG PACKAGE: .*\.rpm.*\.deb/);
   assert.strictEqual(checkBuild('tool_arm64.deb', ubuntu).level, 'error');
   assert.strictEqual(checkBuild('tool.AppImage', fedoraArm).level, '');
+});
+
+test('download controls: vendor wording ("Install Steam", "Get the app", "Try free") counts; store/extension installs do not', () => {
+  const dmg = 'https://cdn.akamai.steamstatic.com/client/installer/steam.dmg';
+  // Fortes: valem com ou sem link (menos loja).
+  for (const l of ['Download', 'Download now', 'Free download', 'Download for Mac', 'Download Steam for Windows', 'Agree to the EULA and Download', 'Baixar', 'Descargar ahora'])
+    assert.ok(isDownloadControl(l, 'https://vendor.example/download/page'), l);
+  // Fracos com link pra instalador ou botão sem link: valem.
+  for (const l of ['Install Steam', 'Install', 'Install now', 'Get', 'Get the app', 'Get it now', 'Try free', 'Try it free', 'Free trial'])
+    assert.ok(isDownloadControl(l, dmg), `${l} → .dmg`);
+  assert.ok(isDownloadControl('Install Steam', ''));
+  assert.ok(isDownloadControl('Get the app', 'javascript:void(0)'));
+  assert.ok(isDownloadControl('  Install   Steam  ', 'https://x.example/SteamSetup.exe?v=2'));
+  // Fracos que levam a uma PÁGINA (menu "Install Steam" → /about) ou a uma loja/extensão: não.
+  assert.ok(!isDownloadControl('Install Steam', 'https://store.steampowered.com/about/'));
+  assert.ok(!isDownloadControl('Get', 'https://vendor.example/pricing'));
+  assert.ok(!isDownloadControl('Install', 'https://chromewebstore.google.com/detail/abc'));
+  assert.ok(!isDownloadControl('Get', 'https://apps.apple.com/us/app/steam-link/id123'));
+  assert.ok(!isDownloadControl('Download', 'https://apps.apple.com/us/app/x/id1'));
+  assert.ok(!isDownloadControl('Get it now', 'ms-windows-store://pdp/?productid=9NBLGGH4R32N'));
+  assert.ok(!isDownloadControl('Install', 'https://addons.mozilla.org/firefox/addon/x/'));
+  assert.ok(!isDownloadControl('Play now', dmg));
+  assert.ok(!isDownloadControl('Sign in', ''));
+  assert.strictEqual(installerFileOf(dmg), 'steam.dmg');
+  assert.strictEqual(installerFileOf('https://x.example/HP_Easy_Start.app.zip?model=1'), 'HP_Easy_Start.app.zip');
+  assert.strictEqual(installerFileOf('https://x.example/about/'), '');
+  assert.strictEqual(installerFileOf('/files/Steam.dmg'), 'Steam.dmg');
+  assert.ok(isDownloadControl('Install Steam', '/files/SteamSetup.exe'));
+  assert.ok(!isDownloadControl('Install Steam', '/about/'));
 });
 
 test('third-party "free download" sites are flagged; vendor sites are not', () => {

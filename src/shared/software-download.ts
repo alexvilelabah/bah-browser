@@ -160,6 +160,44 @@ export function checkBuild(filename: string, p: MachineProfile): BuildCheck {
   return { level: 'error', note: ` ⚠️ WRONG CPU: ${filename} is built for ${ARCH_WORD[b.arch]} but this computer is ${p.archLabel} — it will not run here. Cancel it (cancel_download) and pick the ${p.os === 'macos' && p.arch === 'x64' ? 'Intel / x64 or Universal' : p.arch === 'arm64' ? 'ARM64 / Apple Silicon or Universal' : 'x64'} build.` };
 }
 
+// ── Botão de baixar da página ────────────────────────────────────────────────────────────────
+// Fabricante não escreve "Download": Steam é "Install Steam", outros "Get the app", "Try free",
+// "Install now". Mas "Install"/"Get" também abre loja de apps ou instala extensão — por isso os
+// rótulos FRACOS só valem num link pra arquivo de instalador ou num botão sem link (que dispara o
+// download); link pra loja nunca.
+
+const INSTALLER_EXT_RE = /\.(dmg|pkg|mpkg|exe|msi|msix|msixbundle|appx|deb|rpm|appimage|snap|zip|tar\.gz|tgz|tar\.xz|7z)$/i;
+const STORE_HREF_RE = /^(itms-apps|itms|macappstore|ms-windows-store|ms-appinstaller|market|steam|chrome-extension):|\/\/(apps\.apple\.com|itunes\.apple\.com|play\.google\.com|chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons|addons\.mozilla\.org|apps\.microsoft\.com|www\.microsoft\.com\/[a-z-]+\/store\/|snapcraft\.io|flathub\.org)/i;
+// Fortes: dizem "baixar" com todas as letras.
+const STRONG_DL_RE = /^((agree|accept|i agree|i accept)\b.*\bdownload\b.*|(free )?download( now| free| it)?|start download|download (for|on) (mac|macos|windows|linux|pc)\b.*|download \S+( \S+)? (for|on) (mac|macos|windows|linux|pc)\b.*|download (the )?(latest|installer|app|client)\b.*|baixar( agora| grátis| gratis)?|descargar( ahora| gratis)?)$/i;
+// Fracos: "instalar/obter/testar" — só com o alvo certo.
+const WEAK_DL_RE = /^(install( now| it now)?|install \S+( \S+)?( now| for (mac|macos|windows|linux|pc))?|get( it)?( now| free)?|get the app|get \S+( \S+)? (for|on) (mac|macos|windows|linux|pc)|try( it)? (for )?free( now)?|free trial|start (your )?free trial|instalar( agora)?)$/i;
+
+/** Nome do arquivo no fim do link, se o link for pra um instalador ('' se não for). */
+export function installerFileOf(href: string): string {
+  try {
+    const u = new URL(href, 'https://relative.invalid/');   // o atributo pode vir relativo ("/files/x.dmg")
+    const last = decodeURIComponent(u.pathname.split('/').pop() || '');
+    return INSTALLER_EXT_RE.test(last) ? last : '';
+  } catch { return ''; }
+}
+
+/**
+ * Este elemento é o botão/link que baixa o programa? `href` = destino do link (vazio = botão).
+ * Forte ("Download for Mac") vale sempre, menos pra loja; fraco ("Install Steam", "Get") só com
+ * link pra instalador, ou botão sem link de página.
+ */
+export function isDownloadControl(label: string, href = ''): boolean {
+  const l = String(label || '').replace(/\s+/g, ' ').trim();
+  if (!l || l.length > 60) return false;
+  const h = String(href || '').trim();
+  if (h && STORE_HREF_RE.test(h)) return false;
+  if (STRONG_DL_RE.test(l)) return true;
+  if (!WEAK_DL_RE.test(l)) return false;
+  if (!h || /^(javascript:|#)/i.test(h) || /#$/.test(h)) return true;
+  return !!installerFileOf(h);
+}
+
 // ── Sites de "free download" (agregadores): não são o fabricante ─────────────────────────────
 // Reempacotam o instalador (às vezes com "download manager"/bundleware) e ficam desatualizados.
 const AGGREGATOR_HOSTS = [
