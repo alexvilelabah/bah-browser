@@ -7,6 +7,7 @@ const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-
 import { FORM_SCAN_SCRIPT, applyFill, readDropdownOptions } from './form-filler';
 import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
 import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
+import { commandIsGrocery, parseGroceryList, GROCERY_TILES_SCRIPT, CART_PAGE_SCRIPT, formatProductTiles, formatCartPage, formatListProgress, offListAdd, searchBoxRef, nextListItem, cartFinishProblem, type ProductTile, type CartPage } from './grocery';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
@@ -2711,7 +2712,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
               // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
               const unattended = !!opts?.unattended;
-              const riskOpts = { jobs: commandIsJobs, unattended };
+              // Carrinho de mercado ("add milk, eggs… to my Walmart cart"): skill grocery-cart, cartões de produto com
+              // as refs de Add/+/−, a lista do pedido contra o carrinho, e o freio que deixa editar o carrinho.
+              const commandIsCart = commandIsGrocery(command);
+              const groceryList = commandIsCart ? parseGroceryList(command) : [];
+              const groceryInCart = new Map<string, number>();   // nome do produto → quantidade vista ("in cart"/carrinho)
+              const groceryOutOfStock = new Set<string>();      // produtos vistos esgotados nesta tarefa
+              const groceryAvailable = new Set<string>();       // produtos vistos à venda (com Add ou já no carrinho)
+              let groceryTiles: ProductTile[] = [];             // cartões desta página (pra saber o que um ADD põe)
+              const offListWarned = new Set<string>();
+              let cartRenderProblem: string | null = null;      // render_view encerra a tarefa: mesma conferência do done
+              let cartPageSeen = false;
+              let cartCheckBlocks = 0;
+              const riskOpts = { jobs: commandIsJobs, unattended, cart: commandIsCart };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
               const openedJobs: OpenedJob[] = [];
@@ -2968,7 +2981,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
+              // A pessoa já respondeu ao freio neste passo: a recuperação não pergunta de novo ("Sensitive action
+              // detected… asking the user") — depois de um "não" isso encerrava a tarefa com um aviso enganoso.
+              let brakeAskedThisStep = false;
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
+                brakeAskedThisStep = true;
                 setAgentVisual('idle');
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
                 const message = risk.kind === 'application'
@@ -3154,6 +3171,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
+                  brakeAskedThisStep = false;
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
                   // Same clock as the in-flight abort, so a human pause never burns the budget.
@@ -3542,6 +3560,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const jobsBlock = commandIsJobs
                     ? [formatOpenedJobs(openedJobs, jobsAskedN, seenJobs.find(j => !openedJobs.some(o => o.title === j.title)) || null), (onOpenedJob ? '' : formatJobListings(pageJobs || [], 8, openedJobIds))].filter(Boolean).join('\n')   // na página da vaga, as "vagas parecidas" só distraem
                     : '';
+                  let groceryBlock = '';
+                  if (commandIsCart) {
+                    const cartPage = await withTimeout(wv.executeJavaScript(CART_PAGE_SCRIPT), 3000, null as CartPage | null).catch(() => null);
+                    if (cartPage?.isCart) { cartPageSeen = true; groceryInCart.clear(); for (const l of cartPage.lines || []) groceryInCart.set(l.name, l.qty); }
+                    const tiles: ProductTile[] = cartPage?.isCart ? [] : await withTimeout(wv.executeJavaScript(GROCERY_TILES_SCRIPT), 3000, [] as ProductTile[]).catch(() => [] as ProductTile[]);
+                    groceryTiles = tiles || [];
+                    // Algo mudou no carrinho desde a última visita à página do carrinho → tem que conferir de novo no fim.
+                    for (const t of tiles || []) if ((t.inCart || 0) !== (groceryInCart.get(t.name) || 0) && (t.inCart > 0 || groceryInCart.has(t.name))) cartPageSeen = false;
+                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); if (t.oos) groceryOutOfStock.add(t.name); else if (t.add || t.inCart > 0) groceryAvailable.add(t.name); }
+                    groceryBlock = [formatListProgress(groceryList, groceryInCart, groceryOutOfStock, searchBoxRef(observation.interactive_elements), groceryAvailable),
+                      cartPage?.isCart ? formatCartPage(cartPage, observation.interactive_elements) : formatProductTiles(tiles || [], observation.interactive_elements)].filter(Boolean).join('\n');
+                  }
                   const dlButtonsBlock = dlButtons.length
                     ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for this computer)` : ''}`; }).join('\n')}`
                     : '';
@@ -3665,7 +3695,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
-                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : ''].filter(Boolean),
+                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping && !commandIsCart ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : '', commandIsCart ? 'grocery' : ''].filter(Boolean),
                   });
                   const skillsBlock = formatSkillsBlock(stepSkills);
                   if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });
@@ -3697,6 +3727,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     downloadsBlock,
                     dlButtonsBlock,
                     jobsBlock,
+                    groceryBlock,
                     formBlock,
                     skillsBlock,
                     '',
@@ -4148,6 +4179,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     planNudged = true;
                     history += `\nPLAN FIRST: this task covers several sites. Emit a plan action now listing each site/step, then work through it; finish only when every site is covered (or shown to have nothing).`;
                   }
+                  // Carrinho: o Qwen3-VL-8B manda {"action":"fill_ref","text":"bananas"} sem ref ao passar pro próximo
+                  // item (visto em todo ensaio). Com o campo de busca à vista e a lista do pedido, o alvo é óbvio:
+                  // busca o próximo item da lista no campo de busca (o valor vem do pedido da pessoa, não do modelo).
+                  if (commandIsCart && action.type === 'done' && /Invalid action from model: fill_ref needs a finite non-negative integer "ref"/.test(String(action.reason || ''))) {
+                    const sRef = searchBoxRef(observation.interactive_elements);
+                    const nextIt = nextListItem(groceryList, groceryInCart, groceryOutOfStock, groceryAvailable);
+                    if (sRef != null && nextIt) {
+                      action = { type: 'fill_ref', ref: sRef, value: nextIt.text } as BrowserAction;
+                      history += `\nBAH FIXED THE ACTION: fill_ref had no ref — Bah searched the next list item "${nextIt.text}" in the search box [${sRef}].`;
+                    }
+                  }
                   onProgress({ kind: 'action', action });
                   if (action.type === 'done') {
                     // Robustness: a malformed model response is parsed into a sentinel 'done'.
@@ -4191,10 +4233,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         continue;
                       }
                     }
+                    // Carrinho: encerrar sem ter aberto o carrinho (o modelo relatava o que "achava" que tinha posto).
+                    // Uma vez, manda abrir e conferir. Nada adicionado = é uma pergunta à pessoa: deixa sair.
+                    const cartProblem = commandIsCart && cartCheckBlocks < 3
+                      ? cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen, report: String(action.reason || '') }) : null;
+                    if (cartProblem) {
+                      cartCheckBlocks++;
+                      history += `\n${cartProblem}`;
+                      onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                      continue;
+                    }
                     // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
                     // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
                     // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
-                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel || commandIsJobs) && !commandWantsDownload) {
+                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel || commandIsJobs || commandIsCart) && !commandWantsDownload) {
                       const r = String(action.reason || '');
                       const hasList = /\n\s*(?:[-*•]|\d+[.)])\s|\|/.test(r) || (r.match(/\d/g) || []).length >= 3 || r.length > 260;
                       if (!hasList) {
@@ -4364,6 +4416,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           cancelled = true;
                           toolResult = { success: false, reason: 'user_cancelled', error: `You canceled — I did not do "${risk.label}".` };
                           onProgress({ kind: 'status', message: `✖️ Canceled by you: I did not touch "${risk.label}".` });
+                        }
+                      }
+                      // Carrinho: ADD de um produto que nenhum item que falta na lista pede (substituto de um esgotado,
+                      // ou o botão do vizinho) — barra uma vez por produto e explica; repetir de propósito passa.
+                      if (!cancelled && commandIsCart && action.type === 'click_ref') {
+                        const off = offListAdd(groceryTiles, observation.interactive_elements, action.ref, groceryList, groceryInCart);
+                        if (off && !offListWarned.has(off)) {
+                          offListWarned.add(off);
+                          cancelled = true;
+                          toolResult = { success: false, reason: 'not_on_list', error: `Not clicked: that ADD puts "${off.slice(0, 80)}" in the cart, and no item still missing from the SHOPPING LIST asks for it. Out of stock items are never replaced without asking the user. Go to the NEXT list item (search box). If the user really wants this product, click it again.` };
+                          onProgress({ kind: 'status', message: `🛒 Not adding "${off.slice(0, 60)}" — it isn't on the list.` });
                         }
                       }
                       if (!cancelled) {
@@ -5270,6 +5333,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nNEWS: auto-extraction returned nothing for "${q}". The Google News page IS OPEN — use extract_text to read the headlines and report them.`;
                       toolResult = { success: false, error: 'Could not scrape the headlines. The news page is open — I will read it.' };
                     }
+                  } else if (action.type === 'render_view' && commandIsCart && cartCheckBlocks < 3
+                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen,
+                      report: JSON.stringify([(action as any).title, (action as any).subtitle, (action as any).rows, (action as any).source_note]) }))) {
+                    // Tabela final de carrinho com item faltando/curto, carrinho não conferido ou esgotado não citado.
+                    cartCheckBlocks++;
+                    history += `\n${cartRenderProblem}`;
+                    onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                    toolResult = { success: false, reason: 'not_done', error: cartRenderProblem };
                   } else if (action.type === 'render_view' || action.type === 'stock_movers') {
                     // A "mágica" visual: dados → página bonita (tabela ordenável +
                     // gráfico) aberta numa aba. Determinístico → auto-done.
@@ -5526,6 +5597,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     } catch (e: any) {
                       toolResult = { success: false, error: String(e?.message || e) };
                     }
+                  } else if (action.type === 'report' && commandIsCart && cartCheckBlocks < 3
+                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen,
+                      report: String((action as any).summary || '') }))) {
+                    // report também encerra: mesma conferência do done (o 8B quase sempre encerra com report).
+                    cartCheckBlocks++;
+                    history += `\n${cartRenderProblem}`;
+                    onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                    toolResult = { success: false, reason: 'not_done', error: cartRenderProblem };
                   } else if (action.type === 'report') {
                     // Final synthesized answer to user — exits loop.
                     // Modelo fraco às vezes manda report com summary VAZIO ("qual a capital
@@ -6049,6 +6128,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       action.type === 'wait' ? Math.min(Number(action.timeout) || 5000, 60_000) + 3000 : 12000,
                       { success: false, error: `${action.type} timed out — page scripts are unresponsive. Use OCR TEXT or navigate to a DIFFERENT site.` });
                   }
+                  // Carrinho: digitou o próximo item no campo de busca da loja → Bah aperta Enter. O modelo pequeno
+                  // digitava "bagels" e clicava o Add de um produto da busca ANTERIOR (ainda na tela).
+                  if (commandIsCart && action.type === 'fill_ref' && toolResult?.success !== false && String((action as any).value || '').trim()
+                    && action.ref === searchBoxRef(observation.interactive_elements)) {
+                    const wcIdS = (wv as any).getWebContentsId?.();
+                    if (wcIdS != null) {
+                      try { await window.electronAPI?.realKey?.(wcIdS, 'Enter'); } catch {}
+                      history += `\nBAH PRESSED ENTER: the search for "${String((action as any).value).slice(0, 60)}" was submitted for you.`;
+                    }
+                  }
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
@@ -6266,6 +6355,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     step,
                     commandRequiresThisSite: commandMentionsDomain(afterObservation.url),
                     commandWantsDownload,
+                    cartTask: commandIsCart,
+                    brakeAsked: brakeAskedThisStep,
                   });
                   const urlChangedByAction = afterObservation.url !== observation.url;
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);

@@ -586,7 +586,16 @@ first (site > page state > task), as a `SKILLS FOR THIS PAGE` section near the t
 
 Task types come from the request: `download` (download words, typos included), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (stores, prices, buy...), `parts`
-(charger/adapter/battery/compatible...), `people`, `jobs`. Per-site **account state** (signed in / signed out, read from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an `ACCOUNT:` line. **Bundled skills are general rules, not recipes for named sites** —
+(charger/adapter/battery/compatible...), `people`, `jobs`, `grocery` (add/put… to a cart or basket, groceries, a
+shopping list — replaces `shopping`, whose skill says never to add to a cart). On a `grocery` task each step also
+gets, from `src/renderer/grocery.ts` (unit-tested in `tests/unit/grocery.test.ts`, e2e in
+`tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — every product tile's name, price, unit price,
+Sponsored / OUT OF STOCK / IN CART ×n, and the `[ref]` of its Add, + and − buttons (matched to the interactive
+elements by screen position, so a grid of identical "Add" buttons is no longer ambiguous); **CART PAGE** — lines,
+quantities, subtotal and the checkout button it must not click; and **SHOPPING LIST** — the request parsed into items
+("a dozen bagels" = 12) checked against what the store shows in the cart. Finishing without opening the cart is
+sent back once. The brake (`risk.ts`) asks before Checkout / Check out / Continue to payment / Place (your) order /
+Reserve time slot; in a cart task, removing a cart line and Enter on the cart page do not ask. Per-site **account state** (signed in / signed out, read from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an `ACCOUNT:` line. **Bundled skills are general rules, not recipes for named sites** —
 site-specific recipes belong in user/contributed skills.
 User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a successful task Bah offers to draft one
 ("Save as skill" → review → Save → optional GitHub proposal). See [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md). Code: parser + selection `src/shared/skills.ts` (unit-tested in
@@ -594,7 +603,8 @@ User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a succ
 loader + `skills:list` IPC `src/main/skills-loader.ts` (re-reads files in dev; packaged via
 `electron-builder.yml` `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`,
 `site-search`, `page-tabs`, `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`,
-`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`.
+`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`,
+`grocery-cart`.
 
 ---
 

@@ -567,7 +567,17 @@ Skills incluídas — **regras gerais, não receitas de sites específicos** (re
 skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
 `used-listings`, `travel-search`. Estados extras: `searchbox` (campo de busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou aviso "entre para ver…"). Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`. Skills novas: `card-list`, `job-apply`, `sign-in`.
-Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`.
+Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`, `people`, `jobs`, `grocery`.
+Skill nova: `grocery-cart`. Numa tarefa `grocery` (adicionar/pôr… no carrinho, compras de mercado, lista de compras —
+substitui `shopping`, cuja skill manda nunca pôr no carrinho) cada passo recebe ainda, de `src/renderer/grocery.ts`
+(testado em `tests/unit/grocery.test.ts`, e2e em `tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** —
+nome, preço, preço por unidade, Sponsored / OUT OF STOCK / IN CART ×n de cada cartão de produto e a `[ref]` dos botões
+Add, + e − (casados com os elementos interativos pela posição na tela: uma grade de botões "Add" iguais deixa de ser
+ambígua); **CART PAGE** — linhas, quantidades, subtotal e o botão de checkout que ele não deve clicar; e **SHOPPING
+LIST** — o pedido separado em itens ("a dozen bagels" = 12) contra o que a loja mostra no carrinho. Encerrar sem abrir
+o carrinho volta uma vez. O freio (`risk.ts`) pergunta antes de Checkout / Check out / Continue to payment / Place
+(your) order / Reserve time slot; numa tarefa de carrinho, tirar uma linha do carrinho e Enter na página do carrinho
+não perguntam.
 
 ---
 
