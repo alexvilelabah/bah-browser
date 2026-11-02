@@ -164,3 +164,11 @@ test('finish check: missing or short items, then the cart, then the out-of-stock
   assert.strictEqual(cartFinishProblem({ ...base, report: 'Eggs: out of stock — want Eggland\'s Best instead?' }), null);
   assert.strictEqual(cartFinishProblem({ ...base, inCart: new Map() , list: [] }), null);
 });
+
+test('a generic item is not "out of stock" while another product for it is on sale', () => {
+  const list = parseGroceryList('add a dozen bagels to my cart');
+  const oos = ['Everything Bagels, 6 Count'];
+  assert.match(formatListProgress(list, new Map(), oos, 2, ['Plain Bagels, 6 Count']), /1 left — next: bagels/);
+  assert.strictEqual(nextListItem(list, new Map(), oos, ['Plain Bagels, 6 Count'])?.text, 'bagels');
+  assert.match(formatListProgress(list, new Map(), oos, 2), /OUT OF STOCK \(Everything Bagels, 6 Count\)/);   // nothing else seen
+});

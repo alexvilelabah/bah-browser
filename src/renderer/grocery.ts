@@ -218,6 +218,13 @@ export function searchBoxRef(els: Array<{ id: number; tag?: string; role?: strin
   return (els || []).find(e => /searchbox/i.test(e.role || '') || (/^(input|textbox|combobox)$/i.test(e.role || e.tag || '') && /search|what can we help|buscar|pesquis/i.test(`${e.aria || ''} ${e.placeholder || ''} ${e.text || ''}`)))?.id;
 }
 
+/** Item "esgotado" = algum produto que o atende foi visto esgotado e NENHUM que o atende foi visto à venda
+ *  ("bagels" com o Everything esgotado mas o Plain à venda não está esgotado). */
+function soldOut(it: ListItem, oos: string[], available: string[]): string | undefined {
+  const gone = oos.find(n => matchesListItem(it, n));
+  return gone && !available.some(n => matchesListItem(it, n)) ? gone : undefined;
+}
+
 /** O produto atende este item da lista? Todas as palavras do item (e os números: "12-count" ≠ 18 Count) no nome. */
 export function matchesListItem(item: ListItem, productName: string): boolean {
   const words = stem(item.text).split(/\s+/).filter(w => w.length >= 3 || /^\d+$/.test(w));
@@ -227,14 +234,15 @@ export function matchesListItem(item: ListItem, productName: string): boolean {
 
 /** A lista do pedido contra o que já está no carrinho (nomes vistos com "in cart" ou na página do carrinho) e o
  *  que a loja mostrou esgotado: o modelo pequeno trocava o item esgotado pelo "mais parecido" sem perguntar. */
-export function formatListProgress(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = [], searchRef?: number): string {
+export function formatListProgress(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = [], searchRef?: number, available: Iterable<string> = []): string {
   if (!list?.length) return '';
   const names = [...inCart.entries()].filter(([, q]) => q > 0);
   const oos = [...outOfStock];
+  const avail = [...available];
   let next = -1;
   const rows = list.map((it, i) => {
     const hit = names.find(([n]) => matchesListItem(it, n));
-    const gone = !hit && oos.find(n => matchesListItem(it, n));
+    const gone = !hit && soldOut(it, oos, avail);
     // Quantas unidades o pedido quer: o número dito, ou 6 pra fruta vendida por unidade ("Each") sem número.
     const per = hit ? unitsPerPack(hit[0]) : 0;
     const wanted = it.count ?? (hit && per === 1 ? 6 : undefined);
@@ -267,23 +275,23 @@ export function offListAdd(tiles: ProductTile[], els: Elems, ref: number, list: 
 }
 
 /** O próximo item da lista que ainda não está no carrinho nem foi visto esgotado (null = nada a buscar). */
-export function nextListItem(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = []): ListItem | null {
+export function nextListItem(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = [], available: Iterable<string> = []): ListItem | null {
   const names = [...inCart.entries()].filter(([, q]) => q > 0).map(([n]) => n);
-  const oos = [...outOfStock];
-  return (list || []).find(it => !names.some(n => matchesListItem(it, n)) && !oos.some(n => matchesListItem(it, n))) || null;
+  const oos = [...outOfStock], avail = [...available];
+  return (list || []).find(it => !names.some(n => matchesListItem(it, n)) && !soldOut(it, oos, avail)) || null;
 }
 
 /** Antes de encerrar uma tarefa de carrinho (done ou render_view): o que ainda falta, em ordem — itens que dá pra
  *  pôr (faltando ou com menos unidades que o pedido), o carrinho não conferido depois da última mudança, e o
  *  esgotado que o relatório não menciona. null = pode encerrar. */
-export function cartFinishProblem(o: { list: ListItem[]; inCart: ReadonlyMap<string, number>; outOfStock: Iterable<string>; cartPageSeen: boolean; report: string }): string | null {
-  const oos = [...o.outOfStock];
+export function cartFinishProblem(o: { list: ListItem[]; inCart: ReadonlyMap<string, number>; outOfStock: Iterable<string>; available?: Iterable<string>; cartPageSeen: boolean; report: string }): string | null {
+  const oos = [...o.outOfStock], avail = [...(o.available || [])];
   const names = [...o.inCart.entries()].filter(([, q]) => q > 0);
   const missing: string[] = [];
   const gone: string[] = [];
   for (const it of o.list || []) {
     const hit = names.find(([n]) => matchesListItem(it, n));
-    if (!hit) { if (oos.some(n => matchesListItem(it, n))) gone.push(it.text); else missing.push(`"${it.text}" is not in the cart`); continue; }
+    if (!hit) { if (soldOut(it, oos, avail)) gone.push(it.text); else missing.push(`"${it.text}" is not in the cart`); continue; }
     const per = unitsPerPack(hit[0]);
     if (it.count && per > 0 && hit[1] * per < it.count) missing.push(`"${it.text}": ${hit[1] * per} of ${it.count} in the cart — click its + ${Math.ceil(it.count / per) - hit[1]} more time(s)`);
   }

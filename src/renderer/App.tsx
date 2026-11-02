@@ -2504,6 +2504,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const groceryList = commandIsCart ? parseGroceryList(command) : [];
               const groceryInCart = new Map<string, number>();   // nome do produto → quantidade vista ("in cart"/carrinho)
               const groceryOutOfStock = new Set<string>();      // produtos vistos esgotados nesta tarefa
+              const groceryAvailable = new Set<string>();       // produtos vistos à venda (com Add ou já no carrinho)
               let groceryTiles: ProductTile[] = [];             // cartões desta página (pra saber o que um ADD põe)
               const offListWarned = new Set<string>();
               let cartRenderProblem: string | null = null;      // render_view encerra a tarefa: mesma conferência do done
@@ -3249,8 +3250,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     groceryTiles = tiles || [];
                     // Algo mudou no carrinho desde a última visita à página do carrinho → tem que conferir de novo no fim.
                     for (const t of tiles || []) if ((t.inCart || 0) !== (groceryInCart.get(t.name) || 0) && (t.inCart > 0 || groceryInCart.has(t.name))) cartPageSeen = false;
-                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); if (t.oos) groceryOutOfStock.add(t.name); }
-                    groceryBlock = [formatListProgress(groceryList, groceryInCart, groceryOutOfStock, searchBoxRef(observation.interactive_elements)),
+                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); if (t.oos) groceryOutOfStock.add(t.name); else if (t.add || t.inCart > 0) groceryAvailable.add(t.name); }
+                    groceryBlock = [formatListProgress(groceryList, groceryInCart, groceryOutOfStock, searchBoxRef(observation.interactive_elements), groceryAvailable),
                       cartPage?.isCart ? formatCartPage(cartPage, observation.interactive_elements) : formatProductTiles(tiles || [], observation.interactive_elements)].filter(Boolean).join('\n');
                   }
                   const dlButtonsBlock = dlButtons.length
@@ -3814,7 +3815,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // busca o próximo item da lista no campo de busca (o valor vem do pedido da pessoa, não do modelo).
                   if (commandIsCart && action.type === 'done' && /Invalid action from model: fill_ref needs a finite non-negative integer "ref"/.test(String(action.reason || ''))) {
                     const sRef = searchBoxRef(observation.interactive_elements);
-                    const nextIt = nextListItem(groceryList, groceryInCart, groceryOutOfStock);
+                    const nextIt = nextListItem(groceryList, groceryInCart, groceryOutOfStock, groceryAvailable);
                     if (sRef != null && nextIt) {
                       action = { type: 'fill_ref', ref: sRef, value: nextIt.text } as BrowserAction;
                       history += `\nBAH FIXED THE ACTION: fill_ref had no ref — Bah searched the next list item "${nextIt.text}" in the search box [${sRef}].`;
@@ -3866,7 +3867,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Carrinho: encerrar sem ter aberto o carrinho (o modelo relatava o que "achava" que tinha posto).
                     // Uma vez, manda abrir e conferir. Nada adicionado = é uma pergunta à pessoa: deixa sair.
                     const cartProblem = commandIsCart && cartCheckBlocks < 3
-                      ? cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, cartPageSeen, report: String(action.reason || '') }) : null;
+                      ? cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen, report: String(action.reason || '') }) : null;
                     if (cartProblem) {
                       cartCheckBlocks++;
                       history += `\n${cartProblem}`;
@@ -4829,7 +4830,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: 'Could not scrape the headlines. The news page is open — I will read it.' };
                     }
                   } else if (action.type === 'render_view' && commandIsCart && cartCheckBlocks < 3
-                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, cartPageSeen,
+                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen,
                       report: JSON.stringify([(action as any).title, (action as any).subtitle, (action as any).rows, (action as any).source_note]) }))) {
                     // Tabela final de carrinho com item faltando/curto, carrinho não conferido ou esgotado não citado.
                     cartCheckBlocks++;
@@ -5092,6 +5093,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     } catch (e: any) {
                       toolResult = { success: false, error: String(e?.message || e) };
                     }
+                  } else if (action.type === 'report' && commandIsCart && cartCheckBlocks < 3
+                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, available: groceryAvailable, cartPageSeen,
+                      report: String((action as any).summary || '') }))) {
+                    // report também encerra: mesma conferência do done (o 8B quase sempre encerra com report).
+                    cartCheckBlocks++;
+                    history += `\n${cartRenderProblem}`;
+                    onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                    toolResult = { success: false, reason: 'not_done', error: cartRenderProblem };
                   } else if (action.type === 'report') {
                     // Final synthesized answer to user — exits loop.
                     // Modelo fraco às vezes manda report com summary VAZIO ("qual a capital
