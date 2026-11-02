@@ -54,7 +54,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
 | `agent-download-worker.ts`, `download-progress.ts` | A ação `download` do agente: uma worker de `worker_threads` por download; política de cadência do progresso + travamento. Ver [Downloads e torrents](#downloads-e-torrents) |
 | `torrent-manager.ts`, `torrent/engine.mjs` | Cliente de torrent embutido **opcional** (desligado por padrão): ponte IPC + o motor, isolado num `utilityProcess` que só sobe quando usado. Ver [Downloads e torrents](#downloads-e-torrents) |
-| `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
+| `media-downloader.ts`, `media-parts.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio); pedaços/merge/downloads interrompidos. Ver [Downloads e torrents](#downloads-e-torrents) |
 | `proxy.ts`, `proxy-config.ts` | Proxy pra **todas** as sessões (sistema / manual http·https·socks5 / PAC / direto), caixa de login 407 com credencial salva cifrada no chaveiro, IPC `proxy:*`. O `fetch` do processo principal passa pelo `session.fetch` da sessão `persist:browser`, e downloads do agente que precisam de proxy usam `session.downloadURL` — uma configuração vale pra tudo |
 | `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Handlers de permissão das sessões dos sites: o sensível fica negado até a pessoa responder na barra do Bah (desta vez / sempre / nunca, por origem), abas em segundo plano/ocultas negadas direto, permissões desconhecidas negadas |
 | `frames.ts` | Conteúdo de iframes pro agente (formulário de vaga/pagamento/reserva embutido): árvores de acessibilidade dos frames do mesmo processo (por `frameId`) e dos cross-origin (sessões CDP achatadas via `Target.setAutoAttach`), coordenadas na viewport da página; elementos aparecem com `frame="host"`. Preencher grava no nó dentro do frame (sem depender de foco); clique em frame cross-origin usa CDP `Input` na sessão do frame (`sendInputEvent` para no `<iframe>`) |
@@ -181,6 +181,31 @@ Onde se decide (tudo no processo main, então toda entrada se comporta igual):
 - Magnet colado na barra passa por `torrent:open` → `handleUri()` (o renderer nunca decide).
 
 A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só importa com o embutido LIGADO.
+
+#### Vídeo / áudio (`media-downloader.ts`, `media-parts.ts`)
+
+O yt-dlp baixa um vídeo em alta resolução em dois **pedaços** — `Título [id].f313.webm` (só imagem) e
+`Título [id].f140.m4a` (só som) — e depois o ffmpeg junta em `Título [id].mp4`. Com `--no-part` os
+pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode passar por resultado:
+
+1. O yt-dlp roda com `--no-quiet` (o `--print after_move:filepath` sozinho liga o modo quieto e some com as
+   linhas `Destination:` / `Merging formats into`). Essas linhas são a lista exata do que **este** download
+   gravou; nada fora dela é apagado.
+2. Depois de cada disparo, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decide: sucesso só
+   com um arquivo final que existe e não é pedaço `.f<id>.`. Sobrou pedaço (saída ≠ 0, ou 0 sem merge) =
+   **"o áudio e o vídeo não foram juntados"** — falha, e os pedaços saem do disco. Se as duas partes estão
+   completas (100% no progresso, ou o yt-dlp saiu 0), o Bah junta sozinho com `ffmpeg -c copy` (mp4 quando
+   os codecs cabem, senão mkv) em vez de falhar.
+3. Pedido normal de vídeo (não mp3) é conferido com o `ffprobe` da mesma pasta do ffmpeg. Sem faixa de
+   áudio → uma nova tentativa com `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; se a origem não tem
+   formato nenhum com áudio, o arquivo fica e o agente é avisado de que não tem som; senão é falha.
+4. Sair / crash: o yt-dlp roda em grupo de processos próprio (`detached`) e não morre com o Bah. No
+   `before-quit`, `stopAllMediaDownloads()` mata todos os grupos do yt-dlp. Cada download fica anotado em
+   `userData/media-downloads.json` (pasta, início, arquivos gravados, pid, o que o "tentar de novo"
+   precisa); arquivo final sai da anotação assim que é impresso. No boot seguinte
+   `recoverInterruptedDownloads()` para um yt-dlp que sobrou, apaga só os arquivos anotados que estão na
+   pasta daquele download e não são mais velhos que ele, e a lista de Downloads mostra o download como
+   **Interrompido** com ↻.
 
 ---
 

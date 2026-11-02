@@ -267,7 +267,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
     ipcRenderer.invoke('images:search', query, minWidth, count),
-  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => {
+  onDownloadEvent: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:download-event', listener);
     return () => ipcRenderer.removeListener('agent:download-event', listener);
@@ -285,6 +285,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setYoutubeDlButton: (on: boolean, labels?: Record<string, string>) => ipcRenderer.invoke('youtube:set-dl-button', on, labels),
   cancelVideoDownload: (id: string) => ipcRenderer.invoke('media:cancel-video', id),
   retryVideoDownload: (id: string) => ipcRenderer.invoke('media:retry-video', id),
+  // Downloads de vídeo que o Bah fechou no meio (sessão anterior) → voltam pra lista como eventos.
+  takeInterruptedVideoDownloads: () => ipcRenderer.invoke('media:interrupted'),
   onTorrentEvent: (cb: (info: any) => void) => {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('agent:torrent-event', listener);
