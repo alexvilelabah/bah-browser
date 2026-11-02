@@ -3401,15 +3401,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (p.children.length < 3) return false;
                       var kids = Array.prototype.slice.call(p.children).filter(function(c){ var t = (c.textContent || '').length; return t > 20 && t < 3000 && c.querySelector('a[href],[role=link],button') && visRow(c); });
                       if (kids.length < 3) return false;
-                      var sig = function(c){ return c.tagName + '.' + String(c.className || '').split(/\s+/)[0]; };
+                      var sig = function(c){ return c.tagName + '.' + String(c.className || '').split(/\\s+/)[0]; };
                       var n = {}; kids.forEach(function(c){ n[sig(c)] = (n[sig(c)] || 0) + 1; });
                       return Object.keys(n).some(function(k){ return n[k] >= 3; });
                     });
                     // Parede de login: campo de senha à vista, página de login (título/endereço) ou aviso "entre para ver…".
                     var signin = Array.prototype.slice.call(document.querySelectorAll('input[type=password]')).filter(visRow).length > 0
-                      || /\b(log ?in|sign ?in|sign ?up)\b|\bentrar\b|iniciar sesi[oó]n/i.test(document.title || '')
-                      || /\/(login|signin|sign-in|log-in|uas\/login|auth|account\/login)\b/i.test(location.pathname)
-                      || /\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\b/i.test((document.body.innerText || '').slice(0, 4000));
+                      || /\\b(log ?in|sign ?in|sign ?up)\\b|\\bentrar\\b|iniciar sesi[oó]n/i.test(document.title || '')
+                      || /\\/(login|signin|sign-in|log-in|uas\\/login|auth|account\\/login)\\b/i.test(location.pathname)
+                      || /\\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\\b/i.test((document.body.innerText || '').slice(0, 4000));
                     return { promo: promo, dialog: label, closers: closers, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
                   })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
                   const elFor = (txt: string) => observation.interactive_elements.find(e => {
