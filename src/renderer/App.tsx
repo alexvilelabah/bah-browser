@@ -7,6 +7,7 @@ const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-
 import { FORM_SCAN_SCRIPT, formApplyScript } from './form-filler';
 import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
 import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
+import { commandIsGrocery, parseGroceryList, GROCERY_TILES_SCRIPT, CART_PAGE_SCRIPT, formatProductTiles, formatCartPage, formatListProgress, type ProductTile, type CartPage } from './grocery';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
@@ -2497,7 +2498,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
               // Candidatura a vaga: liga a skill job-apply e o freio do "Submit" puro do formulário.
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
-              const riskOpts = { jobs: commandIsJobs };
+              // Carrinho de mercado ("add milk, eggs… to my Walmart cart"): skill grocery-cart, cartões de produto com
+              // as refs de Add/+/−, a lista do pedido contra o carrinho, e o freio que deixa editar o carrinho.
+              const commandIsCart = commandIsGrocery(command);
+              const groceryList = commandIsCart ? parseGroceryList(command) : [];
+              const groceryInCart = new Map<string, number>();   // nome do produto → quantidade vista ("in cart"/carrinho)
+              let cartPageSeen = false;
+              let cartCheckBlocks = 0;
+              const riskOpts = { jobs: commandIsJobs, cart: commandIsCart };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
               const openedJobs: OpenedJob[] = [];
@@ -2711,7 +2719,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
+              // A pessoa já respondeu ao freio neste passo: a recuperação não pergunta de novo ("Sensitive action
+              // detected… asking the user") — depois de um "não" isso encerrava a tarefa com um aviso enganoso.
+              let brakeAskedThisStep = false;
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
+                brakeAskedThisStep = true;
                 setAgentVisual('idle');
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
                 const message = risk.kind === 'application'
@@ -2886,6 +2898,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
+                  brakeAskedThisStep = false;
                   throwIfCancelled();
                   // Etapa 6: global time budget — bail out gracefully instead of grinding 25 steps
                   // Same clock as the in-flight abort, so a human pause never burns the budget.
@@ -3224,6 +3237,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const jobsBlock = commandIsJobs
                     ? [formatOpenedJobs(openedJobs, jobsAskedN, seenJobs.find(j => !openedJobs.some(o => o.title === j.title)) || null), (onOpenedJob ? '' : formatJobListings(pageJobs || [], 8, openedJobIds))].filter(Boolean).join('\n')   // na página da vaga, as "vagas parecidas" só distraem
                     : '';
+                  let groceryBlock = '';
+                  if (commandIsCart) {
+                    const cartPage = await withTimeout(wv.executeJavaScript(CART_PAGE_SCRIPT), 3000, null as CartPage | null).catch(() => null);
+                    if (cartPage?.isCart) { cartPageSeen = true; groceryInCart.clear(); for (const l of cartPage.lines || []) groceryInCart.set(l.name, l.qty); }
+                    const tiles: ProductTile[] = cartPage?.isCart ? [] : await withTimeout(wv.executeJavaScript(GROCERY_TILES_SCRIPT), 3000, [] as ProductTile[]).catch(() => [] as ProductTile[]);
+                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); }
+                    groceryBlock = [formatListProgress(groceryList, groceryInCart),
+                      cartPage?.isCart ? formatCartPage(cartPage, observation.interactive_elements) : formatProductTiles(tiles || [], observation.interactive_elements)].filter(Boolean).join('\n');
+                  }
                   const dlButtonsBlock = dlButtons.length
                     ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"`).join('\n')}`
                     : '';
@@ -3317,7 +3339,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
-                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : ''].filter(Boolean),
+                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping && !commandIsCart ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : '', commandIsCart ? 'grocery' : ''].filter(Boolean),
                   });
                   const skillsBlock = formatSkillsBlock(stepSkills);
                   if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });
@@ -3343,6 +3365,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     downloadsBlock,
                     dlButtonsBlock,
                     jobsBlock,
+                    groceryBlock,
                     formBlock,
                     skillsBlock,
                     '',
@@ -3822,10 +3845,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         continue;
                       }
                     }
+                    // Carrinho: encerrar sem ter aberto o carrinho (o modelo relatava o que "achava" que tinha posto).
+                    // Uma vez, manda abrir e conferir. Nada adicionado = é uma pergunta à pessoa: deixa sair.
+                    if (commandIsCart && !cartPageSeen && cartCheckBlocks < 1 && groceryInCart.size > 0) {
+                      cartCheckBlocks++;
+                      history += `\nNOT DONE YET: open the cart (the store's cart link or icon) and check every line against the list — product and quantity — before you report. Do not check out.`;
+                      onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                      continue;
+                    }
                     // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
                     // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
                     // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
-                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel || commandIsJobs) && !commandWantsDownload) {
+                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel || commandIsJobs || commandIsCart) && !commandWantsDownload) {
                       const r = String(action.reason || '');
                       const hasList = /\n\s*(?:[-*•]|\d+[.)])\s|\|/.test(r) || (r.match(/\d/g) || []).length >= 3 || r.length > 260;
                       if (!hasList) {
@@ -5711,6 +5742,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     stepsOnSameUrl,
                     step,
                     commandRequiresThisSite: commandMentionsDomain(afterObservation.url),
+                    cartTask: commandIsCart,
+                    brakeAsked: brakeAskedThisStep,
                   });
                   const urlChangedByAction = afterObservation.url !== observation.url;
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);

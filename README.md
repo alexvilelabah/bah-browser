@@ -50,6 +50,7 @@ llama.cpp — tested with `Qwen3-VL-8B` on a 16 GB GPU).
 | *"Find a hotel in New York under $450 a night for next weekend"* | Searches booking sites, picks dates in the date picker, dismisses pop-ups (keeps coupon codes), compares prices | ✅ tested (Booking.com) |
 | *"Compare prices for this product on Amazon and other stores"* · *"find a compatible charger for my laptop"* | Finds the exact part number on the maker's site, then checks several stores (new and used) and renders a comparison table | ✅ Amazon · 🧪 multi-store |
 | *"Open my 2 recommended jobs"* · *"Apply to this job with my résumé"* | Reads your recommended jobs (saved ★ ones too), opens them one at a time, picks the best résumé from a folder **you** allow, fills the form **by code** from your 📝 application profile and saved answers, asks you once for anything left, and stops for your OK before submitting | 🧪 rehearsed on copies of real Indeed + Ashby pages (3/3) · live sites next |
+| *"Add milk, eggs, bananas and a dozen bagels to my Walmart cart"* | Searches each item, picks by your words (brand, size, organic) or a sensible store-brand default and says why, sets quantities (a dozen bagels = 2 six-packs), asks before substituting anything out of stock and before choosing pickup/delivery or a store, checks the cart, reports a table — and **never checks out** (the brake asks before Checkout / Place order / Reserve time slot) | 🧪 e2e on a synthetic store · real-model rehearsal on local copies pending |
 | *"Who are the procurement managers at Acme?"* | People research on LinkedIn in **careful mode** — one page load per request, no automated clicking on sites whose terms forbid it | ✅ tested |
 | *"Plan my Tokyo trip in Tokyo time"* | Shows sites in your destination's time zone and tells the agent when your VPN makes prices foreign | ✅ tested |
 | *"Save this receipt as a PDF"* · *"screenshot the whole page"* · *"copy the total"* | Saves to Downloads / copies for you; reading your clipboard needs your permission | ✅ tested |
@@ -234,7 +235,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🔓 **It's your real session.** The browser uses a persistent partition (`persist:browser`), so cookies and logins are saved. If you're logged into Gmail in Bah, so is the agent. **The AI can access anything you could access manually.** Don't log into accounts you wouldn't trust an assistant with.
 
-- 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, deleting, entering card data, or sending a job application**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
+- 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, checking out or reserving a delivery slot, deleting, entering card data, or sending a job application**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
 
 - 🛑 **Stop means stop.** The ■ Stop button cancels immediately, even mid model-call or mid-loop; a late response won't "resurrect" a cancelled task.
 
