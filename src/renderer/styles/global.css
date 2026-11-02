@@ -2725,3 +2725,12 @@ body {
 .tabs-summary-asleep .tabs-summary-text,.tabs-summary-no_access .tabs-summary-text,.tabs-summary-unreadable .tabs-summary-text{font-style:italic;color:var(--text-muted);}
 .tabs-summary-overall{margin-top:8px;border-top:1px solid var(--border);padding-top:6px;user-select:text;}
 .tabs-summary-skipped{margin-top:4px;font-size:11px;color:var(--text-muted);}
+
+/* Anel de progresso do botão de downloads (components/DownloadButtonIcon.tsx), igual ao do Chrome. */
+.dl-ring .dl-ring-track{ stroke:currentColor; opacity:0.22; }
+.dl-ring .dl-ring-arc{ stroke:var(--accent, #4c8dff); transition:stroke-dasharray 0.4s var(--ease); }
+.dl-ring.paused .dl-ring-arc{ stroke:var(--text-muted); }
+.dl-ring.spin .dl-ring-arc{ transform-origin:12px 12px; animation:dlRingSpin 1s linear infinite; }
+.dl-ring.done .dl-ring-arc{ stroke:var(--success, #34c759); animation:dlRingDone 1.6s var(--ease); }
+@keyframes dlRingSpin{ from{ transform:rotate(-90deg); } to{ transform:rotate(270deg); } }
+@keyframes dlRingDone{ 0%{ opacity:1; } 60%{ opacity:1; } 100%{ opacity:0; } }
