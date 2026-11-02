@@ -30,6 +30,7 @@
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
     "@ghostery/adblocker-electron": "^2.18.1",
+    "adm-zip": "0.5.18",
     "electron-chrome-web-store": "^0.13.0",
     "electron-updater": "^6.8.9",
     "mammoth": "^1.12.0",
