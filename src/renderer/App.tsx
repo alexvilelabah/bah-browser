@@ -3012,6 +3012,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (siteHint) history += `\n${siteHint}`;
                 }
 
+                let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
@@ -3316,6 +3317,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       .sort((a, b) => Number(!!installerFileOf(hrefOf(b))) - Number(!!installerFileOf(hrefOf(a))))
                       .slice(0, 3)
                     : [];
+                  stepDlButtons = dlButtons;
                   // Tarefa de vaga: os cartões de vaga desta página, com o ★ de salvo (ver job-listings.ts).
                   if (commandIsJobs) { const jid = jobIdOf(observation.url); if (jid) openedJobIds.add(jid); }
                   const pageJobs = commandIsJobs ? await withTimeout(wv.executeJavaScript(JOB_LISTINGS_SCRIPT), 3000, [] as JobListing[]).catch(() => [] as JobListing[]) : [];
@@ -4118,6 +4120,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
+                  }
+                  // Download: click_text com o rótulo de um LIKELY DOWNLOAD BUTTON vira click_ref nele. O
+                  // click_text pega a 1ª ocorrência — na Steam o "Install Steam" do menu, que só leva à página
+                  // (o modelo local repetia em loop; visto no ensaio real).
+                  if (action.type === 'click_text' && stepDlButtons.length) {
+                    const want = String((action as any).text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const hit = stepDlButtons.find(e => String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+                    if (hit) { action = { type: 'click_ref', ref: hit.id } as BrowserAction; history += `\nBAH: "${want}" is the download button [${hit.id}] — clicked that one (not a same-named menu link).`; }
                   }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;

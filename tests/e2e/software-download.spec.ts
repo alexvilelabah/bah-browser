@@ -100,8 +100,9 @@ a.href = /Mac/.test(p) ? '/files/Steam.dmg' : /Win/.test(p) ? '/files/SteamSetup
   const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-swdl-files-'));
   const script = [
     { type: 'navigate', url: T + 'steam' },
-    // A linha do LIKELY DOWNLOAD BUTTON (o "Install Steam" grande, não o do menu).
-    { type: 'click_ref', ref: '__REF:(installer for this computer)__' },
+    // Como o modelo local fez na Steam de verdade: click_text pelo rótulo. O 1º "Install Steam" é o do
+    // menu (→ página); Bah troca pelo [id] do botão de baixar listado.
+    { type: 'click_text', text: 'INSTALL STEAM' },
     { type: 'navigate', url: T + 'tool' },
     { type: 'click_ref', ref: `__REF:${labelOf(wrongOs)}__` },
     ...(wrongCpu ? [{ type: 'click_ref', ref: `__REF:${labelOf(wrongCpu)}__` }] : []),
@@ -146,6 +147,7 @@ a.href = /Mac/.test(p) ? '/files/Steam.dmg' : /Win/.test(p) ? '/files/SteamSetup
     const likely = (ps[1].match(/LIKELY DOWNLOAD BUTTONS? ON THIS PAGE[^\n]*\n((?: {2}\[\d+\][^\n]*\n?)+)/) || [])[1] || '';
     expect(likely).toMatch(new RegExp(`^ {2}\\[\\d+\\] "Install Steam" → ${autoFile.replace('.', '\\.')} \\(installer for this computer\\)$`, 'm'));
     expect(likely.trim().split('\n')).toHaveLength(1);
+    expect(all).toContain('BAH: "install steam" is the download button');
     expect(all).toMatch(new RegExp(`DOWNLOAD STARTED[^\\n]*${autoFile.replace('.', '\\.')}`));
     expect(all).not.toMatch(new RegExp(`${autoFile.replace('.', '\\.')}[^\\n]*WRONG`));
     // Escolha errada de propósito: o aviso vem na linha do download.
