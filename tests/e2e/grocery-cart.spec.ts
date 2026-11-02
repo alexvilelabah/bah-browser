@@ -98,7 +98,7 @@ test('grocery cart: products and cart reach the agent with refs; checkout asks a
     expect(ps[1]).toContain('GROCERY PRODUCTS ON THIS PAGE (2 found)');
     expect(ps[1]).toMatch(/1\. Plain Bagels, 6 Count — \$3\.98 \(66\.3 ¢\/ea\) · ADD \[\d+\]/);
     expect(ps[1]).toMatch(/2\. Everything Bagels, 6 Count — \$4\.29 \(66\.3 ¢\/ea\) · OUT OF STOCK/);
-    expect(ps[1]).toMatch(/SHOPPING LIST \(from the request; 1 left\):\n {2}- bagels \(12 wanted — a dozen/);
+    expect(ps[1]).toMatch(/SHOPPING LIST \(from the request; 1 left — next: bagels → \{ "action": "fill_ref", "ref": \d+, "value": "bagels" \} \(Bah presses Enter for you\)\):\n {2}- bagels \(12 wanted — a dozen/);
     expect(ps[1]).toContain('### grocery-cart');
     expect(ps[1]).not.toContain('### shopping-compare');
     // After Add and +: the stepper and the count.

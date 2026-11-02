@@ -206,16 +206,92 @@ export function formatCartPage(cart: CartPage | null | undefined, els: Elems): s
 
 const stem = (w: string) => w.toLowerCase().replace(/[^a-z0-9áéíóúãõç ]/g, ' ').replace(/(ies)\b/g, 'y').replace(/(es|s)\b/g, '').trim();
 
-/** A lista do pedido contra o que já está no carrinho (nomes vistos com "in cart" ou na página do carrinho). */
-export function formatListProgress(list: ListItem[], inCart: ReadonlyMap<string, number>): string {
+/** Unidades por embalagem pelo nome ("6 Count", "12 ct", "Pack of 4", "Each" = 1); 0 = não dá pra saber (galão, lb…). */
+export function unitsPerPack(name: string): number {
+  const m = /\b(\d{1,3})\s*(?:-\s*)?(count|ct|pack|pk|pc|pcs|pieces)\b/i.exec(name || '') || /\bpack of (\d{1,3})\b/i.exec(name || '') || /\/(\d{1,3})\s*ct\b/i.exec(name || '');
+  if (m) return Number(m[1]);
+  return /\b(each|1 each)\b/i.test(name || '') ? 1 : 0;
+}
+
+/** O campo de busca da loja entre os elementos interativos (pra dizer "fill_ref [N]" no próximo item). */
+export function searchBoxRef(els: Array<{ id: number; tag?: string; role?: string; text?: string; aria?: string; placeholder?: string }>): number | undefined {
+  return (els || []).find(e => /searchbox/i.test(e.role || '') || (/^(input|textbox|combobox)$/i.test(e.role || e.tag || '') && /search|what can we help|buscar|pesquis/i.test(`${e.aria || ''} ${e.placeholder || ''} ${e.text || ''}`)))?.id;
+}
+
+/** O produto atende este item da lista? Todas as palavras do item (e os números: "12-count" ≠ 18 Count) no nome. */
+export function matchesListItem(item: ListItem, productName: string): boolean {
+  const words = stem(item.text).split(/\s+/).filter(w => w.length >= 3 || /^\d+$/.test(w));
+  const sn = ` ${stem(productName)} `;
+  return words.length > 0 && words.every(w => /^\d+$/.test(w) ? new RegExp(`\\b${w}\\b`).test(sn) : sn.includes(w));
+}
+
+/** A lista do pedido contra o que já está no carrinho (nomes vistos com "in cart" ou na página do carrinho) e o
+ *  que a loja mostrou esgotado: o modelo pequeno trocava o item esgotado pelo "mais parecido" sem perguntar. */
+export function formatListProgress(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = [], searchRef?: number): string {
   if (!list?.length) return '';
   const names = [...inCart.entries()].filter(([, q]) => q > 0);
-  const rows = list.map(it => {
-    const words = stem(it.text).split(/\s+/).filter(w => w.length >= 3);
-    const hit = names.find(([n]) => { const sn = stem(n); return words.length > 0 && words.every(w => sn.includes(w)); });
+  const oos = [...outOfStock];
+  let next = -1;
+  const rows = list.map((it, i) => {
+    const hit = names.find(([n]) => matchesListItem(it, n));
+    const gone = !hit && oos.find(n => matchesListItem(it, n));
+    // Quantas unidades o pedido quer: o número dito, ou 6 pra fruta vendida por unidade ("Each") sem número.
+    const per = hit ? unitsPerPack(hit[0]) : 0;
+    const wanted = it.count ?? (hit && per === 1 ? 6 : undefined);
     const want = it.count ? ` (${it.count} wanted${/dozen/i.test(it.raw) ? ' — a dozen; packs add up, e.g. 2 × 6-count' : ''})` : '';
-    return `  - ${it.text}${want}: ${hit ? `✓ in cart: ${hit[0].slice(0, 70)} ×${hit[1]}` : 'not in cart yet'}`;
+    // Embalagem com contagem conhecida e menos que o pedido → faltam cliques no +.
+    const short = hit && wanted && per > 0 && hit[1] * per < wanted ? Math.ceil(wanted / per) - hit[1] : 0;
+    if ((!hit || short) && !gone && next < 0) next = i;
+    const state = short ? `in cart ×${hit![1]} of ${hit![0].slice(0, 60)} = ${hit![1] * per} of ${wanted}${it.count ? '' : ' (sold each; 6 is the default)'} — click its + ${short} more time${short > 1 ? 's' : ''}`
+      : hit ? `✓ in cart: ${hit[0].slice(0, 70)} ×${hit[1]}`
+      : gone ? `OUT OF STOCK (${gone.slice(0, 60)}) — do NOT add another product instead; skip it and ask the user at the end`
+      : 'not in cart yet';
+    return `  - ${it.text}${want}: ${state}`;
   });
-  const left = rows.filter(r => r.endsWith('not in cart yet')).length;
-  return `SHOPPING LIST (from the request; ${left ? `${left} left` : 'all in cart — open the cart and check it'}):\n${rows.join('\n')}`;
+  const left = rows.filter(r => r.endsWith('not in cart yet') || / more times?$/.test(r)).length;
+  // Próximo passo concreto: o modelo pequeno "decidia pular" o esgotado e mandava um click_ref sem ref.
+  const nextItem = next >= 0 ? list[next] : null;
+  const how = nextItem && rows[next].endsWith('not in cart yet') && searchRef != null
+    ? ` → { "action": "fill_ref", "ref": ${searchRef}, "value": "${nextItem.text.replace(/"/g, '')}" } (Bah presses Enter for you)` : '';
+  return `SHOPPING LIST (from the request; ${left ? `${left} left — next: ${nextItem ? nextItem.text : ''}${how}` : 'nothing left to add — open the cart and check it'}):\n${rows.join('\n')}`;
+}
+
+/** O clique em ADD põe um produto que nenhum item que FALTA na lista pede (ex.: os ovos de 18 no lugar dos de 12
+ *  esgotados — o modelo dizia "vou pular" e clicava o Add do vizinho)? Devolve o nome do produto, ou null. */
+export function offListAdd(tiles: ProductTile[], els: Elems, ref: number, list: ListItem[], inCart: ReadonlyMap<string, number>): string | null {
+  if (!list?.length) return null;
+  const tile = (tiles || []).find(t => t.add && refAt(els, t.add) === ref);
+  if (!tile) return null;
+  const pending = list.filter(it => ![...inCart.entries()].some(([n, q]) => q > 0 && matchesListItem(it, n)));
+  return pending.some(it => matchesListItem(it, tile.name)) ? null : tile.name;
+}
+
+/** O próximo item da lista que ainda não está no carrinho nem foi visto esgotado (null = nada a buscar). */
+export function nextListItem(list: ListItem[], inCart: ReadonlyMap<string, number>, outOfStock: Iterable<string> = []): ListItem | null {
+  const names = [...inCart.entries()].filter(([, q]) => q > 0).map(([n]) => n);
+  const oos = [...outOfStock];
+  return (list || []).find(it => !names.some(n => matchesListItem(it, n)) && !oos.some(n => matchesListItem(it, n))) || null;
+}
+
+/** Antes de encerrar uma tarefa de carrinho (done ou render_view): o que ainda falta, em ordem — itens que dá pra
+ *  pôr (faltando ou com menos unidades que o pedido), o carrinho não conferido depois da última mudança, e o
+ *  esgotado que o relatório não menciona. null = pode encerrar. */
+export function cartFinishProblem(o: { list: ListItem[]; inCart: ReadonlyMap<string, number>; outOfStock: Iterable<string>; cartPageSeen: boolean; report: string }): string | null {
+  const oos = [...o.outOfStock];
+  const names = [...o.inCart.entries()].filter(([, q]) => q > 0);
+  const missing: string[] = [];
+  const gone: string[] = [];
+  for (const it of o.list || []) {
+    const hit = names.find(([n]) => matchesListItem(it, n));
+    if (!hit) { if (oos.some(n => matchesListItem(it, n))) gone.push(it.text); else missing.push(`"${it.text}" is not in the cart`); continue; }
+    const per = unitsPerPack(hit[0]);
+    if (it.count && per > 0 && hit[1] * per < it.count) missing.push(`"${it.text}": ${hit[1] * per} of ${it.count} in the cart — click its + ${Math.ceil(it.count / per) - hit[1]} more time(s)`);
+  }
+  if (missing.length) return `NOT DONE YET: ${missing.join('; ')}. Finish these first (see SHOPPING LIST), then open the cart.`;
+  if (!names.length) return null;   // nada posto: é uma pergunta à pessoa
+  if (!o.cartPageSeen) return `NOT DONE YET: open the cart (the store's cart link or icon) and check every line against the SHOPPING LIST — product and quantity — before you report. Do not check out.`;
+  if (gone.length && !/out of stock|unavailable|sold out|esgotad|agotad/i.test(o.report || '')) {
+    return `NOT DONE YET: your report must tell the user that ${gone.map(t => `"${t}"`).join(', ')} ${gone.length > 1 ? 'were' : 'was'} OUT OF STOCK and ask which substitute they want (name 1–2 options you saw). Then finish.`;
+  }
+  return null;
 }

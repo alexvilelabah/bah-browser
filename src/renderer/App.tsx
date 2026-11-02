@@ -7,7 +7,7 @@ const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-
 import { FORM_SCAN_SCRIPT, formApplyScript } from './form-filler';
 import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
 import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
-import { commandIsGrocery, parseGroceryList, GROCERY_TILES_SCRIPT, CART_PAGE_SCRIPT, formatProductTiles, formatCartPage, formatListProgress, type ProductTile, type CartPage } from './grocery';
+import { commandIsGrocery, parseGroceryList, GROCERY_TILES_SCRIPT, CART_PAGE_SCRIPT, formatProductTiles, formatCartPage, formatListProgress, offListAdd, searchBoxRef, nextListItem, cartFinishProblem, type ProductTile, type CartPage } from './grocery';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
@@ -2503,6 +2503,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsCart = commandIsGrocery(command);
               const groceryList = commandIsCart ? parseGroceryList(command) : [];
               const groceryInCart = new Map<string, number>();   // nome do produto → quantidade vista ("in cart"/carrinho)
+              const groceryOutOfStock = new Set<string>();      // produtos vistos esgotados nesta tarefa
+              let groceryTiles: ProductTile[] = [];             // cartões desta página (pra saber o que um ADD põe)
+              const offListWarned = new Set<string>();
+              let cartRenderProblem: string | null = null;      // render_view encerra a tarefa: mesma conferência do done
               let cartPageSeen = false;
               let cartCheckBlocks = 0;
               const riskOpts = { jobs: commandIsJobs, cart: commandIsCart };
@@ -3242,8 +3246,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const cartPage = await withTimeout(wv.executeJavaScript(CART_PAGE_SCRIPT), 3000, null as CartPage | null).catch(() => null);
                     if (cartPage?.isCart) { cartPageSeen = true; groceryInCart.clear(); for (const l of cartPage.lines || []) groceryInCart.set(l.name, l.qty); }
                     const tiles: ProductTile[] = cartPage?.isCart ? [] : await withTimeout(wv.executeJavaScript(GROCERY_TILES_SCRIPT), 3000, [] as ProductTile[]).catch(() => [] as ProductTile[]);
-                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); }
-                    groceryBlock = [formatListProgress(groceryList, groceryInCart),
+                    groceryTiles = tiles || [];
+                    // Algo mudou no carrinho desde a última visita à página do carrinho → tem que conferir de novo no fim.
+                    for (const t of tiles || []) if ((t.inCart || 0) !== (groceryInCart.get(t.name) || 0) && (t.inCart > 0 || groceryInCart.has(t.name))) cartPageSeen = false;
+                    for (const t of tiles || []) { if (t.inCart > 0) groceryInCart.set(t.name, t.inCart); else if (t.add) groceryInCart.delete(t.name); if (t.oos) groceryOutOfStock.add(t.name); }
+                    groceryBlock = [formatListProgress(groceryList, groceryInCart, groceryOutOfStock, searchBoxRef(observation.interactive_elements)),
                       cartPage?.isCart ? formatCartPage(cartPage, observation.interactive_elements) : formatProductTiles(tiles || [], observation.interactive_elements)].filter(Boolean).join('\n');
                   }
                   const dlButtonsBlock = dlButtons.length
@@ -3802,6 +3809,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     planNudged = true;
                     history += `\nPLAN FIRST: this task covers several sites. Emit a plan action now listing each site/step, then work through it; finish only when every site is covered (or shown to have nothing).`;
                   }
+                  // Carrinho: o Qwen3-VL-8B manda {"action":"fill_ref","text":"bananas"} sem ref ao passar pro próximo
+                  // item (visto em todo ensaio). Com o campo de busca à vista e a lista do pedido, o alvo é óbvio:
+                  // busca o próximo item da lista no campo de busca (o valor vem do pedido da pessoa, não do modelo).
+                  if (commandIsCart && action.type === 'done' && /Invalid action from model: fill_ref needs a finite non-negative integer "ref"/.test(String(action.reason || ''))) {
+                    const sRef = searchBoxRef(observation.interactive_elements);
+                    const nextIt = nextListItem(groceryList, groceryInCart, groceryOutOfStock);
+                    if (sRef != null && nextIt) {
+                      action = { type: 'fill_ref', ref: sRef, value: nextIt.text } as BrowserAction;
+                      history += `\nBAH FIXED THE ACTION: fill_ref had no ref — Bah searched the next list item "${nextIt.text}" in the search box [${sRef}].`;
+                    }
+                  }
                   onProgress({ kind: 'action', action });
                   if (action.type === 'done') {
                     // Robustness: a malformed model response is parsed into a sentinel 'done'.
@@ -3847,9 +3865,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                     // Carrinho: encerrar sem ter aberto o carrinho (o modelo relatava o que "achava" que tinha posto).
                     // Uma vez, manda abrir e conferir. Nada adicionado = é uma pergunta à pessoa: deixa sair.
-                    if (commandIsCart && !cartPageSeen && cartCheckBlocks < 1 && groceryInCart.size > 0) {
+                    const cartProblem = commandIsCart && cartCheckBlocks < 3
+                      ? cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, cartPageSeen, report: String(action.reason || '') }) : null;
+                    if (cartProblem) {
                       cartCheckBlocks++;
-                      history += `\nNOT DONE YET: open the cart (the store's cart link or icon) and check every line against the list — product and quantity — before you report. Do not check out.`;
+                      history += `\n${cartProblem}`;
                       onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
                       continue;
                     }
@@ -4024,6 +4044,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           cancelled = true;
                           toolResult = { success: false, reason: 'user_cancelled', error: `You canceled — I did not do "${risk.label}".` };
                           onProgress({ kind: 'status', message: `✖️ Canceled by you: I did not touch "${risk.label}".` });
+                        }
+                      }
+                      // Carrinho: ADD de um produto que nenhum item que falta na lista pede (substituto de um esgotado,
+                      // ou o botão do vizinho) — barra uma vez por produto e explica; repetir de propósito passa.
+                      if (!cancelled && commandIsCart && action.type === 'click_ref') {
+                        const off = offListAdd(groceryTiles, observation.interactive_elements, action.ref, groceryList, groceryInCart);
+                        if (off && !offListWarned.has(off)) {
+                          offListWarned.add(off);
+                          cancelled = true;
+                          toolResult = { success: false, reason: 'not_on_list', error: `Not clicked: that ADD puts "${off.slice(0, 80)}" in the cart, and no item still missing from the SHOPPING LIST asks for it. Out of stock items are never replaced without asking the user. Go to the NEXT list item (search box). If the user really wants this product, click it again.` };
+                          onProgress({ kind: 'status', message: `🛒 Not adding "${off.slice(0, 60)}" — it isn't on the list.` });
                         }
                       }
                       if (!cancelled) {
@@ -4797,6 +4828,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nNEWS: auto-extraction returned nothing for "${q}". The Google News page IS OPEN — use extract_text to read the headlines and report them.`;
                       toolResult = { success: false, error: 'Could not scrape the headlines. The news page is open — I will read it.' };
                     }
+                  } else if (action.type === 'render_view' && commandIsCart && cartCheckBlocks < 3
+                    && (cartRenderProblem = cartFinishProblem({ list: groceryList, inCart: groceryInCart, outOfStock: groceryOutOfStock, cartPageSeen,
+                      report: JSON.stringify([(action as any).title, (action as any).subtitle, (action as any).rows, (action as any).source_note]) }))) {
+                    // Tabela final de carrinho com item faltando/curto, carrinho não conferido ou esgotado não citado.
+                    cartCheckBlocks++;
+                    history += `\n${cartRenderProblem}`;
+                    onProgress({ kind: 'status', message: '🛒 Checking the cart before finishing.' });
+                    toolResult = { success: false, reason: 'not_done', error: cartRenderProblem };
                   } else if (action.type === 'render_view' || action.type === 'stock_movers') {
                     // A "mágica" visual: dados → página bonita (tabela ordenável +
                     // gráfico) aberta numa aba. Determinístico → auto-done.
@@ -5574,6 +5613,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = riskCancel ?? await withTimeout(executeBrowserAction(wv, action),
                       action.type === 'wait' ? Math.min(Number(action.timeout) || 5000, 60_000) + 3000 : 12000,
                       { success: false, error: `${action.type} timed out — page scripts are unresponsive. Use OCR TEXT or navigate to a DIFFERENT site.` });
+                  }
+                  // Carrinho: digitou o próximo item no campo de busca da loja → Bah aperta Enter. O modelo pequeno
+                  // digitava "bagels" e clicava o Add de um produto da busca ANTERIOR (ainda na tela).
+                  if (commandIsCart && action.type === 'fill_ref' && toolResult?.success !== false && String((action as any).value || '').trim()
+                    && action.ref === searchBoxRef(observation.interactive_elements)) {
+                    const wcIdS = (wv as any).getWebContentsId?.();
+                    if (wcIdS != null) {
+                      try { await window.electronAPI?.realKey?.(wcIdS, 'Enter'); } catch {}
+                      history += `\nBAH PRESSED ENTER: the search for "${String((action as any).value).slice(0, 60)}" was submitted for you.`;
+                    }
                   }
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
