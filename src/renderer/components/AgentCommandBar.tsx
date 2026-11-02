@@ -302,7 +302,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       t('composer.phEx4'), t('composer.phEx6'), t('composer.phEx1'),
       t('composer.phEx7'), t('composer.phEx5'), t('composer.phEx2'),
       t('composer.phEx8'), t('composer.phEx9'), t('composer.phEx3'),
-      t('composer.phEx10'), t('composer.phEx11'), t('composer.phEx12'),
+      t('composer.phEx10'), t('composer.phEx11'), t('composer.phEx13'),
+      t('composer.phEx12'), t('composer.phEx14'),
     ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
