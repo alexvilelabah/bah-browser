@@ -2503,6 +2503,14 @@ body {
   box-shadow:0 0 0 1px var(--bg-elevated);
 }
 .ext-puzzle-wrap{ position:relative; display:flex; align-items:center; flex:none; }
+/* "Adicionar ao Bah" na página de uma extensão da loja (a loja esconde o botão dela pra quem não é o Chrome). */
+.ext-store-install{
+  flex:none; height:28px; padding:0 12px; margin-right:6px; border:none; border-radius:14px;
+  background:var(--accent); color:#fff; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+.ext-store-install:hover{ background:var(--accent-hover); }
+.ext-store-install:disabled{ opacity:.7; cursor:progress; }
+.ext-store-install:focus-visible{ outline:2px solid var(--accent-hover); outline-offset:2px; }
 /* Risquinho depois do quebra-cabeça, como o Chrome separa as extensões do download. */
 .ext-puzzle-wrap::after{ content:''; width:1px; height:18px; margin:0 6px 0 8px; background:rgba(255,255,255,0.14); }
 /* Botões da direita quase colados, como no Chrome (passo de 36px); o respiro fica só

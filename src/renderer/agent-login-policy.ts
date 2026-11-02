@@ -142,6 +142,13 @@ export function accountStateOf(observation: ObservedState): AccountState | null 
   return null;
 }
 
+/** Formulário de login à vista: campo de senha ou endereço de página de login. */
+export function loginFormVisible(observation: ObservedState): boolean {
+  const passwordField = observation.interactive_elements.some(e => /input|textbox/i.test(`${e.tag} ${e.role || ''}`)
+    && /\b(password|senha|contrase[nñ]a)\b/.test(normalize(`${e.text || ''} ${e.aria || ''} ${e.placeholder || ''}`)));
+  return passwordField || /\/(login|signin|sign-in|entrar|uas\/login)\b/i.test(observation.url);
+}
+
 const siteAccounts = new Map<string, AccountState>();
 
 /** Atualiza o estado do site com o que a página mostra (sem sinal claro, mantém o anterior). */

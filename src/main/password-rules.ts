@@ -16,6 +16,9 @@ export interface SavedEntry {
 export interface PasswordFile {
   version: 1;
   offerToSave: boolean;       // "Oferecer para salvar senhas" (padrão ligado)
+  // Com um gerenciador de senha em extensão ligado (LastPass, Bitwarden, 1Password), o do Bah sai da
+  // frente nas abas normais: nem lista no campo nem "Salvar senha?" (os dois brigariam). Padrão ligado.
+  deferToExtension?: boolean;
   entries: SavedEntry[];
   never: string[];            // origens do "Nunca"
 }
@@ -79,6 +82,7 @@ export function sanitizeFile(raw: unknown, makeId: () => string, now = Date.now(
   if (!raw || typeof raw !== 'object') return out;
   const r = raw as Record<string, unknown>;
   if (typeof r.offerToSave === 'boolean') out.offerToSave = r.offerToSave;
+  if (typeof r.deferToExtension === 'boolean') out.deferToExtension = r.deferToExtension;
   const byKey = new Map<string, SavedEntry>();
   const ids = new Set<string>();
   const list = Array.isArray(r.entries) ? r.entries.slice(0, MAX_ENTRIES) : [];

@@ -184,6 +184,83 @@ A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só i
 
 ---
 
+## Instalação pela Chrome Web Store e extensões de gerenciador de senha
+
+**Instalar pela loja ("Adicionar ao Bah").** A Chrome Web Store agora decide no *servidor* se o navegador
+é o Google Chrome. O script da página pergunta `chrome.webstorePrivate.getFullChromeVersion()` e, a partir
+da 142.0.7430, para de ler o user agent: passa a confiar só num sinal que o servidor manda junto com a
+página (`IJ_values`). Esse sinal vem falso pra todo navegador que não é o Chrome. O preload da loja do Bah,
+o `webstorePrivate` e os brands do `userAgentData` (com "Google Chrome") estavam todos no lugar, e mudar o
+`sec-ch-ua` também não muda o sinal. Por isso a página mostra "Switch to Chrome" e esconde o botão. O Bah
+**não** se passa pelo Chrome pra contornar isso (nada de cabeçalho forjado nem versão falsa). Em vez disso,
+numa página de extensão da loja (`shared/extension-store.ts`, origem exata), a barra mostra o botão
+**Adicionar ao Bah**, do próprio Bah. `extensions:install-from-store` tira o ID do endereço da aba (nunca
+de argumento) e baixa o `.crx` público do mesmo endereço de atualização que a loja usa, pela sessão das
+abas e pelo proxy dela. `parseCrx3` confere que o hash da chave do pacote é o ID declarado nele e o ID da
+página. Depois o Bah faz a mesma pergunta "Adicionar X?" da loja e carrega pelo carregador com trava
+(aprovação de acesso, lista de removidas).
+
+**LastPass, Bitwarden e 1Password rodando.** Testados com os pacotes públicos (sem entrar em conta
+nenhuma), o background do Bitwarden morria em `chrome.webNavigation.onCommitted` e o do LastPass em
+`chrome.windows.onFocusChanged`: um TypeError no começo para a extensão inteira, inclusive o menu nos
+campos e o popup. O calço (`extension-shim-preload.ts`) agora põe o que faltava, atendido em
+`chrome-extensions.ts`:
+
+- `webNavigation`: eventos dos frames das abas, só pra quem escuta e só de páginas que a extensão pode
+  ver. `frameId` 0 é o frame principal e os outros usam o `frameTreeNodeId`. Também `getFrame`/`getAllFrames`.
+- `windows`: o Bah é uma janela só, id 1. `windows.create` abre uma aba.
+- `idle`: "locked" segue o bloqueio de tela do sistema, então cofre que tranca junto com o computador
+  continua trancando.
+- `offscreen`: uma janela escondida por extensão, só com a página da própria extensão (usada pra área de
+  transferência e DOMParser). O Bah também atende `runtime.getContexts` pra esse documento.
+- `commands`: a lista de atalhos do manifesto, sem tecla ligada.
+
+**Quem está instalado** (`shared/password-extensions.ts`): a detecção usa os IDs da Web Store, que vêm da
+chave pública da extensão, então outra extensão não consegue usar os mesmos. Só o nome não conta.
+
+**O gerenciador do Bah sai da frente.** Vem ligado, com um interruptor no painel de Senhas. Com uma dessas
+extensões ligada, nas abas normais o gerenciador do Bah não oferece a lista de logins nem "Salvar senha?":
+dois gerenciadores brigando pelo mesmo campo é a surpresa a evitar. Nas abas anônimas continua o do Bah,
+porque extensão não roda lá (igual ao Chrome).
+
+**Agente num formulário de login** (`loginWaitStep` e `waitForExtensionLogin` no `App.tsx`). Numa tarefa
+da conta:
+
+- Com extensão de gerenciador de senha, o Bah espera até 8 s o login automático da própria extensão. Se o
+  formulário some ou a página mostra a conta, o agente segue.
+- O "Autofill on page load" do Bitwarden só preenche. Se a extensão preencheu a senha, o Bah aperta Entrar
+  do formulário uma vez.
+- O 1Password nunca preenche sozinho, então o Bah nem espera por ele.
+- Se nada disso acontece, o Bah pausa com um cartão que diz o nome da opção na extensão: no LastPass,
+  "Auto-login" (item do site → Editar → Configurações avançadas); no Bitwarden, "Autofill on page load"
+  (Configurações → Preenchimento automático, e também por login); no 1Password, escolher o login e deixar
+  ele enviar.
+- O agente nunca digita credencial. O Bah só pergunta à página se o campo de senha está vazio (sim/não) e
+  nunca lê o valor.
+
+**Interface de extensão não é da página** (`shared/extension-ui.ts`). O agente nunca vê nem clica nos
+iframes `chrome-extension://`, nem nas raízes de injeção marcadas onde o LastPass e o 1Password desenham
+os ícones e menus deles:
+
+- eles saem da árvore de acessibilidade da página (`cdp:axtree`) e das árvores dos iframes
+  (`cdp:frames-ax`);
+- o porteiro de avisos de cookie (`overlays:dismiss`) pula esses frames.
+
+Clicar no menu de um gerenciador de senha entregaria uma credencial por iniciativa da IA.
+
+**Ler ou mudar o auto-login por site: não há caminho suportado.** Nenhum dos três documenta um jeito
+suportado de outro programa ler ou mudar o auto-login ou o preenchimento por site:
+
+- Não há API de mensagens de extensão: nenhum tem `externally_connectable`.
+- As CLIs deles (`lpass`, `bw`, `op`) exigem o cofre aberto da pessoa.
+- As políticas corporativas ficam no console de administração do fornecedor, que o navegador não lê. O
+  Electron também não tem `storage.managed`.
+
+Ler o armazenamento privado deles ou alterar a extensão está fora de questão: entra no cofre e quebraria
+a cada atualização. Então o Bah só *orienta*, e diz o nome da opção.
+
+---
+
 ## `src/renderer/` — UI + loop do agente
 
 | Arquivo | Responsabilidade |

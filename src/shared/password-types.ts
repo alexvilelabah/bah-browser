@@ -19,6 +19,10 @@ export interface PwState {
   vault: 'ok' | 'unavailable';   // sem cofre do sistema a função fica desligada (nunca grava texto puro)
   readOnly?: boolean;            // o arquivo existe mas não abriu: nada é gravado até reiniciar (não perde nada)
   offerToSave: boolean;
+  /** Sair da frente quando há gerenciador de senha em extensão (padrão ligado). */
+  deferToExtension: boolean;
+  /** O gerenciador em extensão ligado agora (o do Bah está saindo da frente se deferToExtension). */
+  extension: { name: string; kind: 'lastpass' | 'bitwarden' | '1password' } | null;
   entries: PwEntryView[];
   never: Array<{ origin: string; host: string }>;
 }
@@ -39,6 +43,7 @@ export interface PasswordsBridge {
   onSuggestHide: (cb: (p: { wcId: number }) => void) => () => void;
   fill: (suggestId: string, entryId: string) => Promise<PwResult>;
   setOfferToSave: (on: boolean) => Promise<PwResult>;
+  setDeferToExtension: (on: boolean) => Promise<PwResult>;
   reveal: (id: string) => Promise<PwResult<{ password: string }>>;
   copy: (id: string, what: 'username' | 'password') => Promise<PwResult<{ clearsInSec?: number }>>;
   update: (id: string, patch: { username: string; password?: string }) => Promise<PwResult>;
