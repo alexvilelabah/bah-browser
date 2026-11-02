@@ -16,6 +16,8 @@ import {
   contextWindow as contextWindowNow, setContextWindow,
 } from './threads';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
+import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
+import { machineProfile, machineLine, checkBuild, isDownloadControl, installerFileOf, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { ProxySettings, ProxyAuthPrompt } from './components/ProxyPanel';
@@ -276,6 +278,7 @@ declare global {
       cancelDownload?: (id: string) => Promise<any>;
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
+      machineInfo?: () => Promise<MachineInput>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
@@ -3078,6 +3081,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (siteHint) history += `\n${siteHint}`;
                 }
 
+                let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
@@ -3157,6 +3161,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
                     let manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    // Download atrás de conta (SolidWorks, Altium, Adobe, Office): para JÁ e a pessoa decide.
+                    // A política geral só pausa tarefa "da conta"; "baixe o X" não parece uma — o agente
+                    // seguia e tentava o formulário. Nunca digita senha nem cria conta. Não no 1º passo:
+                    // a aba em que a pessoa estava pode ser qualquer login.
+                    if (!manualHelpNeed && commandWantsDownload && step > 0) {
+                      const wall = signInWall({ url: observation.url, title: observation.title, text: observation.text_sample, elements: observation.interactive_elements as any });
+                      if (wall) {
+                        const host = hostOf(observation.url) || 'this site';
+                        manualHelpNeed = { kind: 'login', reason: t('dl.signinWall.reason', { host }), instruction: t('dl.signinWall.instruction') };
+                        history += `\nSIGN-IN WALL (${wall}) on ${host}: the download needs the user's account. Bah paused and asked the user. Never type a password, never create an account.`;
+                      }
+                    }
                     // Login numa tarefa da conta com gerenciador de senha em extensão ligado: o Bah não
                     // preenche nada — espera o login automático DA EXTENSÃO; se não vier, o cartão diz
                     // como ligar a opção nela (o nome certo pra cada uma).
@@ -3364,10 +3380,27 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
                   // Download task: aponta o(s) botão(ões) de baixar DESTA página. O modelo pequeno lia
                   // "Agree to the EULA and Download" como página de confirmação e desistia.
-                  const DL_BUTTON_RE = /^(agree|accept|i agree|i accept)\b.*\bdownload\b|^(download|download now|download free|free download|start download|download for (mac|macos|windows|linux)\b.*|baixar( agora)?|descargar( ahora)?)$/i;
+                  // Fabricante escreve "Install Steam", "Get the app", "Try free"… (ver isDownloadControl);
+                  // link direto pra instalador vem primeiro, e o do SO/CPU errado fica de fora.
+                  // A lista da árvore de acessibilidade NÃO tem href: o destino de cada candidato vem do DOM
+                  // e casa com o [id] por texto + posição (Steam: o "Install Steam" do menu vai pra uma página,
+                  // o grande vai pro .dmg — sem o href o modelo clicava no do menu em loop).
+                  const domCtls: PageControl[] = commandWantsDownload ? await withTimeout(wv.executeJavaScript(`(function(){
+                    var re = /download|install|get|try|free|trial|baixar|descargar|instalar|agree|accept/i;
+                    return Array.prototype.slice.call(document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit]')).map(function(b){
+                      var r = b.getBoundingClientRect(); var t = (b.innerText || b.value || b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+                      return r.width > 4 && r.height > 4 && t.length <= 60 && re.test(t) ? { text: t, href: b.href || '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null;
+                    }).filter(Boolean).slice(0, 60);
+                  })()`), 2000, [] as PageControl[]).catch(() => [] as PageControl[]) : [];
+                  const hrefOf = (e: { id: number; href?: string }) => e.href || (domCtls.find(c => c.href && matchControl(observation.interactive_elements, c)?.id === e.id)?.href) || '';
                   const dlButtons = commandWantsDownload
-                    ? observation.interactive_elements.filter(e => DL_BUTTON_RE.test(String(e.text || (e as any).aria || '').trim())).slice(0, 3)
+                    ? observation.interactive_elements
+                      .filter(e => isDownloadControl(String(e.text || (e as any).aria || ''), hrefOf(e)))
+                      .filter(e => { const f = installerFileOf(hrefOf(e)); return !f || !isWrongBuild(f); })
+                      .sort((a, b) => Number(!!installerFileOf(hrefOf(b))) - Number(!!installerFileOf(hrefOf(a))))
+                      .slice(0, 3)
                     : [];
+                  stepDlButtons = dlButtons;
                   // Tarefa de vaga: os cartões de vaga desta página, com o ★ de salvo (ver job-listings.ts).
                   if (commandIsJobs) { const jid = jobIdOf(observation.url); if (jid) openedJobIds.add(jid); }
                   const pageJobs = commandIsJobs ? await withTimeout(wv.executeJavaScript(JOB_LISTINGS_SCRIPT), 3000, [] as JobListing[]).catch(() => [] as JobListing[]) : [];
@@ -3440,7 +3473,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? [formatOpenedJobs(openedJobs, jobsAskedN, seenJobs.find(j => !openedJobs.some(o => o.title === j.title)) || null), (onOpenedJob ? '' : formatJobListings(pageJobs || [], 8, openedJobIds))].filter(Boolean).join('\n')   // na página da vaga, as "vagas parecidas" só distraem
                     : '';
                   const dlButtonsBlock = dlButtons.length
-                    ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"`).join('\n')}`
+                    ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for this computer)` : ''}`; }).join('\n')}`
                     : '';
                   // Dica ao vivo de UI que trava modelo pequeno (vale pra qualquer site):
                   //  • diálogo modal aberto → a página de trás fica inerte e SOME da lista de elementos
@@ -3452,12 +3485,30 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       .filter(function(d){ var r = d.getBoundingClientRect(); return r.width * r.height > innerWidth * innerHeight * 0.04; })[0];
                     // Painel flutuante sem role de diálogo (ex.: "Trending" do campo de busca, banner que cobre
                     // a página): fixo/absoluto, z-index alto, cobrindo ≥20% da tela, e que não é o cabeçalho.
-                    if (!dlg) dlg = Array.prototype.slice.call(document.querySelectorAll('body *')).filter(function(e){
-                      var cs = getComputedStyle(e); if (!(cs.position === 'fixed' || cs.position === 'absolute')) return false;
-                      if ((parseInt(cs.zIndex, 10) || 0) < 10 || cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.1) return false;
-                      var r = e.getBoundingClientRect(); if (r.height < 120 || r.top < 0 && r.bottom < 120) return false;
-                      return r.width * r.height > innerWidth * innerHeight * 0.20 && !(r.top <= 0 && r.height < 140);
-                    }).sort(function(a, b){ return (parseInt(getComputedStyle(b).zIndex, 10) || 0) - (parseInt(getComputedStyle(a).zIndex, 10) || 0); })[0];
+                    // Mesma passada coleta também os candidatos a modal "caseiro" (div fixa sem ARIA, menor
+                    // que 20% — ex.: o de download da HP) e se há um fundo escuro; quem decide é pickOverlay
+                    // (shared/page-controls.ts), no renderer.
+                    var overlays = [], backdrop = false, legacyHits = [];
+                    if (!dlg) Array.prototype.slice.call(document.querySelectorAll('body *')).forEach(function(e){
+                      var cs = getComputedStyle(e); if (!(cs.position === 'fixed' || cs.position === 'absolute')) return;
+                      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.1) return;
+                      var z = parseInt(cs.zIndex, 10) || 0, r = e.getBoundingClientRect();
+                      // Fundo escuro vazio ANTES da regra antiga: com z alto ele ganhava dela e virava um
+                      // "diálogo" sem título (= nenhum aviso) escondendo o painel de verdade.
+                      if (cs.position === 'fixed' && r.width * r.height >= innerWidth * innerHeight * 0.6 && (e.innerText || '').trim().length < 20 && !e.querySelector('button,a,input')) { backdrop = true; return; }
+                      if (z >= 10 && r.height >= 120 && !(r.top < 0 && r.bottom < 120) && r.width * r.height > innerWidth * innerHeight * 0.20 && !(r.top <= 0 && r.height < 140)) { legacyHits.push(e); return; }
+                      if (r.width < 40 || r.height < 40 || r.bottom <= 0 || r.top >= innerHeight) return;
+                      var area = Math.min(r.width, innerWidth) * Math.min(r.height, innerHeight) / (innerWidth * innerHeight);
+                      if (area >= 0.015 && (cs.position === 'fixed' ? z >= 1 : z >= 100)) overlays.push({ el: e, z: z, area: area, top: r.top, height: r.height });
+                    });
+                    if (!dlg) dlg = legacyHits.sort(function(a, b){ return (parseInt(getComputedStyle(b).zIndex, 10) || 0) - (parseInt(getComputedStyle(a).zIndex, 10) || 0); })[0];
+                    var btnsOf = function(el){ return Array.prototype.slice.call(el.querySelectorAll('button,a[href],[role=button],input[type=button],input[type=submit]')).filter(function(b){ var r = b.getBoundingClientRect(); return r.width > 4 && r.height > 4 && getComputedStyle(b).visibility !== 'hidden'; }).slice(0, 8)
+                      .map(function(b){ var r = b.getBoundingClientRect(); return { text: (b.getAttribute('aria-label') || b.innerText || b.value || b.title || '').replace(/\\s+/g, ' ').trim().slice(0, 60), href: b.href || '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; }).filter(function(b){ return b.text; }); };
+                    var hitC = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+                    overlays = dlg ? [] : overlays.filter(function(o){ return !overlays.some(function(p){ return p !== o && p.el.contains(o.el); }); }).slice(0, 12).map(function(o){
+                      return { z: o.z, area: o.area, top: o.top, height: o.height, viewportH: innerHeight, hitCenter: !!hitC && o.el.contains(hitC), legacy: false, buttons: btnsOf(o.el),
+                        label: (o.el.getAttribute('aria-label') || (o.el.querySelector('h1,h2,h3,h4,[role=heading]') || {}).innerText || o.el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 90) };
+                    });
                     var label = dlg ? (dlg.getAttribute('aria-label') || (dlg.querySelector('h1,h2,h3,[role=heading]') || {}).innerText || dlg.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 90) : '';
                     // Cupom/desconto no popup: guarda o trecho (quase todo popup só precisa sair do caminho).
                     var promo = dlg ? ((dlg.innerText || '').replace(/\\s+/g, ' ').match(/[^.!?]{0,80}(\\d+\\s?% off|promo ?code|coupon|discount code|use code|save \\$\\d+|\\$\\d+ off|cupom|c[oó]digo promocional|descuento)[^.!?]{0,80}/i) || [''])[0].trim() : '';
@@ -3493,8 +3544,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       || /\\b(log ?in|sign ?in|sign ?up)\\b|\\bentrar\\b|iniciar sesi[oó]n/i.test(document.title || '')
                       || /\\/(login|signin|sign-in|log-in|uas\\/login|auth|account\\/login)\\b/i.test(location.pathname)
                       || /\\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\\b/i.test((document.body.innerText || '').slice(0, 4000));
-                    return { promo: promo, dialog: label, closers: closers, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
-                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
+                    return { promo: promo, dialog: label, closers: closers, buttons: dlg ? btnsOf(dlg) : [], overlays: overlays, backdrop: backdrop, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
+                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; buttons?: PageControl[]; overlays?: OverlayCandidate[]; backdrop?: boolean; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
+                  // Modal sem ARIA (div fixa por cima): vira o "dialog" daqui pra frente — o mesmo aviso,
+                  // skill popup-dismiss e Escape dos popups de sempre, mais a lista dos botões dele.
+                  if (uiState && !uiState.dialog && uiState.overlays?.length) {
+                    const ov = pickOverlay(uiState.overlays, !!uiState.backdrop);
+                    if (ov) {
+                      uiState.dialog = ov.label || 'untitled overlay';
+                      uiState.buttons = ov.buttons;
+                      uiState.closers = ov.buttons.map(b => b.text).filter(t => /^(close|dismiss|×|x|✕|no thanks|not now|maybe later|skip|cancel|fechar|cerrar|agora não)\b|dismiss|close/i.test(t)).slice(0, 3);
+                    }
+                  }
                   const elFor = (txt: string) => observation.interactive_elements.find(e => {
                     const t = String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase();
                     return t && (t === txt.toLowerCase() || t.startsWith(txt.toLowerCase().slice(0, 40)));
@@ -3503,8 +3564,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     memory.push({ key: 'promo', value: uiState.promo, source: hostOf(observation.url), ts: Date.now() });
                     onProgress({ kind: 'status', message: `🏷️ Noted an offer from a popup: ${uiState.promo.slice(0, 80)}` });
                   }
+                  // Os botões DO diálogo, com o [id] certo pela posição (o "Download" do modal × o da página atrás).
+                  const dlgBtns = (uiState?.buttons || []).map(b => { const e = matchControl(observation.interactive_elements, b); return e ? `[${e.id}] "${b.text}"` : ''; }).filter(Boolean);
                   const dialogBlock = uiState?.dialog
-                    ? `OPEN DIALOG/POPUP: "${uiState.dialog}".${uiState.promo ? ` It mentions an offer — Bah saved it to MEMORY ("${uiState.promo.slice(0, 100)}"); mention it in your answer only if it applies to what the user wants.` : ''} While it is open the page behind it cannot be used (its fields/buttons are not in the list). Close it FIRST${uiState.closers.length ? ': ' + uiState.closers.map(c => { const e = elFor(c); return e ? `[${e.id}] "${c}"` : `"${c}"`; }).join(' or ') + ' — or press "Escape"' : ': press "Escape" (or click an empty part of the page)'} — unless this dialog IS what the task needs.`
+                    ? `OPEN DIALOG/POPUP: "${uiState.dialog}".${dlgBtns.length ? ` Its own buttons: ${dlgBtns.join(', ')} — if one of them is what the task needs (e.g. the dialog's Download/Continue), click THAT [id], not a same-named button on the page behind.` : ''}${uiState.promo ? ` It mentions an offer — Bah saved it to MEMORY ("${uiState.promo.slice(0, 100)}"); mention it in your answer only if it applies to what the user wants.` : ''} While it is open the page behind it cannot be used (its fields/buttons are not in the list). Close it FIRST${uiState.closers.length ? ': ' + uiState.closers.map(c => { const e = elFor(c); return e ? `[${e.id}] "${c}"` : `"${c}"`; }).join(' or ') + ' — or press "Escape"' : ': press "Escape" (or click an empty part of the page)'} — unless this dialog IS what the task needs.`
                     // Realidade da página ATUAL: o modelo pequeno repete "travado num popup" de passos antigos.
                     : /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)
                       ? `PAGE CHECK: Bah sees NO open popup/dialog on ${hostOf(observation.url) || 'this page'} right now — the page is usable. Do not repeat earlier observations; act on the current page.`
@@ -3557,6 +3620,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
+                    // Download: a máquina e o que escolher bem ao lado dos downloads (o bloco do sistema
+                    // fica longe e o modelo pequeno pegava o .exe num Mac); e o aviso de agregador.
+                    commandWantsDownload ? machineLine(MACHINE) : '',
+                    commandWantsDownload ? thirdPartyNote(thirdPartyDownloadSite(observation.url)) : '',
                     downloadsBlock,
                     dlButtonsBlock,
                     jobsBlock,
@@ -3987,7 +4054,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // download completo). Antes do onProgress, que é quem desenha o rótulo.
                   if (action.type === 'done' && !action.success && commandWantsDownload) {
                     const mine = [...dlLatestRef.current.values()].filter(ofThisTask) as Array<{ state: string; filename: string }>;
-                    const completed = mine.some(d => d.state === 'completed' && !wrongOsNote(d.filename));
+                    const completed = mine.some(d => d.state === 'completed' && !isWrongBuild(d.filename));
                     const running = mine.some(d => d.state === 'started' || d.state === 'progress' || d.state === 'queued');
                     // ...e a mensagem final NÃO admite falha (meta pode ter mudado no meio — um ISO
                     // concluído antes não faz o pedido NOVO de drivers dar "success").
@@ -4126,6 +4193,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
+                  }
+                  // Download: click_text com o rótulo de um LIKELY DOWNLOAD BUTTON vira click_ref nele. O
+                  // click_text pega a 1ª ocorrência — na Steam o "Install Steam" do menu, que só leva à página
+                  // (o modelo local repetia em loop; visto no ensaio real).
+                  if (action.type === 'click_text' && stepDlButtons.length) {
+                    const want = String((action as any).text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const hit = stepDlButtons.find(e => String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+                    if (hit) { action = { type: 'click_ref', ref: hit.id } as BrowserAction; history += `\nBAH: "${want}" is the download button [${hit.id}] — clicked that one (not a same-named menu link).`; }
                   }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;
@@ -5980,7 +6055,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     for (const d of dlEvents) {
                       const latest = dlLatestRef.current.get(d.id || d.path || d.filename) as any;
                       const prevTask = latest && (latest.startedAt ?? 0) < taskStartedAt ? ' (from a PREVIOUS task — not this request)' : '';
-                      const osNote = d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '';
+                      // Arquivo errado pra esta máquina, ou baixado de agregador de "free download" (não do fabricante).
+                      const dlFrom = d.state === 'started' && commandWantsDownload ? thirdPartyDownloadSite(String((d as any).url || '')) || thirdPartyDownloadSite(observation.url) : '';
+                      const osNote = (d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '') + (dlFrom ? ' ' + thirdPartyNote(dlFrom) : '');
                       const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const line = d.state === 'completed'
                         ? `DOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready to use at that path. This is SUCCESS — do not download it again.`
@@ -6000,7 +6077,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
                         : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.' : 'Bah waits for it to COMPLETE before your next step; the rest of the request continues after DOWNLOAD COMPLETED.'}`;
                       history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
-                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${osNote ? ' ⚠️ wrong OS' : ''}` });
+                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${isWrongBuild(d.filename) ? ' ⚠️ ' + t('dl.wrongBuild') : dlFrom ? ' ⚠️ ' + t('dl.thirdParty') : ''}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
                     // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
@@ -6391,16 +6468,19 @@ function youtubeWatchId(u: string): string | null {
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
 // Arquivo de OUTRO sistema (o agente baixou o .exe de Windows num Mac): aviso genérico, vale pra
 // qualquer site de driver/instalador.
+// Agora também a CPU (arm64 num Mac Intel não roda) e o tipo de pacote no Linux — o perfil de
+// verdade vem do main (machine:info); até ele chegar, o palpite pelo navigator (só o SO).
 const IS_WINDOWS = typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform || '');
 const IS_LINUX = typeof navigator !== 'undefined' && /Linux/i.test(navigator.platform || '') && !/Android/i.test(navigator.userAgent || '');
+let MACHINE: MachineProfile = machineProfile({ platform: IS_WINDOWS ? 'win32' : IS_LINUX ? 'linux' : (typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '')) ? 'darwin' : 'other', arch: 'other' });
+try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
+/** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
 function wrongOsNote(filename: string): string {
-  const f = (filename || '').toLowerCase();
-  const mine = IS_MAC ? 'macOS' : IS_WINDOWS ? 'Windows' : IS_LINUX ? 'Linux' : '';
-  let other = '';
-  if (/\.(exe|msi|msix|appx)$/.test(f) && !IS_WINDOWS) other = 'a Windows installer';
-  else if (/\.(dmg|pkg)$/.test(f) && !IS_MAC) other = 'a macOS installer';
-  else if (/\.(deb|rpm|appimage)$/.test(f) && !IS_LINUX) other = 'a Linux package';
-  return other && mine ? ` ⚠️ WRONG OS: ${filename} is ${other} but the user's computer is ${mine} — this is NOT what the user needs. Go back and pick the ${mine} download (check the OS selector).` : '';
+  return checkBuild(filename, MACHINE).note;
+}
+/** Só o erro de verdade: um download "concluído" que não roda aqui não conta como sucesso. */
+function isWrongBuild(filename: string): boolean {
+  return checkBuild(filename, MACHINE).level === 'error';
 }
 
 // "Salvar como skill": depois de uma tarefa que deu certo, oferece transformar o que funcionou num

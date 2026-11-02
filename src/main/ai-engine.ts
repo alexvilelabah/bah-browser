@@ -19,6 +19,8 @@ import { ThinkingBudget, LOCAL_SERVER_THINK_TOKENS } from './thinking-budget';
 import { chooseDeepSeekModel, isModelMissingError, DEEPSEEK_FLASH_IDS } from './deepseek-models';
 import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
 import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
+import { currentMachineProfile } from './machine-info';
+import { pickHint } from '../shared/software-download';
 
 /** Ollama auto num_ctx: the floor it asks for, and the answer room it sizes the window for. */
 const OLLAMA_NUM_CTX_FLOOR = 16384;
@@ -142,15 +144,11 @@ function sanitizeForJson(s: string): string {
 // O computador e a região da pessoa — "drivers pra minha máquina", "o instalador certo pro meu
 // PC". Sem isto o modelo chutava (SO errado; site do Brasil/pt por causa dos exemplos em pt).
 function machineBlock(): string {
-  // Build x64 rodando no Rosetta num Mac M-series: o hardware é Apple Silicon.
-  let rosetta = false;
-  try { rosetta = !!require('electron').app?.runningUnderARM64Translation; } catch {}
-  const arch = process.arch === 'arm64' || rosetta ? (process.platform === 'darwin' ? 'Apple Silicon (arm64)' : 'ARM64') : process.arch === 'x64' ? 'x86-64 (Intel/AMD 64-bit)' : process.arch;
-  let osName: string = process.platform;
+  // SO/versão/CPU (Rosetta = Apple Silicon) e o que escolher: machine-info + shared/software-download.
+  const m = currentMachineProfile();
+  const osName = m.osName, arch = m.archLabel;
   let region = '';
   try {
-    const ver = typeof (process as any).getSystemVersion === 'function' ? (process as any).getSystemVersion() : '';
-    osName = process.platform === 'darwin' ? `macOS ${ver}`.trim() : process.platform === 'win32' ? `Windows ${ver}`.trim() : `Linux ${ver}`.trim();
     const { app } = require('electron');
     const country = app?.getLocaleCountryCode?.() || '';
     const locale = app?.getSystemLocale?.() || app?.getLocale?.() || '';
@@ -158,7 +156,7 @@ function machineBlock(): string {
     region = [country && `country ${country}`, locale && `locale ${locale}`, tz && `time zone ${tz}`].filter(Boolean).join(', ');
   } catch {}
   return `USER'S COMPUTER: ${osName}, ${arch}${region ? `. USER'S REGION: ${region}` : ''}.
-- When the user says "my machine", "my computer", "my PC/Mac" or asks for drivers, software or an installer without naming an OS, pick the download for THIS operating system and architecture. On driver sites choose this OS in the OS selector — if the page shows another OS (e.g. Windows downloads) or an OS/version drop-down, change it FIRST with select_option (e.g. option "macOS 26.x"), then pick the download; do not accept a different OS the site pre-selected.
+- When the user says "my machine", "my computer", "my PC/Mac" or asks for drivers, software or an installer without naming an OS, pick the download for THIS operating system and architecture: ${pickHint(m)} On driver sites choose this OS in the OS selector — if the page shows another OS (e.g. Windows downloads) or an OS/version drop-down, change it FIRST with select_option (e.g. option "macOS 26.x"), then pick the download; do not accept a different OS the site pre-selected.
 - On sites with a country/language choice (vendor support, stores), use the user's region above — not Brazil/Portuguese unless that IS the region.
 - Do not invent deep URLs with ids/product keys you have not seen (they lead to error pages) — URL patterns given in SKILLS are the exception. Otherwise start from the site's home or support page and use its search box with the product/model name.`;
 }
