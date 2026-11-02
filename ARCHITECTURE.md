@@ -196,6 +196,7 @@ The separate **🌱 Share torrents (seed)** switch (default OFF) only matters wh
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
 | `page-executor.ts` | Executes browser actions inside the page |
 | `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
 | `agent-run-logger.ts` | Opt-in run logging (local training-data collector) |
 | `store.ts` | UI/settings state (localStorage) |
