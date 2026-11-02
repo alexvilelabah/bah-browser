@@ -10,6 +10,11 @@ import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } f
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
+import {
+  promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
+  noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
+  contextWindow as contextWindowNow, setContextWindow,
+} from './threads';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
@@ -47,6 +52,7 @@ import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
 import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
+import ChatHistoryPanel from './components/ChatHistoryPanel';
 import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
 import BookmarksBar from './components/BookmarksBar';
@@ -150,7 +156,16 @@ declare global {
       setLocalWarmup?: (on: boolean) => Promise<boolean>;
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) => Promise<{ response?: string; error?: string; ctx?: { system: number } }>;
+      contextWindow?: (local?: boolean) => Promise<{ tokens: number; source: string } | null>;
+      // Conversas do assistente (main/chat-store.ts, cifradas no disco).
+      threadsLoadLiveSync?: () => unknown;
+      threadsSaveLive?: (payload: unknown) => void;
+      threadsClearLive?: () => Promise<{ ok: boolean }>;
+      chatHistoryList?: () => Promise<{ rows: import('../shared/chat-history').ChatHistoryRow[]; available: boolean }>;
+      chatHistoryGet?: (id: string) => Promise<import('../shared/chat-history').ChatHistoryEntry | null>;
+      chatHistoryDelete?: (id: string) => Promise<{ ok: boolean }>;
+      chatHistoryClear?: (since: number | null) => Promise<{ ok: boolean }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
@@ -476,21 +491,8 @@ export default function App() {
   // O usuário emenda pedidos ("e com a palavra bom dia?") esperando que o agente
   // lembre do anterior. Guardamos os últimos comandos+desfechos (vai no GOAL do
   // modelo) e a última quick action (pra follow-up determinístico sem IA).
-  // Memória curta de tarefas do agente POR ABA (tabId → últimos comandos+desfecho).
-  // Antes era uma lista global → follow-up de agente vazava entre abas.
-  const recentRunsRef = useRef<Map<string, Array<{ cmd: string; outcome: string }>>>(new Map());
-  // A conversa de uma aba mudou de chave (ganhou sessão / entrou em outra): os pedidos recentes vão junto.
-  useEffect(() => {
-    const onMove = (e: Event) => {
-      const { from, to } = (e as CustomEvent).detail || {};
-      const m = recentRunsRef.current, a = m.get(from);
-      if (!a?.length || !to || from === to) { m.delete(from); return; }
-      m.set(to, [...(m.get(to) ?? []), ...a].slice(-5));
-      m.delete(from);
-    };
-    window.addEventListener('bah:move-thread', onMove);
-    return () => window.removeEventListener('bah:move-thread', onMove);
-  }, []);
+  // Os pedidos anteriores (e o que o chat respondeu) moram na thread da sessão (renderer/threads.ts):
+  // o agente lê o bloco dela no começo do prompt e grava o resumo da tarefa no fim.
   const lastQuickActionRef = useRef<QuickAction | null>(null);
   // Gravação de macro: ações duráveis executadas com sucesso no run atual.
   // No fim (sucesso), vira a "receita" que o usuário repete sem gastar IA.
@@ -1168,6 +1170,15 @@ export default function App() {
   // Trocou o mecanismo de pesquisa (⋮) → placeholder da barra e o próprio menu se redesenham.
   // Ao abrir, o main recebe o escolhido (pro "Pesquisar no … por" do clique direito).
   useEffect(() => { syncSearchEngineToMain(); return onSearchEngineChange(() => forceI18n(n => n + 1)); }, []);
+  // Janela de contexto do modelo (a detecção do engine: /props no llama.cpp, ou o tamanho configurado)
+  // → orçamento da thread da sessão e o medidor do painel. Nuvem: desconhecida (orçamento padrão).
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      try { const r = await window.electronAPI?.contextWindow?.(store.localSettings.enabled); if (alive) setContextWindow(r?.tokens); } catch {}
+    }, 1200);
+    return () => { alive = false; clearTimeout(t); };
+  }, [store.localSettings.enabled, store.localSettings.model, store.localSettings.baseUrl, store.localSettings.contextMode, store.localSettings.contextTokens]);
 
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
@@ -1180,6 +1191,7 @@ export default function App() {
   // Histórico e lista de downloads são daqui (renderer); cookies/cache vão pro main, que só
   // mexe na sessão das abas. Os sites do período saem do histórico ANTES de apagá-lo.
   const [clearDataOpen, setClearDataOpen] = useState(false);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);   // ⋮ → 🕘 Histórico de conversas
   const closeClearData = useCallback(() => setClearDataOpen(false), []);
   const sitesInRange = useCallback((range: TimeRange) => originsVisited(historyRef.current, rangeSince(range, Date.now())).length, []);
   const runClearData = useCallback(async (c: ClearChoice): Promise<boolean> => {
@@ -1201,6 +1213,8 @@ export default function App() {
       store.forgetClosedTabs(u => c.range === 'all' || gone.has(u));
     }
     if (c.downloads) setDownloads(prev => keepDownloads(prev, since));
+    // 🕘 Histórico de conversas do assistente (cifrado no main): o mesmo período.
+    if (c.chats) { try { const r = await window.electronAPI?.chatHistoryClear?.(since === -Infinity ? null : since); if (!r?.ok) ok = false; } catch { ok = false; } }
     // Cookies do Google podem ter saído → o menu ⋮ volta a mostrar "Entrar no Google".
     if (c.cookies) checkGoogleLogin();
     return ok;
@@ -2110,6 +2124,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">📄</span>
                   <span className="menu-label">{t('menu.savePdf')}</span>
                 </button>
+                <button className="menu-item" data-testid="menu-chat-history" onClick={() => { setMenuOpen(false); setChatHistoryOpen(true); }} title={t('chats.menuTitle')}>
+                  <span className="menu-ic">🕘</span>
+                  <span className="menu-label">{t('chats.menu')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setClearDataOpen(true); }} title={t('menu.clearDataTitle', { key: CLEAR_DATA_KEY })}>
                   <span className="menu-ic">🧹</span>
                   <span className="menu-label">{t('menu.clearData')}</span>
@@ -2431,9 +2449,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
-              const convoCtx = (recentRunsRef.current.get(store.threadKeyOf(taskTabId)) ?? []).slice(-3)
-                .map(r => `- "${r.cmd}" → ${r.outcome}`)
-                .join('\n');
+              // A thread da sessão (pedidos, respostas do chat, tarefas, fatos, 📌), já no orçamento dela.
+              const threadKey = store.threadKeyOf(taskTabId);
+              const convoCtx = threadPromptBlock(threadKey);
+              const threadTok = estimateThreadTokens(convoCtx);
+              let trimNoticeShown = false;
               let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
               let previousStateKey = '';
               let noEffectCount = 0;
@@ -2660,12 +2680,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   : status === 'max_steps' ? 'Step limit reached.'
                   : "The task stopped before finishing and the model gave no reason. Try rephrasing it."
                 );
-                // Memória curta da conversa: o próximo pedido pode ser um follow-up.
+                // A thread da sessão guarda o RESUMO da tarefa (o próximo pedido pode ser um follow-up):
+                // objetivo, os últimos passos que deram certo, desfecho e o último alvo — não cada passo.
                 const runsKey = store.threadKeyOf(taskTabId);   // sessão da aba de origem (abas da sessão dividem)
-                const tabRuns = recentRunsRef.current.get(runsKey) ?? [];
-                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}${lastTarget ? ` — last thing acted on: ${lastTarget}` : ''}` });
-                if (tabRuns.length > 5) tabRuns.shift();
-                recentRunsRef.current.set(runsKey, tabRuns);
+                const keySteps = allResults.filter(r => r.result?.success !== false && r.action?.type !== 'done' && r.action?.type !== 'report')
+                  .slice(-4).map(r => { try { return formatAction(r.action); } catch { return String(r.action?.type || ''); } });
+                noteThreadTask(runsKey, { goal: command, status, outcome: reason.slice(0, 300), steps: keySteps, target: lastTarget || undefined });
+                if (commandIsJobs && lastTarget) noteThreadFact(runsKey, `job:${lastTarget.slice(0, 60)}`, `looked at job ${lastTarget}`);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
@@ -3377,7 +3398,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (eng && SEARCH_BLOCK_RE.test(`${observation.url} ${observation.title} ${(observation.text_sample || '').slice(0, 1500)}`)) markBlocked(eng); }
                   agentDialogsTab((wv as any).getWebContentsId?.());
                   history += drainDialogLog();
-                  noteAccountState(observation);
+                  { const acct = noteAccountState(observation); const h = hostOf(observation.url);
+                    // Fato da sessão: em que site a pessoa está (ou não) logada.
+                    if (acct && h) noteThreadFact(threadKey, `account:${h}`, `${acct === 'signed-in' ? 'signed in' : 'signed out'} on ${h}`); }
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
                     '',
@@ -3669,6 +3692,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (c) bumpSessionCost(c.usd, c.est);
                     const money = c && c.usd > 0 ? ` • ${fmtUsd(c.usd, c.est)}` : '';
                     onProgress({ kind: 'status', message: `📊 ${m.model} • ${inT} in / ${outT} out / ${cached} cached • ${sec}s${money}` });
+                  }
+                  // Medidor de contexto do painel: as partes desta chamada (estimadas) + o total que o
+                  // provedor informou, quando informou. A página é a que foi de fato (cortada, se precisou).
+                  {
+                    const m = result?.metrics || {};
+                    const pp = m.promptParts || {};
+                    const skillsTok = estimateThreadTokens(skillsBlock);
+                    const pageTok = Math.max(0, (typeof pp.page === 'number' ? pp.page : estimateThreadTokens(observedPayload)) - skillsTok) + (pp.image || 0);
+                    const reported = Number(m.usage?.prompt_tokens ?? m.usage?.input_tokens ?? 0);
+                    noteContextUsage(threadKey, {
+                      window: m.contextTokens || contextWindowNow(),
+                      parts: { instructions: (pp.system || 0) + Math.max(0, estimateThreadTokens(prompt) - threadTok), skills: skillsTok, thread: threadTok, page: pageTok },
+                      reported: reported > 0 ? reported : undefined,
+                    });
+                    if (m.contextTrimmed && !trimNoticeShown) { trimNoticeShown = true; noteThreadTrimmed(threadKey, `task:${actionId}`); }
                   }
                   action = result?.action as BrowserAction | undefined;
                   // FAST MODE: enqueue the remaining batched actions (if any), capturing each
@@ -5903,14 +5941,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
               }
             }}
-            onSendChat={async (msg, docText, streamId, skipPageContext) => {
+            onSendChat={async (msg, docText, streamId, skipPageContext, docIsFile) => {
               const chatTabId = store.threadKeyOf(store.activeTabId);   // a conversa pertence à SESSÃO desta aba (ou a ela, sem sessão)
+              // A thread da sessão (a mesma que o agente lê), já no orçamento. Quem grava a troca nela é o
+              // AgentCommandBar, depois da resposta.
+              const threadText = threadPromptBlock(chatTabId);
+              const threadTok = estimateThreadTokens(threadText);
+              const noteChatUsage = (r: { ctx?: { system: number } } | undefined, pageText: string, cap = 8000) => {
+                // O main corta o contexto da página em 8000 caracteres (o documento em 24000): a página cede, a thread nunca.
+                if (pageText.length > cap) noteThreadTrimmed(chatTabId, `chat:${store.activeTab?.url || ''}`);
+                noteContextUsage(chatTabId, {
+                  window: contextWindowNow(),
+                  parts: { instructions: (r?.ctx?.system || 0) + estimateThreadTokens(msg), thread: threadTok, page: estimateThreadTokens(pageText.slice(0, cap)) },
+                });
+              };
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
                 // docText = self-contained doc context (rawContext). Non-stateless so the doc
                 // stays in THIS tab's history → follow-up questions still work after the chip clears.
-                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId);
+                // keepDoc: um ARQUIVO anexado fica lembrado pelo main pras perguntas seguintes (não cabe na thread);
+                // o resumo da última tarefa (pergunta sobre ela) não.
+                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId, undefined, { text: threadText, keepDoc: !!docIsFile });
+                noteChatUsage(r, docText, 24000);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 return { reply, isError: !!r?.error };
               }
@@ -5945,7 +5998,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 chatShot = fr?.image;
                 if (!chatShot) console.log(`[chat] vision skipped: ${chatShotDec.reason} (capture failed)`);
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot);
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot, threadText);
+              noteChatUsage(result, pageContent || '');
               const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
@@ -6025,6 +6079,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           </div>
         </div>
       )}
+      {chatHistoryOpen && <ChatHistoryPanel onClose={() => setChatHistoryOpen(false)} onResume={(e, reopen) => store.resumeSession(e, reopen)} />}
       {clearDataOpen && <ClearDataDialog onClose={closeClearData} sitesInRange={sitesInRange} onClear={runClearData} />}
       {/* ⋮ → Senhas (ou "Gerenciar senhas…" da lista em cima do campo, já filtrado pelo site). */}
       {passwordsOpen && <PasswordsPanel initialQuery={passwordsOpen.query} onClose={() => setPasswordsOpen(null)} />}

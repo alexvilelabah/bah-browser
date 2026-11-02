@@ -54,6 +54,7 @@ import { setupUpload, setUploadTextExtractor } from './upload';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupApplicantProfile } from './applicant-profile';
 import { setupScheduledTasks } from './scheduled-tasks';
+import { setupChatStore } from './chat-store';
 import { setupFrames } from './frames';
 import { setupPageSave } from './page-save';
 import { loadSystemCAs, installCAs } from './system-ca';
@@ -1815,7 +1816,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     try { chatAborts.get(streamId)?.abort(); } catch {}
     return true;
   });
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text?: unknown; keepDoc?: unknown }) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
     // E2E: resposta fixa de chat (E2E_MOCK_CHAT) — pra testar fluxos que pedem um texto ao modelo.
@@ -1831,8 +1832,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       const onDelta = (streamId && !stateless)
         ? (delta: string) => { try { mainWindow?.webContents.send('ai:chat-delta', { streamId, delta }); } catch {} }
         : undefined;
-      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal, image);
-      return { response };
+      // thread: a conversa da sessão (renderer/threads.ts); keepDoc = o rawContext é um arquivo anexado.
+      const tRaw = typeof thread === 'string' ? thread : (thread && typeof thread === 'object' && typeof thread.text === 'string' ? thread.text : undefined);
+      const threadOpt = typeof tRaw === 'string' ? { text: tRaw.slice(0, 40000), keepDoc: typeof thread === 'object' && thread?.keepDoc === true } : undefined;
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal, image, threadOpt);
+      // ctx.system: as instruções fixas do chat, pro medidor de contexto do painel.
+      return { response, ctx: { system: engine.chatSystemTokens() } };
     } catch (err: any) {
       const m = err?.message ?? String(err);
       if (local) {
@@ -1877,6 +1882,13 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     const wc = webContents.fromId(wcId);
     if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || wc.hostWebContents !== mainWindow?.webContents) throw new Error('no such tab');
     return wc.executeJavaScriptInIsolatedWorld(BAH_ISOLATED_WORLD, [{ code }], userGesture === true);
+  });
+  // Janela de contexto do modelo LOCAL (a mesma detecção do agente: /props no llama.cpp, o tamanho
+  // configurado…), pro medidor do painel. Nuvem: null (a janela não é conhecida daqui).
+  ipcMain.handle('ai:context-window', async (_event, local?: boolean) => {
+    if (process.env.E2E_MOCK_AI === '1' && process.env.E2E_CONTEXT_WINDOW) return { tokens: Number(process.env.E2E_CONTEXT_WINDOW), source: 'configured' };
+    if (!local || !localEngine) return null;
+    try { const r = await localEngine.resolveContextBudget(); return { tokens: r.totalTokens, source: r.source }; } catch { return null; }
   });
   ipcMain.handle('ai:move-history', (_event, from: string, to: string) => {
     if (typeof from !== 'string' || typeof to !== 'string') return;
@@ -3987,6 +3999,7 @@ app.whenReady().then(async () => {
   setupJsDialogs();
   setupApplicantProfile();
   setupScheduledTasks({ getMainWindow: () => mainWindow, showMainWindow });
+  setupChatStore(() => mainWindow);
   setupFrames(sharedEnsureDebugger);
   setupPageSave(sharedEnsureDebugger);
   loadSystemCAs().then((pems) => { systemCAs = pems; const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
