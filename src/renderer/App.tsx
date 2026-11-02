@@ -221,6 +221,7 @@ declare global {
       setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
       cancelVideoDownload?: (id: string) => Promise<any>;
       retryVideoDownload?: (id: string) => Promise<any>;
+      takeInterruptedVideoDownloads?: () => Promise<number>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -251,7 +252,7 @@ declare global {
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { id?: string; path: string; bytes?: number; totalBytes?: number; contentType?: string; background?: boolean }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
       getDownloadEngine?: () => Promise<DlEngineSettings>;
       setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
       setDownloadDir?: (dir: string | null) => Promise<string>;
@@ -262,7 +263,7 @@ declare global {
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
-      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
+      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
       resolveVideos?: (queries: string[]) => Promise<Array<{ query: string; id?: string; title?: string }>>;
       resolveManyVideos?: (query: string, count: number) => Promise<{ ok: boolean; videos: Array<{ id: string; title: string; url: string }>; error?: string }>;
@@ -752,10 +753,13 @@ export default function App() {
           speedBps: done ? 0 : (info.speedBps ?? existing?.speedBps),
           etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec ?? undefined),
           stalled: done ? false : (info.stalled ?? existing?.stalled),
+          reasonCode: info.state === 'failed' ? info.reasonCode : undefined,
         };
         return [merged, ...rest].slice(0, 50);
       });
     }) as any);
+    // Downloads de vídeo que o Bah fechou no meio da última vez: chegam como eventos acima.
+    window.electronAPI?.takeInterruptedVideoDownloads?.()?.catch(() => {});
     return () => { for (const off of offs) { try { off?.(); } catch {} } };
   }, []);
 
@@ -1065,7 +1069,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean; reasonCode?: string }>>([]);
   // Espelho do painel pro loop do agente (o state fica velho dentro do loop async): list_downloads.
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
@@ -1938,6 +1942,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         : d.state === 'completed' ? t('dl.done')
                         : d.state === 'blocked' ? t('dl.blocked')
                         : d.state === 'cancelled' ? t('dl.cancelled')
+                        : d.reasonCode === 'interrupted' ? t('dl.interrupted')
                         : t('dl.failed');
                       return (
                         <li key={d.id || d.path || d.filename || String(i)} className="dl-item" title={d.path || d.filename}>
@@ -1960,6 +1965,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               {active && !d.paused && d.speedBps ? ' · ' + fmtSpeed(d.speedBps) : ''}
                               {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
                               {active && !d.paused && d.engine && d.connections ? ` · ${d.connections} ${t('dl.conns')}` : ''}
+                              {d.state === 'failed' && d.reasonCode === 'not-merged' ? t('dl.notMerged') : ''}
+                              {d.state === 'failed' && d.reasonCode === 'no-audio' ? t('dl.noAudio') : ''}
                             </span>
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
@@ -4451,11 +4458,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           .map(p => p.split(/[\\/]/).pop());
                         const nFiles = files.length || 1;
                         const list = files.join(', ') || vr.title;
-                        const doneMsg = nFiles > 1
+                        const doneMsg = (nFiles > 1
                           ? (action.audio_only
                               ? `${nFiles} songs downloaded and saved to Downloads: ${list}`
                               : `${nFiles} videos downloaded and saved to Downloads: ${list}`)
-                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`;
+                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`)
+                          + (vr.warning === 'source-has-no-audio' ? ' (note: the original video has no sound track)' : '');
                         // miniaturas clicáveis no feed (clique → abre a pasta Downloads)
                         const fullPaths = (vr.paths && vr.paths.length ? vr.paths : (vr.path ? [vr.path] : []));
                         if (fullPaths.length) {
@@ -5586,7 +5594,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
                     const rows = [...all.filter(isActive), ...all.filter(d => !isActive(d))].slice(0, 20).map(d => {
                       const key = d.id || d.path || d.filename;
-                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING' : d.state.toUpperCase();
+                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING'
+                        : d.state === 'failed' && d.reasonCode ? `FAILED (${d.reasonCode})` : d.state.toUpperCase();
                       const pct = d.totalBytes ? ` ${Math.floor(((d.bytes || 0) / d.totalBytes) * 100)}%,` : '';
                       const size = ` ${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const live = isActive(d) && !d.paused ? `${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}` : '';

@@ -28,7 +28,7 @@ import {
 import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
-import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, stopAllMediaDownloads, type VideoDownloadProgress } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
 import { fetchTranscript } from './transcript';
 import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
@@ -4231,6 +4231,8 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;   // libera o close handler (não vai mais esconder na bandeja)
+  // yt-dlp roda destacado do Bah: sem isto ele ficava órfão e deixava o pedaço de vídeo sem som.
+  try { stopAllMediaDownloads(); } catch {}
   try { monitorManager?.disposeAll(); } catch {}
   destroyTray();
   // Free the persistent OCR workers (≈40–80MB) cleanly on exit.
