@@ -940,6 +940,16 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     if (q.length >= 3) return { type: 'find_file', query: q, filetype };
   }
 
+  // COLEÇÃO ("todas as músicas/clipes do filme X", "a trilha sonora", "o álbum", "a discografia"): precisa
+  // PESQUISAR a lista antes (faixas oficiais) e baixar uma a uma — não é um atalho de uma busca só. Antes
+  // "find all the music videos from the movie top gun" virava UM download de áudio de "all from top gun
+  // with tom cruise and them" (um clipe do filme). Cede pro agente (skill media-collection).
+  if (wantsDownload && (/\b(all|every|each|whole|entire|complete|full)\b.*\b(songs?|tracks?|music\s+videos?|videos?|clips?|episodes?)\b/.test(n)
+      || /\b(soundtrack|soundtracks|tracklist|track\s+list|album|discography|trilha\s+sonora|banda\s+sonora|discografia)\b/.test(n)
+      || /\b(todas|todos|cada)\b.*\b(musicas?|videos?|clipes?|faixas?|canciones|episodios?)\b/.test(n))) {
+    return null;
+  }
+
   // MÚSICA (mp3 / música / áudio) — dispara com mp3 OU com intenção de download.
   // 'tema(s)' = faixa em ES; o guard de tema-UI lá em cima já barrou "mudar o tema".
   // !REFERS_TO_MY_PLAYLIST: "baixe as músicas da minha playlist" — coleção EXISTENTE do
@@ -947,7 +957,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // playlist salva; viraria download de query-lixo. O `|| /\bmp3\b/` é o MESMO padrão do
   // bug do PDF (menção crua = gatilho, sem checar intenção) — "esse mp3 é bom?" disparava
   // só por citar 'mp3'; agora exige que não seja pergunta/opinião sobre o que já toca.
+  // "music video" / "videoclipe" é VÍDEO (com som), não só áudio — vai pro bloco de vídeo abaixo.
   if (/\b(mp3|musica|musicas|music|audio|audios|som|sons|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|sound)\b/.test(n)
+      && !/\b(music\s+videos?|videoclipes?|video\s*clipes?|clipes?\s+musicais?|video\s+musical)\b/.test(n)
       && !REFERS_TO_MY_PLAYLIST.test(n)
       && (wantsDownload || (/\bmp3\b/.test(n) && !REFERS_TO_OPEN_ITEM.test(n) && !IS_WHO_QUESTION.test(n) && !IS_CANNOT.test(n) && !IS_NEGATING_PRIOR_ACTION.test(n)))) {
     const q = cleanQuery();
