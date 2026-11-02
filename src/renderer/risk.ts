@@ -6,8 +6,14 @@
 export interface RiskInfo { kind: string; label: string }
 /** jobs: the task is a job application — a bare "Submit"/"Send" button sends it (Workday, iCIMS…).
  *  unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too.
- *  cart: the task fills a shopping cart — editing the cart (remove a line, Enter on the cart page) is the job, not a risk. */
-export interface RiskOpts { jobs?: boolean; unattended?: boolean; cart?: boolean }
+ *  cart: the task fills a shopping cart — editing the cart (remove a line, Enter on the cart page) is the job, not a risk.
+ *  support: a support ticket / forum post — Submit/Send/Post sends a message in the person's name. */
+export interface RiskOpts { jobs?: boolean; unattended?: boolean; cart?: boolean; support?: boolean }
+
+// Chamado/post: o botão final manda texto (às vezes público) em nome da pessoa e não volta.
+// Fortes valem sempre ("Submit ticket"); os curtos ("Send", "Post") só numa tarefa de suporte.
+const TICKET_SEND = /\b(submit (a |the |my |your |this )?(support )?(ticket|case|request|question)|create (a |the )?(support )?(case|ticket)|open (a |the )?(support )?(case|ticket)|send (the |my |your )?(support )?(ticket|request|message to support)|post (your |my |the )?(question|reply|thread)|request (a )?(call ?back|callback|call)|schedule (a )?(call|callback|call ?back)|abrir chamado|enviar chamado|enviar solicitacao|enviar pergunta|publicar pergunta|enviar consulta|crear caso)\b/;
+const SUPPORT_SEND = /^(submit|send|post|publish|create case|create ticket|request (a )?call|schedule (a )?call|call me|start (a )?chat|chat now|enviar|envie|publicar|postar|solicitar (ligacao|llamada)|iniciar chat)\b/;
 
 export function classifyRisk(
   actionType: string,
@@ -52,6 +58,11 @@ export function classifyRisk(
   // Tarefa de carrinho: "Remove"/"Delete <produto>" tira uma linha do carrinho (a Amazon chama de Delete) — editar
   // o carrinho é a tarefa. Conta, tudo e "permanentemente" continuam perguntando.
   if (opts.cart && /^(remove|delete|excluir|remover|eliminar|apagar)\b/.test(norm(label).trim()) && !/\b(account|conta|cuenta|all|tudo|todo|permanent\w*)\b/.test(hay)) return null;
+  if (TICKET_SEND.test(hay)) return { kind: 'message', label: shown || 'send' };
+  if (opts.support && (label || '').trim().length <= 40 && SUPPORT_SEND.test(norm(label).trim())
+      && !/\b(search|filter|query|busca|pesquisa|buscar)\b/.test(hay)) {   // "Submit search" do cabeçalho não manda nada
+    return { kind: 'message', label: shown || 'send' };
+  }
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
   // Tarefa agendada rodando sozinha: mandar/publicar/reservar sai em nome da pessoa e não volta.
   // Com ela olhando o agente segue (pediu "manda"); sem ela, o cartão espera (e o aviso do sistema chama).
@@ -153,7 +164,10 @@ export function riskForAction(
       if (checkout) return { kind: 'payment', label: 'Enter on the payment page' };
       // ...or on an application's review step (Enter there submits the form).
       const review = !!currentUrl && opts.jobs && /review|submit|confirm/i.test(currentUrl);
-      return review ? { kind: 'application', label: 'Enter on the application review page' } : null;
+      if (review) return { kind: 'application', label: 'Enter on the application review page' };
+      // ...or in a ticket/post form (Enter in a one-line field submits it; in a search box it doesn't).
+      const sendForm = !!currentUrl && opts.support && /\/(ask|reply|compose|post(-|_)?(question|reply|thread)?|(new|create|submit)(-|_)?(case|ticket|request|thread|post|question)|contact(-|_)?form)(\b|\/|\?|$)/i.test(currentUrl);
+      return sendForm ? { kind: 'message', label: 'Enter on the support form' } : null;
     }
     default:
       return null;

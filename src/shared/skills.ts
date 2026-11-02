@@ -95,7 +95,7 @@ export function formatSkillsBlock(skills: Skill[], now = new Date()): string {
 
 export const SKILL_MAX_WORDS = 220;
 export const SKILL_STATES = ['dialog', 'suggestions', 'datepicker', 'eula', 'os-selector', 'searchbox', 'tabs', 'cards', 'signin'];
-export const SKILL_TASKS = ['download', 'search', 'travel', 'shopping', 'parts', 'people', 'jobs', 'grocery'];
+export const SKILL_TASKS = ['download', 'search', 'travel', 'shopping', 'parts', 'people', 'jobs', 'grocery', 'support'];
 
 /** As regras que toda skill (incluída, do usuário ou contribuída) tem que cumprir. */
 export function validateSkill(markdown: string): { ok: true; skill: Skill } | { ok: false; error: string } {

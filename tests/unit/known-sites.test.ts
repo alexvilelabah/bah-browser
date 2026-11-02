@@ -45,6 +45,15 @@ test('ambiguous names need a navigation cue; words inside other words do not cou
   assert.strictEqual(id('email me at bob@walmart'), null);
 });
 
+test('vendor support sites and communities resolve to the vendor\'s own domain', () => {
+  const id = (c: string) => namedOfficialSite(c, 'en-US')?.id ?? null;
+  assert.strictEqual(id('ask Dell support about my XPS fan noise'), 'dellsupport');
+  assert.strictEqual(id('open a ticket on Apple Support for my MacBook battery'), 'applesupport');
+  assert.strictEqual(id('post a question in the Apple Support Community about Wi-Fi'), 'applecommunity');   // o mais específico vence
+  assert.strictEqual(id('ask on the Dell Community forum'), 'dellcommunity');
+  assert.strictEqual(officialSiteForName('dell support', 'en-US')?.url, 'https://www.dell.com/support/home/');
+});
+
 test('prompt block and first-step hint', () => {
   const block = officialSitesPromptBlock('en-US');
   assert.match(block, /never web_search its name/);

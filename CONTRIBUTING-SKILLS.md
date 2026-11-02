@@ -27,7 +27,7 @@ name: kebab-case-name           # = folder name
 description: one line
 sites: [example.com]            # optional; subdomains match
 states: [dialog, suggestions, datepicker, eula, os-selector, searchbox, tabs, cards, signin]   # optional
-tasks: [download, search, travel, shopping, parts, people, jobs, grocery]       # optional
+tasks: [download, search, travel, shopping, parts, people, jobs, grocery, support]       # optional
 priority: 40
 ---
 1. Numbered steps using the agent's actions: navigate, click_ref, fill_ref, select_option,
