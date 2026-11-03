@@ -604,6 +604,39 @@ não perguntam.
 
 ---
 
+## Identidade do navegador e checagens de robô (o que os sites veem)
+
+Medido em 03/11/2026 num MacBook Pro Intel (i7-9750H, 6 núcleos / 12 threads, 16 GB, UHD 630), o mesmo
+trecho em `https://example.com` no Chrome 156 de verdade e no Bah (perfil temporário):
+
+| Sinal | Chrome de verdade | Bah |
+|---|---|---|
+| `hardwareConcurrency` / `deviceMemory` (página e worker) | 6 / 16 | 6 / 16 |
+| WebGL renderer | ANGLE Metal, Intel UHD Graphics 630 | igual |
+| `navigator.plugins`, UA, arch / platformVersion do `userAgentData` | 5 leitores de PDF, Mac Intel, x86, 26.7.1 | igual |
+| `userAgentData.fullVersionList` | Chrome **156.0.8078.79** | Chrome **156.0.0.0** |
+| `navigator.webdriver` | **false** | **true** quando aberto pelo Playwright |
+
+GPU, núcleos e memória são os valores do próprio motor (o remendo antigo do script da página — "Intel Iris 6100",
+8 núcleos, 8 GB — saiu: o worker via os números reais, sinal clássico de adulteração;
+`tests/e2e/hardware-identity.spec.ts`). Canvas, áudio e fontes não são mexidos. O Chromium informa os núcleos
+físicos neste Mac (o Chrome de verdade também diz 6) e a RAM real (16, sem teto de 8).
+
+**Prováveis culpados pelas checagens de robô vistas nas demos e testes** ("Press & hold" da Target, "Robot or
+human?" do Walmart, páginas de erro da Amazon):
+1. **`navigator.webdriver = true`.** Todo teste e2e, gravação de demo (`tools/record-demo-mac.mjs`) e sonda abre o
+   Bah pelo Playwright, que liga a flag de automação do Chromium. É um sinal honesto de "automatizado" e deve
+   continuar honesto — mas faz das nossas execuções o pior caso. O Bah aberto normalmente diz `false`; esperamos
+   checagens raras no uso do dia a dia. Medir a frequência de checagens com o Bah aberto normalmente, não em teste/demo.
+2. **Versão que não bate.** O Bah se apresenta como Chrome 156 (preciso pro login do Google, ver a seção da Chrome
+   Web Store) sobre o Chromium mais antigo do Electron 44, e a versão completa é `156.0.0.0`, não um build real. Um
+   detector pode notar um "Chrome 156" sem recursos que só o 156 tem. A correção honesta (informar o motor real)
+   pode trazer de volta o bloqueio do login do Google — decisão em aberto.
+3. **Perfis novos.** Perfis de teste e demo começam vazios (sem logins, sem cookies de checagens já passadas): toda
+   visita parece a primeira.
+
+O Bah nunca opera uma checagem de humano; quando aparece, a pessoa resolve (entrega Watch/Takeover).
+
 ## Build e release
 
 > **E2E no macOS:** abra o Electron com `--use-mock-keychain`. Sem isso o cofre de senhas (`safeStorage`) abre um pedido do Chaveiro pro build de dev sem assinatura num perfil novo de teste, e a chamada síncrona trava o processo principal (o Playwright só estoura o tempo, sem erro).

@@ -631,6 +631,39 @@ loader + `skills:list` IPC `src/main/skills-loader.ts` (re-reads files in dev; p
 
 ---
 
+## Browser identity & bot checks (what sites see)
+
+Measured 2026-11-03 on an Intel MacBook Pro (i7-9750H, 6 cores / 12 threads, 16 GB, UHD 630), the same
+snippet on `https://example.com` in real Chrome 156 and in Bah (temp profile):
+
+| Signal | Real Chrome | Bah |
+|---|---|---|
+| `hardwareConcurrency` / `deviceMemory` (page and worker) | 6 / 16 | 6 / 16 |
+| WebGL renderer | ANGLE Metal, Intel UHD Graphics 630 | same |
+| `navigator.plugins`, UA, `userAgentData` arch / platformVersion | 5 PDF viewers, Intel Mac, x86, 26.7.1 | same |
+| `userAgentData.fullVersionList` | Chrome **156.0.8078.79** | Chrome **156.0.0.0** |
+| `navigator.webdriver` | **false** | **true** when launched by Playwright |
+
+GPU, cores and memory are the engine's own values (the old page-script override — "Intel Iris 6100", 8 cores,
+8 GB — was removed: workers saw the real numbers, a classic tampering signal; `tests/e2e/hardware-identity.spec.ts`).
+Canvas, audio and fonts are not touched. Chromium itself reports physical cores on this Mac (real Chrome says 6 too)
+and real RAM (16, not capped at 8).
+
+**Likely culprits for the bot checks seen in demos and tests** (Target "Press & hold", Walmart "Robot or human?",
+Amazon error pages):
+1. **`navigator.webdriver = true`.** Every e2e spec, demo take (`tools/record-demo-mac.mjs`) and probe launches Bah
+   through Playwright, which adds Chromium's automation flag. That is an honest "automated" signal and should stay
+   honest — but it means our runs are the worst case. Bah opened normally reports `false`; we expect checks to be
+   rare in everyday use. Judge bot-check rates from a normal launch, not from test/demo runs.
+2. **Version mismatch.** Bah presents itself as Chrome 156 (needed for Google sign-in, see the Chrome Web Store
+   section) on Electron 44's older Chromium, and the full version is `156.0.0.0`, not a real build. A detector can
+   notice a "Chrome 156" missing 156-only features. The honest fix (report the real engine) may bring back the Google
+   sign-in block — open decision.
+3. **Fresh profiles.** Test and demo profiles start empty (no sign-ins, no cookies from checks already passed), so
+   every visit looks like a first visit.
+
+Bah never operates a human check itself; when one appears the user completes it (Watch/Takeover handoff).
+
 ## Build & release
 
 > **E2E on macOS:** launch Electron with `--use-mock-keychain`. The password vault (`safeStorage`) otherwise opens a Keychain prompt for the unsigned dev build in a fresh test profile, and the synchronous call freezes the main process (Playwright then times out with no error).
