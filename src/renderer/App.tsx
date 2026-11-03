@@ -2174,7 +2174,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           )}
         </div>
         <div className="menu-wrap">
-          <button className="menu-btn" onClick={() => setMenuOpen(o => !o)} title={t('menu.title')}>
+          <button className="menu-btn" data-testid="main-menu-btn" onClick={() => setMenuOpen(o => !o)} title={t('menu.title')}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>
           </button>
           {menuOpen && (
