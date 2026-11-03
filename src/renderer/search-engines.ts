@@ -24,12 +24,25 @@ const BLOCK_MS = 60 * 60 * 1000;
 const blockedUntil = new Map<EngineId, number>();
 
 /** 'auto' = Google primeiro. */
+// Chave própria: 'searchEngine' é do mecanismo da barra (⋮, JSON {"id":"bing"} em search-engine.ts).
+// Antes as duas dividiam a chave em formatos diferentes e uma apagava a escolha da outra.
+const AGENT_KEY = 'agentSearchEngine';
+const isEngine = (v: unknown): v is EngineId => typeof v === 'string' && ENGINES.some(e => e.id === v);
 export function preferredEngine(): EngineId | 'auto' {
-  try { const v = localStorage.getItem('searchEngine'); if (v && ENGINES.some(e => e.id === v)) return v as EngineId; } catch {}
+  try {
+    const own = localStorage.getItem(AGENT_KEY);
+    if (isEngine(own)) return own;
+    const bar = localStorage.getItem('searchEngine');
+    // valor antigo ("bing" puro, gravado aqui antes): migra uma vez pra chave própria
+    if (isEngine(bar)) { localStorage.setItem(AGENT_KEY, bar); localStorage.removeItem('searchEngine'); return bar; }
+    // sem preferência do agente: segue o mecanismo escolhido no ⋮, se for um que o agente conhece
+    const id = bar ? (JSON.parse(bar) as { id?: unknown })?.id : null;
+    if (isEngine(id)) return id;
+  } catch {}
   return 'auto';
 }
 export function setPreferredEngine(v: EngineId | 'auto'): void {
-  try { if (v === 'auto') localStorage.removeItem('searchEngine'); else localStorage.setItem('searchEngine', v); } catch {}
+  try { if (v === 'auto') localStorage.removeItem(AGENT_KEY); else localStorage.setItem(AGENT_KEY, v); } catch {}
 }
 
 export function engineForUrl(url: string): EngineId | null {

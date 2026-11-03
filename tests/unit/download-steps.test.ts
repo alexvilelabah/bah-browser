@@ -54,3 +54,13 @@ test('collections: "Title — Artist" entries and the work\'s year make precise 
   assert.equal(m.collectionQuery('Top Gun Anthem — Harold Faltermeyer', 'top gun', false, '1986'), 'Top Gun Anthem Harold Faltermeyer 1986 official music video');
   assert.deepEqual(m.listItems(['Danger Zone — Kenny Loggins', 'Take My Breath Away — Berlin']), ['Danger Zone — Kenny Loggins', 'Take My Breath Away — Berlin']);
 });
+
+test("collections: an artist's top N / most famous songs or videos is a collection too", async () => {
+  const { isMediaCollectionRequest } = await import('../../src/renderer/download-steps.ts');
+  assert.ok(isMediaCollectionRequest("Find Michael Jackson's most famous songs and download all of their music videos, just the top 3"));
+  assert.ok(isMediaCollectionRequest('find the most famous Michael Jackson music videos and download 3 of them'));
+  assert.ok(isMediaCollectionRequest('download the top 5 Queen music videos'));
+  assert.ok(isMediaCollectionRequest('baixe os 3 maiores sucessos do Tim Maia'));
+  assert.ok(!isMediaCollectionRequest('download the most famous Michael Jackson video'));
+  assert.ok(!isMediaCollectionRequest('find the most famous Michael Jackson songs'));   // no download
+});
