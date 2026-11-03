@@ -297,6 +297,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Roteador local (Qwen2.5-1.5B): só rotula o texto da caixa. download só depois do "sim" da pessoa.
   routerStatus: () => ipcRenderer.invoke('router:status'),
   routerClassify: (text: string, ctx?: { url?: string; title?: string; lastRun?: { request: string; outcome: string } | null }) => ipcRenderer.invoke('router:classify', text, ctx),
+  routerExpand: (text: string) => ipcRenderer.invoke('router:expand', text),
   routerDownload: () => ipcRenderer.invoke('router:download'),
   onRouterStatus: (cb: (s: any) => void) => {
     const listener = (_e: any, s: any) => cb(s);

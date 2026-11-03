@@ -1,9 +1,11 @@
 // Motor do roteador local — roda num utilityProcess (como o motor de torrent), NUNCA no main:
 // se o llama.cpp travar ou faltar memória, morre só este processo e a caixa volta pras regras.
-// Carrega o Qwen2.5-1.5B-Instruct (GGUF) uma vez e só ROTULA texto: {route, ms}. Não executa nada.
+// Carrega o Qwen2.5-1.5B-Instruct (GGUF) uma vez e só ROTULA texto: {route, ms} — ou reescreve um
+// pedido ambíguo com a desambiguação (expand → {raw, ms}; o main confere). Não executa nada.
 //
 // Protocolo (process.parentPort): {t:'init', modelPath, gpu} → {t:'ready', backend, loadMs, rss} | {t:'error', msg}
 //                                 {t:'classify', id, text, ctx} → {t:'result', id, route, ms}
+//                                 {t:'expand', id, text} → {t:'expanded', id, raw, ms}
 //                                 bt-fork/bt-send/bt-kill ↔ bt-msg/bt-exit: teste do binário (abaixo)
 import cp from 'child_process';
 import { syncBuiltinESMExports } from 'module';
@@ -52,6 +54,12 @@ port.on('message', (e) => {
     router.classify(m.text, m.ctx).then(
       (r) => post({ t: 'result', id: m.id, route: r.route, ms: r.ms }),
       (err) => post({ t: 'result', id: m.id, route: null, ms: 0, error: String(err?.message || err) }),
+    );
+  } else if (m?.t === 'expand') {
+    if (!router?.expand) { post({ t: 'expanded', id: m.id, raw: '', ms: 0 }); return; }
+    router.expand(m.text).then(
+      (r) => post({ t: 'expanded', id: m.id, raw: r.raw, ms: r.ms }),
+      (err) => post({ t: 'expanded', id: m.id, raw: '', ms: 0, error: String(err?.message || err) }),
     );
   } else if (m?.t === 'bt-msg') {
     tests.get(m.tid)?.emit('message', m.msg);

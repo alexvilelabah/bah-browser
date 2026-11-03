@@ -38,7 +38,8 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
-import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery } from './download-steps';
+import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear } from './download-steps';
+import { shouldExpandRequest, understoodNote } from '../shared/request-expansion';
 import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { stripTrackingParams } from '../main/tracking-params';
@@ -239,6 +240,7 @@ declare global {
       torrentOpen?: (uri: string) => Promise<{ ok: boolean }>;
       routerStatus?: () => Promise<RouterStatus & { rss?: number }>;
       routerClassify?: (text: string, ctx?: RouteContext) => Promise<{ route: string; ms: number } | null>;
+      routerExpand?: (text: string) => Promise<{ expanded: string; ms: number } | null>;
       routerDownload?: () => Promise<{ ok: boolean; error?: string }>;
       onRouterStatus?: (cb: (s: RouterStatus) => void) => (() => void);
       setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
@@ -2602,7 +2604,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const convoCtx = threadPromptBlock(threadKey);
               const threadTok = estimateThreadTokens(convoCtx);
               let trimNoticeShown = false;
-              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}`;
+              // Roteador local deixa o pedido PRECISO antes do modelo grande (request-expansion.ts):
+              // "clipes de top gun" → "…do filme Top Gun de 1986, não Top Gun: Maverick (2022)". Só pedidos de
+              // achar/baixar mídia com uma obra; sem modelo, lento ou saída ruim → vale o texto original.
+              let understood = '';
+              if (routerReadyRef.current && window.electronAPI?.routerExpand && shouldExpandRequest(command)) {
+                const x = await raceTimeout(window.electronAPI.routerExpand(command).catch(() => null), 4000, null);
+                if (x?.expanded) {
+                  understood = x.expanded;
+                  // 'thought' fica no feed (o 'status' some sozinho): a pessoa vê o que o Bah entendeu.
+                  onProgress({ kind: 'thought', message: `🔎 ${t('router.understoodAs', { text: understood })}` });
+                }
+              }
+              const understoodLine = () => understoodNote(understood);
+              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}${understoodLine()}`;
               let previousStateKey = '';
               let noEffectCount = 0;
               // Vision: mode + how many images this run already sent (token/latency budget).
@@ -3222,7 +3237,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `↪ ${t('agent.interjected')}` });
                   }
                   // Etapa 6: prune unbounded history to keep token usage and memory in check
-                  if (history.length > 8000) history = `GOAL: ${command}\n...[older steps trimmed]...\n` + history.slice(-6000);
+                  if (history.length > 8000) history = `GOAL: ${command}${understoodLine()}\n...[older steps trimmed]...\n` + history.slice(-6000);
                   const wv = getActiveWebview();
                   if (!wv) { finishRun('failed', 'No active webview'); return { error: 'No active webview', results: allResults }; }
                   if (commandLooksLikeGoogleLogin && step >= 8) {
@@ -3910,7 +3925,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       return { thought: thoughts.join('\n\n') || reason, results: allResults, done: { type: 'done', success: false, reason } as BrowserAction };
                     }
                     if (choice === 'restart') {
-                      history = `GOAL: ${command}\nNOTE: the task was restarted with a different model (${to}); start over from the current page.`;
+                      history = `GOAL: ${command}${understoodLine()}\nNOTE: the task was restarted with a different model (${to}); start over from the current page.`;
                       plan = [];
                       memory.length = 0;
                     } else {
@@ -4667,6 +4682,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (typeof decision === 'string') {
                         // Rewritten goal: the model re-plans from the user's own wording.
                         command = decision;
+                        understood = '';   // a expansão era do pedido antigo
                         history += '\nGOAL EDITED BY USER: ' + decision.slice(0, 400);
                       }
                     }
@@ -4678,7 +4694,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const collectionItems = isMediaCollectionRequest(command) ? listItems(action.value) : [];
                     if (collectionItems.length >= 2) {
                       const audioOnly = collectionWantsAudioOnly(command);
-                      const subject = collectionSubject(command);
+                      // Ano da obra: o que o modelo grande conferiu e guardou ("work": "Top Gun (1986)") > o pedido > a
+                      // expansão do roteador local (palpite de um modelo pequeno). "Top Gun" de 1986, não o Maverick.
+                      const work = String(memory.find(m => m.key === 'work')?.value ?? '');
+                      const subject = collectionSubject(command) || collectionSubject(understood);
+                      const year = subjectYear(subject, work, command, understood);
                       const noun = audioOnly ? 'songs' : 'music videos';
                       const choice = await new Promise<string>((resolve) => {
                         onProgress({ kind: 'confirm', risk: 'choice', label: noun,
@@ -4704,13 +4724,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           throwIfCancelled();
                           const item = collectionItems[i];
                           onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
-                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly)}`, audioOnly, 1, choice === 'low' ? 'low' : 'best');
+                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, choice === 'low' ? 'low' : 'best');
                           const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
                           rows.push(`| ${i + 1} | ${item} | ${r?.success ? '✅ ' + (file || 'downloaded') : '❌ ' + String(r?.error || 'failed').slice(0, 80)} |`);
                         }
                       } finally { deadline.resume(); }
                       const ok = rows.filter(r => r.includes('✅')).length;
-                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}` : ''}:\n\n| # | Track | Result |\n|---|---|---|\n${rows.join('\n')}`;
+                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}${year ? ` (${year})` : ''}` : ''}:\n\n| # | Track | Result |\n|---|---|---|\n${rows.join('\n')}`;
                       onProgress({ kind: 'status', message: `✅ ${ok}/${collectionItems.length} ${noun} downloaded` });
                       finishRun(ok ? 'success' : 'failed', report);
                       return { thought: report, results: allResults, done: { type: 'done', success: ok > 0, reason: report } as BrowserAction };

@@ -546,6 +546,26 @@ coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de 
   conjunto. Num Intel i7-9750H (CPU): roteador 89,0 % (90,2 % com a saudação antes) x regras 84,1 %, p50 ≈ 0,6–0,9 s, p95 ≈ 1,0–1,4 s,
   carga ≈ 9 s, ≈ 0,9 GB de RSS no Node (≈ 2 GB no utilityProcess, com o arquivo mapeado em memória).
   Smoke: `tests/e2e/router-local.spec.ts` (pula sem o modelo).
+- **Expansão do pedido** (`src/shared/request-expansion.ts`, IPC `router:expand`): antes do agente
+  começar, um pedido de "achar/baixar" sobre uma obra nomeada (`shouldExpandRequest`: verbo de
+  achar/baixar + mídia + uma obra depois de from/of/do/de…; nunca URL nem ordem comum) é reescrito pelo
+  mesmo modelo num segundo contexto pequeno (1024 tokens, gramática própria `{"understood": "…"}`,
+  ≤ 96 tokens, temperatura 0). O prompt só deixa acrescentar desambiguação (ano, intérprete, original x
+  sequência/remake, nome completo) e proíbe lista de faixas, passo novo, compositor/diretor. O main
+  confere a saída (`checkExpansion`): lixo/recusa, > 320 caracteres, sem as palavras-chave do pedido
+  (sinônimos movie↔film, plural e erro de uma letra tolerados), ação nova (comprar/mandar/tocar/abrir…),
+  número novo que não seja ano, ou site novo → descarta. Timeout 3,5 s (renderer 4 s); sem modelo,
+  lento ou descartado → o texto original. O aceito aparece no feed como "🔎 Entendido como: …" e vai pro
+  agente numa linha `UNDERSTOOD AS (… a GUESS … the GOAL wins …)` embaixo do `GOAL:`. Os fatos do 1,5B
+  erram com frequência (disse "Bad by The Beatles"), por isso o "palpite" e o "confirme" da skill.
+  Eval: `npm run router:expand-eval` imprime a saída crua e o veredito por pedido. E2E sem modelo:
+  `E2E_FAKE_ROUTER_EXPAND` (com `E2E_MOCK_AI=1`) finge a resposta do modelo.
+- **Coleções de mídia** (`src/renderer/download-steps.ts`, skill `media-collection`): o agente guarda
+  `work` ("Top Gun (1986)") e `tracks` como "Título — Artista"; aí o Bah baixa cada uma com
+  `ytsearch:` + `collectionQuery` = título + artista + obra + ano (`subjectYear`: o `work` guardado,
+  senão o pedido, senão a expansão, ignorando o que vem depois de "not …"). O main alarga o poço da
+  busca (`ytsearchN`) e pega o primeiro resultado que passa no filtro de duração; ranquear os primeiros
+  resultados por título/artista/ano não é feito.
 - **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
   node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
   pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.

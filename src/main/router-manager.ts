@@ -7,6 +7,7 @@ import { app, ipcMain, utilityProcess, type UtilityProcess } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ROUTER_MODEL, type RouterStatus, type RouteContext } from '../shared/router-routes';
+import { checkExpansion, shouldExpandRequest } from '../shared/request-expansion';
 import { downloadModel } from './router/model-download';
 
 interface Deps {
@@ -15,6 +16,8 @@ interface Deps {
 }
 
 const CLASSIFY_TIMEOUT_MS = 4000;
+// Expansão do pedido: gera ~40 tokens (Metal ≈ 1 s, CPU mais). Passou disso → vale o texto original.
+const EXPAND_TIMEOUT_MS = 3500;
 const BINDING_TEST_FILE = path.join('node_modules', 'node-llama-cpp', 'dist', 'bindings', 'utils', 'testBindingBinary.js');
 
 export function setupRouterManager(deps: Deps) {
@@ -25,6 +28,10 @@ export function setupRouterManager(deps: Deps) {
   let seq = 0;
   let downloading: Promise<unknown> | null = null;
   const pending = new Map<number, (v: { route: string | null; ms: number } | null) => void>();
+  const pendingExpand = new Map<number, (v: { raw: string; ms: number } | null) => void>();
+  // E2E (só com E2E_MOCK_AI=1): E2E_FAKE_ROUTER_EXPAND = a saída "do modelo" pra expansão, sem modelo
+  // nenhum — o status fica 'ready' e o classificador devolve null (as regras de palavras decidem).
+  const fakeExpand = process.env.E2E_MOCK_AI === '1' ? process.env.E2E_FAKE_ROUTER_EXPAND : undefined;
   const tests = new Map<number, UtilityProcess>();
 
   const setStatus = (s: RouterStatus) => {
@@ -35,7 +42,10 @@ export function setupRouterManager(deps: Deps) {
   const modelPresent = () => { try { return fs.statSync(modelPath).size === ROUTER_MODEL.size; } catch { return false; } };
   if (!modelPresent()) status = { state: 'not-downloaded' };
 
-  const flushPending = () => { for (const r of pending.values()) r(null); pending.clear(); };
+  const flushPending = () => {
+    for (const r of pending.values()) r(null); pending.clear();
+    for (const r of pendingExpand.values()) r(null); pendingExpand.clear();
+  };
 
   // gpu 'auto' primeiro; se o motor morrer ou falhar ao carregar, uma segunda vez só CPU.
   function start(gpu: 'auto' | false = 'auto') {
@@ -79,6 +89,11 @@ export function setupRouterManager(deps: Deps) {
         case 'result': {
           const r = pending.get(m.id);
           if (r) { pending.delete(m.id); r(m.route ? { route: m.route, ms: m.ms } : null); }
+          break;
+        }
+        case 'expanded': {
+          const r = pendingExpand.get(m.id);
+          if (r) { pendingExpand.delete(m.id); r({ raw: String(m.raw || ''), ms: Number(m.ms) || 0 }); }
           break;
         }
         case 'log':
@@ -127,6 +142,29 @@ export function setupRouterManager(deps: Deps) {
     });
   }
 
+  // Reescreve um pedido ambíguo com a desambiguação (request-expansion.ts). O main confere a saída
+  // (palavras-chave, ação/número/site novo, tamanho): qualquer coisa fora → null = vale o original.
+  async function expand(text: string): Promise<{ expanded: string; ms: number } | null> {
+    const t = String(text || '').slice(0, 300);
+    if (!shouldExpandRequest(t)) return null;
+    let out: { raw: string; ms: number } | null = null;
+    if (fakeExpand !== undefined) out = { raw: fakeExpand, ms: 1 };
+    else {
+      if (!child || status.state !== 'ready') return null;
+      const id = ++seq;
+      out = await new Promise((resolve) => {
+        pendingExpand.set(id, resolve);
+        setTimeout(() => { if (pendingExpand.has(id)) { pendingExpand.delete(id); resolve(null); } }, EXPAND_TIMEOUT_MS);
+        try { child!.postMessage({ t: 'expand', id, text: t }); } catch { pendingExpand.delete(id); resolve(null); }
+      });
+    }
+    if (!out) { log('expand: no answer in time'); return null; }
+    const v = checkExpansion(t, out.raw);
+    if (!v.ok) { log(`expand: kept the original (${v.reason}) in ${out.ms}ms`); return null; }
+    log(`expand: ${out.ms}ms`);
+    return { expanded: v.expanded, ms: out.ms };
+  }
+
   function download(): Promise<{ ok: boolean; error?: string }> {
     if (modelPresent()) { start(); return Promise.resolve({ ok: true }); }
     if (downloading) return downloading as Promise<{ ok: boolean; error?: string }>;
@@ -148,11 +186,13 @@ export function setupRouterManager(deps: Deps) {
 
   ipcMain.handle('router:status', () => ({ ...status, rss }));
   ipcMain.handle('router:classify', (_e, text: string, ctx?: RouteContext) => classify(text, ctx));
+  ipcMain.handle('router:expand', (_e, text: string) => expand(text).catch(() => null));
   ipcMain.handle('router:download', () => download());
+  if (fakeExpand !== undefined) status = { state: 'ready', backend: 'e2e-fake' };
 
   return {
     /** Sobe o motor se o modelo já estiver em disco (chamado depois que a janela aparece). */
-    start: () => { if (modelPresent()) start(); },
+    start: () => { if (fakeExpand === undefined && modelPresent()) start(); },
     status: () => status,
     dispose: () => { try { child?.kill(); } catch {} child = null; for (const t of tests.values()) { try { t.kill(); } catch {} } },
   };

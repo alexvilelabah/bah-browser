@@ -5,8 +5,13 @@
 // histórico volta pro só-system e o node-llama-cpp reaproveita esses tokens (prefixo comum) →
 // só a mensagem nova é processada. A saída é presa por gramática (JSON schema) a UMA rota.
 import { buildSystemPrompt, buildUserMessage, parseRoute, refineRoute, ROUTE_JSON_SCHEMA } from '../../shared/router-routes.ts';
+import { buildExpandSystemPrompt, buildExpandUserMessage, parseExpansion, EXPAND_JSON_SCHEMA, EXPAND_MAX_TOKENS } from '../../shared/request-expansion.ts';
 
-/** Carrega o modelo e devolve {classify(text, ctx) → {route, ms}, backend, loadMs, dispose}. */
+/**
+ * Carrega o modelo e devolve {classify(text, ctx) → {route, ms}, expand(text) → {raw, ms}, backend, loadMs, dispose}.
+ * A expansão (request-expansion.ts) usa um contexto PRÓPRIO, pequeno: o prefixo do classificador
+ * continua no cache dele, e uma consulta não espera a outra.
+ */
 export async function loadRouter(modelPath, opts = {}) {
   const t0 = Date.now();
   // Import tardio: o engine.mjs ajusta o child_process.fork antes do node-llama-cpp carregar.
@@ -31,10 +36,35 @@ export async function loadRouter(modelPath, opts = {}) {
   const classify = (text, ctx) => { const p = chain.then(() => run(text, ctx)); chain = p.catch(() => {}); return p; };
   // Aquece: avalia o prefixo fixo agora, não na primeira mensagem da pessoa.
   await classify('hi', {});
+
+  // ── Expansão do pedido: só ACRESCENTA desambiguação; quem confere a saída é o main (validateExpansion).
+  // Falhou ao montar (memória?) → sem expansão; o classificador segue igual.
+  let xContext = null;
+  let expand = null;
+  try {
+    xContext = await model.createContext({ contextSize: 1024, sequences: 1 });
+    const xSession = new LlamaChatSession({ contextSequence: xContext.getSequence(), systemPrompt: buildExpandSystemPrompt() });
+    const xGrammar = await llama.createGrammarForJsonSchema(EXPAND_JSON_SCHEMA);
+    const xBase = xSession.getChatHistory();
+    let xChain = Promise.resolve();
+    const runExpand = async (text) => {
+      const t1 = Date.now();
+      xSession.setChatHistory(xBase);
+      const out = await xSession.prompt(buildExpandUserMessage(String(text || '')), { grammar: xGrammar, maxTokens: EXPAND_MAX_TOKENS, temperature: 0 });
+      return { raw: parseExpansion(out), ms: Date.now() - t1 };
+    };
+    expand = (text) => { const p = xChain.then(() => runExpand(text)); xChain = p.catch(() => {}); return p; };
+    await expand('download the vlc installer');   // aquece o prefixo fixo
+  } catch {
+    try { await xContext?.dispose(); } catch {}
+    xContext = null;
+    expand = null;
+  }
   return {
     classify,
+    expand,
     backend: llama.gpu || 'cpu',
     loadMs: Date.now() - t0,
-    dispose: async () => { try { await context.dispose(); await model.dispose(); await llama.dispose(); } catch {} },
+    dispose: async () => { try { await xContext?.dispose(); await context.dispose(); await model.dispose(); await llama.dispose(); } catch {} },
   };
 }
