@@ -38,6 +38,7 @@ import TabBar, { type TabCommand, type SessionCommand } from './components/TabBa
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
+import { PLATFORM, ARCH, IS_MAC, shortcut } from './platform';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
@@ -154,12 +155,12 @@ import { mergeFavorites, MAX_FAVORITES, type FlatBookmark } from '../shared/book
 const FAV_BAR_MAX = 100;
 const FAV_MENU_MAX = 150;
 // Atalho do "Imprimir…" como o sistema escreve (dica do item no menu ⋮).
-const BOOKMARK_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘D' : 'Ctrl+D';
-const PRINT_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘P' : 'Ctrl+P';
+const BOOKMARK_KEY = shortcut('⌘D', 'Ctrl+D');
+const PRINT_KEY = shortcut('⌘P', 'Ctrl+P');
 // Atalho da "Nova aba anônima" (o da janela anônima do Chrome).
-const INCOGNITO_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⇧⌘N' : 'Ctrl+Shift+N';
+const INCOGNITO_KEY = shortcut('⇧⌘N', 'Ctrl+Shift+N');
 // Atalho do Limpar dados de navegação, como no Chrome (no Mac a tecla "delete" é o Backspace).
-const CLEAR_DATA_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⇧⌘⌫' : 'Ctrl+Shift+Delete';
+const CLEAR_DATA_KEY = shortcut('⇧⌘⌫', 'Ctrl+Shift+Delete');
 
 declare global {
   interface Window {
@@ -294,6 +295,8 @@ declare global {
       cancelDownload?: (id: string) => Promise<any>;
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
+      platform?: string;
+      arch?: string;
       machineInfo?: () => Promise<MachineInput>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
@@ -7215,9 +7218,7 @@ function youtubeWatchId(u: string): string | null {
 // qualquer site de driver/instalador.
 // Agora também a CPU (arm64 num Mac Intel não roda) e o tipo de pacote no Linux — o perfil de
 // verdade vem do main (machine:info); até ele chegar, o palpite pelo navigator (só o SO).
-const IS_WINDOWS = typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform || '');
-const IS_LINUX = typeof navigator !== 'undefined' && /Linux/i.test(navigator.platform || '') && !/Android/i.test(navigator.userAgent || '');
-let MACHINE: MachineProfile = machineProfile({ platform: IS_WINDOWS ? 'win32' : IS_LINUX ? 'linux' : (typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '')) ? 'darwin' : 'other', arch: 'other' });
+let MACHINE: MachineProfile = machineProfile({ platform: PLATFORM, arch: ARCH });
 try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
 /** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
 function wrongOsNote(filename: string): string {
@@ -7275,8 +7276,6 @@ ${history.slice(-6000)}`;
   }
 }
 
-// macOS usa o semáforo nativo (titleBarStyle 'hidden'): sem os botões de janela do app.
-const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
 
 function fmtSize(b?: number): string {
   if (!b) return '';
