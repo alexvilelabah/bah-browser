@@ -12,6 +12,7 @@ import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, ope
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { runHandoff, classifyWebview, setHumanCheckFlag, humanCheckFlag } from './takeover-driver';
 import { TAKEOVER_TIMEOUT_MS, guardAgentAction, type TakeoverOutcome } from '../shared/takeover';
+import { collectHtmlScript, serializeHtml, selectorNotFoundMessage, pageHtmlBlock, type CollectResult } from '../shared/html-clean';
 import { classifyHumanCheck, HUMAN_CHECK_SIGNALS_JS, type HumanCheckKind, type HumanCheckVerdict } from '../shared/human-check';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import {
@@ -266,6 +267,7 @@ declare global {
       clipboardReadText?: () => Promise<string>;
       clipboardWriteText?: (text: string) => Promise<any>;
       inspect?: (wcId: number, target: any) => Promise<{ ok: boolean; state?: any; error?: string }>;
+      markRefs?: (wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => Promise<{ ok: boolean; marked?: number; error?: string }>;
       keyState?: (wcId: number, key: string, down: boolean) => Promise<any>;
       insertText?: (wcId: number, text: string) => Promise<any>;
       waitNetworkIdle?: (wcId: number, idleMs: number, timeoutMs: number) => Promise<{ ok: boolean; waitedMs?: number; error?: string }>;
@@ -2837,6 +2839,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const taskUploads: Array<{ token: string; names: string[] }> = [];
               // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
+              // get_html: o HTML limpo vai INTEIRO no próximo pedido (bloco próprio, antes do PAGE TEXT) — o
+              // RECENT HISTORY só leva os últimos 2500 caracteres e cortaria o começo. Vale 1 passo.
+              let pendingHtml = '';
               // Download que começou NESTA tarefa (não um que terminou depois, vindo da anterior).
               const ofThisTask = (d: any) => !!d && (d.startedAt ?? 0) >= taskStartedAt;
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
@@ -4223,6 +4228,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     newElementCount > 0 ? `(${newElementCount} element(s) marked with '*' are NEW since your last action — e.g. a popup/modal/result that just appeared)` : '',
                     compactDom || '(none detected)',
                     '',
+                    pendingHtml,
                     `PAGE TEXT: ${observation.text_sample.slice(0, 1500)}`,
                     // Full OCR even when a frame is attached: main may still drop the image
                     // (capability/size/rejection) AFTER this payload is built, and then the OCR
@@ -4231,6 +4237,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
                   ].filter(s => s !== '').join('\n');
+                  pendingHtml = '';
                   // Anti-loop: track time on same URL
                   if (observation.url === lastSeenUrl) stepsOnSameUrl++;
                   else { stepsOnSameUrl = 1; lastSeenUrl = observation.url; }
@@ -6241,6 +6248,31 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (r?.ok && r.state) { history += `\nGET @${action.ref}: ${JSON.stringify(r.state)}`; toolResult = { success: true, info: { ref: action.ref } }; }
                       else toolResult = { success: false, error: r?.error || 'could not read the element' };
                     }
+                  } else if (action.type === 'get_html') {
+                    // Estrutura da página (HTML limpo) quando a lista de elementos é ambígua. Leitura passiva: o
+                    // main carimba o [N] da lista num atributo com nonce (o script lê e apaga), o script anda no
+                    // DOM pelo mesmo executeJavaScript do extract_text (recua pro mundo isolado em página sem
+                    // script) e a limpeza/segredos/corte ficam em shared/html-clean.ts.
+                    onProgress({ kind: 'status', message: t('feed.readingSource') });
+                    const wcIdH = (wv as any).getWebContentsId?.();
+                    const refAttr = `data-bah-ref-${Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('')}`;
+                    if (wcIdH != null && humanCheckFlag(wv)?.kind !== 'captcha' && window.electronAPI?.markRefs) {
+                      const marks = observation.interactive_elements.filter(e => !e.frameNode && !e.frame)
+                        .map(e => (e.backendNodeId != null ? { ref: e.id, backendNodeId: e.backendNodeId } : { ref: e.id, x: e.x, y: e.y }));
+                      await withTimeout(window.electronAPI.markRefs(wcIdH, refAttr, marks).catch(() => null), 4000, null);
+                    }
+                    const got = await withTimeout(wv.executeJavaScript(collectHtmlScript(action.selector || '', refAttr))
+                      .catch((e: any) => ({ ok: false, error: String(e?.message || e) })), 6000, null) as CollectResult | null;
+                    if (got == null) toolResult = { success: false, error: 'get_html timed out — page scripts are unresponsive. Use the element list / OCR TEXT instead.' };
+                    else if (!got.ok && (got.notFound || got.invalid)) toolResult = { success: false, error: selectorNotFoundMessage(action.selector || '', got.candidates, got.invalid) };
+                    else if (!got.ok || !got.tree) toolResult = { success: false, error: got.error || 'get_html could not read the page' };
+                    else {
+                      const ser = serializeHtml(got.tree, { max: action.max, cut: got.cut });
+                      const where = action.selector ? `"${action.selector}"` : 'the page body';
+                      pendingHtml = pageHtmlBlock(where, wv.getURL(), ser.html).trim();
+                      history += `\nGET_HTML ${where}: ${ser.html.length} chars${ser.truncated ? ' (truncated)' : ''} — shown once in the PAGE HTML block of the next step; act on its [#N] refs with click_ref/fill_ref.`;
+                      toolResult = { success: true, info: { chars: ser.html.length, truncated: ser.truncated } };
+                    }
                   } else if ((action.type === 'keydown' || action.type === 'keyup' || action.type === 'insert_text') && wcId != null) {
                     toolResult = action.type === 'insert_text'
                       ? await window.electronAPI?.insertText?.(wcId, action.text)
@@ -6675,7 +6707,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
-                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
+                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
@@ -6739,7 +6771,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
-                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';

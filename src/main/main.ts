@@ -1996,6 +1996,14 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
             const want = a[key].slice(6, -2).toLowerCase();
             const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
             a = { ...a, [key]: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+          } else if (typeof a[key] === 'string' && a[key].startsWith('__HTMLREF:')) {
+            // "__HTMLREF:<text>__" → the [#N] of the first tag in the LATEST "PAGE HTML" block (get_html)
+            // whose tag + text contains <text> — what a model reading the HTML would pick.
+            const want = a[key].slice(10, -2).toLowerCase();
+            const all = `${command}\n${pageContent ?? ''}`;
+            const at = all.lastIndexOf('PAGE HTML of');
+            const hit = at < 0 ? null : [...all.slice(at).matchAll(/<[a-z0-9-]+ \[#(\d+)\][^>]*>[^<]*/gi)].find(x => x[0].toLowerCase().includes(want));
+            a = { ...a, [key]: hit ? Number(hit[1]) : -1 };
           }
         }
         return {

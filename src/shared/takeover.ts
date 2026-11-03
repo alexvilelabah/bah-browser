@@ -108,7 +108,7 @@ export const waitingItems = (s: TakeoverState): TakeoverItem[] => s.items.filter
 // Allowlist, not denylist: a new action type is refused here until someone decides it is passive.
 const ALLOWED_ON_HUMAN_CHECK = new Set<string>([
   // passive reads of the page / screenshots
-  'screenshot', 'extract_text', 'extract_images', 'get', 'wait',
+  'screenshot', 'extract_text', 'extract_images', 'get', 'get_html', 'wait',
   // leaving the page (never operating it)
   'navigate', 'back', 'new_tab', 'switch_tab', 'close_tab', 'web_search',
   // agent bookkeeping that never touches the page

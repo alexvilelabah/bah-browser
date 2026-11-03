@@ -209,6 +209,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
   inspect: (wcId: number, target: any) => ipcRenderer.invoke('cdp:inspect', wcId, target),
+  markRefs: (wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => ipcRenderer.invoke('cdp:mark-refs', wcId, attr, marks),
   keyState: (wcId: number, key: string, down: boolean) => ipcRenderer.invoke('input:key-state', wcId, key, down),
   insertText: (wcId: number, text: string) => ipcRenderer.invoke('input:insert-text', wcId, text),
   selectAll: (wcId: number) => ipcRenderer.invoke('input:select-all', wcId),

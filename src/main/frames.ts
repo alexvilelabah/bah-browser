@@ -37,6 +37,35 @@ const sessionOf = (wcId: number, key: string): { ok: boolean; sid?: string } => 
 export function setupFrames(ensureDebugger: (wc: WebContents, id: number) => Promise<void>): void {
   // get { ref }: estado do elemento (valor, texto, marcado, habilitado, visível, atributos úteis). Nó da página
   // (backendNodeId), de iframe (key + id) ou, sem id, o elemento na posição.
+  // get_html: carimba o número da lista de elementos ([N]) em cada nó, num atributo temporário com nonce
+  // (`attr`), pra o script de leitura anotar "[#N]" e apagar o carimbo em seguida. Mesma numeração da
+  // lista (nó da página por backendNodeId; sem id, o elemento na posição). Iframes ficam de fora.
+  ipcMain.handle('cdp:mark-refs', async (_e, wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'tab not found' };
+    if (!/^data-bah-ref-[a-z0-9]{6,32}$/.test(String(attr))) return { ok: false, error: 'bad attribute' };
+    try {
+      await ensureDebugger(wc, wcId);
+      let marked = 0;
+      const list = (Array.isArray(marks) ? marks : []).slice(0, 300);
+      const fn = `function(a, r){ var el = this.nodeType === 1 ? this : this.parentElement; if (el) el.setAttribute(a, String(r)); }`;
+      for (let i = 0; i < list.length; i += 30) {
+        await Promise.all(list.slice(i, i + 30).map(async (m) => {
+          try {
+            let node = m.backendNodeId;
+            if (node == null && m.x != null && m.y != null) node = (await wc.debugger.sendCommand('DOM.getNodeForLocation', { x: Math.round(m.x), y: Math.round(m.y) }) as any)?.backendNodeId;
+            if (node == null) return;
+            const objectId = (await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId: node }) as any)?.object?.objectId;
+            if (!objectId) return;
+            await wc.debugger.sendCommand('Runtime.callFunctionOn', { objectId, functionDeclaration: fn, arguments: [{ value: attr }, { value: m.ref }] });
+            marked++;
+          } catch { /* nó sumiu: fica sem número */ }
+        }));
+      }
+      return { ok: true, marked };
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+  });
+
   ipcMain.handle('cdp:inspect', async (_e, wcId: number, target: { backendNodeId?: number; key?: string; id?: number; x?: number; y?: number }) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { ok: false, error: 'tab not found' };

@@ -116,7 +116,7 @@ test('guard: on a human check, every page interaction is refused; passive reads 
     assert.match(r!, /human check/);
     assert.match(r!, /never operates/);
   }
-  for (const a of ['screenshot', 'extract_text', 'get', 'wait', 'navigate', 'back', 'new_tab', 'switch_tab', 'close_tab', 'web_search', 'done', 'report', 'store'])
+  for (const a of ['screenshot', 'extract_text', 'get', 'get_html', 'wait', 'navigate', 'back', 'new_tab', 'switch_tab', 'close_tab', 'web_search', 'done', 'report', 'store'])
     assert.strictEqual(guardAgentAction(a, check), null, `${a} is passive / leaves the page`);
   // Not a human check (normal page, or a sign-in wall) → the guard does not apply.
   assert.strictEqual(guardAgentAction('click_ref', null), null);
