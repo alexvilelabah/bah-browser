@@ -260,6 +260,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   proxySet: (c: any) => ipcRenderer.invoke('proxy:set', c),
   proxyTest: (url?: string) => ipcRenderer.invoke('proxy:test', url),
   proxyForgetPasswords: () => ipcRenderer.invoke('proxy:forget-passwords'),
+  secureDnsGet: () => ipcRenderer.invoke('dns:get'),
+  secureDnsSet: (s: any) => ipcRenderer.invoke('dns:set', s),
+  netGet: () => ipcRenderer.invoke('net:get'),
+  netSet: (p: any) => ipcRenderer.invoke('net:set', p),
+  netOpenOsSettings: () => ipcRenderer.invoke('net:open-os-settings'),
   proxyAuthResponse: (id: number, r: { user?: string; pass?: string; remember?: boolean } | null) => ipcRenderer.invoke('proxy:auth-response', id, r),
   onProxyAuthRequest: (cb: (req: { id: number; host: string; port: number; realm?: string; scheme?: string }) => void) => {
     const listener = (_e: any, req: any) => cb(req);

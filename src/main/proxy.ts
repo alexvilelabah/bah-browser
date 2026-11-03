@@ -9,7 +9,9 @@ import * as path from 'path';
 
 import { configFromEnv, toElectronProxy, type ProxyConfig } from './proxy-config';
 import { invalidateNetworkCountry } from './region';
-import { setBaseNetwork, extensionControlsProxy, extensionControlsRtc } from './proxy-base';
+import { setBaseNetwork, extensionControlsProxy, extensionControlsRtc, type RtcPolicy } from './proxy-base';
+import { getNetworkPrefs } from './network-privacy';
+import { webRtcPolicyFor } from '../shared/network-privacy';
 export type { ProxyConfig } from './proxy-config';
 
 const cfgPath = () => path.join(app.getPath('userData'), 'proxy.json');
@@ -32,12 +34,14 @@ async function applyTo(s: Session): Promise<void> {
 }
 
 // WebRTC fala UDP direto e ignora o proxy → o IP real vaza (STUN). Com proxy ativo, só UDP pelo
-// proxy (na prática: TURN/TCP). Sem proxy fica o padrão do Chrome, pra não piorar chamadas de vídeo.
-let rtcPolicy: 'default' | 'disable_non_proxied_udp' = 'default';
+// proxy (na prática: TURN/TCP). Sem proxy, só a interface pública: o padrão do Electron ('default')
+// entrega os IPs locais reais (IPv4 e IPv6, sem mDNS) pra qualquer página. A pessoa pode escolher
+// 'default' em ⋮ → Rede ("melhor qualidade de chamada") — network-privacy.ts.
+let rtcPolicy: RtcPolicy = 'default_public_interface_only';
 const setRtc = (wc: WebContents) => { try { if (!wc.isDestroyed() && !extensionControlsRtc(wc.session)) wc.setWebRTCIPHandlingPolicy(rtcPolicy); } catch {} };
 async function refreshRtcPolicy(): Promise<void> {
   const via = current.mode === 'direct' ? 'DIRECT' : await proxyFor('https://www.example.com/');
-  rtcPolicy = via.startsWith('DIRECT') ? 'default' : 'disable_non_proxied_udp';
+  rtcPolicy = webRtcPolicyFor(getNetworkPrefs(), !via.startsWith('DIRECT'));
   setBaseNetwork(toElectronProxy(current) as Electron.ProxyConfig, rtcPolicy);
   webContents.getAllWebContents().forEach(setRtc);
 }
@@ -118,6 +122,11 @@ export function setupProxy(getMainWindow: () => BrowserWindow | null): void {
     win.webContents.send('proxy:auth-request', { id, host: authInfo.host, port: authInfo.port, realm: authInfo.realm, scheme: authInfo.scheme });
   });
 }
+
+/** Config de proxy em vigor (pros avisos de vazamento do painel Rede). */
+export const getProxyConfig = (): ProxyConfig => current;
+/** Recalcula e reaplica a política de WebRTC (a escolha em ⋮ → Rede mudou). */
+export const refreshWebRtcPolicy = (): Promise<void> => refreshRtcPolicy();
 
 /** O proxy que o motor usaria pra esta URL ("DIRECT" ou "PROXY host:port; ..."). */
 export async function proxyFor(url: string): Promise<string> {

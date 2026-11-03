@@ -50,7 +50,9 @@ import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
 import { setupSkills } from './skills-loader';
-import { setupProxy, proxyFor } from './proxy';
+import { setupProxy, proxyFor, getProxyConfig, refreshWebRtcPolicy } from './proxy';
+import { setupSecureDns, getSecureDns } from './secure-dns';
+import { setupNetworkPrivacy, applyNetworkStartupSwitches } from './network-privacy';
 import { setupRegion, getTimezoneOverride } from './region';
 import { setupUpload, setUploadTextExtractor } from './upload';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
@@ -4003,6 +4005,8 @@ app.commandLine.appendSwitch('lang', LANG_SWITCH);
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// ⋮ → Rede: WebRTC sem IPv6 (field trial do WebRTC; só vale no boot).
+applyNetworkStartupSwitches();
 
 // Aceleração de hardware (GPU): em alguns PCs com vídeo integrado/driver velho, abrir uma aba
 // nova dá "tela branca" (o compositor da GPU não pinta o 1º frame; só carrega com F5). O usuário
@@ -4099,6 +4103,10 @@ app.whenReady().then(async () => {
   // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
   // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
   setupProxy(() => mainWindow);
+  // DNS seguro (DoH) escolhido pela pessoa — app inteiro; padrão "system" não mexe em nada.
+  setupSecureDns();
+  // ⋮ → Rede: WebRTC (vazamento de IP) + avisos de vazamento (proxy/DNS/IPv4×IPv6).
+  setupNetworkPrivacy({ getProxy: getProxyConfig, getSecureDns, refreshWebRtc: refreshWebRtcPolicy });
   setupRegion(applyTimezoneEverywhere, () => mainWindow);
   setupUpload(() => mainWindow, sharedEnsureDebugger);
   setupJsDialogs();
