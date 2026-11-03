@@ -2459,6 +2459,18 @@ body {
 .proxy-status{ font-size:12.5px; color:var(--text-primary); word-break:break-word; }
 .proxy-foot{ gap:8px; }
 .proxy-foot .tour-btn:not(.tour-btn-primary){ background:rgba(255,255,255,0.08); color:var(--text-primary); }
+.proxy-settings{ max-height:86vh; overflow:auto; }
+/* DNS seguro (dentro de Rede e proxy) */
+.dns-section{ display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--border); padding-top:12px; margin-top:2px; }
+.dns-title{ font-size:13.5px; font-weight:600; color:var(--text-primary); }
+.dns-presets{ display:flex; flex-direction:column; gap:6px; }
+.dns-preset{ display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+.dns-preset.on{ border-color:var(--accent); }
+.dns-preset input{ margin-top:2px; }
+.dns-preset-body{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.dns-preset-name{ font-size:13px; color:var(--text-primary); font-weight:600; }
+.dns-preset-url{ font-size:11.5px; color:var(--text-secondary); word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dns-preset-tags{ font-size:11.5px; color:var(--text-secondary); }
 
 
 /* Região e hora */

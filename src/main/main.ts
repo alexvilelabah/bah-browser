@@ -51,6 +51,7 @@ import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
 import { setupSkills } from './skills-loader';
 import { setupProxy, proxyFor } from './proxy';
+import { setupSecureDns } from './secure-dns';
 import { setupRegion, getTimezoneOverride } from './region';
 import { setupUpload, setUploadTextExtractor } from './upload';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
@@ -4075,6 +4076,8 @@ app.whenReady().then(async () => {
   // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
   // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
   setupProxy(() => mainWindow);
+  // DNS seguro (DoH) escolhido pela pessoa — app inteiro; padrão "system" não mexe em nada.
+  setupSecureDns();
   setupRegion(applyTimezoneEverywhere, () => mainWindow);
   setupUpload(() => mainWindow, sharedEnsureDebugger);
   setupJsDialogs();

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { t } from '../i18n';
+import { SECURE_DNS_PRESETS, type SecureDnsSetting, type SecureDnsMode } from '../../shared/secure-dns';
 
 type Mode = 'system' | 'manual' | 'pac' | 'direct';
 type ProxyConfig = { mode: Mode; server?: string; pacUrl?: string; bypass?: string };
@@ -31,7 +32,7 @@ export function ProxySettings(props: { onClose: () => void }) {
 
   return (
     <div className="tour-backdrop" onClick={props.onClose}>
-      <div className="tour-card proxy-card" onClick={e => e.stopPropagation()}>
+      <div className="tour-card proxy-card proxy-settings" onClick={e => e.stopPropagation()}>
         <div className="tour-head">
           <span className="tour-title">🌐 {t('proxy.title')}</span>
           <button className="tour-x" onClick={props.onClose} aria-label={t('proxy.close')}>✕</button>
@@ -71,8 +72,87 @@ export function ProxySettings(props: { onClose: () => void }) {
           <button className="tour-btn proxy-test" onClick={test}>{t('proxy.test')}</button>
           <button className="tour-btn tour-btn-primary proxy-save" onClick={save}>{t('proxy.save')}</button>
         </div>
+        <SecureDnsSettings proxyActive={cfg.mode === 'manual' || cfg.mode === 'pac'} />
       </div>
     </div>
+  );
+}
+
+/** DNS seguro (DoH): sistema (padrão) / provedor público / NextDNS / servidor próprio; estrito opcional. */
+function SecureDnsSettings(props: { proxyActive: boolean }) {
+  const api = window.electronAPI as any;
+  const [s, setS] = useState<SecureDnsSetting>({ mode: 'system' });
+  const [status, setStatus] = useState('');
+
+  useEffect(() => { api?.secureDnsGet?.().then((r: any) => { if (r?.setting) setS(r.setting); }); }, []);
+  const set = (patch: Partial<SecureDnsSetting>) => { setS(c => ({ ...c, ...patch })); setStatus(''); };
+  const save = async () => {
+    const r = await api?.secureDnsSet?.(s);
+    if (r?.ok && r.setting) setS(r.setting);
+    setStatus(r?.ok ? t('dns.saved') : `${t('dns.error')}: ${r?.error || ''}`);
+  };
+  const yn = (b: boolean) => t(b ? 'dns.yes' : 'dns.no');
+
+  return (
+    <section className="dns-section" aria-label={t('dns.title')}>
+      <div className="dns-title">🔒 {t('dns.title')}</div>
+      <div className="proxy-hint">{t('dns.intro')}</div>
+      <label className="proxy-row">
+        <span>{t('dns.mode')}</span>
+        <select className="dns-mode" value={s.mode} onChange={e => {
+          const mode = e.target.value as SecureDnsMode;
+          set(mode === 'preset' && !s.preset ? { mode, preset: SECURE_DNS_PRESETS[0].id } : { mode });
+        }}>
+          <option value="system">{t('dns.mode.system')}</option>
+          <option value="preset">{t('dns.mode.preset')}</option>
+          <option value="nextdns">{t('dns.mode.nextdns')}</option>
+          <option value="custom">{t('dns.mode.custom')}</option>
+        </select>
+      </label>
+      {s.mode === 'system' && <div className="proxy-hint">{t('dns.hint.system')}</div>}
+      {s.mode === 'preset' && (
+        <div className="dns-presets" role="radiogroup">
+          {SECURE_DNS_PRESETS.map(p => (
+            <label key={p.id} className={`dns-preset${s.preset === p.id ? ' on' : ''}`} data-preset={p.id}>
+              <input type="radio" name="dns-preset" checked={s.preset === p.id} onChange={() => set({ preset: p.id })} />
+              <span className="dns-preset-body">
+                <span className="dns-preset-name">{p.name}</span>
+                <span className="dns-preset-url">{p.url}</span>
+                <span className="dns-preset-tags">
+                  {t('dns.adBlocking')}: {yn(p.adBlocking)}{p.malwareBlocking ? ` (${t('dns.malware')})` : ''} · {t('dns.signup')}: {t('dns.none')} · {t('dns.manageLists')}: {yn(p.userManagedLists)}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {s.mode === 'nextdns' && (<>
+        <label className="proxy-row">
+          <span>{t('dns.nextdnsId')}</span>
+          <input className="dns-nextdns" value={s.nextdnsId || ''} placeholder="abc123" spellCheck={false} onChange={e => set({ nextdnsId: e.target.value })} />
+        </label>
+        <div className="proxy-hint">{t('dns.hint.nextdns')}</div>
+      </>)}
+      {s.mode === 'custom' && (<>
+        <label className="proxy-row">
+          <span>{t('dns.customUrl')}</span>
+          <input className="dns-custom" value={s.customUrl || ''} placeholder="https://pihole.lan/dns-query" spellCheck={false} onChange={e => set({ customUrl: e.target.value })} />
+        </label>
+        <div className="proxy-hint">{t('dns.hint.custom')}</div>
+      </>)}
+      {s.mode !== 'system' && (<>
+        <label className="proxy-check">
+          <input type="checkbox" className="dns-strict" checked={!!s.strict} onChange={e => set({ strict: e.target.checked })} />
+          <span>{t('dns.strict')}</span>
+        </label>
+        <div className="proxy-hint">{t('dns.strictHint')}</div>
+      </>)}
+      {props.proxyActive && <div className="proxy-note dns-proxy-note">{t('dns.proxyNote')}</div>}
+      {status && <div className="proxy-status dns-status">{status}</div>}
+      <div className="tour-foot proxy-foot">
+        <button className="tour-btn tour-btn-primary dns-save" onClick={save}>{t('dns.save')}</button>
+      </div>
+    </section>
   );
 }
 

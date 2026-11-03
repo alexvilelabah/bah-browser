@@ -62,6 +62,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `upload.ts` | `upload` do agente (diálogo do SO → token; campo por nó/label/posição, ou o seletor do SO interceptado com `Page.setInterceptFileChooserDialog` durante a ação; `DOM.setFileInputFiles`) e pastas liberadas na sessão pra `list_files` / `read_file` / `upload { file }` (conferidas por realpath) |
 | `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Região e hora: país de saída da rede (trace da Cloudflare, só no Automático, cache de 10 min), região de compras, fuso dos sites via CDP `Emulation.setTimezoneOverride` (volta ao reiniciar, salvo se mantido); linha de região do agente, `gl=`/`cc=` na busca, cartão `suggest_time_zone` |
 | `proxy-base.ts` | Ponte entre o proxy do Bah e o `chrome.proxy` das extensões (VPN de extensão): extensão no controle vence (como no Chrome); quando solta, as abas voltam pro proxy configurado no Bah, não um "sistema" fixo; a política de WebRTC do Bah é a base das extensões |
+| `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | DNS seguro (DNS sobre HTTPS) escolhido pela pessoa: `app.configureHostResolver` pro app inteiro, IPC `dns:*`. Veja [DNS seguro](#dns-seguro-dns-sobre-https) |
 | `system-ca.ts` | Lê o repositório de certificados-raiz do SO e soma às CAs padrão do Node (`tls.setDefaultCACertificates`) — processo principal e worker de download — pra proxies corporativos com inspeção TLS |
 | `video-cuts.ts`, `transcript.ts` | Recursos de vídeo locais (localizar onde uma frase é dita, transcrições) — ffmpeg nativo |
 | `image-harvester.ts` | Colheita de imagens em massa + geração de imagem por IA (Pollinations), com limites |
@@ -70,6 +71,29 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `validate.ts` | Helpers de segurança de caminho (`isInsideAllowedRoot` etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
 | `job-queue.ts` | Serializa tarefas longas |
+
+### DNS seguro (DNS sobre HTTPS)
+
+⋮ → Rede e proxy → **DNS seguro**. Salvo em `userData/secure-dns.json`; `src/shared/secure-dns.ts`
+converte a configuração em `app.configureHostResolver({ secureDnsMode, secureDnsServers })` (validado,
+com teste unitário; entrada ruim volta pro Sistema). O resolvedor é do serviço de rede único do Chromium,
+então uma configuração vale pra **todas** as sessões: abas, anônima, janelas de login do Google e as
+requisições do próprio Bah. Aplicado depois do `ready` e reaplicado na hora quando a pessoa salva
+(as conexões abertas são fechadas).
+
+| Modo | Resolvedor |
+|---|---|
+| **Sistema** (padrão) | O Bah nem chama o `configureHostResolver`: padrão do Chromium (`automatic`, sem servidores: DNS comum da rede, cifrado só se o provedor do sistema tiver DoH). Nada muda até a pessoa escolher; voltar pro Sistema reaplica exatamente esse padrão |
+| Provedor (sem conta) | AdGuard DNS `https://dns.adguard-dns.com/dns-query` (anúncios + malware), Mullvad adblock `https://adblock.dns.mullvad.net/dns-query` (anúncios), Quad9 `https://dns.quad9.net/dns-query` (malware), Cloudflare `https://cloudflare-dns.com/dns-query` (sem filtro). As listas são do provedor |
+| NextDNS | `https://dns.nextdns.io/<id>` — a configuração da própria pessoa (conta grátis; ela gerencia as listas). Nunca é o padrão porque exige conta |
+| Personalizado | Qualquer modelo DoH `https://` (`{?dns}` aceito), ex.: Pi-hole / AdGuard Home na rede local; `http://` recusado |
+
+**Estrito** (desligado por padrão) vira `secure` (a consulta falha se o servidor DoH não responder) em vez
+de `automatic` (cai pro DNS comum da rede). Com proxy configurado, o proxy pode resolver os nomes do
+tráfego que passa por ele (HTTP CONNECT, SOCKS5) — o painel avisa; o comportamento do proxy não muda.
+
+É configuração do núcleo, não extensão: extensões do Chrome não têm API pra definir o resolvedor, e
+Chrome / Edge / Brave / Firefox mantêm o DNS seguro nas próprias configurações.
 
 ### Downloads e torrents
 
