@@ -64,3 +64,21 @@ test("collections: an artist's top N / most famous songs or videos is a collecti
   assert.ok(!isMediaCollectionRequest('download the most famous Michael Jackson video'));
   assert.ok(!isMediaCollectionRequest('find the most famous Michael Jackson songs'));   // no download
 });
+
+test('top-N collections: detection, count, prompt and parsing of the model list', async () => {
+  const { isTopNCollection, collectionCount, topNListPrompt, parseTopNList } = await import('../../src/renderer/download-steps.ts');
+  const mj = "Find Michael Jackson's most famous songs and download all of their music videos, just the top 3";
+  assert.ok(isTopNCollection(mj));
+  assert.ok(isTopNCollection('download the top 5 Queen music videos'));
+  assert.ok(!isTopNCollection('find all the music videos from the movie top gun and download them'));   // soundtrack: look it up
+  assert.equal(collectionCount(mj), 3);
+  assert.equal(collectionCount('find the most famous Michael Jackson music videos and download 3 of them'), 3);
+  assert.equal(collectionCount('download the top 5 Queen music videos'), 5);
+  assert.equal(collectionCount('baixe os maiores sucessos do Tim Maia'), 5);
+  assert.match(topNListPrompt(mj, 3), /exactly 3 strings/);
+  assert.deepEqual(parseTopNList('```json\n["Billie Jean — Michael Jackson", "Thriller — Michael Jackson", "Beat It — Michael Jackson"]\n```', 3),
+    ['Billie Jean — Michael Jackson', 'Thriller — Michael Jackson', 'Beat It — Michael Jackson']);
+  assert.deepEqual(parseTopNList('Here you go:\n1. "Billie Jean — Michael Jackson"\n2. Thriller — Michael Jackson\n3. Beat It — Michael Jackson\n4. Bad — Michael Jackson', 3),
+    ['Billie Jean — Michael Jackson', 'Thriller — Michael Jackson', 'Beat It — Michael Jackson']);
+  assert.deepEqual(parseTopNList('I am not sure.', 3), []);
+});
