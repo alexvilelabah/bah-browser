@@ -42,7 +42,7 @@ export interface FieldInfo {
   automationId?: string;
 }
 
-export interface FillDecision { idx: number; label: string; value?: string; option?: number; source: 'profile' | 'saved' | 'resume' | 'voluntary' }
+export interface FillDecision { idx: number; label: string; value?: string; option?: number; source: 'profile' | 'saved' | 'resume' | 'voluntary' | 'support' }
 
 const norm = (s?: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/[*:?!.,()[\]_/\\'’-]+/g, ' ').replace(/\s+/g, ' ').trim();
