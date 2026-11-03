@@ -241,6 +241,10 @@ const CAPTCHA_RE = /\b(?:captcha|recaptcha|hcaptcha|are\s+you\s+a\s+(?:robot|hum
 const DENIED_RE = /\b(?:access\s+denied|acesso\s+negado|forbidden|you\s+don't\s+have\s+permission\s+to\s+access|request\s+(?:was\s+)?blocked|you\s+have\s+been\s+blocked|too\s+many\s+requests)\b/i;
 const ERROR_RE = /(?:sorry[!,.]?\s+something\s+went\s+wrong|something\s+went\s+wrong|page\s+not\s+found|\b404\b|service\s+unavailable|temporarily\s+unavailable|internal\s+server\s+error|an\s+error\s+(?:has\s+)?occurred|we'?re\s+having\s+(?:some\s+)?trouble|algo\s+deu\s+errado|p[aá]gina\s+n[aã]o\s+encontrada|this\s+site\s+can'?t\s+be\s+reached|err_[a-z_]+)/i;
 const SIGNIN_RE = /\b(?:sign\s+in\s+to\s+continue|log\s+in\s+to\s+continue|please\s+sign\s+in|sign\s+in\s+required|you\s+must\s+(?:be\s+)?(?:signed|logged)\s+in|fa[cç]a\s+login\s+para\s+continuar|entre\s+na\s+sua\s+conta\s+para)\b/i;
+// Frases que só aparecem numa porteira de robô — valem mesmo numa página longa (a Target põe o
+// "Quick verification / Press & hold" por cima da página do produto, com o texto dela embaixo).
+const STRONG_CAPTCHA_RE = /\b(?:quick\s+verification|press\s+(?:&|and)\s+hold|(?:and\s+)?not\s+a\s+(?:ro)?bot\b|confirm\s+(?:that\s+)?you(?:'re|’re|\s+are)\s+(?:a\s+)?human|captcha)/i;
+const BLOCK_WORDS_RE = /\b(?:captcha|robot|bot|human|verif\w*|denied|forbidden|403|blocked|sign[\s-]?in|log[\s-]?in|error|unavailable|country|region)\b/i;
 const COUNTRY_RE = /\b(?:choose\s+a\s+country|select\s+your\s+(?:country|region)|escolha\s+(?:o\s+)?(?:seu\s+)?pa[ií]s)\b/i;
 
 /**
@@ -255,7 +259,7 @@ export function blockedReason(page: { url: string; title?: string; text?: string
   if (!isStoreSource(url, store)) return `left ${store.domain} (ended on ${hostOf(url) || url})`;
   const short = text.length < 2500;
   const head = `${title}\n${short ? text : text.slice(0, 600)}`;
-  if (CAPTCHA_RE.test(title) || (short && CAPTCHA_RE.test(text))) return 'bot check / captcha';
+  if (CAPTCHA_RE.test(title) || (short && CAPTCHA_RE.test(text)) || STRONG_CAPTCHA_RE.test(text)) return 'bot check / captcha';
   if (DENIED_RE.test(title) || (short && DENIED_RE.test(text))) return 'access denied (blocked)';
   if (/\/(?:ap\/signin|signin|sign-in|login|log-in|account\/login|identity)\b/i.test(new URL(url).pathname) || (short && SIGNIN_RE.test(head))) return 'sign-in wall';
   if (short && COUNTRY_RE.test(head)) return 'country selection page';
@@ -402,7 +406,9 @@ export function checkRead(read: PriceRead | null, page: { url: string; text: str
   const base = { store: store.label, url: page.url };
   if (!isStoreSource(page.url, store)) return { ...base, status: 'blocked', reason: `left ${store.domain}` };
   if (!read) return { ...base, status: 'not_found', reason: "couldn't read the page" };
-  if (read.blocked) return { ...base, status: 'blocked', reason: read.blocked };
+  // "blocked" do modelo só vale se fala de bloqueio de verdade; "não achei o produto" ali é não-encontrado.
+  if (read.blocked && BLOCK_WORDS_RE.test(read.blocked)) return { ...base, status: 'blocked', reason: read.blocked };
+  if (read.blocked && !read.price) return { ...base, status: 'not_found', reason: read.blocked };
   if (!read.found || !read.price) return { ...base, status: 'not_found', reason: 'no matching product with a visible price' };
   if (!titleMatchesQuery(read.title, query) || looksLikeAccessory(read.title, query)) return { ...base, status: 'not_found', reason: `best match was "${read.title.slice(0, 60)}", not the product` };
   if (!priceOnPage(read.price, page.text)) return { ...base, status: 'not_found', reason: `price ${read.price} not confirmed on the page` };

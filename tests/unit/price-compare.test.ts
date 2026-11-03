@@ -110,6 +110,9 @@ test('blocked pages: error, captcha, bot check, sign-in, off-domain — but not 
   // A real results page that happens to mention "robot" (a robot vacuum) is readable.
   const results = 'Results\n' + Array.from({ length: 60 }, (_, i) => `iRobot Roomba robot vacuum ${i}\n$${199 + i}.99`).join('\n');
   assert.strictEqual(blockedReason({ url: 'https://www.amazon.com/s?k=robot+vacuum', title: 'Amazon.com : robot vacuum', text: results }, amz), null);
+  // Target's press-and-hold check sits over a long product page: still a bot check (live take3).
+  const tgt = 'Apple AirPods Pro 3\n' + 'details '.repeat(500) + '\nQuick verification\nPress & hold to confirm you\'re a human (and not a bot).';
+  assert.strictEqual(blockedReason({ url: 'https://www.target.com/p/ap2022/-/A-85978609', title: 'Apple AirPods Pro 3 : Target', text: tgt }, store('target')), 'bot check / captcha');
 });
 
 test('prices: parsing and confirmation against the page text', () => {
@@ -182,4 +185,13 @@ test('table lists every store attempted with links; summary counts read vs block
   assert.match(msg, /read 2 \(Target \$189\.99, Best Buy \$199\.99\)/);
   assert.match(msg, /blocked 2 \(Amazon — error page; Walmart — bot check \/ captcha\)/);
   assert.match(msg, /Cheapest: Target — \$189\.99/);
+});
+
+test('checkRead: the model putting "no product" in blocked is not-found, a real block stays blocked', () => {
+  const t = store('target');
+  const page = { url: 'https://www.target.com/s?searchTerm=AirPods+Pro', text: 'Results ' + 'x'.repeat(3000) };
+  const r1 = checkRead({ found: false, title: '', price: '', availability: '', blocked: 'No matching product with visible price found.' }, page, t, 'AirPods Pro');
+  assert.strictEqual(r1.status, 'not_found');
+  const r2 = checkRead({ found: false, title: '', price: '', availability: '', blocked: 'Robot check: press and hold' }, page, t, 'AirPods Pro');
+  assert.strictEqual(r2.status, 'blocked');
 });
