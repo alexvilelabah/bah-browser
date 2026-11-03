@@ -37,7 +37,7 @@ export function supportRequestText(command: string, previousGoal?: string | null
 export interface SupportSite { vendor: string; names: string[]; support: string; community?: string; domains: string[] }
 export const SUPPORT_SITES: SupportSite[] = [
   { vendor: 'Apple', names: ['apple', 'macbook', 'imac', 'iphone', 'ipad', 'airpods', 'apple watch', 'mac mini', 'mac studio'], support: 'https://support.apple.com/', community: 'https://discussions.apple.com/', domains: ['apple.com'] },
-  { vendor: 'Dell', names: ['dell', 'xps', 'alienware', 'inspiron', 'latitude', 'precision', 'optiplex'], support: 'https://www.dell.com/support/home/', community: 'https://www.dell.com/community/', domains: ['dell.com', 'delltechnologies.com'] },
+  { vendor: 'Dell', names: ['dell', 'xps', 'alienware', 'inspiron', 'latitude', 'precision', 'optiplex'], support: 'https://www.dell.com/support/home/en-us', community: 'https://www.dell.com/community/', domains: ['dell.com', 'delltechnologies.com'] },
   { vendor: 'HP', names: ['hp', 'hewlett-packard', 'hewlett packard', 'pavilion', 'elitebook', 'omen', 'spectre', 'envy'], support: 'https://support.hp.com/', community: 'https://h30434.www3.hp.com/', domains: ['hp.com'] },
   { vendor: 'Lenovo', names: ['lenovo', 'thinkpad', 'ideapad', 'legion', 'yoga'], support: 'https://support.lenovo.com/', community: 'https://forums.lenovo.com/', domains: ['lenovo.com'] },
   { vendor: 'Microsoft', names: ['microsoft', 'surface', 'xbox'], support: 'https://support.microsoft.com/', community: 'https://answers.microsoft.com/', domains: ['microsoft.com', 'live.com'] },
@@ -57,10 +57,12 @@ export function supportSiteFor(command: string): SupportSite | null {
 
 /** Chamado com fabricante conhecido: sair do domínio dele (notebookcheck, Gmail, busca) é recusado.
  *  Devolve o motivo, ou null se pode. Endereço escrito pela pessoa libera (ela escolheu). */
-export function offSupportSite(action: { type: string; url?: string }, supportText: string): string | null {
+export function offSupportSite(action: { type: string; url?: string }, supportText: string, opts: { pageFailed?: boolean } = {}): string | null {
   const site = supportSiteFor(supportText);
   if (!site || /https?:\/\//i.test(supportText)) return null;
-  if (action.type === 'web_search') return `stay on ${site.vendor}'s own support site (${site.support}) — use its search or menus instead of a web search.`;
+  // Página do fabricante que não carregou (Access Denied, 404, em branco): a busca na web acha o
+  // endereço certo dela. Só a BUSCA é liberada — abrir um resultado continua restrito ao domínio dele.
+  if (action.type === 'web_search') return opts.pageFailed ? null : `stay on ${site.vendor}'s own support site (${site.support}) — use its search or menus instead of a web search.`;
   if (action.type !== 'navigate' && action.type !== 'new_tab') return null;
   let host = '';
   try { host = new URL(/^https?:\/\//i.test(action.url || '') ? String(action.url) : `https://${action.url || ''}`).hostname.toLowerCase(); } catch { return null; }

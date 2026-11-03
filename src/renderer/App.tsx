@@ -112,7 +112,9 @@ import {
   type QuickAction,
 } from './site-knowledge';
 import { namedSiteHint } from './known-sites';
-import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, supportPromptBlock, formatSupportDraft, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
+import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, commandIsSupport as isSupportCommand, supportPromptBlock, formatSupportDraft, supportSiteFor, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
+import { supportFacts, draftPrompt, finalDraft, planSupportFill, findingFrom, supportFinishProblem, supportThreadContext } from './support-draft';
+import { pageLoadProblem, pageLoadHint } from './page-load';
 import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
@@ -336,6 +338,7 @@ declare global {
       schedList?: () => Promise<{ tasks: import('../shared/schedule').ScheduledTask[]; available: boolean }>;
       schedSave?: (list: import('../shared/schedule').ScheduledTask[]) => Promise<{ ok: boolean; tasks: import('../shared/schedule').ScheduledTask[] }>;
       schedClock?: () => Promise<{ offset: number; test: boolean }>;
+      e2eSearchResults?: (q: string) => Promise<Array<{ title: string; snippet: string; url: string }> | null>;
       schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
       onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       applicantGet?: () => Promise<{ profile: import('../shared/form-fill').ApplicantProfile; answers: Record<string, string>; available: boolean }>;
@@ -1801,6 +1804,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   const searchWebResults = useCallback(async (query: string): Promise<{ results: Array<{ title: string; snippet: string; url: string }>; engine?: string; blocked: boolean; error?: string }> => {
     const q = (query || '').trim();
     if (!q) return { results: [], blocked: false, error: 'Empty query.' };
+    // Teste E2E: resultados fixos (main só devolve algo com NODE_ENV=test) — nada de buscador de verdade.
+    const fixed = await window.electronAPI?.e2eSearchResults?.(q).catch(() => null);
+    if (Array.isArray(fixed)) return { results: fixed.slice(0, 6), engine: 'E2E', blocked: false };
     const engines = engineOrder();
     // Perguntou numa aba anônima: a busca escondida também é anônima.
     const bgId = store.addHiddenTab(engines[0].url(q), opensIncognito('from-tab', aiOnIncognito()));
@@ -2737,6 +2743,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 supportBlock = supportPromptBlock(supportText, applicant?.profile);
                 if (supportText !== command) supportBlock += `\nTHIS IS A FOLLOW-UP to the support request: ${prevGoal?.goal?.slice(0, 300)}`;
               }
+              // Rascunho do chamado: o que a pessoa disse depois do pedido (respostas na conversa) e o que o
+              // agente achou (tópico parecido no fórum) — o formulário é preenchido com isso, por código.
+              const supportFollowUps = supportText && supportText !== command
+                ? [...supportThreadContext((getThread(threadKey)?.entries || []) as any, isSupportCommand).followUps, command] : [];
+              const supportFindings: string[] = [];
+              const supportFilledForms = new Set<string>();
+              const supportSite = supportText && !/https?:\/\//i.test(supportText) ? supportSiteFor(supportText) : null;
+              // Página que não carregou (Access Denied, 404, em branco): libera a busca na web pra achá-la.
+              let supportPageFailed = false;
+              const supportLoadFailures: string[] = [];
               const riskOpts = { jobs: commandIsJobs, unattended, cart: commandIsCart, support: commandIsSupport };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
               const openedJobIds = new Set<string>();
@@ -2866,7 +2882,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
                 // isso não é receita pra guardar.
-                const reportsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed to|not able to|não consegui|não foi possível|no pude)\b/i.test(reason);
+                const reportsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed to|not able to|was ?n[o']t able|gave up|give up|giving up|unfortunately|did ?n[o']t (manage|work|find)|não consegui|não foi possível|no pude)\b/i.test(reason);
                 if (status === 'success' && !reportsFailure && !repeatIntent && (history.match(/\nSTEP \d+:/g) || []).length >= 3) {
                   void offerSkillSave(command, history, onProgress);
                 }
@@ -3580,6 +3596,55 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   }
                   lastFormFields = isAppForm ? formFields : [];
+                  // Chamado / post: formulário com a caixa de descrição vazia → o Bah preenche POR CÓDIGO com o que
+                  // já se sabe (pedido + respostas da pessoa + produto/serial + o que o agente achou), uma vez por
+                  // formulário, e pede à pessoa pra conferir na aba. O envio final continua no freio do "message".
+                  if (supportText) {
+                    const found = findingFrom(observation.url, observation.title || '', supportText);
+                    if (found && !supportFindings.includes(found)) supportFindings.push(found);
+                    const scan = await withTimeout(wv.executeJavaScript(FORM_SCAN_SCRIPT), 4000, [] as FieldInfo[]).catch(() => [] as FieldInfo[]);
+                    const formKey = `${observation.url.split('#')[0]}|${(scan || []).map((f: FieldInfo) => f.label).join('|').slice(0, 400)}`;
+                    if (scan?.length && !supportFilledForms.has(formKey) && planSupportFill(scan, { subject: '-', description: '-' }, {}).length) {
+                      supportFilledForms.add(formKey);
+                      const facts = supportFacts(supportText, supportFollowUps, supportFindings);
+                      onProgress({ kind: 'status', message: t('agent.supportFill.drafting') });
+                      // Redação pelo modelo configurado, só com os fatos; falhou ou inventou → modelo fixo.
+                      const reply = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(draftPrompt(facts), '', true, store.localSettings.enabled)), 60000, undefined).catch(() => undefined);
+                      throwIfCancelled();
+                      const draft = finalDraft(facts, reply?.response || null);
+                      const applicant = await window.electronAPI?.applicantGet?.().catch(() => null);
+                      const plan = planSupportFill(scan, draft, facts, applicant?.profile);
+                      const pageExec = (js: string) => withTimeout(wv.executeJavaScript(js), 6000, null as any);
+                      const res = plan.length ? await applyFill(pageExec, plan, scan).catch(() => ({ done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> })) : { done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> };
+                      const filled = plan.filter(d => res.done.includes(d.idx));
+                      if (filled.length) {
+                        const shown = formatSupportDraft(filled.map(d => ({ label: d.label, value: d.value ?? ((scan.find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] || ''), type: d.what === 'description' ? 'textarea' : 'text' })));
+                        // Revisão: a pessoa confere e muda o que quiser direto na aba; Continuar segue. O relógio dorme.
+                        deadline.suspend();
+                        setAgentVisual('idle');
+                        const go = await new Promise<boolean>((resolve) => {
+                          let settled = false;
+                          const fin = (v: boolean) => { if (!settled) { settled = true; deadline.resume(); resolve(v); } };
+                          if (signal) signal.addEventListener('abort', () => fin(false), { once: true });
+                          onProgress({ kind: 'confirm', risk: 'support-review', label: 'support form',
+                            title: t(commandIsForum ? 'agent.supportFill.titleForum' : 'agent.supportFill.title'),
+                            message: t('agent.supportFill.message', { draft: shown, source: t(draft.source === 'model' ? 'agent.supportFill.byModel' : 'agent.supportFill.byTemplate') }),
+                            yesLabel: t('agent.supportFill.yes'), noLabel: t('agent.supportFill.no'),
+                            onConfirm: () => fin(true), onCancel: () => fin(false) });
+                        });
+                        throwIfCancelled();
+                        if (!go) {
+                          const msg = t('agent.supportFill.stopped');
+                          finishRun('cancelled', msg);
+                          return { thought: msg, results: allResults, done: { type: 'done', success: false, reason: msg } as BrowserAction };
+                        }
+                        // O que está no formulário AGORA (com o que a pessoa mudou): o modelo não redigita por cima.
+                        const now = await withTimeout(Promise.resolve(wv.executeJavaScript(SUPPORT_DRAFT_SCRIPT)), 3000, [] as DraftField[]).catch(() => [] as DraftField[]);
+                        history += `\nFORM FILLED BY BAH from what the user told you, and the user reviewed it in the tab (they may have edited it). Do NOT retype or change these fields:\n${formatSupportDraft(now || []) || filled.map(d => d.label).join(', ')}\nNext: anything still empty that the form needs (contact option, category), then the final Submit/Send/Post — Bah asks the user before it goes out.`;
+                        onProgress({ kind: 'status', message: t('agent.supportFill.filled', { n: filled.length }) });
+                      }
+                    }
+                  }
                   const formBlock = isAppForm ? formatFormProgress(formFields, !!lastReadFile, lastResumeFacts) : '';
                   const jobsBlock = commandIsJobs
                     ? [formatOpenedJobs(openedJobs, jobsAskedN, seenJobs.find(j => !openedJobs.some(o => o.title === j.title)) || null), (onOpenedJob ? '' : formatJobListings(pageJobs || [], 8, openedJobIds))].filter(Boolean).join('\n')   // na página da vaga, as "vagas parecidas" só distraem
@@ -4316,6 +4381,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         if (val && val.trim().length > 20) action.reason = val.trim().slice(0, 600);
                       }
                     }
+                    // Suporte que terminou FORA do site do fabricante (ensaio: desistiu, foi parar na notebookcheck e
+                    // disse "success") não é sucesso — nem vira "salvar como skill".
+                    if (supportText && action.success) {
+                      const gaveUp = supportFinishProblem(supportText, observation.url);
+                      if (gaveUp) { action.success = false; action.reason = `${gaveUp}\n\n${action.reason || ''}`.trim(); }
+                    }
                     finishRun(action.success ? 'success' : 'failed', action.reason);
                     return { thought: thoughts.join('\n\n') || action.reason, results: allResults, done: action };
                   }
@@ -4409,7 +4480,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   // Chamado com fabricante conhecido: só o site dele (o modelo pequeno fugia pra blog/Gmail quando travava).
                   if (supportText) {
-                    const off = offSupportSite(action as any, supportText);
+                    const off = offSupportSite(action as any, supportText, { pageFailed: supportPageFailed });
                     if (off) {
                       history += `\nREFUSED: ${off}`;
                       onProgress({ kind: 'status', message: `🛡️ ${off}` });
@@ -5675,6 +5746,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       result: { reported },
                       success: true,
                     });
+                    // Suporte encerrado com relatório FORA do site do fabricante = desistiu (ver o done).
+                    const supportGaveUp = supportText ? supportFinishProblem(supportText, observation.url) : null;
+                    if (supportGaveUp) {
+                      const msg = `${supportGaveUp}\n\n${reported}`;
+                      finishRun('failed', msg);
+                      return { thought: thoughts.join('\n\n'), results: [...allResults, { action, result: { reported } }], done: { type: 'done', reason: msg, success: false } as any };
+                    }
                     finishRun('success', reported);
                     return {
                       thought: thoughts.join('\n\n'),
@@ -6397,6 +6475,32 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     brakeAsked: brakeAskedThisStep,
                   });
                   const urlChangedByAction = afterObservation.url !== observation.url;
+                  // Suporte: página que não carregou (Access Denied/403, 404, erro, em branco, clique sem efeito) →
+                  // buscar na web a página que se queria e abrir o resultado do domínio oficial. Nada de insistir no
+                  // mesmo endereço nem de contornar bloqueio; falhou de novo → para e diz à pessoa.
+                  const loadProblem = supportText && /^(navigate|new_tab|click_ref|click_text|click_at|click_role|dblclick)$/.test(action.type)
+                    ? pageLoadProblem({ url: afterObservation.url, title: afterObservation.title, text: afterObservation.text_sample, elementCount: (afterObservation.interactive_elements || []).length, lastAction: action.type, urlChanged: urlChangedByAction, noEffectCount })
+                    : null;
+                  if (loadProblem) {
+                    supportPageFailed = true;
+                    const navUrl = String((action as any).url || '');
+                    const failedUrl = (/^chrome-error:|^about:/.test(afterObservation.url) && navUrl) ? navUrl : afterObservation.url;
+                    // O bloqueio é desta página: o resto do site oficial continua valendo (o recovery marcava o domínio todo).
+                    recovery.blockedDomains.delete(hostOf(failedUrl));
+                    const again = supportLoadFailures.includes(failedUrl);
+                    supportLoadFailures.push(failedUrl);
+                    if (again || supportLoadFailures.length >= 4) {
+                      const msg = t('agent.supportLoad.stop', { url: failedUrl.slice(0, 160), detail: loadProblem.detail });
+                      onProgress({ kind: 'status', message: `🛑 ${msg}` });
+                      finishRun('failed', msg);
+                      return { thought: msg, results: allResults, done: { type: 'done', success: false, reason: msg } as BrowserAction };
+                    }
+                    history += `\n${pageLoadHint(loadProblem, { url: failedUrl, target: lastTarget && /^click/.test(action.type) ? lastTarget.replace(/\s+on\s+\S+$/, '') : undefined, vendor: supportSite?.vendor, domains: supportSite?.domains, product: supportFacts(supportText || '').product })}`;
+                    onProgress({ kind: 'status', message: t('agent.supportLoad.search', { detail: loadProblem.detail }) });
+                  } else if (supportSite && /^https?:/i.test(afterObservation.url) && !supportSite.domains.some(d => hostOf(afterObservation.url) === d || hostOf(afterObservation.url).endsWith('.' + d))) {
+                    // Um link levou pra fora do fabricante (blog, loja, revista): o chamado não é lá.
+                    history += `\nOFF ${supportSite.vendor.toUpperCase()}'S SITE: ${hostOf(afterObservation.url)} is not ${supportSite.vendor}'s site — go back (go_back) to ${supportSite.domains.join(' / ')}. A support request goes only through the vendor's own site.`;
+                  }
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);
                   const openedRegularPage = recoveryVerdict.blocker === 'sensitive_action'
                     && urlChangedByAction
@@ -6448,9 +6552,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     history += openedRegularPage
                       ? '\nRECOVERY OVERRIDE: Ignored sensitive-action warning because the last action only opened a regular page/product, not checkout/payment/cart.'
                       : '\nRECOVERY OVERRIDE: Ignored sensitive-action warning because the last action was only a key press/dismissal attempt.';
+                  } else if (loadProblem && /^(search_alternative|retry|go_back)$/.test(recoveryVerdict.decision)) {
+                    // Já tratado acima (busca da página no site oficial); o "abandone o site, use Google/Wikipedia"
+                    // genérico mandava o agente de suporte pra blog de terceiros.
                   } else if (recoveryVerdict.decision !== 'continue') {
                     onProgress({ kind: 'status', message: `🛡️ Recovery: ${recoveryVerdict.reason.slice(0, 120)}` });
-                    const instruction = recoveryInstruction(recoveryVerdict);
+                    let instruction = recoveryInstruction(recoveryVerdict);
+                    if (supportSite && recoveryVerdict.decision === 'search_alternative') {
+                      supportPageFailed = true;
+                      recovery.blockedDomains.delete(hostOf(afterObservation.url));
+                      instruction = `\nRECOVERY: ${recoveryVerdict.reason}\nINSTRUCTION: this is a support request with ${supportSite.vendor} — do NOT go to another site. If the page you wanted did not load, web_search for it (e.g. "${supportSite.vendor} contact technical support") and open the result on ${supportSite.domains.join(' / ')}. If nothing works, stop and tell the user what blocks you.`;
+                    }
                     history += instruction;
 
                     // Abort / ask_user → end the task immediately
