@@ -18,6 +18,13 @@
   <a href="https://github.com/alexvilelabah/bah-browser/releases/latest"><img src="https://img.shields.io/github/v/release/alexvilelabah/bah-browser?label=vers%C3%A3o&color=blue" alt="Versão" /></a>
 </p>
 
+https://github.com/user-attachments/assets/0b67eac7-7800-403a-b9e1-6bc9e7619c24
+
+<p align="center">
+  <i>Rodando num modelo local: o Bah encontra os clipes mais famosos de Michael Jackson e baixa, compara preços do AirPods Pro entre lojas numa tabela só, e baixa o Steam do site oficial.</i><br/>
+  ▶️ <a href="assets/demo.mp4">Baixar o vídeo (MP4)</a>
+</p>
+
 > Você dá comandos em linguagem natural ("abre o gmail e apaga os spams") e a IA opera o navegador no seu lugar — vendo a tela, clicando com mouse real, digitando e seguindo até concluir.
 
 > 🖼️ **Gerar imagem funciona de cara — sem chave.** Pra conversar e pro agente autônomo completo, adicione uma chave barata — **DeepSeek** (recomendado), **Mistral** ou **NVIDIA NIM** — ou vá 100% local + offline com **Ollama** (também grátis, sem chave).
@@ -49,10 +56,10 @@ ou **100% local** (Ollama ou llama.cpp — testado com `Qwen3-VL-8B` numa GPU de
 | *"Baixe a ISO mais recente do Ubuntu"* · *"o driver da impressora pro meu Mac"* | Acha o arquivo certo pro **seu** SO e CPU, passa por EULA e seletor de SO, baixa em segundo plano (qualquer tamanho) e informa o caminho; confere checksum | ✅ testado de ponta a ponta |
 | *"Baixe a última versão do Steam / software da impressora HP / Office / SolidWorks / Altium / Photoshop pra este computador"* | Vai à página **oficial** do fabricante (marca agregadores de "free download"), pega a versão do seu SO **e CPU** (Intel × Apple Silicon, x64 × ARM64), avisa se o arquivo é do SO/CPU errado e **para na parede de login** pra você decidir (nunca digita senha nem cria conta). Nunca abre o instalador | 🧪 páginas de teste (detecção automática, lista SO/CPU, modelo de impressora, modal, login). Ao vivo, Qwen3-VL-8B local, Mac Intel: ✅ Steam (`steam.dmg`) · ✅ Altium (parou no login) · ❌ HP 9015e, Office, SolidWorks, Photoshop (chegou à página oficial, não escolheu versão) |
 | *"Hotel em Nova York até US$ 450 a diária no próximo fim de semana"* | Busca em sites de reserva, escolhe datas no calendário, fecha popups (guarda cupons) e compara preços | ✅ testado (Booking.com) |
-| *"Compare preços deste produto na Amazon e em outras lojas"* · *"carregador compatível com meu notebook"* | Acha o número da peça no site do fabricante e confere várias lojas (novo e usado), com tabela comparativa | ✅ Amazon · 🧪 várias lojas |
+| *"Compare preços do AirPods Pro na Amazon e em outras lojas"* · *"carregador compatível com meu notebook"* | **Visita o site de cada loja** (as que você citar, completando com as grandes varejistas da sua região), busca lá, lê o preço naquela página e monta a tabela só com essas leituras — artigo de ofertas ou comparador de preços nunca é fonte. Loja com checagem de robô vai pra você (Watch/Takeover) ou fica como "não deu pra ler"; cada linha tem o link da página lida | ✅ ao vivo, modelo local 8B: Amazon, Best Buy, Walmart lidas · Target mostrou checagem "segure o botão" (entregue à pessoa) · 🧪 4 lojas de treino |
 | *"Abra minhas 2 vagas recomendadas"* · *"Candidate-se a esta vaga com meu currículo"* | Lê suas vagas recomendadas (inclusive as salvas ★), abre uma por vez, escolhe o melhor currículo de uma pasta que **você** libera, preenche o formulário **por código** — campos de texto e listas suspensas com busca (Greenhouse, Workday) — com seu 📝 perfil de candidatura e respostas salvas, pergunta uma vez o que faltar e para pro seu OK antes de enviar | 🧪 ensaiado em cópias de páginas reais do Indeed + Ashby (3/3) · sites ao vivo a seguir |
 | *"Põe leite, ovos, bananas e uma dúzia de bagels no meu carrinho do Walmart"* | Busca item por item, escolhe pelo que você disse (marca, tamanho, orgânico) ou por um padrão sensato da marca da loja e diz por quê, acerta as quantidades (uma dúzia de bagels = 2 pacotes de 6), pergunta antes de substituir algo esgotado e antes de escolher retirada/entrega ou loja, confere o carrinho, mostra uma tabela — e **nunca fecha o pedido** (o freio pergunta antes de Checkout / Place order / Reserve time slot) | 🧪 ensaiado em cópias locais de lojas com o modelo local 8B: cópia do Walmart 3/3 carrinhos certos e nunca fechou o pedido (2/3 também conferiram o carrinho e relataram) · cópias do Whole Foods e da Target 0/1 · lojas ao vivo ainda não |
-| *"Abra um chamado na Apple sobre a bateria do meu MacBook"* · *"Pergunte na comunidade da Dell por que o ventilador do meu XPS faz barulho"* | Vai só ao site **oficial** de suporte ou à comunidade do fabricante (e recusa ir pra outros sites), escolhe produto → assunto → formas de contato, procura na comunidade antes de redigir um post e **preenche o chamado por código com o que já se sabe** — o seu pedido e as respostas seguintes, o produto e o serial que você deu, um tópico parecido que ele viu — redigido pelo seu modelo com a regra "só estes fatos" (o que ele acrescentar, como o ano do modelo, é recusado e o Bah volta às suas palavras num modelo fixo), mais o assunto e os campos de contato do 📝 perfil; um cartão pede pra você conferir na aba, mudar o que quiser e apertar Continuar. Nunca senha, nunca cria conta. Página do fabricante que não carrega (Access Denied / 403, não encontrada, em branco) → ele busca essa página na web e só abre resultado do domínio do próprio fabricante; continuou bloqueada → para e diz. Tarefa que termina fora do site do fabricante é relatada como não feita; no login o Bah pausa pra você, e o **Enviar / Postar** final mostra antes o texto exato | 🧪 modelo local 8B (Qwen3-VL-8B) em cópias de treino, com o formulário preenchido por código: chamados enviados pelo cartão: Dell 3/3, Apple 2/5 (os que faltaram nem chegaram ao formulário e terminaram como falha); posts 6/6 (um como resposta no tópico parecido); todo formulário alcançado teve a descrição preenchida e o cartão de revisão; nenhuma frase inventada no que foi enviado; todo login alcançado pausou, todo envio perguntou, nenhuma senha digitada · ao vivo: a aba "Contact Support" da Dell responde Access Denied ao Bah — o agente agora busca a página em vez de sair da Dell (conferido com páginas sintéticas, não ao vivo) |
+| *"Abra um chamado na Apple sobre a bateria do meu MacBook"* · *"Pergunte na comunidade da Dell por que o ventilador do meu XPS faz barulho"* | **Começa achando o site de suporte do fabricante com uma busca na web** (qualquer marca — Dell, Canon, Logitech…), abre só resultado no domínio do próprio fabricante (anúncio de "suporte" imitação, tipo `canon-support-help.com`, é recusado) e fica lá, escolhe produto → assunto → formas de contato, procura na comunidade antes de redigir um post e **preenche o chamado por código com o que já se sabe** — o seu pedido e as respostas seguintes, o produto e o serial que você deu, um tópico parecido que ele viu — redigido pelo seu modelo com a regra "só estes fatos" (o que ele acrescentar, como o ano do modelo, é recusado e o Bah volta às suas palavras num modelo fixo), mais o assunto e os campos de contato do 📝 perfil; um cartão pede pra você conferir na aba, mudar o que quiser e apertar Continuar. Nunca senha, nunca cria conta. Página do fabricante que não carrega (Access Denied / 403, não encontrada, em branco) → ele busca essa página na web e só abre resultado do domínio do próprio fabricante; continuou bloqueada → para e diz. Tarefa que termina fora do site do fabricante é relatada como não feita; no login o Bah pausa pra você, e o **Enviar / Postar** final mostra antes o texto exato | 🧪 modelo local 8B (Qwen3-VL-8B) em cópias de treino, com o formulário preenchido por código: chamados enviados pelo cartão: Dell 3/3, Apple 2/5 (os que faltaram nem chegaram ao formulário e terminaram como falha); posts 6/6 (um como resposta no tópico parecido); todo formulário alcançado teve a descrição preenchida e o cartão de revisão; nenhuma frase inventada no que foi enviado; todo login alcançado pausou, todo envio perguntou, nenhuma senha digitada · 🧪 anúncio golpe imitando o fabricante acima do resultado verdadeiro é recusado (Canon) · ao vivo: a aba "Contact Support" da Dell responde Access Denied ao Bah — o agente busca a página em vez de sair da Dell (conferido com páginas sintéticas, não ao vivo) |
 | *"Quem são os gerentes de compras da Acme?"* | Pesquisa de pessoas no LinkedIn em **modo cuidadoso** — uma página por pedido, sem clique automático | ✅ testado |
 | *"Planeje minha viagem a Tóquio no horário de Tóquio"* | Mostra os sites no fuso do destino e avisa o agente quando a VPN deixa os preços estrangeiros | ✅ testado |
 | *"Salve este recibo em PDF"* · *"print da página inteira"* · *"copie o total"* | Salva em Downloads / copia pra você; ler a área de transferência pede sua permissão | ✅ testado |
@@ -61,12 +68,6 @@ ou **100% local** (Ollama ou llama.cpp — testado com `Qwen3-VL-8B` numa GPU de
 
 ✅ testado de ponta a ponta no site real · 🧪 testado em páginas de teste · 🛠️ planejado.
 Quer outro fluxo? O Bah pode **salvar o que funcionou como skill** — ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
-
-## 🎬 Demonstração
-
-![Bah em ação](assets/demo.gif)
-
-▶️ **[Baixar o vídeo completo](https://github.com/alexvilelabah/bah-browser/raw/main/assets/demo.mp4)** — o agente pesquisando e operando a web sozinho. *(o GIF acima é a prévia; o GitHub não toca vídeo embutido no README.)*
 
 ## 📥 Baixar
 
@@ -107,10 +108,12 @@ Quer outro fluxo? O Bah pode **salvar o que funcionou como skill** — ver [CONT
 - **Adblock** completo (EasyList + EasyPrivacy) com bypass automático em sites que quebram (YouTube, Twitch)
 - **Safe Browsing** (lista de hosts maliciosos URLhaus, atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
-- **Identidade honesta e consistente** — user agent, client hints e idiomas do Chrome atual definidos dentro do motor (uma fonte só, sem remendo em JavaScript), pra os sites verem um Chrome normal e não bloquearem por engano. Não tenta driblar detecção de robô; sites que proíbem automação ficam em **modo cuidadoso**
+- **Identidade honesta e consistente** — user agent, client hints e idiomas do Chrome atual definidos dentro do motor (uma fonte só, sem remendo em JavaScript), pra os sites verem um Chrome normal e não bloquearem por engano. GPU, núcleos e memória são os valores **reais** (os mesmos que o Chrome informa no seu computador) — nada inventado, então a página e os workers dela concordam. Não tenta driblar detecção de robô; sites que proíbem automação ficam em **modo cuidadoso**. Por que os testes veem mais checagens de robô do que você vai ver: [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#identidade-do-navegador-e-checagens-de-robô-o-que-os-sites-veem)
 - **Skills de navegação** — receitas curtas `SKILL.md` (popups, calendários, autocomplete, EULAs, seletor de SO, downloads, compras, viagens, pesquisa de pessoas, candidaturas a vagas, listas de cartões, login) escolhidas a cada passo; salve as suas depois de uma tarefa que deu certo
-- **Segurança primeiro** — confirma pagamento/exclusão/envio; permissões de site (localização, câmera, microfone, área de transferência) ficam **bloqueadas até você liberar**; upload só usa arquivo que *você* escolhe ou de uma pasta que *você* libera na sessão; diálogos das páginas passam pela caixa do próprio Bah
-- **Redes corporativas** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, proteção contra vazamento por WebRTC, região ciente de VPN e "fuso dos sites"
+- **Segurança primeiro** — confirma pagamento/exclusão/envio; **localização é negada a todo site** sem nem perguntar (só um site que você marcar Permitir no cadeado recebe); câmera, microfone e área de transferência ficam **bloqueados até você liberar**; upload só usa arquivo que *você* escolhe ou de uma pasta que *você* libera na sessão; diálogos das páginas passam pela caixa do próprio Bah
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
+- **Entrega a página pra você quando o site quer uma pessoa** — checagem de robô de qualquer tipo e tela de login: a aba vem pra frente, você resolve, o Bah continua sozinho (**Watch/Takeover**)
+- **Login do Google é opcional** — um ícone redondo de perfil no canto de cima (como o do Chrome) entra no Google pra tarefas no Gmail / Drive / YouTube; o resto funciona sem isso
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -204,9 +207,26 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
   Electron não, então o Bah lê o repositório do SO na inicialização (chaveiros do macOS, repositórios
   `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node — downloads na
   worker funcionam atrás de proxy com inspeção TLS também.
-- **Vazamento de IP pelo WebRTC:** com proxy em uso, o WebRTC só pode usar o proxy (`disable_non_proxied_udp`),
-  então a página não descobre o seu IP real por ele. Sem proxy (ou com app de VPN, que age no SO) vale o padrão
-  do Chrome. O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **Proteção contra vazamento de IP pelo WebRTC (ligada por padrão):** com proxy, o WebRTC só pode usar o proxy
+  (`disable_non_proxied_udp`); sem proxy, só a conexão de rede principal (`default_public_interface_only`) — nos
+  dois casos a página não lista seus endereços IP por ele. **Melhor qualidade de chamada** desliga a proteção
+  (qualquer página passa a ver seus IPs reais). **WebRTC: só IPv4** tira os candidatos IPv6 (vale depois de
+  reiniciar). O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **DNS seguro (DNS-over-HTTPS):** **Sistema** (padrão — nada muda até você escolher) · predefinições **AdGuard**
+  e **Mullvad** (bloqueiam anúncio, sem cadastro), **Quad9** (bloqueia malware), **Cloudflare** (sem filtro) ·
+  **NextDNS** (cole o ID da sua configuração — conta grátis, você gerencia as listas; plano grátis com 300 mil
+  consultas/mês, depois disso continua resolvendo mas para de filtrar) · endereço `https://` **personalizado**
+  (Pi-hole, AdGuard Home). **Estrito** faz a consulta falhar em vez de cair no DNS comum da sua rede quando o
+  servidor não responde. Uma configuração pra todas as abas, anônimas também. É configuração do navegador, não
+  extensão: extensão do Chrome não tem como trocar o resolvedor.
+- **Versão de IP:** o motor do Bah não consegue forçar só IPv4 ou só IPv6 no tráfego das páginas (testado:
+  `--disable-ipv6` não faz nada no Electron 44), então essas opções aparecem desativadas com o motivo — use as
+  configurações de rede do sistema. Só o WebRTC pode ficar limitado a IPv4 (acima).
+- **Avisos de vazamento:** se o seu proxy ou servidor de DNS seguro só é alcançável por uma versão de IP e este
+  computador também tem endereço real da outra, o painel avisa que o tráfego pode escapar (com botão pras
+  configurações de rede do sistema). Também avisa quando há proxy mas o WebRTC está em Melhor qualidade de
+  chamada, e lembra que o proxy pode fazer as próprias consultas de DNS. O Bah só olha quais versões de IP
+  existem — nunca mostra nem envia os seus endereços.
 
 ### Região e hora (VPN, viagem)
 
@@ -250,7 +270,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. Sites cujos termos proíbem automação (ex.: LinkedIn) ficam em **modo cuidadoso**: uma página por pedido, sem clique automático — se o agente tentar mesmo assim, o Bah para a tarefa e diz o que fazer à mão (entre na conta você mesmo; abra a vaga e clique em Candidatar-se, e deixe o Bah continuar no site de candidatura da empresa). **Não** resolvemos CAPTCHA de imagem nem driblamos rate-limit. Por padrão o agente para e pede sua ajuda em qualquer verificação humana; uma chave **opcional** no menu (☑️ *Agente pode clicar em captcha de caixinha*, desligada por padrão) deixa ele clicar uma vez numa caixinha simples "Não sou um robô" / "Verifique que você é humano" — quem decide continua sendo o serviço de captcha, e qualquer coisa além disso (desafio de imagem) volta pra você. Respeite os termos de cada site.
 
-- **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
+- **🔑 Login do Google (opcional) — o ícone de perfil no canto de cima.** Entrar só é preciso pra tarefas dentro do Google (Gmail, Drive, o seu YouTube). O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique no **ícone de perfil** → **Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 
 - **📥 Downloads sem limite de tipo ou tamanho.** Qualquer tipo de arquivo pode ser baixado (instaladores inclusive), gravado direto no disco. **Torrents:** por padrão, arquivos `.torrent` baixam como qualquer arquivo e links `magnet:` abrem no app de torrent do sistema; ligue **🧲 Cliente de torrent embutido** no menu pra abrir no card de torrent do próprio Bah. Detalhes em [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#downloads-e-torrents).
 
