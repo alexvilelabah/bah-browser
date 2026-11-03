@@ -4742,11 +4742,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
                           const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, choice === 'low' ? 'low' : 'best');
                           const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
-                          rows.push(`| ${i + 1} | ${item} | ${r?.success ? '✅ ' + (file || 'downloaded') : '❌ ' + String(r?.error || 'failed').slice(0, 80)} |`);
+                          rows.push(`${r?.success ? '✅' : '❌'} ${i + 1}. ${item}${r?.success ? (file ? ` — ${file}` : '') : ` — ${String(r?.error || 'failed').slice(0, 80)}`}`);
                         }
                       } finally { deadline.resume(); }
-                      const ok = rows.filter(r => r.includes('✅')).length;
-                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}${year ? ` (${year})` : ''}` : ''}:\n\n| # | Track | Result |\n|---|---|---|\n${rows.join('\n')}`;
+                      const ok = rows.filter(r => r.startsWith('✅')).length;
+                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}${year ? ` (${year})` : ''}` : ''}:\n\n${rows.join('\n')}`;
                       onProgress({ kind: 'status', message: `✅ ${ok}/${collectionItems.length} ${noun} downloaded` });
                       finishRun(ok ? 'success' : 'failed', report);
                       return { thought: report, results: allResults, done: { type: 'done', success: ok > 0, reason: report } as BrowserAction };
