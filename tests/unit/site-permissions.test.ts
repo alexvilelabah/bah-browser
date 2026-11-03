@@ -48,8 +48,8 @@ test('resolveRequest: o site da ABA responde; tela é negada; só pergunta o que
   store['https://meet.example'].camera = 'allow';
   assert.deepStrictEqual(resolveRequest(store, 'media', { mediaTypes: [] }, top), { action: 'deny' });
   // iframe (página em branco dentro de outro site) é atribuído ao site da aba
-  assert.deepStrictEqual(resolveRequest({}, 'geolocation', { requestingUrl: 'about:srcdoc', isMainFrame: false }, top),
-    { action: 'ask', origin: 'https://meet.example', kinds: ['geolocation'] });
+  assert.deepStrictEqual(resolveRequest({}, 'media', { mediaTypes: ['video'], requestingUrl: 'about:srcdoc', isMainFrame: false }, top),
+    { action: 'ask', origin: 'https://meet.example', kinds: ['camera'] });
   // notificação de iframe de outro site: negada (como no Chrome)
   assert.deepStrictEqual(resolveRequest({}, 'notifications', { requestingUrl: 'https://ads.example/x', isMainFrame: false }, top), { action: 'deny' });
   assert.deepStrictEqual(resolveRequest({}, 'notifications', { requestingUrl: top, isMainFrame: true }, top),
@@ -105,4 +105,13 @@ test('sanitizeStore: arquivo estragado ou mexido não derruba nada', () => {
     'nao-e-origem': { camera: 'allow' },
     'https://vazio.example': {},
   }), { 'https://ok.example': { microphone: 'allow' } });
+});
+
+test('localização: negada em todo site sem perguntar; só um Permitir escolhido no cadeado libera', () => {
+  const top = 'https://maps.example/x';
+  assert.deepStrictEqual(resolveRequest({}, 'geolocation', { isMainFrame: true }, top), { action: 'deny' });
+  assert.deepStrictEqual(resolveRequest({}, 'geolocation', { requestingUrl: 'about:srcdoc', isMainFrame: false }, top), { action: 'deny' });
+  assert.deepStrictEqual(resolveRequest({ 'https://maps.example': { geolocation: 'block' } }, 'geolocation', {}, top), { action: 'deny' });
+  assert.deepStrictEqual(resolveRequest({ 'https://maps.example': { geolocation: 'allow' } }, 'geolocation', {}, top), { action: 'allow' });
+  assert.strictEqual(checkAnswer({}, 'https://maps.example', 'geolocation'), false);
 });
