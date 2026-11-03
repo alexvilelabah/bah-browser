@@ -3615,8 +3615,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const applicant = await window.electronAPI?.applicantGet?.().catch(() => null);
                       const plan = planSupportFill(scan, draft, facts, applicant?.profile);
                       const pageExec = (js: string) => withTimeout(wv.executeJavaScript(js), 6000, null as any);
+                      // Preencher dá foco (a página rola) e a pessoa rola ao revisar: as coordenadas da lista de
+                      // elementos deste passo são de ANTES. Ensaio: o "Submit request" virou "coberto por input#ln".
+                      const scroll0 = await withTimeout(Promise.resolve(wv.executeJavaScript('[scrollX, scrollY]')), 1500, null as number[] | null).catch(() => null);
+                      const restoreScroll = async () => { if (Array.isArray(scroll0)) await withTimeout(Promise.resolve(wv.executeJavaScript(`scrollTo(${Number(scroll0[0]) || 0}, ${Number(scroll0[1]) || 0})`)), 1500, null).catch(() => null); };
                       const res = plan.length ? await applyFill(pageExec, plan, scan).catch(() => ({ done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> })) : { done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> };
                       const filled = plan.filter(d => res.done.includes(d.idx));
+                      await restoreScroll();
                       if (filled.length) {
                         const shown = formatSupportDraft(filled.map(d => ({ label: d.label, value: d.value ?? ((scan.find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] || ''), type: d.what === 'description' ? 'textarea' : 'text' })));
                         // Revisão: a pessoa confere e muda o que quiser direto na aba; Continuar segue. O relógio dorme.
@@ -3638,6 +3643,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           finishRun('cancelled', msg);
                           return { thought: msg, results: allResults, done: { type: 'done', success: false, reason: msg } as BrowserAction };
                         }
+                        await restoreScroll();
                         // O que está no formulário AGORA (com o que a pessoa mudou): o modelo não redigita por cima.
                         const now = await withTimeout(Promise.resolve(wv.executeJavaScript(SUPPORT_DRAFT_SCRIPT)), 3000, [] as DraftField[]).catch(() => [] as DraftField[]);
                         history += `\nFORM FILLED BY BAH from what the user told you, and the user reviewed it in the tab (they may have edited it). Do NOT retype or change these fields:\n${formatSupportDraft(now || []) || filled.map(d => d.label).join(', ')}\nNext: anything still empty that the form needs (contact option, category), then the final Submit/Send/Post — Bah asks the user before it goes out.`;

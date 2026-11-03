@@ -174,7 +174,7 @@ export function draftPrompt(f: SupportFacts): string {
     ...f.findings.map(s => `- Found while browsing: ${s}`),
   ].filter(Boolean).join('\n');
   const what = f.forum ? 'a question for a public support community forum (title + post body)' : 'a support ticket for the vendor (subject + description)';
-  return `Write ${what} using ONLY the facts below. Do not add anything that is not in them: no model numbers, years, versions, dates, error codes, serial numbers, steps, causes or guesses. If something is unknown, leave it out. Write in first person, plain text, no markdown, at most 8 short lines. Cover: the symptom, when it started / what changed, what was already tried, product and serial (only if given).
+  return `Write ${what} using ONLY the facts below. Do not add anything that is not in them: no model numbers, years, versions, dates, error codes, serial numbers, steps, causes or guesses. If something is unknown, leave it out — never say what the user did or did not try, change or check unless a fact says so. Write in first person, plain text, no markdown, at most 8 short lines. Cover: the symptom, when it started / what changed, what was already tried, product and serial (only if given).
 
 FACTS:
 ${facts || '- (none)'}
@@ -210,14 +210,42 @@ export function inventedTokens(draft: { subject: string; description: string }, 
   return [...new Set(out)];
 }
 
+// Palavras de ligação que um ticket usa sem afirmar fato nenhum.
+const FILLER = new Set(('about also already anyone been could does from have hello help here into just know like please since some still than thanks thank that the their them then there these they this those what when where which while with would your yours issue problem product service serial number model happens happening started start begin began after before ever even every really very much more most tell anything someone something question details description subject title').split(' '));
+const NEGATION = /\b(not|no|never|none|nothing|without)\b|n['’]t\b/i;
+const stem = (w: string) => w.slice(0, 5);
+
 /**
- * Rascunho final: o do modelo quando ele não inventou nada (produto/serial garantidos no texto);
- * senão o modelo fixo. modelReply vazio (chamada falhou) → modelo fixo.
+ * Frases do rascunho que afirmam o que a pessoa não disse. Ensaio (Qwen3-VL-8B): "I've not tried any
+ * fixes yet", "I didn't change any settings", "I've tried restarting and resetting the SMC" — nada
+ * disso estava no pedido. Regra: ≥70% das palavras de conteúdo da frase têm que estar nos fatos, e
+ * negação só se a pessoa negou algo.
+ */
+export function unsupportedSentences(text: string, f: SupportFacts): string[] {
+  const factText = norm([...f.problem, ...f.followUps, f.product, f.serial, f.vendor, ...f.findings].filter(Boolean).join(' '));
+  const known = new Set(factText.split(/[^a-z0-9]+/).filter(w => w.length >= 4).map(stem));
+  const factNeg = NEGATION.test(factText);
+  const out: string[] = [];
+  for (const s of splitSentences(text)) {
+    const words = norm(s).replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !/\d/.test(w) && !FILLER.has(w));
+    const ok = words.filter(w => known.has(stem(w))).length;
+    if ((NEGATION.test(s) && !factNeg) || (words.length && ok / words.length < 0.7)) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Rascunho final: o do modelo sem as frases que ele inventou (produto/serial garantidos no texto);
+ * número que não está nos fatos, resposta fora do formato ou chamada que falhou → modelo fixo.
  */
 export function finalDraft(f: SupportFacts, modelReply?: string | null): SupportDraft {
   const parsed = modelReply ? parseDraftReply(modelReply) : null;
   if (!parsed || inventedTokens(parsed, f).length) return templateDraft(f);
-  let description = parsed.description;
+  const bad = new Set(unsupportedSentences(parsed.description, f));
+  const kept = parsed.description.split('\n').map(line => splitSentences(line).filter(s => !bad.has(s)).join(' ')).filter(l => l.trim()).join('\n');
+  if (kept.replace(/\s+/g, ' ').trim().length < 20 || !f.problem.concat(f.followUps).length) return templateDraft(f);
+  if (unsupportedSentences(parsed.subject, f).length) parsed.subject = templateDraft(f).subject;
+  let description = kept;
   if (f.product && !norm(description).includes(norm(f.product))) description += `\nProduct: ${f.product}`;
   if (f.serial && !description.includes(f.serial)) description += `\n${tagLabel(f)}: ${f.serial}`;
   return { subject: parsed.subject, description, source: 'model' };

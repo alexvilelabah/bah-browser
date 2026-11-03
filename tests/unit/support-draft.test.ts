@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  supportFacts, templateDraft, finalDraft, draftPrompt, parseDraftReply, inventedTokens, planSupportFill,
+  supportFacts, templateDraft, finalDraft, draftPrompt, parseDraftReply, inventedTokens, unsupportedSentences, planSupportFill,
   stripSupportCommand, productFrom, serialFrom, findingFrom, supportFinishProblem, supportThreadContext,
 } from '../../src/renderer/support-draft.ts';
 import { commandIsSupport, offSupportSite } from '../../src/renderer/support-tickets.ts';
@@ -70,6 +70,24 @@ test('model draft is used only when it adds nothing; otherwise the template', ()
   assert.match(p, /ONLY the facts below/);
   assert.match(p, /- Service tag: 7XK2PQ3/);
   assert.doesNotMatch(p, /Contact me by email/);
+});
+
+test('sentences the model made up are dropped (real Qwen3-VL-8B drafts from the practice rig)', () => {
+  const dell = supportFacts(DELL);
+  const d1 = finalDraft(dell, 'SUBJECT: Fan loud even at idle after BIOS update\nDESCRIPTION:\nMy XPS 13 9310 fan is loud even at idle since the BIOS update last week. I’ve not tried any fixes yet. Product: XPS 13 9310. Service tag: 7XK2PQ3.');
+  assert.strictEqual(d1.source, 'model');
+  assert.strictEqual(d1.description, 'My XPS 13 9310 fan is loud even at idle since the BIOS update last week. Product: XPS 13 9310. Service tag: 7XK2PQ3.');
+  const apple = supportFacts('Post a question in the Apple Support Community asking why my MacBook Air M2 battery drains fast since the macOS update.');
+  assert.deepStrictEqual(unsupportedSentences('My MacBook Air M2 battery drains fast since the macOS update.\nI didn’t change any settings or install new apps.\nI’ve tried restarting and resetting the SMC.\nProduct: MacBook Air M2', apple),
+    ['I didn’t change any settings or install new apps.', 'I’ve tried restarting and resetting the SMC.']);
+  const dellForum = supportFacts('Ask the Dell Community why my XPS 13 9310 fan is loud at idle since the BIOS update.');
+  assert.deepStrictEqual(unsupportedSentences('My XPS 13 9310 fan is loud at idle since the BIOS update. I checked the Dell Community for similar issues. No other changes were made recently.', dellForum),
+    ['I checked the Dell Community for similar issues.', 'No other changes were made recently.']);
+  // Reescrita fiel passa inteira; negação que a pessoa disse também.
+  assert.deepStrictEqual(unsupportedSentences('Since the BIOS update last week, the fan on my XPS 13 9310 is loud even when idle.', dell), []);
+  assert.deepStrictEqual(unsupportedSentences('Restarting did not help.', supportFacts('open a ticket with Dell: my XPS fan is loud. Restarting did not help.')), []);
+  // Sobrou quase nada → modelo fixo.
+  assert.strictEqual(finalDraft(dell, 'SUBJECT: Fan noise\nDESCRIPTION:\nI have checked every driver and nothing changed at all.').source, 'template');
 });
 
 const field = (idx: number, label: string, type: string, extra: Partial<FieldInfo> = {}): FieldInfo => ({ idx, label, type, ...extra });
