@@ -2690,6 +2690,28 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         }
       } catch { /* hit-test unavailable (e.g. off-screen) — don't block the click */ }
 
+      // 3. "Covered" right after scrollIntoViewIfNeeded moved the page: the CDP hit-test can land on
+      // the spot where the node was BEFORE the scroll (seen on a support form whose Submit sat below the
+      // fold: "covered by input#ln", the field one scroll-length above). Ask the page itself — the
+      // node's own rect and elementFromPoint, in the same layout — before calling it covered.
+      if (covered) {
+        try {
+          const tObj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+          const tId = tObj?.object?.objectId;
+          if (tId) {
+            const chk = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+              objectId: tId,
+              functionDeclaration: 'function(){var r=this.getBoundingClientRect();if(r.width<1||r.height<1)return null;var x=r.left+r.width/2,y=r.top+r.height/2;var o=document.elementFromPoint(x,y);if(!o)return null;var l=o.closest&&o.closest("label");var mine=o===this||this.contains(o)||o.contains(this)||!!(l&&(l.contains(this)||l.control===this));return mine?{x:x,y:y,top:window===window.top}:null;}',
+              returnByValue: true,
+            }) as any;
+            wc.debugger.sendCommand('Runtime.releaseObject', { objectId: tId }).catch(() => {});
+            const v = chk?.result?.value;
+            // Só no documento principal as coordenadas do elementFromPoint são as da janela; num iframe fica o veredito do CDP.
+            if (v && v.top === true) { covered = false; covering = undefined; return { ok: true, stale: false, covered: false, x: Math.round(v.x), y: Math.round(v.y) }; }
+          }
+        } catch { /* best effort — keep the CDP verdict */ }
+      }
+
       return { ok: true, stale: false, covered, covering, x: cx, y: cy };
     } catch (e: any) {
       return { error: String(e?.message ?? e) };
