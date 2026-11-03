@@ -147,12 +147,17 @@ machine). They are listed here so an auditor does not have to "discover" them:
    `.pkg`, `.sh`, ...), by you or by the agent. There is no extension blocklist or content
    sniffing; the protection is that downloads go only to the downloads folder and are never
    executed by Bah. Review what the agent downloads before opening it.
-5. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
+5. **Optional captcha checkbox click** (menu ☑️, OFF by default; `tryCaptchaCheckbox` in `App.tsx`):
+   when ON, on a real human-verification gate the agent clicks a reCAPTCHA / hCaptcha / Turnstile
+   checkbox **once** with real input and checks whether it passed (response token / widget gone);
+   otherwise it asks the user as before. It never attempts image challenges. Some sites forbid
+   automated access in their terms — this is the user's choice to make.
+6. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
    style or a sign-in wall ([`src/shared/human-check.ts`](src/shared/human-check.ts), generic signals, never per
    site), Bah hands the tab to you and resumes on its own when the page is normal again
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
    human check — a code-level guard refuses every page action on a tab classified as one — and never
-   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check".
+   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check". The opt-in switch from item 5 (OFF by default) still clicks a simple checkbox once before handing off.
 
 ---
 
