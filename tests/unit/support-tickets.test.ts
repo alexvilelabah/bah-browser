@@ -153,7 +153,7 @@ test('a support request with a known vendor stays on that vendor\'s site', () =>
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/support/home/en-us' }, cmd), null);
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'www.dell.com/community/en' }, cmd), null);
   assert.match(offSupportSite({ type: 'navigate', url: 'https://www.notebookcheck.net/' }, cmd) || '', /not Dell's site/);
-  assert.match(offSupportSite({ type: 'new_tab', url: 'https://mail.google.com' }, cmd) || '', /not Dell's site/);
+  assert.match(offSupportSite({ type: 'new_tab', url: 'https://mail.google.com' }, cmd) || '', /never the user's mailbox/);
   assert.match(offSupportSite({ type: 'web_search' }, cmd) || '', /stay on Dell's own support site/);
   assert.strictEqual(offSupportSite({ type: 'click_ref' }, cmd), null);
   // Apple: o login (idmsa.apple.com) é do mesmo dono.

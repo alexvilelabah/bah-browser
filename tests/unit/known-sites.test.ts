@@ -51,7 +51,7 @@ test('vendor support sites and communities resolve to the vendor\'s own domain',
   assert.strictEqual(id('open a ticket on Apple Support for my MacBook battery'), 'applesupport');
   assert.strictEqual(id('post a question in the Apple Support Community about Wi-Fi'), 'applecommunity');   // o mais específico vence
   assert.strictEqual(id('ask on the Dell Community forum'), 'dellcommunity');
-  assert.strictEqual(officialSiteForName('dell support', 'en-US')?.url, 'https://www.dell.com/support/home/');
+  assert.strictEqual(officialSiteForName('dell support', 'en-US')?.url, 'https://www.dell.com/support/home/en-us');
 });
 
 test('prompt block and first-step hint', () => {
