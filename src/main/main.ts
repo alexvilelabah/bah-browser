@@ -3897,25 +3897,10 @@ const STEALTH_SCRIPT = `
       };
     }
 
-    // 6. WebGL vendor — pretend to be a real GPU
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-      if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100'; // UNMASKED_RENDERER_WEBGL
-      return getParameter.call(this, p);
-    };
-    if (window.WebGL2RenderingContext) {
-      const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-      WebGL2RenderingContext.prototype.getParameter = function(p) {
-        if (p === 37445) return 'Intel Inc.';
-        if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100';
-        return getParameter2.call(this, p);
-      };
-    }
-
-    // 7. Hardware concurrency / device memory
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+    // 6–7. GPU (WebGL), núcleos e memória: os VALORES REAIS do motor, sem remendo. O antigo
+    //      "Intel Iris 6100 / 8 núcleos / 8 GB" contradizia o resto (Mac ARM com GPU Intel de 2015;
+    //      o worker da página via o número real) — contradição é o sinal clássico de adulteração.
+    //      A memória o próprio Chromium já arredonda e limita a 8 GB.
 
     // 8. Chromium-detected automation flag
     delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Array;
