@@ -58,7 +58,7 @@ export const SCENES = {
   },
   prices: {
     cmd: 'compare prices for AirPods Pro on Amazon and other stores',
-    caption: 'Price comparison across stores, in one table',
+    caption: 'Visits Amazon, Best Buy, Walmart and Target, reads each price, and compares them in one table',
     budget: 20, limitMin: 10,
   },
   steam: {
