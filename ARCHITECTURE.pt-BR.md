@@ -63,6 +63,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Região e hora: país de saída da rede (trace da Cloudflare, só no Automático, cache de 10 min), região de compras, fuso dos sites via CDP `Emulation.setTimezoneOverride` (volta ao reiniciar, salvo se mantido); linha de região do agente, `gl=`/`cc=` na busca, cartão `suggest_time_zone` |
 | `proxy-base.ts` | Ponte entre o proxy do Bah e o `chrome.proxy` das extensões (VPN de extensão): extensão no controle vence (como no Chrome); quando solta, as abas voltam pro proxy configurado no Bah, não um "sistema" fixo; a política de WebRTC do Bah é a base das extensões |
 | `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | DNS seguro (DNS sobre HTTPS) escolhido pela pessoa: `app.configureHostResolver` pro app inteiro, IPC `dns:*`. Veja [DNS seguro](#dns-seguro-dns-sobre-https) |
+| `network-privacy.ts` (+ `src/shared/network-privacy.ts`) | ⋮ → Rede: escolha da política de WebRTC (vazamento de IP), WebRTC só IPv4 (switch de boot), avisos de vazamento, IPC `net:*`. Veja [DNS seguro, versão do IP, WebRTC](#dns-seguro-dns-sobre-https) |
 | `system-ca.ts` | Lê o repositório de certificados-raiz do SO e soma às CAs padrão do Node (`tls.setDefaultCACertificates`) — processo principal e worker de download — pra proxies corporativos com inspeção TLS |
 | `video-cuts.ts`, `transcript.ts` | Recursos de vídeo locais (localizar onde uma frase é dita, transcrições) — ffmpeg nativo |
 | `image-harvester.ts` | Colheita de imagens em massa + geração de imagem por IA (Pollinations), com limites |
@@ -94,6 +95,44 @@ tráfego que passa por ele (HTTP CONNECT, SOCKS5) — o painel avisa; o comporta
 
 É configuração do núcleo, não extensão: extensões do Chrome não têm API pra definir o resolvedor, e
 Chrome / Edge / Brave / Firefox mantêm o DNS seguro nas próprias configurações.
+
+#### Versão do IP, WebRTC e avisos de vazamento
+
+O mesmo painel (⋮ → Rede e proxy: avisos, Proxy, DNS seguro, Versão do IP, WebRTC) reúne o resto da
+privacidade de rede (`network-privacy.ts`, lógica pura em `src/shared/network-privacy.ts`, salvo em
+`userData/network.json`).
+
+**Versão do IP — medido no Electron 44, só o "automático" é possível.** O switch `--disable-ipv6` não
+existe mais neste Chromium (a string nem está no binário; com ele, uma página em `localhost` continua
+conectando por `::1`), e nem o `configureHostResolver` nem as sessões têm opção de família
+(`session.resolveHost` aceita `queryType`, mas só pras consultas do próprio Bah). O painel mostra
+"Só IPv4" / "Só IPv6" desligados com esse motivo e aponta pros ajustes de rede do sistema.
+
+**WebRTC.** Medido: a política padrão do Electron (`default`) entrega pra qualquer página os IPs reais
+das interfaces — candidatos de host IPv4 e IPv6 global, sem nome mDNS. Agora o Bah sempre define uma
+política em todo web contents (todas as sessões, inclusive a anônima; quem aplica é o `proxy.ts`, e a
+configuração `chrome.privacy` de uma extensão continua vencendo na sessão dela):
+
+| Escolha | Sem proxy | Com proxy |
+|---|---|---|
+| Proteger meus IPs (padrão) | `default_public_interface_only` (sem candidato de host) | `disable_non_proxied_udp` (nada de UDP fora do proxy) |
+| Melhor qualidade de chamada | `default` | `default` (com aviso: o WebRTC pode passar por fora do proxy) |
+
+"WebRTC: só IPv4" acrescenta `--force-fieldtrials=WebRTC-IPv6Default/Disabled/` antes do `ready`
+(medido: os candidatos IPv6 somem), então **vale depois de reiniciar** — o painel avisa.
+
+**Avisos de vazamento** (no topo do painel; o renderer recebe só famílias/flags, nunca os endereços da
+máquina; `os.networkInterfaces()` conta IPv4 que não é loopback/169.254 e IPv6 só em 2000::/3):
+
+| Aviso | Quando | Botão |
+|---|---|---|
+| Proxy só por uma família | proxy manual cujo host é IP literal (ou resolve) de uma família só, e a máquina tem a outra; proxy em loopback é ignorado | Abrir os ajustes de rede do sistema (macOS / Windows) |
+| DNS seguro só por uma família | idem, pro host do servidor DoH | Abrir os ajustes de rede do sistema |
+| WebRTC pode passar por fora do proxy | proxy + "Melhor qualidade de chamada" | Proteger o WebRTC |
+| DNS seguro atrás do proxy (info) | proxy + DNS seguro: o proxy pode resolver os nomes do tráfego que passa por ele | — |
+
+Nada configurado → nenhum aviso. Testes: `tests/unit/network-privacy.test.ts`, `tests/e2e/network-privacy.spec.ts`
+(candidatos ICE de uma página local; interfaces simuladas com `E2E_NET_IFACES` sob `NODE_ENV=test` + `E2E_MOCK_AI=1`).
 
 ### Downloads e torrents
 

@@ -2461,7 +2461,7 @@ body {
 .proxy-foot .tour-btn:not(.tour-btn-primary){ background:rgba(255,255,255,0.08); color:var(--text-primary); }
 .proxy-settings{ max-height:86vh; overflow:auto; }
 /* DNS seguro (dentro de Rede e proxy) */
-.dns-section{ display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--border); padding-top:12px; margin-top:2px; }
+.dns-section, .net-section{ display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--border); padding-top:12px; margin-top:2px; }
 .dns-title{ font-size:13.5px; font-weight:600; color:var(--text-primary); }
 .dns-presets{ display:flex; flex-direction:column; gap:6px; }
 .dns-preset{ display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
@@ -2471,6 +2471,11 @@ body {
 .dns-preset-name{ font-size:13px; color:var(--text-primary); font-weight:600; }
 .dns-preset-url{ font-size:11.5px; color:var(--text-secondary); word-break:break-all; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
 .dns-preset-tags{ font-size:11.5px; color:var(--text-secondary); }
+.net-warnings{ display:flex; flex-direction:column; gap:6px; }
+.net-warning{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:8px 10px; border-radius:8px; font-size:12px; line-height:1.45; color:var(--text-primary); border:1px solid var(--border); }
+.net-warning.warn{ border-color:rgba(230,160,40,0.7); background:rgba(230,160,40,0.10); }
+.net-warning.info{ background:rgba(255,255,255,0.04); }
+.net-warning .net-fix{ height:26px; padding:0 10px; font-size:12px; background:rgba(255,255,255,0.08); color:var(--text-primary); }
 
 
 /* Região e hora */

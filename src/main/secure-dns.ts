@@ -26,6 +26,8 @@ let current: SecureDnsSetting = { ...DEFAULT_SECURE_DNS };
 let applied: HostResolverConfig | null = null;   // null = nunca chamado (resolvedor padrão do Chromium)
 let lastError = '';
 let calls = 0;
+/** Configuração em vigor (pros avisos do painel Rede). */
+export const getSecureDns = (): SecureDnsSetting => current;
 
 function apply(config: HostResolverConfig): boolean {
   try {

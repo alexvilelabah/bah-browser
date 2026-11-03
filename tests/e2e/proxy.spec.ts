@@ -89,7 +89,7 @@ test('corporate proxy: settings, 407 sign-in, page + Bah fetch + download throug
     const n2 = seen.length; await app.evaluate(async (_e: any, u: string) => (await fetch(u + '/direct')).text(), T);
     ok(seen.length === n2, 'direct mode bypasses the proxy');
     const rtcOff: string[] = await app.evaluate((({ webContents }: any) => webContents.getAllWebContents().filter((w: any) => w.getType() === 'webview').map((w: any) => w.getWebRTCIPHandlingPolicy())));
-    ok(rtcOff.every(p => p === 'default'), 'WebRTC back to default without a proxy: ' + rtcOff.join(','));
+    ok(rtcOff.every(p => p === 'default_public_interface_only'), 'WebRTC back to public-interface-only (no local IPs) without a proxy: ' + rtcOff.join(','));
   } finally {
     for (const f of [path.join(os.homedir(), 'Downloads', 'file.bin')]) { try { if (fs.statSync(f).size === 200000) fs.unlinkSync(f); } catch {} }
     await app.close(); target.close(); proxy.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
