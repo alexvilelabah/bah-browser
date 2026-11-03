@@ -1310,6 +1310,7 @@ export default function App() {
   // botão de vidro do painel e pelo item do menu ⋮.
   // Mostra "Conectado ao Google" no lugar do botão quando já existe sessão importada.
   const [googleLoggedIn, setGoogleLoggedIn] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const checkGoogleLogin = useCallback(async () => {
     try { const r = await window.electronAPI?.googleCheckLogin?.(); setGoogleLoggedIn(!!r?.loggedIn); } catch {}
   }, []);
@@ -2140,6 +2141,36 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             </>
           )}
         </div>
+        {/* Perfil (canto de cima, como o Chrome): entrar no Google é opcional — serve pra tarefas
+            no Gmail/Drive/YouTube. Aba anônima: apagado (importaria a sessão pro perfil normal). */}
+        <div className="menu-wrap">
+          <button className={`menu-btn profile-btn${googleLoggedIn ? ' signed-in' : ''}`} data-testid="profile-btn"
+            onClick={() => setProfileOpen(o => !o)} title={googleLoggedIn ? t('menu.googleConnected') : t('profile.title')}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4a3.5 3.5 0 110 7 3.5 3.5 0 010-7zm0 14a8 8 0 01-6.2-2.9c.9-1.9 3.4-3.1 6.2-3.1s5.3 1.2 6.2 3.1A8 8 0 0112 20z"/></svg>
+          </button>
+          {profileOpen && (
+            <>
+              <div className="menu-overlay" onClick={() => setProfileOpen(false)} />
+              <div className="menu-panel profile-panel">
+                <div className="profile-note">{t('profile.note')}</div>
+                {googleLoggedIn ? (
+                  <>
+                    <div className="menu-item connected" aria-disabled="true">
+                      <span className="menu-ic">✓</span><span className="menu-label connected">{t('menu.googleConnected')}</span>
+                    </div>
+                    <button className="menu-item" disabled={activeIncognito} onClick={() => { setProfileOpen(false); handleGoogleSwitch(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.googleSwitchTitle')}>
+                      <span className="menu-ic">🔄</span><span className="menu-label">{t('menu.googleSwitch')}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button className="menu-item" disabled={activeIncognito} onClick={() => { setProfileOpen(false); handleGoogleLogin(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.googleLoginTitle')}>
+                    <span className="menu-ic">🔑</span><span className="menu-label">{t('menu.googleLogin')}</span>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
         <div className="menu-wrap">
           <button className="menu-btn" onClick={() => setMenuOpen(o => !o)} title={t('menu.title')}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>
@@ -2289,18 +2320,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🔑</span>
                   <span className="menu-label">{t('pw.menu')}</span>
                 </button>
-                {/* Entrar no Google / neste site trazem os cookies pro perfil NORMAL: numa aba anônima
-                    não fariam sentido (e misturariam as duas) — ficam apagados, com o porquê. */}
-                <button className="menu-item" disabled={activeIncognito} onClick={() => { setMenuOpen(false); handleGoogleLogin(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.googleLoginTitle')}>
-                  <span className="menu-ic">{googleLoggedIn ? '✓' : '🔑'}</span>
-                  <span className={`menu-label${googleLoggedIn ? ' connected' : ''}`}>{googleLoggedIn ? t('menu.googleConnected') : t('menu.googleLogin')}</span>
-                </button>
-                {googleLoggedIn && (
-                  <button className="menu-item" disabled={activeIncognito} onClick={() => { setMenuOpen(false); handleGoogleSwitch(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.googleSwitchTitle')}>
-                    <span className="menu-ic">🔄</span>
-                    <span className="menu-label">{t('menu.googleSwitch')}</span>
-                  </button>
-                )}
+                {/* Entrar neste site traz os cookies pro perfil NORMAL: numa aba anônima não faria
+                    sentido (e misturaria os dois) — fica apagado, com o porquê. Google: no ícone de perfil. */}
                 <button className="menu-item" disabled={activeIncognito} onClick={() => { setMenuOpen(false); handleSiteLogin(); }} title={activeIncognito ? t('incog.loginOff') : t('menu.siteLoginTitle')}>
                   <span className="menu-ic">🔓</span>
                   <span className="menu-label">{t('menu.siteLogin')}</span>
@@ -6782,9 +6803,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onResearch={runWebResearch}
             onClassify={classifyIntent}
             onFetchHeadlines={fetchNewsHeadlines}
-            // Aba anônima: sem o botão "Entrar no Google" (importaria a sessão pro perfil normal).
-            onGoogleLogin={activeIncognito ? undefined : handleGoogleLogin}
-            googleLoggedIn={googleLoggedIn}
             isStartupTab={!!store.activeTab?.startup}
             // Link da resposta da IA: na aba anônima, abre anônimo também.
             onOpenUrl={(url: string) => { const id = store.addTab(url, opensIncognito('from-tab', aiOnIncognito())); activeTabIdRef.current = id; }}
