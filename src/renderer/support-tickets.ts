@@ -58,6 +58,11 @@ export function supportSiteFor(command: string): SupportSite | null {
 /** Chamado com fabricante conhecido: sair do domínio dele (notebookcheck, Gmail, busca) é recusado.
  *  Devolve o motivo, ou null se pode. Endereço escrito pela pessoa libera (ela escolheu). */
 export function offSupportSite(action: { type: string; url?: string }, supportText: string, opts: { pageFailed?: boolean } = {}): string | null {
+  // Webmail nunca (ensaio: "não deu no site" → o modelo abria o Gmail pra mandar por e-mail), com ou sem fabricante.
+  if ((action.type === 'navigate' || action.type === 'new_tab') && /^(https?:\/\/)?(mail\.google\.com|outlook\.(live|office)\.com|mail\.yahoo\.com|mail\.proton\.me)\b/i.test(String(action.url || '').trim())
+      && !/mail\.google|gmail|outlook|yahoo mail|proton/i.test(supportText)) {
+    return 'a support request goes through the vendor\'s own form — never the user\'s mailbox. If the form is stuck, stop and tell the user what blocks you.';
+  }
   const site = supportSiteFor(supportText);
   if (!site || /https?:\/\//i.test(supportText)) return null;
   // Página do fabricante que não carregou (Access Denied, 404, em branco): a busca na web acha o

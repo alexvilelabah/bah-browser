@@ -2748,6 +2748,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const supportFollowUps = supportText && supportText !== command
                 ? [...supportThreadContext((getThread(threadKey)?.entries || []) as any, isSupportCommand).followUps, command] : [];
               const supportFindings: string[] = [];
+              let supportSent = false;   // a pessoa aprovou o envio (freio "message") nesta tarefa
               const supportFilledForms = new Set<string>();
               const supportSite = supportText && !/https?:\/\//i.test(supportText) ? supportSiteFor(supportText) : null;
               // Página que não carregou (Access Denied, 404, em branco): libera a busca na web pra achá-la.
@@ -2882,8 +2883,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
                 // isso não é receita pra guardar.
-                const reportsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed to|not able to|was ?n[o']t able|gave up|give up|giving up|unfortunately|did ?n[o']t (manage|work|find)|não consegui|não foi possível|no pude)\b/i.test(reason);
-                if (status === 'success' && !reportsFailure && !repeatIntent && (history.match(/\nSTEP \d+:/g) || []).length >= 3) {
+                const reportsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed to|not able to|was ?n[o']t able|gave up|give up|giving up|unfortunately|did ?n[o']t (manage|work|find)|(is|was|are) not allowing|does ?n[o']t allow|no progress|não consegui|não foi possível|no pude)\b/i.test(reason);
+                // Suporte: só vira skill o chamado/post que a pessoa mandou de fato (ensaio: "a página não deixa
+                // avançar" com done(success) oferecia "salvar como skill").
+                const supportUnsent = !!supportText && !supportSent;
+                if (status === 'success' && !reportsFailure && !supportUnsent && !repeatIntent && (history.match(/\nSTEP \d+:/g) || []).length >= 3) {
                   void offerSkillSave(command, history, onProgress);
                 }
                 if (status === 'success' && !reportsFailure && !repeatIntent && macroTraceRef.current.length > 0) {
@@ -3035,7 +3039,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 deadline.suspend();
                 return new Promise<boolean>((resolve) => {
                   let done = false;
-                  const finish = (v: boolean) => { if (!done) { done = true; deadline.resume(); resolve(v); } };
+                  const finish = (v: boolean) => { if (!done) { done = true; if (v && risk.kind === 'message') supportSent = true; deadline.resume(); resolve(v); } };
                   if (signal) signal.addEventListener('abort', () => finish(false), { once: true });
                   onProgress({
                     kind: 'confirm',
@@ -4392,6 +4396,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (supportText && action.success) {
                       const gaveUp = supportFinishProblem(supportText, observation.url);
                       if (gaveUp) { action.success = false; action.reason = `${gaveUp}\n\n${action.reason || ''}`.trim(); }
+                      // Nada enviado e a mensagem admite que não deu ("the page is not allowing progress") → falha.
+                      else if (!supportSent && /\b(unable|could ?n[o']t|cannot|can't|failed|not (allowing|possible|able)|does ?n[o']t allow|no progress|blocked|gave up)\b/i.test(String(action.reason || ''))) action.success = false;
                     }
                     finishRun(action.success ? 'success' : 'failed', action.reason);
                     return { thought: thoughts.join('\n\n') || action.reason, results: allResults, done: action };
