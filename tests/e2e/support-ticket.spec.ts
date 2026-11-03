@@ -10,7 +10,10 @@ import type { AddressInfo } from 'net';
 // "Don't send" → nada sai; "Send it" → enviado. Depois um post de fórum: o "Post" também pergunta.
 // Segundo teste: pedido + resposta seguinte viram o texto do chamado; a edição da pessoa na aba aparece no
 // cartão de envio e é o que sai. Terceiro: página do fabricante com 403 "Access Denied" → busca na web (resultados
-// fixos) → só abre o resultado do domínio oficial.
+// fixos) → só abre o resultado do domínio oficial. Quarto: fabricante fora da tabela (Canon) → o 1º passo é a busca
+// do site de suporte; o anúncio golpista (domínio parecido) no topo é recusado e o resultado canon.com abre.
+// Todo chamado começa pela busca do site de suporte (fixa no teste); www.acme.com / www.dell.com / www.canon.com → o
+// servidor local (--host-resolver-rules), porque abrir resultado só vale no domínio do fabricante.
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
   : process.platform === 'darwin' ? path.join(ROOT, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
@@ -81,7 +84,9 @@ test('support ticket: sign-in wall pauses, the form is filled by code and review
   test.setTimeout(240_000);
   const { st, server } = acmeServer();
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
-  const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  const port1 = (server.address() as AddressInfo).port;
+  const T = `http://www.acme.com:${port1}/`;      // o navegador (MAP www.acme.com → 127.0.0.1)
+  const L = `http://127.0.0.1:${port1}/`;         // o próprio teste (Node não usa o MAP)
   const desc = 'Battery drains from 100% to 20% in about two hours since the macOS update last week. Tried an SMC reset; no change.';
   const script = [
     { type: 'navigate', url: `${T}contact` },                    // → parede de login (Bah pausa)
@@ -99,7 +104,8 @@ test('support ticket: sign-in wall pauses, the form is filled by code and review
     { type: 'done', reason: 'Draft left unposted.', success: true },
   ];
   // Resposta do "modelo" sem o formato pedido → o Bah usa o modelo fixo (as palavras da pessoa).
-  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_MOCK_CHAT: 'Sure, here is a ticket.' });
+  const acmeResults = [{ title: 'Acme Support', snippet: 'Get support for Acme products', url: `${T}` }];
+  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_MOCK_CHAT: 'Sure, here is a ticket.', E2E_SEARCH_RESULTS: JSON.stringify(acmeResults) }, ['--host-resolver-rules=MAP www.acme.com 127.0.0.1']);
   try {
     let sendAnswered = 0, reviewsAnswered = 0;   // cartões antigos continuam no feed: só responde um cartão NOVO
     const run = async (command: string, answers: string[], untilPrompt: number) => {
@@ -112,7 +118,7 @@ test('support ticket: sign-in wall pauses, the form is filled by code and review
           // A pessoa entra no site (simulado no servidor) e clica Continuar.
           expect((await prompts(app)).length).toBe(1);   // nenhum passo de modelo na tela de login
           paused = true;
-          await fetch(`${T}__signin`);
+          await fetch(`${L}__signin`);
           await page.getByTestId('agent-manual-continue').click();
         }
         const reviews = await page.getByText(REVIEW).count();
@@ -156,6 +162,10 @@ test('support ticket: sign-in wall pauses, the form is filled by code and review
     // A skill e o bloco de suporte chegaram ao modelo; o formulário preenchido também; o 1º "Submit request" foi cancelado.
     expect(ps[1]).toContain('### support-ticket');
     expect(ps[1]).toContain('SUPPORT TASK');
+    // 1º passo, sem o modelo: a busca do site de suporte (fabricante + produto + "support contact").
+    expect(ps[0]).toContain('WEB RESULTS for "Acme laptop support contact"');
+    expect(ps[0]).toContain("ACME'S OWN SITE: result 1");
+    expect(ps[0]).toContain("FIND THE SITE: open Acme's support result from the web search");
     expect(ps[2]).toContain('FORM FILLED BY BAH');
     expect(ps[5]).toMatch(/click_ref\(@\d+\)\nRESULT: \{"success":false,"reason":"user_cancelled"/);
     await waitIdle(page);
@@ -178,7 +188,7 @@ test('support ticket: the request and a follow-up fill the form by code; the use
   st.signedIn = true;
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
-  const T = `http://127.0.0.1:${port}/`;
+  const T = `http://www.acme.com:${port}/`;
   const script = [
     { type: 'done', reason: 'What is the serial number, and when did it start?', success: true },   // 1ª tarefa: pergunta
     { type: 'navigate', url: `${T}contact` },                        // 2ª tarefa (resposta da pessoa): o formulário
@@ -188,7 +198,7 @@ test('support ticket: the request and a follow-up fill the form by code; the use
   ];
   // "Modelo" que redige só com os fatos (números todos do pedido) → o Bah usa esse texto e põe o serial.
   const chat = 'SUBJECT: Laptop battery drains in about two hours\nDESCRIPTION:\nMy laptop battery drains from 100% to 20% in about two hours. It started after the macOS update last week. I already tried an SMC reset.';
-  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_MOCK_CHAT: chat });
+  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_MOCK_CHAT: chat, E2E_SEARCH_RESULTS: JSON.stringify([{ title: 'Acme Support', snippet: 'Acme', url: T }]) }, ['--host-resolver-rules=MAP www.acme.com 127.0.0.1']);
   try {
     await page.evaluate(() => (window as any).electronAPI?.applicantSetProfile?.({ firstName: 'Pat', lastName: 'Example', email: 'pat@example.com', address: '1 Main St' }));
     const send = async (text: string) => { await page.getByTestId('agent-command-input').fill(text); await page.getByTestId('agent-command-input').press('Enter'); };
@@ -279,6 +289,10 @@ test('support ticket: a vendor page answering 403 Access Denied → web search �
     const ps = await prompts(app);
     if (process.env.SUPPORT_DUMP) fs.writeFileSync(process.env.SUPPORT_DUMP + '.403', ps.join('\n=====\n'));
     expect(ps.length).toBe(5);
+    // 1º passo: a busca do site de suporte; o resultado dell.com é apontado (o de terceiro não).
+    expect(ps[0]).toContain('WEB RESULTS for "Dell XPS 13 9310 support contact"');
+    expect(ps[0]).toContain("DELL'S OWN SITE: result 2");
+    expect(ps[0]).toContain('OFFICIAL DELL SUPPORT: https://www.dell.com/support/home/en-us — the fallback');
     // Depois do 403: a dica nomeia a página e manda buscar na web, abrindo só o domínio oficial.
     expect(ps[1]).toContain(`PAGE DID NOT LOAD: ${DELL}/en-us/lp/contact-us — Access Denied (errors.edgesuite.net)`);
     expect(ps[1]).toContain('"action": "web_search", "query": "Dell contact us XPS 13 9310"');
@@ -291,5 +305,57 @@ test('support ticket: a vendor page answering 403 Access Denied → web search �
     expect(ps[4]).toContain(`URL: ${official}`);
     expect(hits.filter(h => h.endsWith('/en-us/lp/contact-us')).length).toBe(1);   // não insistiu no endereço bloqueado
     expect(hits.some(h => h.includes('/support/incidents-online/'))).toBe(true);
+  } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('support ticket, vendor outside the table: the first step finds the support site; a look-alike "support" ad is refused, the vendor domain opens', async () => {
+  test.setTimeout(180_000);
+  const hits: string[] = [];
+  const server = http.createServer((q, res) => {
+    const u = new URL(q.url || '/', 'http://x');
+    hits.push(`${q.headers.host}${u.pathname}`);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (/support-help/.test(String(q.headers.host))) res.end('<title>Canon Printer Support 24/7</title><h1>Call 1-800-000-0000 now</h1>');
+    else if (u.pathname === '/support/contact') res.end('<title>Contact Support | Canon U.S.A.</title><h1>Contact Canon Support</h1><a href="/support/contact/printer">Printers</a>');
+    else res.end('<title>Canon</title><h1>Canon</h1>');
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as AddressInfo).port;
+  const scam = `http://www.canon-printer-support-help.com:${port}/`;
+  const real = `http://www.canon.com:${port}/support/contact`;
+  // Anúncio golpista primeiro (como no buscador de verdade), o domínio da Canon depois.
+  const results = [
+    { title: 'Canon Printer Support ☎ 1-800 Call Now — Official Help', snippet: 'Printer not working? Call our certified technicians.', url: scam },
+    { title: 'Contact Support | Canon U.S.A.', snippet: 'Get help with your Canon printer', url: real },
+  ];
+  const script = [
+    { type: 'navigate', url: scam },    // o modelo cai no anúncio → recusado
+    { type: 'navigate', url: real },    // o resultado no domínio da Canon
+    { type: 'done', reason: "On Canon's Contact Support page.", success: true },
+  ];
+  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_SEARCH_RESULTS: JSON.stringify(results) },
+    ['--host-resolver-rules=MAP www.canon.com 127.0.0.1, MAP www.canon-printer-support-help.com 127.0.0.1']);
+  try {
+    await page.getByTestId('agent-command-input').fill('open a support ticket with Canon about my PIXMA printer, it keeps jamming');
+    await page.getByTestId('agent-command-input').press('Enter');
+    let sawFinding = false;
+    for (let i = 0; i < 240 && (await prompts(app)).length < 3; i++) {
+      if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
+      if (!sawFinding) sawFinding = await page.getByText(/Finding Canon's support site/).count().then(n => n > 0).catch(() => false);
+      await sleep(250);
+    }
+    const ps = await prompts(app);
+    if (process.env.SUPPORT_DUMP) fs.writeFileSync(process.env.SUPPORT_DUMP + '.canon', ps.join('\n=====\n'));
+    expect(ps.length).toBe(3);
+    expect(sawFinding).toBe(true);
+    // 1º passo sem o modelo: a busca (fabricante + aparelho + "support contact"), e o resultado da Canon apontado.
+    expect(ps[0]).toContain('WEB RESULTS for "Canon printer support contact"');
+    expect(ps[0]).toContain("CANON'S OWN SITE: result 2 (canon.com (or canon.<country>))");
+    expect(ps[0]).toContain('only a result on canon.com (or canon.<country>)');
+    // O anúncio parecido foi recusado; o domínio da Canon abriu.
+    expect(ps[1]).toContain("REFUSED: www.canon-printer-support-help.com is not Canon's site");
+    expect(ps[2]).toContain(`URL: ${real}`);
+    expect(hits.some(h => /support-help/.test(h))).toBe(false);
+    expect(hits.some(h => h.startsWith('www.canon.com') && h.endsWith('/support/contact'))).toBe(true);
   } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

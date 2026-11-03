@@ -114,7 +114,7 @@ import {
 } from './site-knowledge';
 import { namedSiteHint, localeCountry } from './known-sites';
 import { isPriceComparison, priceCompareQuery, pickStores, unknownNamedStores, storeSearchUrl, blockedReason, pageSnippets, readPricePrompt, parseReadReply, checkRead, titleMatchesQuery, looksLikeAccessory, isStoreSource, compareTableSpec, compareSummary, type PriceRow, type PriceStore } from './price-compare';
-import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, commandIsSupport as isSupportCommand, supportPromptBlock, formatSupportDraft, supportSiteFor, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
+import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, commandIsSupport as isSupportCommand, supportPromptBlock, formatSupportDraft, supportVendorFor, supportSearchQuery, vendorUrlOk, vendorDomainsLabel, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
 import { supportFacts, draftPrompt, finalDraft, planSupportFill, findingFrom, supportFinishProblem, supportThreadContext } from './support-draft';
 import { pageLoadProblem, pageLoadHint } from './page-load';
 import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
@@ -2788,9 +2788,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const supportFindings: string[] = [];
               let supportSent = false;   // a pessoa aprovou o envio (freio "message") nesta tarefa
               const supportFilledForms = new Set<string>();
-              const supportSite = supportText && !/https?:\/\//i.test(supportText) ? supportSiteFor(supportText) : null;
-              // Página que não carregou (Access Denied, 404, em branco): libera a busca na web pra achá-la.
-              let supportPageFailed = false;
+              // Fabricante do chamado (da tabela ou nome citado: "Canon printer"); endereço escrito pela pessoa → nenhum.
+              const supportVendor = supportText && !/https?:\/\//i.test(supportText) ? supportVendorFor(supportText) : null;
+              // A busca do 1º passo que acha o site de suporte (sem resultado no domínio do fabricante → o endereço reserva).
+              let supportFindQuery: string | null = null;
               const supportLoadFailures: string[] = [];
               const riskOpts = { jobs: commandIsJobs, unattended, cart: commandIsCart, support: commandIsSupport };
               // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
@@ -3375,6 +3376,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nCOLLECTION LIST (from the model's own knowledge, asked directly): ${items.join('; ')}`;
                     }
                   } catch { /* sem lista: o agente segue pelo caminho normal (skill + aviso COLLECTION) */ }
+                }
+
+                // Chamado de suporte: o 1º passo é ACHAR o site de suporte do fabricante pela busca na web (fabricante +
+                // produto + "support contact"/"community") — o modelo escolhe o resultado; abrir só vale no domínio dele
+                // (offSupportSite). Já no site dele (continuação do chamado) → não busca de novo.
+                if (supportVendor && !usedInitialShortcut && actionQueue.length === 0) {
+                  const startUrl = (() => { try { return getActiveWebview()?.getURL() || ''; } catch { return ''; } })();
+                  if (!/^https?:/i.test(startUrl) || !vendorUrlOk(startUrl, supportVendor)) {
+                    supportFindQuery = supportSearchQuery(supportText || '', supportVendor, supportFacts(supportText || '').product);
+                    actionQueue.unshift({ action: { type: 'web_search', query: supportFindQuery } as BrowserAction });
+                    onProgress({ kind: 'status', message: t('agent.supportFind.search', { vendor: supportVendor.vendor }) });
+                  }
                 }
 
                 let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo
@@ -4657,7 +4670,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   // Chamado com fabricante conhecido: só o site dele (o modelo pequeno fugia pra blog/Gmail quando travava).
                   if (supportText) {
-                    const off = offSupportSite(action as any, supportText, { pageFailed: supportPageFailed });
+                    const off = offSupportSite(action as any, supportText);
                     if (off) {
                       history += `\nREFUSED: ${off}`;
                       onProgress({ kind: 'status', message: `🛡️ ${off}` });
@@ -6064,6 +6077,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     } else {
                       toolResult = { success: false, error: sr.error || (sr.blocked ? 'All search engines are blocking this connection right now — go directly to a site you know (e.g. the vendor or booking site).' : 'No results — try other words.') };
                     }
+                    if (supportVendor) {
+                      // Golpe comum: anúncio de "suporte" com telefone falso no topo. Só o domínio do fabricante vale.
+                      const own = sr.results.map((x, i) => ({ x, i })).filter(r => vendorUrlOk(r.x.url, supportVendor));
+                      const fallback = action.query === supportFindQuery && supportVendor.site
+                        ? (isForumCommand(supportText || '') && supportVendor.site.community ? supportVendor.site.community : supportVendor.site.support) : null;
+                      if (own.length) history += `\n${supportVendor.vendor.toUpperCase()}'S OWN SITE: result ${own.map(r => r.i + 1).join(', ')} (${vendorDomainsLabel(supportVendor)}) — navigate to ${own[0].x.url}. Any other result is not ${supportVendor.vendor}'s site and will be refused.`;
+                      else if (fallback) history += `\nNO ${supportVendor.vendor.toUpperCase()} RESULT: no result is on ${vendorDomainsLabel(supportVendor)} — navigate to the OFFICIAL address instead: ${fallback}`;
+                      else history += `\nNO ${supportVendor.vendor.toUpperCase()} RESULT: no result is on ${vendorDomainsLabel(supportVendor)} — web_search again with other words, or ask the user for ${supportVendor.vendor}'s support site. Never open another domain.`;
+                    }
                   } else if (action.type === 'look_at') {
                     // Só marca a área; o recorte vai na próxima captura (decideAgentShot força a imagem).
                     if (action.ref != null) {
@@ -6669,7 +6691,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? pageLoadProblem({ url: afterObservation.url, title: afterObservation.title, text: afterObservation.text_sample, elementCount: (afterObservation.interactive_elements || []).length, lastAction: action.type, urlChanged: urlChangedByAction, noEffectCount })
                     : null;
                   if (loadProblem) {
-                    supportPageFailed = true;
                     const navUrl = String((action as any).url || '');
                     const failedUrl = (/^chrome-error:|^about:/.test(afterObservation.url) && navUrl) ? navUrl : afterObservation.url;
                     // O bloqueio é desta página: o resto do site oficial continua valendo (o recovery marcava o domínio todo).
@@ -6682,11 +6703,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       finishRun('failed', msg);
                       return { thought: msg, results: allResults, done: { type: 'done', success: false, reason: msg } as BrowserAction };
                     }
-                    history += `\n${pageLoadHint(loadProblem, { url: failedUrl, target: lastTarget && /^click/.test(action.type) ? lastTarget.replace(/\s+on\s+\S+$/, '') : undefined, vendor: supportSite?.vendor, domains: supportSite?.domains, product: supportFacts(supportText || '').product })}`;
+                    history += `\n${pageLoadHint(loadProblem, { url: failedUrl, target: lastTarget && /^click/.test(action.type) ? lastTarget.replace(/\s+on\s+\S+$/, '') : undefined, vendor: supportVendor?.vendor, domains: supportVendor ? (supportVendor.site?.domains || [vendorDomainsLabel(supportVendor)]) : undefined, product: supportFacts(supportText || '').product })}`;
                     onProgress({ kind: 'status', message: t('agent.supportLoad.search', { detail: loadProblem.detail }) });
-                  } else if (supportSite && /^https?:/i.test(afterObservation.url) && !supportSite.domains.some(d => hostOf(afterObservation.url) === d || hostOf(afterObservation.url).endsWith('.' + d))) {
+                  } else if (supportVendor && urlChangedByAction && /^https?:/i.test(afterObservation.url) && !vendorUrlOk(afterObservation.url, supportVendor)) {
                     // Um link levou pra fora do fabricante (blog, loja, revista): o chamado não é lá.
-                    history += `\nOFF ${supportSite.vendor.toUpperCase()}'S SITE: ${hostOf(afterObservation.url)} is not ${supportSite.vendor}'s site — go back (go_back) to ${supportSite.domains.join(' / ')}. A support request goes only through the vendor's own site.`;
+                    history += `\nOFF ${supportVendor.vendor.toUpperCase()}'S SITE: ${hostOf(afterObservation.url)} is not ${supportVendor.vendor}'s site — go back (go_back) to ${vendorDomainsLabel(supportVendor)}. A support request goes only through the vendor's own site.`;
                   }
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);
                   const openedRegularPage = recoveryVerdict.blocker === 'sensitive_action'
@@ -6745,10 +6766,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (recoveryVerdict.decision !== 'continue') {
                     onProgress({ kind: 'status', message: `🛡️ Recovery: ${recoveryVerdict.reason.slice(0, 120)}` });
                     let instruction = recoveryInstruction(recoveryVerdict);
-                    if (supportSite && recoveryVerdict.decision === 'search_alternative') {
-                      supportPageFailed = true;
+                    if (supportVendor && recoveryVerdict.decision === 'search_alternative') {
                       recovery.blockedDomains.delete(hostOf(afterObservation.url));
-                      instruction = `\nRECOVERY: ${recoveryVerdict.reason}\nINSTRUCTION: this is a support request with ${supportSite.vendor} — do NOT go to another site. If the page you wanted did not load, web_search for it (e.g. "${supportSite.vendor} contact technical support") and open the result on ${supportSite.domains.join(' / ')}. If nothing works, stop and tell the user what blocks you.`;
+                      instruction = `\nRECOVERY: ${recoveryVerdict.reason}\nINSTRUCTION: this is a support request with ${supportVendor.vendor} — do NOT go to another site. If the page you wanted did not load, web_search for it (e.g. "${supportVendor.vendor} contact technical support") and open the result on ${vendorDomainsLabel(supportVendor)}. If nothing works, stop and tell the user what blocks you.`;
                     }
                     history += instruction;
 

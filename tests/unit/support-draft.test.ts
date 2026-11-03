@@ -146,13 +146,12 @@ test('a support task that ends off the vendor site is not a success', () => {
   assert.strictEqual(supportFinishProblem('open a support ticket about my printer', 'https://example.org/'), null);
 });
 
-test('web search is allowed after a page failed to load; opening a result stays on the vendor domain', () => {
+test('web search is always allowed in a support task; opening a result stays on the vendor domain', () => {
   const cmd = 'open a support ticket with Dell about my XPS 13 fan';
-  assert.match(offSupportSite({ type: 'web_search' }, cmd) || '', /stay on Dell's own support site/);
-  assert.strictEqual(offSupportSite({ type: 'web_search' }, cmd, { pageFailed: true }), null);
-  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/support/incidents-online/en-us/contactus/dynamic' }, cmd, { pageFailed: true }), null);
-  assert.match(offSupportSite({ type: 'navigate', url: 'https://www.notebookcheck.net/' }, cmd, { pageFailed: true }) || '', /not Dell's site/);
-  assert.match(offSupportSite({ type: 'navigate', url: 'https://www.google.com/search?q=dell' }, cmd, { pageFailed: true }) || '', /not Dell's site/);
+  assert.strictEqual(offSupportSite({ type: 'web_search' }, cmd), null);
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/support/incidents-online/en-us/contactus/dynamic' }, cmd), null);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://www.notebookcheck.net/' }, cmd) || '', /not Dell's site/);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://www.google.com/search?q=dell' }, cmd) || '', /not Dell's site/);
   // Webmail nunca, nem com o endereço escrito pela pessoa (ensaio: o modelo abria o Gmail quando o formulário travava).
   const given = 'Create a support request with Dell using the practice copy at http://127.0.0.1:47300/dell/support';
   assert.match(offSupportSite({ type: 'navigate', url: 'https://mail.google.com' }, given) || '', /never the user's mailbox/);
