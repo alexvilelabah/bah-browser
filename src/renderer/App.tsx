@@ -38,7 +38,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
-import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear } from './download-steps';
+import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear, isTopNCollection, collectionCount, topNListPrompt, parseTopNList } from './download-steps';
 import { shouldExpandRequest, understoodNote } from '../shared/request-expansion';
 import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
@@ -3205,6 +3205,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Medido: "browse to linkedin…" → web_search("LinkedIn") (~25s) antes do navigate.
                   const siteHint = namedSiteHint(command);
                   if (siteHint) history += `\n${siteHint}`;
+                }
+
+                // "Os 3 maiores sucessos do X": a lista é conhecimento do modelo, não uma página. O 8B navegava
+                // rankings por 20 min e nunca guardava a lista; aqui o Bah pergunta UMA vez, direto, e o passo 0
+                // vira o store → cartão de qualidade e downloads pelo próprio Bah (bloco da COLEÇÃO no store).
+                if (isTopNCollection(command)) {
+                  const n = collectionCount(command);
+                  onProgress({ kind: 'status', message: `🎵 Picking the ${n} best-known ones…` });
+                  try {
+                    const r = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(topNListPrompt(command, n), undefined, undefined, store.localSettings.enabled)), 60000, null as any);
+                    const items = parseTopNList(String(r?.response || ''), n);
+                    if (items.length >= 2) {
+                      actionQueue.unshift({ action: { type: 'store', key: 'tracks', value: items } as BrowserAction });
+                      history += `\nCOLLECTION LIST (from the model's own knowledge, asked directly): ${items.join('; ')}`;
+                    }
+                  } catch { /* sem lista: o agente segue pelo caminho normal (skill + aviso COLLECTION) */ }
                 }
 
                 let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo

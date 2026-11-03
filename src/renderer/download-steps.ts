@@ -34,6 +34,35 @@ export function isMediaCollectionRequest(command: string): boolean {
       && /\b(songs|tracks|music\s+videos|videos|clips|hits|m[uú]sicas|clipes|v[ií]deos|faixas|sucessos|canciones|[eé]xitos)\b/.test(c));
 }
 
+// "Os 3 maiores sucessos do X" / "top 5 Queen videos": a lista vem do que o modelo SABE, não de uma página.
+const TOP_N_RE = /\b(top\s+\d+|most\s+(famous|popular|played|viewed)|greatest\s+hits|best[- ]known|biggest\s+hits|maiores\s+sucessos|mais\s+(famos[ao]s|populares|tocad[ao]s)|m[aá]s\s+(famos[ao]s|populares)|grandes\s+[eé]xitos)\b/;
+export function isTopNCollection(command: string): boolean {
+  return isMediaCollectionRequest(command) && TOP_N_RE.test(command.toLowerCase())
+    && !/\b(soundtrack|trilha\s+sonora|banda\s+sonora|album|[aá]lbum|movie|film|filme|pel[ií]cula)\b/i.test(command);
+}
+const NUM_WORDS: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, dois: 2, duas: 2, 'três': 3, tres: 3, quatro: 4, cinco: 5, dos: 2, cuatro: 4 };
+/** Quantos itens: "top 3", "3 of them", "os 5 maiores" → n; sem número → 5. Teto 10. */
+export function collectionCount(command: string): number {
+  const c = command.toLowerCase();
+  const m = c.match(/\btop\s+(\d+)\b/) || c.match(/\b(\d+|two|three|four|five|six|seven|eight|nine|ten|dois|duas|tr[eê]s|quatro|cinco|dos|cuatro)\s+(of\s+them|most|maiores|mais|m[aá]s|songs|tracks|music|videos|clips|hits|m[uú]sicas|clipes|v[ií]deos|sucessos|canciones)\b/);
+  const n = m ? (Number(m[1]) || NUM_WORDS[m[1]] || 5) : 5;
+  return Math.max(2, Math.min(10, n));
+}
+/** Pergunta direta ao modelo (sem navegar): a lista em JSON. */
+export function topNListPrompt(command: string, n: number): string {
+  return `The user asked: "${command.slice(0, 300)}". From your own knowledge, list the ${n} items they mean, most famous first. `
+    + `Reply with ONLY a JSON array of exactly ${n} strings, each "Title — Artist" (the performing artist), e.g. ["Song — Artist", …]. No other text.`;
+}
+/** Resposta do modelo → itens ("Title — Artist"); aceita JSON, lista numerada ou com marcadores. */
+export function parseTopNList(text: string, n: number): string[] {
+  const t = String(text || '');
+  const arr = t.match(/\[[\s\S]*\]/);
+  let items: string[] = [];
+  if (arr) { try { const v = JSON.parse(arr[0]); if (Array.isArray(v)) items = listItems(v); } catch {} }
+  if (!items.length) items = listItems(t.split(/\r?\n/).filter(l => /^\s*(\d+[.)]|[-•*])\s+/.test(l)));
+  return items.filter(x => !/[{}]/.test(x)).map(x => x.replace(/^["'“”]+|["'“”]+$/g, '').trim()).filter(Boolean).slice(0, n);
+}
+
 /** Vídeo (com som) ou só áudio? "music video/clipe" = vídeo; "songs/tracks/mp3/músicas" sem vídeo = áudio. */
 export function collectionWantsAudioOnly(command: string): boolean {
   const c = command.toLowerCase();
