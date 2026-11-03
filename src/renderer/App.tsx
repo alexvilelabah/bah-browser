@@ -10,6 +10,9 @@ import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } f
 import { commandIsGrocery, parseGroceryList, GROCERY_TILES_SCRIPT, CART_PAGE_SCRIPT, formatProductTiles, formatCartPage, formatListProgress, offListAdd, searchBoxRef, nextListItem, cartFinishProblem, type ProductTile, type CartPage } from './grocery';
 import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
+import { runHandoff, classifyWebview, setHumanCheckFlag, humanCheckFlag } from './takeover-driver';
+import { TAKEOVER_TIMEOUT_MS, guardAgentAction, type TakeoverOutcome } from '../shared/takeover';
+import { classifyHumanCheck, HUMAN_CHECK_SIGNALS_JS, type HumanCheckKind, type HumanCheckVerdict } from '../shared/human-check';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import {
   promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
@@ -113,7 +116,7 @@ import {
   type QuickAction,
 } from './site-knowledge';
 import { namedSiteHint, localeCountry } from './known-sites';
-import { isPriceComparison, priceCompareQuery, pickStores, unknownNamedStores, storeSearchUrl, blockedReason, pageSnippets, readPricePrompt, parseReadReply, checkRead, titleMatchesQuery, looksLikeAccessory, isStoreSource, compareTableSpec, compareSummary, type PriceRow, type PriceStore } from './price-compare';
+import { isPriceComparison, priceCompareQuery, pickStores, unknownNamedStores, storeSearchUrl, blockedReason, BOT_CHECK_REASON, HUMAN_CHECK_REASON, pageSnippets, readPricePrompt, parseReadReply, checkRead, titleMatchesQuery, looksLikeAccessory, isStoreSource, compareTableSpec, compareSummary, type PriceRow, type PriceStore } from './price-compare';
 import { supportRequestText, offSupportSite, commandIsForum as isForumCommand, commandIsSupport as isSupportCommand, supportPromptBlock, formatSupportDraft, supportVendorFor, supportSearchQuery, vendorUrlOk, vendorDomainsLabel, SUPPORT_DRAFT_SCRIPT, type DraftField } from './support-tickets';
 import { supportFacts, draftPrompt, finalDraft, planSupportFill, findingFrom, supportFinishProblem, supportThreadContext } from './support-draft';
 import { pageLoadProblem, pageLoadHint } from './page-load';
@@ -343,6 +346,9 @@ declare global {
       schedClock?: () => Promise<{ offset: number; test: boolean }>;
       e2eSearchResults?: (q: string) => Promise<Array<{ title: string; snippet: string; url: string }> | null>;
       e2ePriceStores?: () => Promise<PriceStore[] | null>;
+      e2eTakeoverTimeout?: () => Promise<number | null>;
+      takeoverWatch?: (wcIds: number[]) => Promise<boolean>;
+      onTakeoverInput?: (cb: (wcId: number) => void) => () => void;
       schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
       onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       applicantGet?: () => Promise<{ profile: import('../shared/form-fill').ApplicantProfile; answers: Record<string, string>; available: boolean }>;
@@ -884,11 +890,6 @@ export default function App() {
   const [searchEngine, setSearchEngineState] = useState<EngineId | 'auto'>(() => preferredEngine());
   const cycleSearchEngine = useCallback(() => {
     setSearchEngineState(v => { const order: Array<EngineId | 'auto'> = ['auto', ...ENGINES.map(e => e.id)]; const n = order[(order.indexOf(v) + 1) % order.length]; setPreferredEngine(n); return n; });
-  }, []);
-  // Agente pode clicar a caixinha de captcha — padrão DESLIGADO (ver captchaCheckboxAllowed).
-  const [captchaCheckbox, setCaptchaCheckbox] = useState<boolean>(() => captchaCheckboxAllowed());
-  const toggleCaptchaCheckbox = useCallback(() => {
-    setCaptchaCheckbox(v => { const n = !v; try { localStorage.setItem('agentCaptchaCheckbox', n ? '1' : '0'); } catch {} return n; });
   }, []);
   // Cliente de torrent embutido — padrão DESLIGADO (.torrent baixa como arquivo; magnet vai pro app do sistema).
   const [torrentBuiltin, setTorrentBuiltin] = useState<boolean>(() => { try { return localStorage.getItem('torrentBuiltin') === '1'; } catch { return false; } });
@@ -2268,11 +2269,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.searchEngine')}</span>
                   <span className="menu-switch on">{searchEngine === 'auto' ? t('menu.searchEngineAuto') : (ENGINES.find(e => e.id === searchEngine)?.label || 'Google')}</span>
                 </button>
-                <button className="menu-item" onClick={() => toggleCaptchaCheckbox()} title={t('menu.captchaCheckboxTitle')}>
-                  <span className="menu-ic">☑️</span>
-                  <span className="menu-label">{t('menu.captchaCheckbox')}</span>
-                  <span className={`menu-switch ${captchaCheckbox ? 'on' : ''}`}>{captchaCheckbox ? 'ON' : 'OFF'}</span>
-                </button>
                 <button className="menu-item" onClick={() => toggleTorrentBuiltin()} title={t('menu.torrentBuiltinTitle')}>
                   <span className="menu-ic">🧲</span>
                   <span className="menu-label">{t('menu.torrentBuiltin')}</span>
@@ -2823,7 +2819,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (useOs) { await window.electronAPI?.regionSet?.({ ...rs.settings, shopping: 'fixed', fixedCountry: rs.os }); await refreshRegion(); }
                 } }
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
-              const captchaTriedUrls = new Set<string>();   // 1 tentativa de checkbox por página
               // Arquivos que a PESSOA escolheu nesta tarefa (upload): o agente só reusa estes, pelo cartão.
               const taskUploads: Array<{ token: string; names: string[] }> = [];
               // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
@@ -2960,6 +2955,32 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try { return await window.electronAPI?.realType?.(id, text); }
                 finally { signal?.removeEventListener('abort', onAbort); }
               };
+              // Depois que a pessoa ajudou (Continuar / página voltou ao normal): anota e recomeça do zero na página atual.
+              const afterManualHelp = (request: ManualHelpRequest, currentUrl: string, note: string) => {
+                const resumedWv = getActiveWebview();
+                const afterUrl = resumedWv?.getURL?.() || currentUrl;
+                appendAgentRunStep(runLog, {
+                  manualHelp: {
+                    kind: request.kind,
+                    reason: request.reason,
+                    beforeUrl: currentUrl,
+                    afterUrl,
+                  },
+                  note,
+                });
+                history += `\n${manualHelpHistoryNote(request, currentUrl, afterUrl)}`;
+                rememberActionForSite({
+                  actionType: `human_help:${request.kind}`,
+                  success: true,
+                  url: afterUrl,
+                  title: resumedWv?.getTitle?.(),
+                  note: request.reason,
+                });
+                noEffectCount = 0;
+                stepsOnSameUrl = 0;
+                actionQueue = [];
+                skipManualHelpDetectionOnce = true;
+              };
               const waitForManualHelp = async (request: ManualHelpRequest, currentUrl: string) => {
                 setAgentVisual('idle');
                 appendAgentRunStep(runLog, {
@@ -2984,29 +3005,60 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                 });
                 throwIfCancelled();
-                const resumedWv = getActiveWebview();
-                const afterUrl = resumedWv?.getURL?.() || currentUrl;
-                appendAgentRunStep(runLog, {
-                  manualHelp: {
-                    kind: request.kind,
-                    reason: request.reason,
-                    beforeUrl: currentUrl,
-                    afterUrl,
+                afterManualHelp(request, currentUrl, 'Usuario clicou em Continuar depois da intervencao manual.');
+              };
+              // ── Watch/Takeover (shared/takeover.ts) ──────────────────────────────────────────────
+              // A página quer uma PESSOA (checagem de robô de qualquer estilo / parede de login): o Bah passa
+              // a aba pra ela (HANDOFF: cartão + aba na frente + som), ela resolve SOZINHA (TAKEOVER quando mexe
+              // na página) e o agente volta por conta própria quando a página está normal de novo. Em tarefa
+              // agendada (ninguém olhando) nunca espera. O agente NUNCA opera a checagem (guard em executeBrowserAction
+              // e antes de cada ação abaixo).
+              const takeoverTimeoutMs = (await window.electronAPI?.e2eTakeoverTimeout?.().catch(() => null)) || TAKEOVER_TIMEOUT_MS;
+              const handedOffSites = new Map<string, TakeoverOutcome>();
+              let humanHandoffs = 0;   // trava de laço: no máximo 6 hand-offs por tarefa   // 'captcha:host' / 'signin:host' → como terminou
+              const watchTakeoverInput = (ids: number[], cb: (wcId: number) => void) => {
+                try { window.electronAPI?.takeoverWatch?.(ids); } catch {}
+                const off = window.electronAPI?.onTakeoverInput?.(cb);
+                return () => { try { off?.(); } catch {} try { window.electronAPI?.takeoverWatch?.([]); } catch {} };
+              };
+              /** Passa a aba pra pessoa e espera. Devolve como terminou (cleared / handed_back / skipped / timeout / unattended). */
+              const humanHandoff = async (request: ManualHelpRequest, humanKind: HumanCheckKind, w: Electron.WebviewTag, entry: { url: string; verdict: HumanCheckVerdict | null }): Promise<TakeoverOutcome> => {
+                const host = hostOf(entry.url) || 'this site';
+                const tabId = activeTabIdRef.current;
+                appendAgentRunStep(runLog, { manualHelp: { kind: request.kind, reason: request.reason, beforeUrl: entry.url }, note: `handoff (${humanKind}${entry.verdict ? `: ${entry.verdict.why}` : ''})` });
+                setAgentVisual('idle');
+                deadline.suspend();   // a pessoa resolvendo não é o modelo demorando
+                let fronted = false;
+                const final = await runHandoff({
+                  kind: humanKind, unattended, timeoutMs: takeoverTimeoutMs, signal,
+                  items: [{ id: tabId, site: host, wv: w as any, entry }],
+                  watchInput: watchTakeoverInput,
+                  onState: (st, c) => {
+                    if (st.mode !== 'agent' && !fronted) { fronted = true; try { store.setActiveTabId(tabId); } catch {} }
+                    onProgress({ kind: 'takeover', phase: st.mode, humanKind, sites: [host], outcome: st.outcome, reason: request.reason, instruction: request.instruction, onHandBack: c.handBack, onSkip: c.skip });
                   },
-                  note: 'Usuario clicou em Continuar depois da intervencao manual.',
                 });
-                history += `\n${manualHelpHistoryNote(request, currentUrl, afterUrl)}`;
-                rememberActionForSite({
-                  actionType: `human_help:${request.kind}`,
-                  success: true,
-                  url: afterUrl,
-                  title: resumedWv?.getTitle?.(),
-                  note: request.reason,
-                });
-                noEffectCount = 0;
-                stepsOnSameUrl = 0;
-                actionQueue = [];
-                skipManualHelpDetectionOnce = true;
+                deadline.resume();
+                throwIfCancelled();
+                const outcome = final.outcome || 'skipped';
+                const key = `${humanKind}:${host}`;
+                if (outcome === 'cleared' || outcome === 'handed_back') {
+                  afterManualHelp(request, entry.url, outcome === 'cleared' ? 'A página voltou ao normal (a pessoa resolveu); o agente retomou sozinho.' : 'A pessoa devolveu o controle (Hand back).');
+                  if (outcome === 'handed_back') handedOffSites.set(key, outcome);   // não pede de novo no mesmo site
+                  history += outcome === 'cleared'
+                    ? `\nHANDBACK: the person cleared the ${humanKind === 'captcha' ? 'human check' : 'sign-in'} on ${host}. Re-observe the page and continue the same step.`
+                    : `\nHANDBACK: the person handed control back on ${host}. Re-observe the page and continue.`;
+                } else {
+                  handedOffSites.set(key, outcome);
+                  const why = outcome === 'unattended' ? 'scheduled run, nobody to ask' : outcome === 'timeout' ? 'nobody cleared it in time' : 'the person chose to skip this site';
+                  history += humanKind === 'captcha'
+                    ? `\nHUMAN CHECK NOT CLEARED on ${host} (${why}): couldn't read — human check. Bah never operates a human check. Do not click, type or scroll on that page; get the information from another source, or finish and say you couldn't read ${host} — human check.`
+                    : `\nSIGN-IN NOT DONE on ${host} (${why}). Never type a password or create an account. Continue without the account if the task allows, otherwise finish and say ${host} needs the user's sign-in.`;
+                  appendAgentRunStep(runLog, { manualHelp: { kind: request.kind, reason: request.reason, beforeUrl: entry.url }, note: `handoff ended: ${outcome}` });
+                  noEffectCount = 0;
+                  actionQueue = [];
+                }
+                return outcome;
               };
               // Gerenciador de senha em extensão (LastPass/Bitwarden/1Password) no formulário de login:
               // espera um tempo curto o login automático dele (o formulário some ou a conta aparece).
@@ -3282,10 +3334,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         if (a.hostname !== location.hostname) continue;
                         seen[a.href] = 1; links.push({ text: txt, href: a.href });
                       }
-                      return { url: location.href, title: document.title || '', text: t.slice(0, 60000), links: links };
+                      var hc = ${HUMAN_CHECK_SIGNALS_JS};
+                      return { url: location.href, title: document.title || '', text: t.slice(0, 60000), links: links, frames: hc.frames, markers: hc.markers, passwordField: hc.passwordField };
                     })()`, false)), 8000, null as any).catch(() => null);
-                    return (r || { url: w.getURL(), title: w.getTitle(), text: '', links: [] }) as { url: string; title: string; text: string; links: Array<{ text: string; href: string }> };
+                    return (r || { url: w.getURL(), title: w.getTitle(), text: '', links: [] }) as { url: string; title: string; text: string; links: Array<{ text: string; href: string }>; frames?: string[]; markers?: string[]; passwordField?: boolean };
                   };
+                  type StorePage = Awaited<ReturnType<typeof readPage>>;
+                  const isHumanCheck = (pg: StorePage) => classifyHumanCheck(pg)?.kind === 'captcha';
                   // O modelo lê o preço: trechos do texto em volta do produto + o print da página (se o modelo enxerga).
                   const askModel = async (st: { label: string }, pg: { url: string; title: string; text: string }) => {
                     const shot = await withTimeout(captureFrame({ image: true, png: false }), 8000, undefined as any).catch(() => undefined);
@@ -3294,10 +3349,50 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const r = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(prompt, '', true, store.localSettings.enabled, undefined, undefined, undefined, shot?.image)), 120000, null as any).catch(() => null);
                     return parseReadReply(String(r?.response || ''));
                   };
+                  // Lê a loja na página aberta (busca; sem preço → abre a página do PRODUTO e lê de novo).
+                  // Checagem humana na página do produto → 'bot check / captcha' (vira espera pela pessoa abaixo).
+                  const readStore = async (st: PriceStore, w: Electron.WebviewTag, first: StorePage): Promise<PriceRow> => {
+                    let pg = first;
+                    const read = await askModel(st, pg);
+                    throwIfCancelled();
+                    let row = checkRead(read, pg, st, query);
+                    // Site "cuidadoso" (careful-sites.ts): uma navegação só — não abre o produto.
+                    if (row.status !== 'read' && !read?.blocked && !isCarefulHost(st.domain)) {
+                      const fits = (l: { text: string; href: string }) => titleMatchesQuery(l.text, query) && !looksLikeAccessory(l.text, query) && isStoreSource(l.href, st);
+                      const want = (read?.title || '').toLowerCase().slice(0, 40);
+                      const pick = (want && pg.links.find(l => fits(l) && l.text.toLowerCase().includes(want))) || pg.links.find(fits);
+                      if (pick) {
+                        onProgress({ kind: 'thought', message: `🛒 ${st.label}: no price in the results — opening the product page…` });
+                        setAgentVisual('acting');
+                        const b2 = w.getURL();
+                        const nav2 = await executeBrowserAction(w, { type: 'navigate', url: pick.href } as BrowserAction);
+                        await waitForWebviewSettled(w, b2);
+                        await waitForSettle(w, { maxMs: 6000, minMs: 800 });
+                        throwIfCancelled();
+                        pg = await readPage(w);
+                        allResults.push({ action: { type: 'navigate', url: pick.href } as BrowserAction, result: nav2 });
+                        setHumanCheckFlag(w, classifyHumanCheck(pg));
+                        const blocked = blockedReason(pg, st);
+                        if (blocked) row = { store: st.label, status: 'blocked', url: pg.url, reason: blocked };
+                        else { const row2 = checkRead(await askModel(st, pg), pg, st, query); if (row2.status === 'read' || row2.status === 'blocked') row = row2; }
+                      }
+                    }
+                    return row;
+                  };
+                  const reportRow = (st: PriceStore, row: PriceRow) => {
+                    console.log(`[PriceCompare] ${st.label}: ${row.status}${row.price ? ` ${row.price}` : ''}${row.reason ? ` — ${row.reason}` : ''} (${row.url})`);
+                    onProgress({ kind: 'thought', message: row.status === 'read'
+                      ? `✅ ${st.label}: ${row.price} — ${String(row.title).slice(0, 80)}`
+                      : `⚠️ ${st.label}: couldn't read — ${row.reason}` });
+                  };
+                  // 1ª volta: cada loja na aba da tarefa. Checagem humana (press & hold, captcha, "Robot or human?")
+                  // NÃO é lida nem tocada: a loja entra na lista de espera pela pessoa (2ª volta).
+                  const storeRows: Array<PriceRow | null> = stores.map(() => null);
+                  const waitingStores: Array<{ i: number; url: string }> = [];
                   for (let i = 0; i < stores.length; i++) {
                     throwIfCancelled();
                     const st = stores[i];
-                    if (deadline.remainingMs() <= 0 || deadline.fired()) { rows.push({ store: st.label, status: 'not_checked', url: storeSearchUrl(st, query), reason: 'task time limit reached' }); continue; }
+                    if (deadline.remainingMs() <= 0 || deadline.fired()) { storeRows[i] = { store: st.label, status: 'not_checked', url: storeSearchUrl(st, query), reason: 'task time limit reached' }; continue; }
                     const w = getActiveWebview();
                     if (!w) break;
                     onProgress({ kind: 'thought', message: `🛒 Checking ${st.label}… (${i + 1}/${stores.length})` });
@@ -3308,45 +3403,95 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     await waitForWebviewSettled(w, beforeUrl);
                     await waitForSettle(w, { maxMs: 6000, minMs: 800 });
                     throwIfCancelled();
-                    let pg = await readPage(w);
+                    const pg = await readPage(w);
                     allResults.push({ action: { type: 'navigate', url: searchUrl } as BrowserAction, result: nav });
                     appendAgentRunStep(runLog, { step: i, urlBefore: beforeUrl, urlAfter: pg.url, titleAfter: pg.title, ...summarizeAction({ type: 'navigate', url: searchUrl } as BrowserAction), result: summarizeResult(nav), success: nav?.success !== false, note: `price compare: ${st.label}` });
-                    let blocked = nav?.success === false && !pg.text ? `the page didn't load (${String(nav?.error || '').slice(0, 60)})` : blockedReason(pg, st);
-                    let row: PriceRow;
-                    if (blocked) {
-                      row = { store: st.label, status: 'blocked', url: pg.url || searchUrl, reason: blocked };
-                    } else {
-                      const read = await askModel(st, pg);
-                      throwIfCancelled();
-                      row = checkRead(read, pg, st, query);
-                      // Sem preço na busca: abre a página do PRODUTO (só link da própria loja) e lê de novo.
-                      // Site "cuidadoso" (careful-sites.ts): uma navegação só — não abre o produto.
-                      if (row.status !== 'read' && !read?.blocked && !isCarefulHost(st.domain)) {
-                        const fits = (l: { text: string; href: string }) => titleMatchesQuery(l.text, query) && !looksLikeAccessory(l.text, query) && isStoreSource(l.href, st);
-                        const want = (read?.title || '').toLowerCase().slice(0, 40);
-                        const pick = (want && pg.links.find(l => fits(l) && l.text.toLowerCase().includes(want))) || pg.links.find(fits);
-                        if (pick) {
-                          onProgress({ kind: 'thought', message: `🛒 ${st.label}: no price in the results — opening the product page…` });
-                          setAgentVisual('acting');
-                          const b2 = w.getURL();
-                          const nav2 = await executeBrowserAction(w, { type: 'navigate', url: pick.href } as BrowserAction);
-                          await waitForWebviewSettled(w, b2);
-                          await waitForSettle(w, { maxMs: 6000, minMs: 800 });
-                          throwIfCancelled();
-                          pg = await readPage(w);
-                          allResults.push({ action: { type: 'navigate', url: pick.href } as BrowserAction, result: nav2 });
-                          blocked = blockedReason(pg, st);
-                          if (blocked) row = { store: st.label, status: 'blocked', url: pg.url, reason: blocked };
-                          else { const row2 = checkRead(await askModel(st, pg), pg, st, query); if (row2.status === 'read' || row2.status === 'blocked') row = row2; }
-                        }
-                      }
+                    setHumanCheckFlag(w, classifyHumanCheck(pg));
+                    const blocked = nav?.success === false && !pg.text ? `the page didn't load (${String(nav?.error || '').slice(0, 60)})` : blockedReason(pg, st);
+                    const row: PriceRow = blocked ? { store: st.label, status: 'blocked', url: pg.url || searchUrl, reason: blocked } : await readStore(st, w, pg);
+                    if (row.status === 'blocked' && row.reason === BOT_CHECK_REASON) {
+                      waitingStores.push({ i, url: row.url || searchUrl });
+                      onProgress({ kind: 'thought', message: `🙋 ${st.label}: wants a person to confirm — ${unattended ? 'scheduled run, not waiting' : 'will hand it to you'}` });
+                      continue;
                     }
-                    rows.push(row);
-                    console.log(`[PriceCompare] ${st.label}: ${row.status}${row.price ? ` ${row.price}` : ''}${row.reason ? ` — ${row.reason}` : ''} (${row.url})`);
-                    onProgress({ kind: 'thought', message: row.status === 'read'
-                      ? `✅ ${st.label}: ${row.price} — ${String(row.title).slice(0, 80)}`
-                      : `⚠️ ${st.label}: couldn't read — ${row.reason}` });
+                    storeRows[i] = row;
+                    reportRow(st, row);
                   }
+                  // 2ª volta (Watch/Takeover): UMA espera pra todas as lojas com checagem — cada uma na sua aba, a pessoa
+                  // libera, o Bah lê a loja assim que ela volta ao normal. Tempo esgotado / pulou / tarefa agendada →
+                  // "couldn't read — human check". O Bah nunca toca a checagem.
+                  if (waitingStores.length) {
+                    const humanRow = (i: number, url: string): PriceRow => ({ store: stores[i].label, status: 'blocked', url, reason: HUMAN_CHECK_REASON });
+                    const items: Array<{ id: string; site: string; wv: any; entry: { url: string; verdict: HumanCheckVerdict | null }; i: number; tabId: string }> = [];
+                    if (!unattended) {
+                      for (const ws of waitingStores) {
+                        const tabId = store.addBackgroundTab(ws.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(tabId, taskTabId);
+                        agentOpenedTabs.add(tabId);
+                        let tw: Electron.WebviewTag | undefined;
+                        for (let k = 0; k < 40 && !(tw = webviewRefs.current.get(tabId)); k++) await sleep(150);
+                        if (!tw) { storeRows[ws.i] = humanRow(ws.i, ws.url); continue; }
+                        await waitForWebviewSettled(tw, '');
+                        await waitForSettle(tw, { maxMs: 6000, minMs: 600 });
+                        const pg = await readPage(tw);
+                        const verdict = classifyHumanCheck(pg);
+                        setHumanCheckFlag(tw, verdict);
+                        items.push({ id: tabId, site: stores[ws.i].label, wv: tw, entry: { url: pg.url || ws.url, verdict }, i: ws.i, tabId });
+                      }
+                    } else {
+                      for (const ws of waitingStores) items.push({ id: `store-${ws.i}`, site: stores[ws.i].label, wv: getActiveWebview(), entry: { url: ws.url, verdict: null }, i: ws.i, tabId: '' });
+                    }
+                    const readCleared = async (it: typeof items[number]) => {
+                      const st = stores[it.i];
+                      const w = it.wv as Electron.WebviewTag;
+                      const prevAgentTab = activeTabIdRef.current;
+                      activeTabIdRef.current = it.tabId;   // o print e as ações do agente vão pra aba da loja
+                      try {
+                        const pg = await readPage(w);
+                        if (isHumanCheck(pg)) return humanRow(it.i, pg.url || it.entry.url);
+                        setHumanCheckFlag(w, null);
+                        const blocked = blockedReason(pg, st);
+                        const row: PriceRow = blocked ? { store: st.label, status: 'blocked', url: pg.url, reason: blocked } : await readStore(st, w, pg);
+                        return row.status === 'blocked' && row.reason === BOT_CHECK_REASON ? humanRow(it.i, row.url) : row;
+                      } finally { activeTabIdRef.current = prevAgentTab; }
+                    };
+                    const front = (st: { items: Array<{ id: string; status: string }> }) => {
+                      const next = st.items.find(x => x.status === 'waiting');
+                      if (next) { try { store.setActiveTabId(next.id); } catch {} }
+                    };
+                    const sites = items.map(it => it.site);
+                    const doneSites: string[] = [];
+                    let fronted = false;
+                    deadline.suspend();
+                    setAgentVisual('idle');
+                    const final = await runHandoff({
+                      kind: 'captcha', unattended, timeoutMs: takeoverTimeoutMs, signal,
+                      items, watchInput: watchTakeoverInput,
+                      onState: (st, c) => {
+                        if (st.mode !== 'agent' && !fronted) { fronted = true; front(st); }
+                        onProgress({ kind: 'takeover', phase: st.mode, humanKind: 'captcha', sites, cleared: [...doneSites], outcome: st.outcome, onHandBack: c.handBack, onSkip: c.skip });
+                      },
+                      onCleared: async (item, st) => {
+                        const it = items.find(x => x.id === item.id)!;
+                        doneSites.push(it.site);
+                        if (st.mode !== 'agent') front(st);   // a próxima loja esperando vai pra frente
+                        const row = await readCleared(it);
+                        storeRows[it.i] = row;
+                        reportRow(stores[it.i], row);
+                      },
+                    });
+                    deadline.resume();
+                    throwIfCancelled();
+                    for (const it of items) {
+                      if (storeRows[it.i]) continue;
+                      const status = final.items.find(x => x.id === it.id)?.status;
+                      // Devolvida pela pessoa: lê agora se a página já está normal; senão, checagem humana.
+                      const row = status === 'handed_back' ? await readCleared(it) : humanRow(it.i, it.entry.url);
+                      storeRows[it.i] = row;
+                      reportRow(stores[it.i], row);
+                    }
+                  }
+                  for (const r of storeRows) if (r) rows.push(r);
                   const readCount = rows.filter(r => r.status === 'read').length;
                   let doneMsg = compareSummary(query, rows);
                   const rv = await window.electronAPI?.renderView?.(compareTableSpec(query, rows));
@@ -3466,7 +3611,24 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   }
                   rememberObservedSite(observation);
-                  if (skipManualHelpDetectionOnce) {
+                  // Watch/Takeover: a página é uma checagem humana? Leitura PASSIVA dos sinais (frames de provedores,
+                  // ids/classes, título, texto) → classificador genérico. Marca a aba pro guard (nenhuma ação que
+                  // toque a página enquanto for checagem) e passa a aba pra pessoa.
+                  const humanCheck = await classifyWebview(wv as any);
+                  throwIfCancelled();
+                  const hcVerdict = humanCheck.verdict?.kind === 'captcha' ? humanCheck.verdict : null;
+                  setHumanCheckFlag(wv, hcVerdict);
+                  if (hcVerdict) {
+                    const host = hostOf(observation.url) || 'this site';
+                    if (!handedOffSites.has(`captcha:${host}`) && humanHandoffs < 6) {
+                      humanHandoffs++;
+                      onProgress({ kind: 'status', message: `🙋 ${t('takeover.statusPaused', { site: host })}` });
+                      const outcome = await humanHandoff({ kind: 'captcha', reason: t('takeover.reason', { site: host }), instruction: t('takeover.instruction') }, 'captcha', wv, { url: observation.url, verdict: hcVerdict });
+                      if (outcome === 'cleared' || outcome === 'handed_back') { step--; continue; }   // re-observa e segue o MESMO passo
+                    }
+                    history += `\nHUMAN CHECK on ${host} (${hcVerdict.why}): only passive reads or leaving the page are allowed — clicks, typing, keys and scrolling on it are refused.`;
+                    skipManualHelpDetectionOnce = false;
+                  } else if (skipManualHelpDetectionOnce) {
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
@@ -3497,7 +3659,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       if (viaExt.instruction) manualHelpNeed = { ...manualHelpNeed, instruction: viaExt.instruction };
                     }
-                    if (manualHelpNeed) {
+                    // Checagem humana / login → Watch/Takeover (volta sozinho quando a página normaliza; tarefa
+                    // agendada não espera). Paywall e afins: o "Continuar" de sempre.
+                    const humanKind: HumanCheckKind | null = manualHelpNeed?.kind === 'captcha' ? 'captcha' : manualHelpNeed?.kind === 'login' ? 'signin' : null;
+                    if (manualHelpNeed && humanKind) {
+                      const host = hostOf(observation.url) || 'this site';
+                      if (!handedOffSites.has(`${humanKind}:${host}`) && humanHandoffs < 6) {
+                        humanHandoffs++;
+                        onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
+                        const entryVerdict = humanCheck.verdict?.kind === humanKind ? humanCheck.verdict : null;
+                        const outcome = await humanHandoff(manualHelpNeed, humanKind, wv, { url: observation.url, verdict: entryVerdict });
+                        if (outcome === 'cleared' || outcome === 'handed_back') continue;
+                      }
+                    } else if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow
                       await waitForManualHelp(manualHelpNeed, observation.url);
@@ -4676,6 +4850,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `🛡️ ${off}` });
                       allResults.push({ action, result: { success: false, error: off } });
                       noEffectCount = Math.max(noEffectCount, 1);
+                      continue;
+                    }
+                  }
+                  // HARD RULE: numa página de checagem humana o agente nunca opera nada (clicar, segurar, digitar,
+                  // teclar, rolar…). Só leitura passiva ou sair da página. Só a pessoa resolve a checagem.
+                  {
+                    const refusal = guardAgentAction(action.type, humanCheckFlag(wv), hostOf(observation.url) || 'this site');
+                    if (refusal) {
+                      history += `\nREFUSED: ${refusal}`;
+                      onProgress({ kind: 'status', message: `🛡️ ${refusal}` });
+                      allResults.push({ action, result: { success: false, reason: 'human_check', error: refusal } });
+                      noEffectCount = Math.max(noEffectCount, 1);
+                      actionQueue = [];
                       continue;
                     }
                   }
@@ -6779,33 +6966,32 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         || recoveryVerdict.blocker === 'captcha'
                         || recoveryVerdict.blocker === 'paywall'
                       )) {
-                        // OPCIONAL (menu, padrão DESLIGADO): o agente clica UMA vez a caixinha "não sou
-                        // um robô" (reCAPTCHA / hCaptcha / Turnstile) com input real. Quem decide é o
-                        // serviço de captcha; desafio de imagem ou falha → pede ajuda como sempre.
-                        if (recoveryVerdict.blocker === 'captcha' && captchaCheckboxAllowed() && !captchaTriedUrls.has(afterObservation.url)) {
-                          captchaTriedUrls.add(afterObservation.url);
-                          const passed = await tryCaptchaCheckbox(wv, afterObservation.interactive_elements);
-                          throwIfCancelled();
-                          if (passed) {
-                            history += '\nCAPTCHA CHECKBOX: clicked the "I am not a robot"/verify checkbox and the verification PASSED. Continue the task on this page.';
-                            onProgress({ kind: 'status', message: '☑️ Clicked the verification checkbox — passed.' });
-                            continue;
-                          }
-                          onProgress({ kind: 'status', message: '☑️ Verification checkbox did not pass on its own — asking you.' });
-                        }
                         const kind = recoveryVerdict.blocker === 'captcha'
                           ? 'captcha'
                           : recoveryVerdict.blocker === 'paywall'
                           ? 'paywall'
                           : 'login';
+                        // Checagem humana / login → Watch/Takeover; já passou por ela neste site (pulada/expirou) → segue
+                        // com a instrução de recuperação no histórico, sem perguntar de novo.
+                        if (kind !== 'paywall') {
+                          const humanKind: HumanCheckKind = kind === 'captcha' ? 'captcha' : 'signin';
+                          const host = hostOf(afterObservation.url) || 'this site';
+                          if (!handedOffSites.has(`${humanKind}:${host}`) && humanHandoffs < 6) {
+                            humanHandoffs++;
+                            const after = await classifyWebview(wv as any);
+                            if (humanKind === 'captcha') setHumanCheckFlag(wv, after.verdict?.kind === 'captcha' ? after.verdict : null);
+                            await humanHandoff({
+                              kind,
+                              reason: recoveryVerdict.reason,
+                              instruction: kind === 'captcha' ? t('takeover.instruction') : 'Sign in yourself in this tab: click the username field to pick a login saved in Bah\'s password manager, or type it. Bah continues by itself once you are signed in. (I never see your password.)',
+                            }, humanKind, wv, { url: afterObservation.url, verdict: after.verdict?.kind === humanKind ? after.verdict : null });
+                          }
+                          continue;
+                        }
                         await waitForManualHelp({
                           kind,
                           reason: recoveryVerdict.reason,
-                          instruction: kind === 'captcha'
-                            ? 'Solve the human verification manually in this tab. When you are done, click Continue.'
-                            : kind === 'paywall'
-                            ? 'If you have access, sign in manually. Then click Continue so I can try to take it from here.'
-                            : 'Sign in yourself in this tab: click the username field to pick a login saved in Bah\'s password manager, or type it. Once you are signed in, click Continue and I resume the task. (I never see your password.)',
+                          instruction: 'If you have access, sign in manually. Then click Continue so I can try to take it from here.',
                         }, afterObservation.url);
                         continue;
                       }
@@ -7087,41 +7273,6 @@ ${history.slice(-6000)}`;
     const url = `${SKILLS_REPO_NEW_FILE}/${encodeURIComponent(saved.name!)}?filename=SKILL.md&value=${encodeURIComponent(md + '\n')}`;
     try { await window.electronAPI?.openExternal?.(url); } catch {}
   }
-}
-
-// Captcha de caixinha ("não sou um robô"): opção do menu, padrão DESLIGADO.
-function captchaCheckboxAllowed(): boolean {
-  try { return localStorage.getItem('agentCaptchaCheckbox') === '1'; } catch { return false; }
-}
-const CAPTCHA_FRAME_RE = /recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*(checkbox|frame=checkbox)|challenges\.cloudflare\.com|turnstile/i;
-/** Clica UMA vez a caixinha do captcha e diz se passou (token preenchido / iframe sumiu / página mudou). */
-async function tryCaptchaCheckbox(wv: any, elements: Array<{ tag?: string; role?: string; text?: string; aria?: string; x: number; y: number }>): Promise<boolean> {
-  const wcId = wv?.getWebContentsId?.();
-  if (wcId == null) return false;
-  const urlBefore = wv.getURL?.() || '';
-  // 1) Caixinha exposta na árvore de acessibilidade (Turnstile/hCaptcha costumam aparecer assim).
-  const ax = elements.find(e => e.role === 'checkbox' && /not a robot|n[aã]o sou um rob|human|verify|captcha/i.test(`${e.text || ''} ${e.aria || ''}`));
-  let pt: { x: number; y: number } | null = ax ? { x: ax.x, y: ax.y } : null;
-  // 2) Senão, o iframe do widget no DOM: a caixinha fica ~30px da borda esquerda, no meio da altura.
-  if (!pt) {
-    pt = await Promise.race([
-      wv.executeJavaScript(`(() => { const re = ${CAPTCHA_FRAME_RE.toString()}; const f = [...document.querySelectorAll('iframe')].find(x => re.test(x.src) && x.getBoundingClientRect().width > 0); if (!f) return null; f.scrollIntoView({ block: 'center' }); const r = f.getBoundingClientRect(); return { x: Math.round(r.left + Math.min(30, r.width / 4)), y: Math.round(r.top + r.height / 2) }; })()`).catch(() => null),
-      new Promise(r => setTimeout(() => r(null), 3000)),
-    ]) as { x: number; y: number } | null;
-  }
-  if (!pt) return false;
-  await window.electronAPI?.realClick?.(wcId, pt.x, pt.y);
-  await new Promise(r => setTimeout(r, 4000));
-  const ok = await Promise.race([
-    wv.executeJavaScript(`(() => {
-      const tok = [...document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"]')].some(x => (x.value || '').length > 20);
-      const re = ${CAPTCHA_FRAME_RE.toString()};
-      const widget = [...document.querySelectorAll('iframe')].some(x => re.test(x.src) && x.getBoundingClientRect().width > 0);
-      return tok || !widget;
-    })()`).catch(() => false),
-    new Promise(r => setTimeout(() => r(false), 3000)),
-  ]) as boolean;
-  return ok || (wv.getURL?.() || '') !== urlBefore;
 }
 
 // macOS usa o semáforo nativo (titleBarStyle 'hidden'): sem os botões de janela do app.

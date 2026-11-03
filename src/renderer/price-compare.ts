@@ -13,6 +13,7 @@
 // Puro (sem DOM/Electron): testado em tests/unit/price-compare.test.ts.
 import { amazonDomainForCountry } from './known-sites.ts';
 import { namesStore } from './stores.ts';
+import { classifyHumanCheck } from '../shared/human-check.ts';
 
 export interface PriceStore {
   id: string;
@@ -237,13 +238,11 @@ export function isStoreSource(url: string, store: PriceStore): boolean {
 }
 
 // ── Página bloqueada? ──────────────────────────────────────────────────────────────────────────
-const CAPTCHA_RE = /\b(?:captcha|recaptcha|hcaptcha|are\s+you\s+a\s+(?:robot|human)|robot\s+or\s+human|not\s+a\s+robot|verify\s+(?:that\s+)?you(?:'re|\s+are)\s+(?:a\s+)?human|human\s+verification|press\s+(?:&|and)\s+hold|bot\s+detection|checking\s+your\s+browser|just\s+a\s+moment|unusual\s+traffic|automated\s+(?:access|queries|requests)|pardon\s+our\s+interruption|n[aã]o\s+sou\s+um\s+rob[oô]|confirme\s+que\s+voc[eê]\s+[eé]\s+humano)\b/i;
+// Checagem de robô / captcha: o classificador genérico (shared/human-check.ts) — frames de provedores,
+// ids/classes e frases — decide; o mesmo que pausa o agente e passa a página pra pessoa.
 const DENIED_RE = /\b(?:access\s+denied|acesso\s+negado|forbidden|you\s+don't\s+have\s+permission\s+to\s+access|request\s+(?:was\s+)?blocked|you\s+have\s+been\s+blocked|too\s+many\s+requests)\b/i;
 const ERROR_RE = /(?:sorry[!,.]?\s+something\s+went\s+wrong|something\s+went\s+wrong|page\s+not\s+found|\b404\b|service\s+unavailable|temporarily\s+unavailable|internal\s+server\s+error|an\s+error\s+(?:has\s+)?occurred|we'?re\s+having\s+(?:some\s+)?trouble|algo\s+deu\s+errado|p[aá]gina\s+n[aã]o\s+encontrada|this\s+site\s+can'?t\s+be\s+reached|err_[a-z_]+)/i;
 const SIGNIN_RE = /\b(?:sign\s+in\s+to\s+continue|log\s+in\s+to\s+continue|please\s+sign\s+in|sign\s+in\s+required|you\s+must\s+(?:be\s+)?(?:signed|logged)\s+in|fa[cç]a\s+login\s+para\s+continuar|entre\s+na\s+sua\s+conta\s+para)\b/i;
-// Frases que só aparecem numa porteira de robô — valem mesmo numa página longa (a Target põe o
-// "Quick verification / Press & hold" por cima da página do produto, com o texto dela embaixo).
-const STRONG_CAPTCHA_RE = /\b(?:quick\s+verification|press\s+(?:&|and)\s+hold|(?:and\s+)?not\s+a\s+(?:ro)?bot\b|confirm\s+(?:that\s+)?you(?:'re|’re|\s+are)\s+(?:a\s+)?human|captcha)/i;
 const BLOCK_WORDS_RE = /\b(?:captcha|robot|bot|human|verif\w*|denied|forbidden|403|blocked|sign[\s-]?in|log[\s-]?in|error|unavailable|country|region)\b/i;
 const COUNTRY_RE = /\b(?:choose\s+a\s+country|select\s+your\s+(?:country|region)|escolha\s+(?:o\s+)?(?:seu\s+)?pa[ií]s)\b/i;
 
@@ -251,7 +250,11 @@ const COUNTRY_RE = /\b(?:choose\s+a\s+country|select\s+your\s+(?:country|region)
  * Motivo pra NÃO ler a página (erro, captcha, checagem de robô, login, saiu da loja) ou null.
  * Texto curto = página-porteira; numa página de resultados cheia, a palavra "robot" é produto (aspirador).
  */
-export function blockedReason(page: { url: string; title?: string; text?: string }, store: PriceStore): string | null {
+export const BOT_CHECK_REASON = 'bot check / captcha';
+/** Linha da loja que ficou na checagem de robô (a pessoa não liberou a tempo / tarefa agendada). */
+export const HUMAN_CHECK_REASON = 'human check';
+
+export function blockedReason(page: { url: string; title?: string; text?: string; frames?: string[]; markers?: string[]; passwordField?: boolean }, store: PriceStore): string | null {
   const url = page.url || '';
   const title = page.title || '';
   const text = (page.text || '').trim();
@@ -259,7 +262,7 @@ export function blockedReason(page: { url: string; title?: string; text?: string
   if (!isStoreSource(url, store)) return `left ${store.domain} (ended on ${hostOf(url) || url})`;
   const short = text.length < 2500;
   const head = `${title}\n${short ? text : text.slice(0, 600)}`;
-  if (CAPTCHA_RE.test(title) || (short && CAPTCHA_RE.test(text)) || STRONG_CAPTCHA_RE.test(text)) return 'bot check / captcha';
+  if (classifyHumanCheck({ url, title, text, frames: page.frames, markers: page.markers })?.kind === 'captcha') return BOT_CHECK_REASON;
   if (DENIED_RE.test(title) || (short && DENIED_RE.test(text))) return 'access denied (blocked)';
   if (/\/(?:ap\/signin|signin|sign-in|login|log-in|account\/login|identity)\b/i.test(new URL(url).pathname) || (short && SIGNIN_RE.test(head))) return 'sign-in wall';
   if (short && COUNTRY_RE.test(head)) return 'country selection page';
