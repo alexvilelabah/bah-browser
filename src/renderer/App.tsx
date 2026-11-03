@@ -891,6 +891,11 @@ export default function App() {
   const cycleSearchEngine = useCallback(() => {
     setSearchEngineState(v => { const order: Array<EngineId | 'auto'> = ['auto', ...ENGINES.map(e => e.id)]; const n = order[(order.indexOf(v) + 1) % order.length]; setPreferredEngine(n); return n; });
   }, []);
+  // Agente pode clicar a caixinha de captcha — padrão DESLIGADO (ver captchaCheckboxAllowed).
+  const [captchaCheckbox, setCaptchaCheckbox] = useState<boolean>(() => captchaCheckboxAllowed());
+  const toggleCaptchaCheckbox = useCallback(() => {
+    setCaptchaCheckbox(v => { const n = !v; try { localStorage.setItem('agentCaptchaCheckbox', n ? '1' : '0'); } catch {} return n; });
+  }, []);
   // Cliente de torrent embutido — padrão DESLIGADO (.torrent baixa como arquivo; magnet vai pro app do sistema).
   const [torrentBuiltin, setTorrentBuiltin] = useState<boolean>(() => { try { return localStorage.getItem('torrentBuiltin') === '1'; } catch { return false; } });
   const toggleTorrentBuiltin = useCallback(() => {
@@ -2269,6 +2274,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.searchEngine')}</span>
                   <span className="menu-switch on">{searchEngine === 'auto' ? t('menu.searchEngineAuto') : (ENGINES.find(e => e.id === searchEngine)?.label || 'Google')}</span>
                 </button>
+                <button className="menu-item" onClick={() => toggleCaptchaCheckbox()} title={t('menu.captchaCheckboxTitle')}>
+                  <span className="menu-ic">☑️</span>
+                  <span className="menu-label">{t('menu.captchaCheckbox')}</span>
+                  <span className={`menu-switch ${captchaCheckbox ? 'on' : ''}`}>{captchaCheckbox ? 'ON' : 'OFF'}</span>
+                </button>
                 <button className="menu-item" onClick={() => toggleTorrentBuiltin()} title={t('menu.torrentBuiltinTitle')}>
                   <span className="menu-ic">🧲</span>
                   <span className="menu-label">{t('menu.torrentBuiltin')}</span>
@@ -2819,6 +2829,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (useOs) { await window.electronAPI?.regionSet?.({ ...rs.settings, shopping: 'fixed', fixedCountry: rs.os }); await refreshRegion(); }
                 } }
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
+              const captchaTriedUrls = new Set<string>();   // 1 tentativa de checkbox por página
               // Arquivos que a PESSOA escolheu nesta tarefa (upload): o agente só reusa estes, pelo cartão.
               const taskUploads: Array<{ token: string; names: string[] }> = [];
               // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
@@ -3620,6 +3631,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   setHumanCheckFlag(wv, hcVerdict);
                   if (hcVerdict) {
                     const host = hostOf(observation.url) || 'this site';
+                    // OPCIONAL (menu, padrão DESLIGADO): o agente clica UMA vez a caixinha "não sou
+                    // um robô" (reCAPTCHA / hCaptcha / Turnstile) com input real. Quem decide é o
+                    // serviço de captcha; desafio de imagem ou falha → pede ajuda como sempre.
+                    if (captchaCheckboxAllowed() && !captchaTriedUrls.has(observation.url)) {
+                      captchaTriedUrls.add(observation.url);
+                      const passed = await tryCaptchaCheckbox(wv, observation.interactive_elements);
+                      throwIfCancelled();
+                      if (passed) {
+                        history += '\nCAPTCHA CHECKBOX: clicked the "I am not a robot"/verify checkbox and the verification PASSED. Continue the task on this page.';
+                        onProgress({ kind: 'status', message: '☑️ Clicked the verification checkbox — passed.' });
+                        continue;
+                      }
+                      onProgress({ kind: 'status', message: '☑️ Verification checkbox did not pass on its own — asking you.' });
+                    }
                     if (!handedOffSites.has(`captcha:${host}`) && humanHandoffs < 6) {
                       humanHandoffs++;
                       onProgress({ kind: 'status', message: `🙋 ${t('takeover.statusPaused', { site: host })}` });
@@ -6966,6 +6991,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         || recoveryVerdict.blocker === 'captcha'
                         || recoveryVerdict.blocker === 'paywall'
                       )) {
+                        // OPCIONAL (menu, padrão DESLIGADO): o agente clica UMA vez a caixinha "não sou
+                        // um robô" (reCAPTCHA / hCaptcha / Turnstile) com input real. Quem decide é o
+                        // serviço de captcha; desafio de imagem ou falha → pede ajuda como sempre.
+                        if (recoveryVerdict.blocker === 'captcha' && captchaCheckboxAllowed() && !captchaTriedUrls.has(afterObservation.url)) {
+                          captchaTriedUrls.add(afterObservation.url);
+                          const passed = await tryCaptchaCheckbox(wv, afterObservation.interactive_elements);
+                          throwIfCancelled();
+                          if (passed) {
+                            history += '\nCAPTCHA CHECKBOX: clicked the "I am not a robot"/verify checkbox and the verification PASSED. Continue the task on this page.';
+                            onProgress({ kind: 'status', message: '☑️ Clicked the verification checkbox — passed.' });
+                            continue;
+                          }
+                          onProgress({ kind: 'status', message: '☑️ Verification checkbox did not pass on its own — asking you.' });
+                        }
                         const kind = recoveryVerdict.blocker === 'captcha'
                           ? 'captcha'
                           : recoveryVerdict.blocker === 'paywall'
@@ -7273,6 +7312,41 @@ ${history.slice(-6000)}`;
     const url = `${SKILLS_REPO_NEW_FILE}/${encodeURIComponent(saved.name!)}?filename=SKILL.md&value=${encodeURIComponent(md + '\n')}`;
     try { await window.electronAPI?.openExternal?.(url); } catch {}
   }
+}
+
+// Captcha de caixinha ("não sou um robô"): opção do menu, padrão DESLIGADO.
+function captchaCheckboxAllowed(): boolean {
+  try { return localStorage.getItem('agentCaptchaCheckbox') === '1'; } catch { return false; }
+}
+const CAPTCHA_FRAME_RE = /recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*(checkbox|frame=checkbox)|challenges\.cloudflare\.com|turnstile/i;
+/** Clica UMA vez a caixinha do captcha e diz se passou (token preenchido / iframe sumiu / página mudou). */
+async function tryCaptchaCheckbox(wv: any, elements: Array<{ tag?: string; role?: string; text?: string; aria?: string; x: number; y: number }>): Promise<boolean> {
+  const wcId = wv?.getWebContentsId?.();
+  if (wcId == null) return false;
+  const urlBefore = wv.getURL?.() || '';
+  // 1) Caixinha exposta na árvore de acessibilidade (Turnstile/hCaptcha costumam aparecer assim).
+  const ax = elements.find(e => e.role === 'checkbox' && /not a robot|n[aã]o sou um rob|human|verify|captcha/i.test(`${e.text || ''} ${e.aria || ''}`));
+  let pt: { x: number; y: number } | null = ax ? { x: ax.x, y: ax.y } : null;
+  // 2) Senão, o iframe do widget no DOM: a caixinha fica ~30px da borda esquerda, no meio da altura.
+  if (!pt) {
+    pt = await Promise.race([
+      wv.executeJavaScript(`(() => { const re = ${CAPTCHA_FRAME_RE.toString()}; const f = [...document.querySelectorAll('iframe')].find(x => re.test(x.src) && x.getBoundingClientRect().width > 0); if (!f) return null; f.scrollIntoView({ block: 'center' }); const r = f.getBoundingClientRect(); return { x: Math.round(r.left + Math.min(30, r.width / 4)), y: Math.round(r.top + r.height / 2) }; })()`).catch(() => null),
+      new Promise(r => setTimeout(() => r(null), 3000)),
+    ]) as { x: number; y: number } | null;
+  }
+  if (!pt) return false;
+  await window.electronAPI?.realClick?.(wcId, pt.x, pt.y);
+  await new Promise(r => setTimeout(r, 4000));
+  const ok = await Promise.race([
+    wv.executeJavaScript(`(() => {
+      const tok = [...document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"]')].some(x => (x.value || '').length > 20);
+      const re = ${CAPTCHA_FRAME_RE.toString()};
+      const widget = [...document.querySelectorAll('iframe')].some(x => re.test(x.src) && x.getBoundingClientRect().width > 0);
+      return tok || !widget;
+    })()`).catch(() => false),
+    new Promise(r => setTimeout(() => r(false), 3000)),
+  ]) as boolean;
+  return ok || (wv.getURL?.() || '') !== urlBefore;
 }
 
 // macOS usa o semáforo nativo (titleBarStyle 'hidden'): sem os botões de janela do app.
