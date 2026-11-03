@@ -1,7 +1,7 @@
 // Chamado de suporte / post em fórum: detecção do pedido, site oficial, freio do envio e o texto do cartão.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { commandIsSupport, commandIsForum, supportSiteFor, supportPromptBlock, formatSupportDraft, supportRequestText, offSupportSite } from '../../src/renderer/support-tickets.ts';
+import { commandIsSupport, commandIsForum, supportSiteFor, supportPromptBlock, formatSupportDraft, supportRequestText, offSupportSite, supportVendorFor, supportSearchQuery, vendorUrlOk, registrableDomain } from '../../src/renderer/support-tickets.ts';
 import { classifyRisk, riskForAction } from '../../src/renderer/risk.ts';
 import { commandLikelyNeedsAccount, detectManualHelpNeed } from '../../src/renderer/agent-login-policy.ts';
 
@@ -154,11 +154,77 @@ test('a support request with a known vendor stays on that vendor\'s site', () =>
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'www.dell.com/community/en' }, cmd), null);
   assert.match(offSupportSite({ type: 'navigate', url: 'https://www.notebookcheck.net/' }, cmd) || '', /not Dell's site/);
   assert.match(offSupportSite({ type: 'new_tab', url: 'https://mail.google.com' }, cmd) || '', /never the user's mailbox/);
-  assert.match(offSupportSite({ type: 'web_search' }, cmd) || '', /stay on Dell's own support site/);
+  // A busca na web é como se acha o site (1º passo, sem página falhada antes).
+  assert.strictEqual(offSupportSite({ type: 'web_search' }, cmd), null);
   assert.strictEqual(offSupportSite({ type: 'click_ref' }, cmd), null);
   // Apple: o login (idmsa.apple.com) é do mesmo dono.
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://idmsa.apple.com/IDMSWebAuth/signin' }, 'open a ticket with Apple for my MacBook'), null);
-  // Sem fabricante conhecido, ou com endereço escrito pela pessoa: não restringe.
+  // Sem fabricante nenhum, ou com endereço escrito pela pessoa: não restringe.
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://example.org/' }, 'open a support ticket about my printer'), null);
   assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.dell.com/' }, 'ask Dell support (copy at http://127.0.0.1:47300/dell/support)'), null);
+});
+
+test('the vendor comes from the table or from a brand named in the request; none is never invented', () => {
+  const v = (c: string) => { const r = supportVendorFor(c); return r && `${r.vendor}${r.site ? '*' : ''}`; };
+  // Da tabela (* = domínios conferidos).
+  assert.strictEqual(v("open a support ticket with Apple for my MacBook's battery"), 'Apple*');
+  assert.strictEqual(v('ask Dell support about my XPS fan after the Windows update'), 'Dell*');
+  assert.strictEqual(v('my XPS fan is loud, contact support'), 'Dell*');
+  assert.strictEqual(v('open a support ticket for my Dell laptop with Windows 11'), 'Dell*');   // "with Windows" depois da Dell
+  assert.strictEqual(v('Ask the Dell Community why my fan is loud'), 'Dell*');
+  // Fora da tabela.
+  assert.strictEqual(v('open a support ticket with Canon about my printer jamming'), 'Canon');
+  assert.strictEqual(v('my Canon printer keeps jamming, open a support ticket'), 'Canon');
+  assert.strictEqual(v('contact Brother about my printer'), 'Brother');
+  assert.strictEqual(v('post a question in the Sonos community about my speaker dropping wifi'), 'Sonos');
+  assert.strictEqual(v("file a case with Logitech's customer service about my MX Master mouse"), 'Logitech');
+  assert.strictEqual(v('ask Logitech support about my mouse on my Dell laptop'), 'Logitech');   // o fabricante é a Logitech
+  assert.strictEqual(v('open a support ticket with canon about my printer'), 'Canon');   // tudo minúsculo
+  assert.strictEqual(v('contactar soporte técnico de Epson'), 'Epson');
+  assert.strictEqual(v('abrir um chamado com a Canon sobre a impressora'), 'Canon');
+  assert.strictEqual(v('open a support ticket about my laptop\nFOLLOW-UP: it is a Canon printer actually'), 'Canon');
+  // Nenhum: nunca palpite.
+  for (const c of ['help with my printer', 'open a support ticket about my printer', 'ask customer support about my order', 'Open a ticket with my bank', 'Contact support about my laptop battery'])
+    assert.strictEqual(supportVendorFor(c), null, c);
+});
+
+test('the first-step search names vendor + product + support, never instruction words', () => {
+  const q = (c: string, product?: string) => supportSearchQuery(c, supportVendorFor(c)!, product);
+  assert.strictEqual(q('open a support ticket with Dell about my XPS 13 9310 fan noise, service tag 7XK2PQ3', 'XPS 13 9310'), 'Dell XPS 13 9310 support contact');
+  assert.strictEqual(q('open a support ticket with Canon about my printer jamming'), 'Canon printer support contact');
+  assert.strictEqual(q('post a question in the Sonos community about my speaker dropping wifi'), 'Sonos speaker support community');
+  assert.strictEqual(q('ask Brother support'), 'Brother support contact');
+  assert.strictEqual(q('ask Dell support about my fan', 'Dell XPS'), 'Dell XPS support contact');   // sem repetir o nome
+  assert.doesNotMatch(q('please open a support ticket with Canon about my printer, contact me by email'), /please|open|ticket|email/);
+});
+
+test('opening a result: only the vendor\'s own domain; look-alikes are refused', () => {
+  const canon = supportVendorFor('contact Canon support about my printer')!;
+  for (const u of ['https://www.canon.com/', 'canon.co.uk', 'https://support.canon.com.br/x', 'https://usa.canon.com:8080/support', 'https://canon.de/'])
+    assert.ok(vendorUrlOk(u, canon), u);
+  for (const u of ['https://canon-support-help.com', 'canonprintersupport.net', 'https://canon.support/', 'https://mycanon.com', 'https://canon.com.evil.net/', 'http://127.0.0.1/', 'https://canon.xyz', 'https://support-canon.com/'])
+    assert.ok(!vendorUrlOk(u, canon), u);
+  assert.strictEqual(registrableDomain('support.canon.co.uk'), 'canon.co.uk');
+  assert.strictEqual(registrableDomain('www.dell.com'), 'dell.com');
+  // Logitech fora da tabela: support.logi.com não é o nome → recusado.
+  const cmd = 'ask Logitech support about my MX Master mouse';
+  assert.strictEqual(offSupportSite({ type: 'navigate', url: 'https://www.logitech.com/en-us/support' }, cmd), null);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://support.logi.com/' }, cmd) || '', /not Logitech's site/);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://logitech-help-desk.com/' }, cmd) || '', /look-alike/);
+  assert.strictEqual(offSupportSite({ type: 'web_search' }, cmd), null);
+  assert.match(offSupportSite({ type: 'navigate', url: 'https://mail.google.com' }, cmd) || '', /never the user's mailbox/);
+  // Da tabela: os domínios dela.
+  const dell = supportVendorFor('ask Dell support')!;
+  assert.ok(vendorUrlOk('https://www.dell.com/support', dell));
+  assert.ok(!vendorUrlOk('https://dell-support-phone.com', dell));
+});
+
+test('the prompt block: open the vendor result from the search; OFFICIAL address is the fallback', () => {
+  const dell = supportPromptBlock('ask Dell support about my XPS fan', {});
+  assert.match(dell, /FIND THE SITE: open Dell's support result from the web search — only a result on dell\.com/);
+  assert.match(dell, /OFFICIAL DELL SUPPORT: https:\/\/www\.dell\.com\/support\/home\/en-us — the fallback/);
+  const canon = supportPromptBlock('open a support ticket with Canon about my printer', {});
+  assert.match(canon, /only a result on canon\.com \(or canon\.<country>\)/);
+  assert.doesNotMatch(canon, /OFFICIAL/);
+  assert.match(supportPromptBlock('open a support ticket about my printer', {}), /VENDOR: not named\. Ask the user/);
 });
