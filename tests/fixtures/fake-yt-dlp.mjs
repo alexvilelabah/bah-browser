@@ -20,6 +20,8 @@ const out = (s) => process.stdout.write(s + '\n');
 const arg = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 
 if (args.includes('--version')) { out('2026.10.26'); process.exit(0); }
+// FAKE_YTDLP_LOG=<arquivo>: guarda os argumentos de cada chamada (uma linha JSON) → o teste confere as buscas.
+if (process.env.FAKE_YTDLP_LOG) fs.appendFileSync(process.env.FAKE_YTDLP_LOG, JSON.stringify(args) + '\n');
 const tmpl = arg('-o');
 const ffdir = arg('--ffmpeg-location') || '/usr/local/bin';
 const sel = arg('-f') || '';

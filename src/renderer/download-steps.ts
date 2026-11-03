@@ -50,12 +50,49 @@ export function listItems(value: unknown): string[] {
 
 /** De quem/de onde é a coleção: "from the movie top gun with tom cruise" → "top gun". */
 export function collectionSubject(command: string): string {
-  const m = command.toLowerCase().match(/\b(?:from|of|do|da|del|de)\s+(?:the\s+|o\s+|a\s+|el\s+|la\s+)?(?:movie|film|filme|pel[ií]cula|album|álbum|soundtrack|trilha sonora|banda sonora|show|series|s[eé]rie)\s+(.+?)(?=\s+(?:with|and|then|by|com|e|y|con|para|for)\b|[.,!?]|$)/);
-  return m ? m[1].replace(/["“”]/g, '').trim().slice(0, 60) : '';
+  const m = command.toLowerCase().match(/\b(?:from|of|do|da|del|de)\s+(?:the\s+|o\s+|a\s+|el\s+|la\s+)?(?:(?:19|20)\d\d\s+)?(?:animated\s+|original\s+)?(?:movie|film|filme|pel[ií]cula|album|álbum|soundtrack|trilha sonora|banda sonora|show|series|s[eé]rie)\s+(.+?)(?=\s+(?:with|and|then|by|com|e|y|con|para|for|not|n[aã]o)\b|\s*\(|[.,!?;]|$)/);
+  if (!m) return '';
+  // "from the soundtrack of the 1986 film top gun" → a obra é a de dentro ("top gun").
+  const inner = m[1] !== command.toLowerCase() ? collectionSubject(m[1]) : '';
+  return (inner || m[1]).replace(/["“”]/g, '').trim().slice(0, 60);
 }
 
-/** Busca no YouTube pra uma faixa da coleção. */
-export function collectionQuery(item: string, subject: string, audioOnly: boolean): string {
-  const s = subject && !item.toLowerCase().includes(subject) ? ` ${subject}` : '';
-  return `${item}${s} ${audioOnly ? 'official audio' : 'official music video'}`.replace(/\s+/g, ' ').trim();
+/** Faixa guardada como "Título — Artista" (também "–", " - " ou '"Título" by Artista') → partes. */
+export function parseTrackEntry(item: string): { title: string; artist: string } {
+  const s = String(item || '').replace(/\s+/g, ' ').trim();
+  // "by" só com o título entre aspas: "Stand by Me" é um título, não "Stand" de "Me".
+  const m = s.match(/^(.+?)\s+[—–-]\s+(.+)$/) || s.match(/^(["“].+["”])\s+by\s+(.+)$/i);
+  if (!m) return { title: s, artist: '' };
+  return { title: m[1].replace(/^["“]|["”]$/g, '').trim(), artist: m[2].replace(/^["“]|["”]$/g, '').trim() };
+}
+
+/**
+ * Ano da obra ("1986") no pedido ou na expansão do roteador local ("…the 1986 film Top Gun…, not Top
+ * Gun: Maverick (2022)"). O que vem depois de "not/instead of/não…" é o que a pessoa NÃO quer → fora.
+ * Prefere o ano mais perto do nome da obra.
+ */
+export function subjectYear(subject: string, ...texts: string[]): string {
+  const subj = String(subject || '').toLowerCase();
+  for (const raw of texts) {
+    const t = String(raw || '').toLowerCase().split(/,?\s+(?:not|instead of|rather than|excluding|n[aã]o|en lugar de|y no)\b/)[0];
+    const years = [...t.matchAll(/\b(19\d\d|20\d\d)\b/g)];
+    if (!years.length) continue;
+    const at = subj ? t.indexOf(subj) : -1;
+    if (at < 0) return years[0][1];
+    const near = years.map(y => ({ y: y[1], d: Math.min(Math.abs(y.index! - at), Math.abs(y.index! - (at + subj.length))) })).sort((a, b) => a.d - b.d)[0];
+    return near.y;
+  }
+  return '';
+}
+
+/**
+ * Busca no YouTube pra uma faixa da coleção: título + artista + obra + ano. Sem o artista e o ano,
+ * "Hold My Hand" de Top Gun virava a da Lady Gaga (Maverick, 2022) e não a do filme de 1986.
+ */
+export function collectionQuery(item: string, subject: string, audioOnly: boolean, year = ''): string {
+  const { title, artist } = parseTrackEntry(item);
+  const low = item.toLowerCase();
+  const s = subject && !low.includes(subject.toLowerCase()) ? ` ${subject}` : '';
+  const y = year && !low.includes(year) && !subject.includes(year) ? ` ${year}` : '';
+  return `${title}${artist ? ' ' + artist : ''}${s}${y} ${audioOnly ? 'official audio' : 'official music video'}`.replace(/\s+/g, ' ').trim();
 }

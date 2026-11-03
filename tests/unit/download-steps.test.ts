@@ -31,3 +31,26 @@ test('collections: detection, audio vs video, list parsing, subject and queries'
   assert.equal(m.collectionQuery('Danger Zone', 'top gun', false), 'Danger Zone top gun official music video');
   assert.equal(m.collectionQuery('Top Gun Anthem', 'top gun', false), 'Top Gun Anthem official music video');
 });
+
+test('collections: "Title — Artist" entries and the work\'s year make precise per-track queries', async () => {
+  const m = await import('../../src/renderer/download-steps.ts');
+  assert.deepEqual(m.parseTrackEntry('Danger Zone — Kenny Loggins'), { title: 'Danger Zone', artist: 'Kenny Loggins' });
+  assert.deepEqual(m.parseTrackEntry('Take My Breath Away – Berlin'), { title: 'Take My Breath Away', artist: 'Berlin' });
+  assert.deepEqual(m.parseTrackEntry('Mighty Wings - Cheap Trick'), { title: 'Mighty Wings', artist: 'Cheap Trick' });
+  assert.deepEqual(m.parseTrackEntry('"Hold My Hand" by Lady Gaga'), { title: 'Hold My Hand', artist: 'Lady Gaga' });
+  assert.deepEqual(m.parseTrackEntry('Stand by Me'), { title: 'Stand by Me', artist: '' });
+  assert.deepEqual(m.parseTrackEntry('Danger Zone'), { title: 'Danger Zone', artist: '' });
+  // ano: do pedido ou da expansão; o que vem depois de "not" (o Maverick) não conta
+  const x = 'find all the music videos from the soundtrack of the 1986 film Top Gun (Tom Cruise), not Top Gun: Maverick (2022)';
+  assert.equal(m.subjectYear('top gun', 'find all the music videos from the movie top gun', x), '1986');
+  assert.equal(m.subjectYear('top gun', 'download all songs from top gun: maverick (2022)'), '2022');
+  assert.equal(m.subjectYear('top gun', 'download all songs from the movie top gun'), '');
+  assert.equal(m.subjectYear('top gun', 'all the videos of Top Gun, not the 2022 sequel'), '');
+  assert.equal(m.collectionSubject(x), 'top gun');
+  assert.equal(m.collectionSubject('download all songs from the movie top gun: maverick'), 'top gun: maverick');
+  assert.equal(m.collectionQuery('Danger Zone — Kenny Loggins', 'top gun', false, '1986'), 'Danger Zone Kenny Loggins top gun 1986 official music video');
+  assert.equal(m.collectionQuery('Take My Breath Away — Berlin', 'top gun', true, '1986'), 'Take My Breath Away Berlin top gun 1986 official audio');
+  assert.equal(m.collectionQuery('Danger Zone — Kenny Loggins', '', false), 'Danger Zone Kenny Loggins official music video');
+  assert.equal(m.collectionQuery('Top Gun Anthem — Harold Faltermeyer', 'top gun', false, '1986'), 'Top Gun Anthem Harold Faltermeyer 1986 official music video');
+  assert.deepEqual(m.listItems(['Danger Zone — Kenny Loggins', 'Take My Breath Away — Berlin']), ['Danger Zone — Kenny Loggins', 'Take My Breath Away — Berlin']);
+});

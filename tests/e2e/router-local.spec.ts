@@ -48,6 +48,14 @@ test('local router: loads after the window shows and labels messages', async () 
     });
     expect(f?.route).toBe('FIX');
 
+    // Expansão do pedido: o pedido ambíguo de coleção volta preciso (e conferido); ordem comum nem passa.
+    const expand = (text: string) => page.evaluate((t) => (window as any).electronAPI.routerExpand(t), text);
+    const x = await expand('find all the music videos from the movie top gun with tom cruise and download them');
+    console.log('[router-local] expand →', JSON.stringify(x));
+    expect(x?.expanded).toMatch(/top gun/i);
+    expect(x?.expanded).toMatch(/tom cruise/i);
+    expect(await expand('open gmail')).toBeNull();
+
     // O card nas configurações do assistente mostra "ligado".
     await page.evaluate(() => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); });
     await page.reload(); await page.waitForLoadState('domcontentloaded'); await sleep(2000);
