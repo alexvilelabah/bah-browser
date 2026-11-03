@@ -4,6 +4,7 @@ import { aiMayRecord } from './incognito';
 import { namesStore } from './stores';
 import { userAmazonDomain, namedOfficialSite, officialSitesPromptBlock } from './known-sites';
 import { wantsTabsSummary, wantsWakeTabs } from './tabs-summary';
+import { isPriceComparison } from './price-compare';
 
 // Amazon do país da pessoa: mora em known-sites.ts (puro, testável); reexportado aqui.
 export { userAmazonDomain };
@@ -212,6 +213,10 @@ export function getInitialShortcutAction(command: string): { action: { type: 'na
       reason: 'fast path: open Gmail Promotions category',
     };
   }
+
+  // Comparar preço ENTRE LOJAS ("compare prices for X on Amazon and other stores"): o Bah visita cada
+  // loja (price-compare.ts). Atalho pra UMA loja aqui virava `amazon search for "X other stores"`.
+  if (isPriceComparison(command)) return null;
 
   // Se o usuário deu uma URL/site explícito, NÃO fast-pathar pra um site conhecido —
   // deixa o agente navegar pra URL que ele pediu. (Gmail compose acima continua, pois
@@ -719,7 +724,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     // tem a skill da loja), em vez do atalho de Google Shopping — que nem é a loja pedida.
     // Viagem (hotel/hospedagem/voo) não é produto do Shopping: o agente faz a busca no site de reserva.
     const isTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|inn|ski trip|flights?|airfare|rental cars?|car rentals?|hot[eé]is|hospedage\w*|pousadas?|voos?|passage\w*|hoteles|vuelos|alojamiento)\b/.test(n);
-    if (isPrice && !isQuote && !isDocOrOpenRef && !namesStore(command) && !isTravel) {
+    // Várias lojas ("…on Amazon and other stores", "where to buy X"): o Bah vai em cada loja e lê o
+    // preço lá (price-compare.ts) — o Google Shopping é agregador, não a loja.
+    if (isPrice && !isQuote && !isDocOrOpenRef && !namesStore(command) && !isTravel && !isPriceComparison(command)) {
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +

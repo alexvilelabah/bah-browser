@@ -1,12 +1,12 @@
 ---
 name: shopping-compare
-description: Search a store for a product and compare price, rating and value across real options (no buying).
+description: Compare a product's price on each store's own site (or options inside one store) and report a table with links (no buying).
 tasks: [shopping]
 priority: 50
 ---
-1. Use the store's own search box with a SHORT query (product type + key spec, or a part number) — never paste instruction words. After the first search, look at the results URL: many stores keep the query and sort in it (?q=, /s?k=, &sort=price) and you can edit it directly next time.
-2. Sort by price (low to high) when the user wants cheap; by rating when they want best.
-3. extract_text the results. For each candidate read: exact title, price (and unit price for packs), star rating + number of ratings, shipping/delivery. Skip ads ("Sponsored", "Ad") unless nothing else fits, and say when one is an ad.
-4. Keep only items that really match (right model/spec/size); drop accessories and look-alikes.
-5. Compare 3–5 options: cheapest, best rated (many ratings), best value. Open a product page only when details are missing.
-6. Report a table (render_view): product, price, rating (count), why it fits, link. Never add to cart, buy, or sign in.
+1. Search with a SHORT query: only the product (type + key spec, or model number). Never paste instruction words or store names into a search box.
+2. Several stores ("on Amazon and other stores", "where to buy", "cheapest place"): visit EACH store's own site — the stores named, plus well-known retailers for the user's region, 3–4 in total. Use the store's search box or search URL, find the matching product, read its price there; open the product page only if the price is missing.
+3. A price counts only if you read it on that store's own domain. Articles, deal blogs, comparison sites and search snippets are never a price source. A step marked ❌ Failed is not a source.
+4. Error page, captcha, robot check or sign-in wall: write "couldn't read — <reason>" for that store and go to the next one. Never try to get past a bot check.
+5. One store: sort by price or rating as asked; extract_text; read exact title, price, rating (count), shipping; skip ads and accessories.
+6. Report with render_view: store, exact product title, price, availability/shipping, link to the page read — every store tried, including blocked ones. Say how many stores were read vs blocked. Never add to cart, buy, or sign in.
