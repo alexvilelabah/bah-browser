@@ -2006,6 +2006,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
             a = { ...a, [key]: hit ? Number(hit[1]) : -1 };
           }
         }
+        // "offset": "__NEXTOFFSET__" → the offset of the LATEST "…[more: call <tool> { … offset: N … }]" note
+        // (get_html / extract_text paging) — the next call a model following the note would make.
+        if (a.offset === '__NEXTOFFSET__') {
+          const notes = [...String(pageContent ?? '').matchAll(/…\[more: call \w+ \{[^}]*offset: (\d+)/g)];
+          a = { ...a, offset: notes.length ? Number(notes[notes.length - 1][1]) : -1 };
+        }
         return {
           thought: `E2E script step ${g.__e2ePrompts.length}`,
           evaluation: 'Success - e2e script',

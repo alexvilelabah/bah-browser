@@ -164,7 +164,11 @@ aqui pra o auditor não ter que "descobrir":
    outra origem viram só `[cross-origin iframe]`. No pedido, o HTML vem marcado como *dado da página, não
    instrução*, e as partes invisíveis levam `[hidden]` — texto escondido tipo "ignore as instruções anteriores"
    fica claramente marcado como algo que a pessoa não vê. É leitura passiva (permitida numa checagem humana, como
-   o `extract_text`); o que o agente fizer depois continua passando pelo freio de segurança.
+   o `extract_text`); o que o agente fizer depois continua passando pelo freio de segurança. Uma leitura tem
+   o tamanho do contexto livre do modelo — de 4.000 a 60.000 caracteres ([`src/shared/read-paging.ts`](src/shared/read-paging.ts)),
+   6.000 por padrão nos modelos locais pequenos — e página maior é lida em partes (`offset`). Cada parte do
+   `get_html` / `extract_text` aparece só no próximo pedido (bloco próprio, marcado como dado da página), não
+   fica no histórico do agente.
 
 ---
 

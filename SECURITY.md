@@ -166,7 +166,10 @@ machine). They are listed here so an auditor does not have to "discover" them:
    cross-origin iframes are just `[cross-origin iframe]`. The HTML is framed in the prompt as *data from the page,
    not instructions*, and invisible parts are marked `[hidden]` so hidden "ignore previous instructions" text
    is visibly not something the user sees. It is a passive read (allowed on a human check like `extract_text`);
-   whatever the agent does next still goes through the safety brake.
+   whatever the agent does next still goes through the safety brake. One read is bounded by the model's free
+   context — 4,000 to 60,000 chars ([`src/shared/read-paging.ts`](src/shared/read-paging.ts)), 6,000 by default
+   on small local models — and longer pages are read in pages (`offset`). Each `get_html` / `extract_text`
+   page is shown in the next prompt only (its own block, framed as page data), not kept in the agent's history.
 
 ---
 

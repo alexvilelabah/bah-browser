@@ -13,12 +13,14 @@ import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from
 import { runHandoff, classifyWebview, setHumanCheckFlag, humanCheckFlag } from './takeover-driver';
 import { TAKEOVER_TIMEOUT_MS, guardAgentAction, type TakeoverOutcome } from '../shared/takeover';
 import { collectHtmlScript, serializeHtml, selectorNotFoundMessage, pageHtmlBlock, type CollectResult } from '../shared/html-clean';
+import { readBudget, resolveReadMax, pageText as pageOfText, pageTextBlock, pastEndMessage, rangeLine, nextCall, type PageInfo } from '../shared/read-paging';
+import { meterState } from '../shared/context-meter';
 import { classifyHumanCheck, HUMAN_CHECK_SIGNALS_JS, type HumanCheckKind, type HumanCheckVerdict } from '../shared/human-check';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, searchUrl, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import {
   promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
   noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
-  contextWindow as contextWindowNow, setContextWindow, getThread,
+  contextWindow as contextWindowNow, setContextWindow, getThread, usageOf as contextUsageOf,
 } from './threads';
 import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
 import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
@@ -2839,9 +2841,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const taskUploads: Array<{ token: string; names: string[] }> = [];
               // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
-              // get_html: o HTML limpo vai INTEIRO no próximo pedido (bloco próprio, antes do PAGE TEXT) — o
-              // RECENT HISTORY só leva os últimos 2500 caracteres e cortaria o começo. Vale 1 passo.
-              let pendingHtml = '';
+              // get_html / extract_text: a leitura vai INTEIRA no próximo pedido (bloco próprio — PAGE HTML /
+              // PAGE TEXT (extracted) — depois da lista de elementos e antes do PAGE TEXT, pra o corte de
+              // contexto local cortar texto da página e histórico antes dela). O RECENT HISTORY só leva os
+              // últimos 2500 caracteres e cortaria o começo; no histórico fica só uma linha. Vale 1 passo.
+              let pendingReads: string[] = [];
+              // Tokens dos blocos de leitura do último pedido: o medidor conta com eles, mas eles saem no
+              // passo seguinte — descontados no orçamento da próxima leitura (senão a página 2 encolhe).
+              let shownReadTokens = 0;
+              // Orçamento de UMA leitura (shared/read-paging.ts): cresce com o contexto livre do modelo.
+              const readBudgetNow = () => {
+                const u = contextUsageOf(threadKey);
+                const window = u?.window || contextWindowNow();
+                const used = u ? meterState({ ...u, window }).used : 0;
+                return readBudget({ window, used: Math.max(0, used - shownReadTokens), local: store.localSettings.enabled });
+              };
+              // Último bloco do extract_text: o freio anti-coleta o mostra de novo em vez de re-extrair.
+              let lastExtractBlock = '';
+              // extract_text com offset novo é PAGINAÇÃO, não re-extração: não conta pro freio anti-coleta.
+              const extractPagesRead = new Set<string>();
               // Download que começou NESTA tarefa (não um que terminou depois, vindo da anterior).
               const ofThisTask = (d: any) => !!d && (d.startedAt ?? 0) >= taskStartedAt;
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
@@ -4228,7 +4246,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     newElementCount > 0 ? `(${newElementCount} element(s) marked with '*' are NEW since your last action — e.g. a popup/modal/result that just appeared)` : '',
                     compactDom || '(none detected)',
                     '',
-                    pendingHtml,
+                    pendingReads.join('\n\n'),
                     `PAGE TEXT: ${observation.text_sample.slice(0, 1500)}`,
                     // Full OCR even when a frame is attached: main may still drop the image
                     // (capability/size/rejection) AFTER this payload is built, and then the OCR
@@ -4237,7 +4255,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
                   ].filter(s => s !== '').join('\n');
-                  pendingHtml = '';
+                  shownReadTokens = pendingReads.length ? estimateThreadTokens(pendingReads.join('\n\n')) : 0;
+                  pendingReads = [];
                   // Anti-loop: track time on same URL
                   if (observation.url === lastSeenUrl) stepsOnSameUrl++;
                   else { stepsOnSameUrl = 1; lastSeenUrl = observation.url; }
@@ -4582,7 +4601,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // perceber que já tem a resposta → empaca sem dar report. Contamos extrações
                   // seguidas: na 2ª mandamos parar; e se persistir (ou já no local), ENCERRAMOS
                   // com a melhor resposta que o próprio modelo já escreveu (thought/eval).
-                  if (action.type === 'extract_text') consecutiveExtracts++;
+                  // Página nova (offset ainda não lido nesta URL) é paginação, não re-extração.
+                  const extractPage = action.type === 'extract_text' ? `${observation.url}#${action.offset || 0}` : '';
+                  if (action.type === 'extract_text' && (action.offset || 0) > 0 && !extractPagesRead.has(extractPage)) consecutiveExtracts = 1;
+                  else if (action.type === 'extract_text') consecutiveExtracts++;
                   else if (action.type !== 'store' && action.type !== 'plan' && action.type !== 'wait') consecutiveExtracts = 0;
                   // SÓ no modo LOCAL: o freio é pra compensar o juízo fraco do modelo local.
                   // O caminho da NUVEM (API) fica 100% intocado (ele já sabe quando parar).
@@ -4598,7 +4620,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       return { thought: thoughts.join('\n\n') || answer, results: allResults, done };
                     }
                     // 2ª/3ª extração seguida: NÃO re-extrai — manda reportar com o texto que já tem.
-                    history += `\nSTOP GATHERING: You ALREADY extracted the page text (see "EXTRACTED FROM ..." in RECENT HISTORY). Do NOT call extract_text again. Answer the user's question NOW with report({"summary":"..."}) using that text.`;
+                    // O texto já lido volta no bloco PAGE TEXT (extracted) do próximo passo (no histórico só fica a linha).
+                    if (lastExtractBlock) pendingReads.push(lastExtractBlock);
+                    history += `\nSTOP GATHERING: You ALREADY extracted the page text (it is shown again in the PAGE TEXT (extracted) block). Do NOT call extract_text again for the same part. Answer the user's question NOW with report({"summary":"..."}) using that text.`;
                     onProgress({ kind: 'status', message: `🛑 I already have the text — asking for the answer (${consecutiveExtracts}×).` });
                     continue;
                   }
@@ -6046,8 +6070,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (action.type === 'extract_text' && commandLooksLikeImageTextRead) {
                     toolResult = { success: false, error: 'Skipped extract_text: OCR image tasks must use OCR TEXT, not webpage text.' };
                   } else if (action.type === 'extract_text') {
-                    // Extract main visible text (filter scripts/styles, headings + paragraphs)
-                    const max = action.max_chars && action.max_chars > 0 ? action.max_chars : 6000;
+                    // Extract main visible text (filter scripts/styles, headings + paragraphs). The page script
+                    // returns the whole text (bounded); the page [offset, offset + max) is cut here, on line /
+                    // whitespace boundaries, sized by the read budget (shared/read-paging.ts).
+                    const rm = resolveReadMax(action.max_chars, readBudgetNow());
                     // Extrator estilo Readability: acha o MIOLO da página por densidade de
                     // texto (penalizando link-farms/menus), poda ads/nav/rodapé/sidebar e
                     // converte para Markdown semântico (títulos #, listas -, citações >).
@@ -6103,7 +6129,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         if (uniq.length) md += '\\n\\nVALORES VISÍVEIS NA PÁGINA (na ordem em que aparecem): ' + uniq.join(' · ');
                       }
-                      return md.slice(0, ${max});
+                      return md.slice(0, 400000);
                     })()`;
                     try {
                       // Hung pages (ad/video scripts holding the main thread) never resolve
@@ -6114,10 +6140,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       } else {
                         const url = wv.getURL();
                         const title = (await withTimeout<string>(wv.executeJavaScript('document.title'), 2000, '')) || '';
-                        // Inject into history so subsequent steps see it
-                        history += `\n\nEXTRACTED FROM ${title} (${url}):\n${text}\n`;
-                        lastExtractedText = text;   // guardado pro fallback do freio anti-coleta
-                        toolResult = { success: true, info: { url, title, chars: (text || '').length } };
+                        const page = pageOfText(String(text), action.offset, rm.max);
+                        const info: PageInfo = { tool: 'extract_text', page, askedMax: action.max_chars, capped: rm.capped ? rm.max : undefined };
+                        if (page.pastEnd) toolResult = { success: false, error: pastEndMessage(info) };
+                        else {
+                          // A página inteira vai no bloco PAGE TEXT (extracted) do próximo passo (não só a cauda de
+                          // 2500 caracteres do RECENT HISTORY); no histórico, a linha com o intervalo, o começo e a próxima chamada.
+                          lastExtractBlock = pageTextBlock(title, url, info);
+                          pendingReads.push(lastExtractBlock);
+                          extractPagesRead.add(`${observation.url}#${page.start}`);
+                          const head = page.text.replace(/\s+/g, ' ').trim().slice(0, 200);
+                          const next = page.more ? ` More: ${nextCall('extract_text', { max: rm.capped ? undefined : action.max_chars }, page.end)}.` : '';
+                          history += `\nEXTRACTED TEXT from ${title} (${url}): ${rangeLine(info)}${rm.capped ? ` (capped at ${rm.max} by the model's free context)` : ''} — shown in full once, in the PAGE TEXT (extracted) block of the next step; store() what you need. Starts: "${head}${page.text.length > 200 ? '…' : ''}".${next}`;
+                          lastExtractedText = page.text;   // guardado pro fallback do freio anti-coleta
+                          toolResult = { success: true, info: { url, title, chars: page.text.length, from: page.start, to: page.end, total: page.total, more: page.more } };
+                        }
                       }
                     } catch (e: any) {
                       toolResult = { success: false, error: String(e?.message || e) };
@@ -6267,11 +6304,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     else if (!got.ok && (got.notFound || got.invalid)) toolResult = { success: false, error: selectorNotFoundMessage(action.selector || '', got.candidates, got.invalid) };
                     else if (!got.ok || !got.tree) toolResult = { success: false, error: got.error || 'get_html could not read the page' };
                     else {
-                      const ser = serializeHtml(got.tree, { max: action.max, cut: got.cut });
+                      // Tamanho da leitura: o padrão (6000 local / 12000 janela grande) ou o `max` pedido, até o
+                      // orçamento do contexto livre (shared/read-paging.ts). offset pagina o HTML limpo.
+                      const rm = resolveReadMax(action.max, readBudgetNow());
+                      const ser = serializeHtml(got.tree, { max: rm.max, offset: action.offset, cut: got.cut, selector: action.selector, askedMax: action.max, capped: rm.capped ? rm.max : undefined });
                       const where = action.selector ? `"${action.selector}"` : 'the page body';
-                      pendingHtml = pageHtmlBlock(where, wv.getURL(), ser.html).trim();
-                      history += `\nGET_HTML ${where}: ${ser.html.length} chars${ser.truncated ? ' (truncated)' : ''} — shown once in the PAGE HTML block of the next step; act on its [#N] refs with click_ref/fill_ref.`;
-                      toolResult = { success: true, info: { chars: ser.html.length, truncated: ser.truncated } };
+                      if (ser.page.pastEnd) toolResult = { success: false, error: pastEndMessage({ tool: 'get_html', page: ser.page, walkCut: got.cut }) };
+                      else {
+                        pendingReads.push(pageHtmlBlock(where, wv.getURL(), ser.html, ser.range).trim());
+                        const next = ser.page.more ? ` More: ${nextCall('get_html', { selector: action.selector, max: rm.capped ? undefined : action.max }, ser.page.end)}.` : '';
+                        history += `\nGET_HTML ${where}: ${ser.range}${rm.capped ? ` (capped at ${rm.max} by the model's free context)` : ''} — shown once in the PAGE HTML block of the next step; act on its [#N] refs with click_ref/fill_ref.${next}`;
+                        toolResult = { success: true, info: { chars: ser.page.text.length, from: ser.page.start, to: ser.page.end, total: ser.total, more: ser.page.more } };
+                      }
                     }
                   } else if ((action.type === 'keydown' || action.type === 'keyup' || action.type === 'insert_text') && wcId != null) {
                     toolResult = action.type === 'insert_text'

@@ -3,12 +3,13 @@ import { isTimeZone } from '../shared/region';
 import type { VisionImage, VisionReport } from '../shared/vision';
 import { classifyError, type AgentErrorCode } from '../shared/error-codes';
 import { isPrivateAi } from './incognito-session';
+import { normalizeGetHtml, normalizeExtractText } from '../shared/read-paging';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
-  | { type: 'extract_text'; max_chars?: number }
-  | { type: 'get_html'; selector?: string; max?: number }
+  | { type: 'extract_text'; max_chars?: number; offset?: number }
+  | { type: 'get_html'; selector?: string; max?: number; offset?: number }
   | { type: 'extract_images'; min_width?: number }
   | { type: 'search_images'; query: string; min_width?: number; count?: number }
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
@@ -313,11 +314,9 @@ export class PageAgent {
       case 'store':
         return { type: 'store', key: String(action.key ?? ''), value: action.value, source: action.source ? String(action.source) : undefined };
       case 'extract_text':
-        return { type: 'extract_text', max_chars: toOptionalNumber(action.max_chars) };
-      case 'get_html': {
-        const sel = String(action.selector ?? action.css ?? action.query ?? '').trim();
-        return { type: 'get_html', selector: sel || undefined, max: toOptionalNumber(action.max ?? action.max_chars) };
-      }
+        return normalizeExtractText(action);
+      case 'get_html':
+        return normalizeGetHtml(action);
       case 'extract_images':
         return { type: 'extract_images', min_width: toOptionalNumber(action.min_width) };
       case 'search_images':
