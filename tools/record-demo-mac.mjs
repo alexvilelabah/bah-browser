@@ -34,6 +34,7 @@ const mode = argv[0];
 const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : def; };
 const expand = (p) => p && p.replace(/^~(?=\/|$)/, os.homedir());
 const take = path.resolve(expand(opt('take', path.join(os.homedir(), 'build/bah-demo-takes/take'))));
+fs.mkdirSync(path.join(take, 'prompts'), { recursive: true });
 
 const LOCAL = { enabled: true, provider: 'openai-compatible', baseUrl: process.env.LLM || 'http://darkstar:8080', model: process.env.MODEL || 'unsloth/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M' };
 const ROUTER_GGUF = process.env.ROUTER_GGUF || path.join(os.homedir(), 'Library/Application Support/bah-browser-agent-test/models/qwen2.5-1.5b-instruct-q4_k_m.gguf');
@@ -48,7 +49,7 @@ export const SCENES = {
   mj: {
     cmd: "Find Michael Jackson's most famous songs and download all of their music videos, just the top 3",
     caption: 'Finds the 3 most famous Michael Jackson music videos and downloads them',
-    budget: 42, limitMin: 25, quality: 'best', showDownloads: true,
+    budget: 42, limitMin: 25, quality: 'low', showDownloads: true,   // ≤480p: the 4K Thriller alone was 647 MB
   },
   hotel: {
     cmd: process.env.HOTEL_CMD || 'find a hotel in Los Angeles for next weekend under $200 a night on Booking.com',
@@ -66,7 +67,7 @@ export const SCENES = {
     budget: 16, limitMin: 8, cancelDownload: true,
   },
   news: {
-    cmd: "summarize today's top tech news",
+    cmd: process.env.NEWS_CMD || "summarize today's top tech news on Hacker News",
     caption: "Today's top tech news, summarized",
     budget: 18, limitMin: 8,
   },
@@ -125,13 +126,22 @@ async function recStart(electronMod, o) {
             let gb = null, gs = null;
             const gwc = box.id != null ? webContents.fromId(box.id) : null;
             if (gwc && !gwc.isDestroyed()) { const gi = await gwc.capturePage(); gs = gi.getSize(); if (gs.width > 0) gb = gi.toBitmap(); }
-            for (let y = 0; y < rh; y++) {
+            let fastDone = false;
+            // Guest fills (almost) the whole rect at the same scale → row copies (fast path).
+            if (gb && hits >= 230 && Math.abs(gs.width - rw) <= 2 && Math.abs(gs.height - rh) <= 2) {
+              const w = Math.min(rw, gs.width) * 4;
+              for (let y = 0; y < Math.min(rh, gs.height); y++) gb.copy(bmp, ((y0 + y) * sz.width + x0) * 4, y * gs.width * 4, y * gs.width * 4 + w);
+              fastDone = true; rec.stats.fast = (rec.stats.fast || 0) + 1;
+            }
+            for (let y = 0; !fastDone && y < rh; y++) {
               const row = (y0 + y) * sz.width;
               const gy = gb ? Math.min(gs.height - 1, Math.floor(y * gs.height / rh)) : 0;
               for (let x = 0; x < rw; x++) {
                 const i = (row + x0 + x) * 4;
                 if (!isKey(bmp, i)) continue;
-                if (gb) { const j = (gy * gs.width + Math.min(gs.width - 1, Math.floor(x * gs.width / rw))) * 4; bmp[i] = gb[j]; bmp[i + 1] = gb[j + 1]; bmp[i + 2] = gb[j + 2]; }
+                // A transparent guest pixel (page without a background) is white, as in a normal browser.
+                const j = gb ? (gy * gs.width + Math.min(gs.width - 1, Math.floor(x * gs.width / rw))) * 4 : -1;
+                if (gb && gb[j + 3] >= 128 && !isKey(gb, j)) { bmp[i] = gb[j]; bmp[i + 1] = gb[j + 1]; bmp[i + 2] = gb[j + 2]; }
                 else { bmp[i] = bmp[i + 1] = bmp[i + 2] = 255; }
                 bmp[i + 3] = 255;
               }
@@ -139,18 +149,23 @@ async function recStart(electronMod, o) {
             rec.stats.composited++;
           }
         }
+        // Downscale here (Electron) → 2.25× fewer bytes through the pipe and no scaling in ffmpeg.
+        const t3 = Date.now();
+        if (bmp) img = nativeImage.createFromBitmap(bmp, sz);
+        const outW = o.width && sz.width > o.width ? o.width : sz.width;
+        const outH = Math.round(sz.height * outW / sz.width / 2) * 2;
+        if (outW !== sz.width || outH !== sz.height) img = img.resize({ width: outW, height: outH, quality: 'good' });
         if (!size) {
-          size = sz;
+          size = { width: outW, height: outH };
           rec.t0 = ts;
-          rec.size = sz;
-          ffp = spawn(o.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-use_wallclock_as_timestamps', '1', '-f', 'rawvideo', '-pix_fmt', 'bgra', '-s', `${sz.width}x${sz.height}`, '-i', 'pipe:0',
-            '-vf', `scale=${o.width}:-2:flags=bilinear,format=yuv420p`, '-fps_mode', 'cfr', '-r', String(o.fps), '-c:v', 'h264_videotoolbox', '-b:v', '24M', o.out], { stdio: ['pipe', 'ignore', 'pipe'] });
+          rec.size = { capture: sz, out: size };
+          ffp = spawn(o.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-use_wallclock_as_timestamps', '1', '-f', 'rawvideo', '-pix_fmt', 'bgra', '-s', `${size.width}x${size.height}`, '-i', 'pipe:0',
+            '-vf', 'format=yuv420p', '-fps_mode', 'cfr', '-r', String(o.fps), '-c:v', 'h264_videotoolbox', '-b:v', '24M', o.out], { stdio: ['pipe', 'ignore', 'pipe'] });
           ffp.stderr.on('data', (d) => { rec.lastError = String(d).slice(-300); });
           closed = new Promise(r => ffp.on('close', r));
         }
-        if (sz.width !== size.width || sz.height !== size.height) { img = (bmp ? nativeImage.createFromBitmap(bmp, sz) : img).resize({ width: size.width, height: size.height }); bmp = null; sz = size; }
-        const t3 = Date.now();
-        const buf = bmp || img.toBitmap();
+        if (outW !== size.width || outH !== size.height) img = img.resize({ width: size.width, height: size.height });
+        const buf = img.toBitmap();
         const t4 = Date.now(); rec.stats.bmpMs += t4 - t3;
         // One write per capture; ffmpeg stamps each frame with the wall clock when it reads it
         // (-use_wallclock_as_timestamps) and fills the gaps itself to a constant rate.
@@ -176,7 +191,7 @@ async function recStop(_e) {
   globalThis.__demoRec = null;
   const s = rec.stats;
   const avg = (v) => rec.captured ? Math.round(v / rec.captured) : 0;
-  return { t0: rec.t0, size: rec.size, captured: rec.captured, avgMs: { total: avg(s.capMs), shot: avg(s.shotMs), js: avg(s.jsMs), bitmap: avg(s.bmpMs), write: avg(s.writeMs) }, composited: s.composited, errors: s.errors, lastError: rec.lastError };
+  return { t0: rec.t0, size: rec.size, captured: rec.captured, avgMs: { total: avg(s.capMs), shot: avg(s.shotMs), js: avg(s.jsMs), bitmap: avg(s.bmpMs), write: avg(s.writeMs) }, composited: s.composited, fastComposite: s.fast || 0, errors: s.errors, lastError: rec.lastError };
 }
 
 async function record(sceneIds) {
@@ -192,14 +207,21 @@ async function record(sceneIds) {
   const app = await electron.launch({
     executablePath: path.join(root, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'),
     args: [root, `--user-data-dir=${tmp}`, '--use-mock-keychain'],
-    env: { ...env, E2E_MOCK_AI: '' },
+    env: { ...env, E2E_MOCK_AI: '', BAH_DUMP_PROMPTS: path.join(take, 'prompts') },
   });
   const pid = app.process().pid;
+  // Main-process stdout/stderr → <take>/main.log (diagnostics for the take).
+  const mainLog = fs.createWriteStream(path.join(take, 'main.log'), { flags: 'a' });
+  app.process().stdout?.on('data', (d) => mainLog.write(d));
+  app.process().stderr?.on('data', (d) => mainLog.write(d));
   fs.writeFileSync(path.join(take, 'electron.pid'), String(pid));
   console.log(`[rec] Electron pid ${pid}, profile ${tmp}, downloads ${dlDir}`);
   // Every download lands in the temp folder (getDownloadDir() falls back to the 'downloads' path).
   await app.evaluate(({ app: a }, d) => a.setPath('downloads', d), dlDir);
-  const summary = { started: new Date().toISOString(), win: WIN, fps: FPS, model: LOCAL.model, scenes: [] };
+  // Re-recording some scenes into an existing take keeps the others (and their order).
+  let prev = null;
+  try { prev = JSON.parse(fs.readFileSync(path.join(take, 'summary.json'), 'utf8')); } catch {}
+  const summary = { started: new Date().toISOString(), win: WIN, fps: FPS, model: LOCAL.model, scenes: prev?.scenes || [] };
   try {
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded'); await sleep(1500);
@@ -232,12 +254,14 @@ async function record(sceneIds) {
     // Key colour behind the webview (only visible where the guest isn't painted in the shell capture).
     await page.addStyleTag({ content: 'webview{background:rgb(1,254,3)!important}' });
     // The agent's searches start on Bing (Google showed this machine a captcha in rehearsal).
-    await page.evaluate(() => localStorage.setItem('searchEngine', 'bing'));
+    await page.evaluate(() => localStorage.setItem('agentSearchEngine', 'bing'));
 
     for (const id of sceneIds) {
       const sc = SCENES[id];
       if (!sc) { console.log(`[rec] unknown scene ${id}`); continue; }
-      summary.scenes.push(await runScene(app, page, id, sc, dlDir));
+      const r = await runScene(app, page, id, sc, dlDir);
+      const at = summary.scenes.findIndex(x => x.id === id);
+      if (at >= 0) summary.scenes[at] = r; else summary.scenes.push(r);
       fs.writeFileSync(path.join(take, 'summary.json'), JSON.stringify(summary, null, 2));
     }
   } catch (e) {
@@ -255,6 +279,14 @@ async function record(sceneIds) {
   }
 }
 
+async function closeMenus(page) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(300);
+  const ov = page.locator('.menu-overlay').first();
+  if (await ov.isVisible().catch(() => false)) await ov.click({ force: true }).catch(() => {});
+  await sleep(300);
+}
+
 async function runScene(app, page, id, sc, dlDir) {
   const dir = path.join(take, id);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -262,6 +294,7 @@ async function runScene(app, page, id, sc, dlDir) {
   const markers = [];
   const mark = (label, extra) => { markers.push({ label, t: Date.now(), ...extra }); console.log(`[${id}] ${label}${extra ? ' ' + JSON.stringify(extra) : ''}`); };
   const vis = (loc) => loc.isVisible().catch(() => false);
+  await closeMenus(page);
   // Fresh tab = fresh feed for this scene; the previous scene's tabs (and their groups) go away.
   await page.locator('.tab-new').click().catch(() => {});
   await sleep(1200);
@@ -299,11 +332,11 @@ async function runScene(app, page, id, sc, dlDir) {
       await page.getByTestId('plan-approve').click().catch(() => {});
       continue;
     }
-    const best = page.getByRole('button', { name: /Best quality/ }).last();
+    const best = page.getByRole('button', { name: sc.quality === 'low' ? /Smaller files/ : /Best quality/ }).last();
     if (await vis(best)) {
-      mark('card'); await sleep(3000);
+      mark('card', { text: (await page.locator('.feed-confirm-card').last().innerText().catch(() => '')).slice(0, 600) }); await sleep(3000);
       await best.click().catch(() => {});
-      mark('chosen');
+      mark('chosen', { quality: sc.quality || 'best' });
       continue;
     }
     const pause = page.getByText(/Safety pause/).last();
@@ -338,15 +371,20 @@ async function runScene(app, page, id, sc, dlDir) {
   }
   if (outcome === 'timeout') { await page.getByTestId('agent-stop').click().catch(() => {}); }
   mark('done', { outcome });
-  // The table / summary may be in its own tab: give it a moment on screen.
+  // render_view opens the table in its own tab (in the background): bring it to the front.
+  const feedNow = await page.getByTestId('agent-command-bar').innerText().catch(() => '');
+  if (/opened in a new tab/i.test(feedNow)) {
+    const tabs = page.locator('.tab');
+    const n = await tabs.count().catch(() => 0);
+    if (n > 1) { await sleep(1200); await tabs.nth(n - 1).click().catch(() => {}); mark('table'); }
+  }
+  // The table / summary: give it a moment on screen.
   await sleep(3500);
   if (sc.showDownloads) {
     await page.locator('button[title^="Downloads ("]').first().click().catch(() => {});
     mark('downloads-panel');
     await sleep(4500);
-    await page.keyboard.press('Escape').catch(() => {});
-    await page.locator('button[title^="Downloads ("]').first().click().catch(() => {});
-    await sleep(500);
+    await closeMenus(page);
   }
   mark('end');
   const rec = await app.evaluate(recStop);
@@ -414,7 +452,7 @@ function rawVideo(dir) {
 // Each marker keeps a 1× window around it; everything between is sped up, and if still too
 // long, the middle of the longest fast stretches is cut.
 const FOCUS = {
-  start: [0, 1.0], typed: [-2.5, 1.2], sent: [0, 2.5], plan: [-0.5, 2.5], card: [-0.8, 4.2], chosen: [0, 2.5],
+  start: [0, 1.0], typed: [-2.5, 1.2], sent: [0, 2.5], plan: [-0.5, 2.5], card: [-0.8, 4.2], chosen: [0, 2.5], table: [-0.3, 4.5],
   brake: [-0.5, 2.0], ring: [-1.0, 3.0], cancelled: [-1.0, 2.0], done: [-2.0, 4.0], 'downloads-panel': [-0.3, 4.5], end: [-0.5, 0],
 };
 
@@ -457,7 +495,7 @@ function edit() {
   const outDir = path.resolve(expand(opt('out', path.join(root, 'assets'))));
   const summary = JSON.parse(fs.readFileSync(path.join(take, 'summary.json'), 'utf8'));
   const only = opt('only', '') ? opt('only').split(',') : null;
-  const ids = summary.scenes.map(s => s.id).filter(id => (!only || only.includes(id)) && fs.existsSync(path.join(take, id, 'frames.json')));
+  const ids = summary.scenes.map(s => s.id).filter(id => (!only || only.includes(id)) && fs.existsSync(path.join(take, id, 'raw.mp4')));
   const enc = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '17', '-pix_fmt', 'yuv420p', '-r', String(FPS)];
   const parts = [];
   const timeline = [];   // where the highlights land in the final video (for the GIF)
@@ -484,25 +522,30 @@ function edit() {
     renderPng(cap, { kind: 'caption', w: OUT_W, h: OUT_H, font: FONT_B, size: 44, bottom: 46, text: SCENES[id]?.caption || m.caption });
     const badge = path.join(work, `${id}-badge.png`);
     renderPng(badge, { kind: 'badge', w: OUT_W, h: OUT_H, font: FONT_B, size: 34, right: 40, top: 128, text: `>> ${speed}x` });
-    // trim+speed each segment; overlay the speed badge on fast ones; caption on everything.
-    const fc = [];
-    const labels = [];
+    // Each segment cut on its own (seek + speed + badge on the fast ones), joined, then the caption.
     let tOut = 0;
     const marks = [];
+    const segFiles = [];
     segs.forEach((s, i) => {
       const k = s.fast ? speed : 1;
-      fc.push(`[0:v]trim=start=${s.a.toFixed(3)}:end=${s.b.toFixed(3)},setpts=(PTS-STARTPTS)/${k}[s${i}]`);
-      if (s.fast) { fc.push(`[s${i}][2:v]overlay=0:0[f${i}]`); labels.push(`[f${i}]`); } else labels.push(`[s${i}]`);
+      const f = path.join(work, `${id}-seg${String(i).padStart(2, '0')}.mp4`);
+      const vf = `setpts=PTS/${k},fps=${FPS}`;
+      ff(['-ss', s.a.toFixed(3), '-to', s.b.toFixed(3), '-i', raw.out, ...(s.fast ? ['-i', badge] : []),
+        '-filter_complex', s.fast ? `[0:v]${vf}[a];[a][1:v]overlay=0:0:eof_action=repeat,format=yuv420p[v]` : `[0:v]${vf},format=yuv420p[v]`,
+        '-map', '[v]', ...enc, f]);
+      segFiles.push(f);
       for (const x of m.markers) {
         const r = (x.t - raw.t0) / 1000;
         if (r >= s.a && r < s.b) marks.push({ label: x.label, t: clock + tOut + (r - s.a) / k });
       }
-      tOut += (s.b - s.a) / k;
+      tOut += probeDur(f);
     });
-    fc.push(`${labels.join('')}concat=n=${labels.length}:v=1:a=0[cat]`);
-    fc.push(`[cat][1:v]overlay=0:0,fade=in:0:5,fps=${FPS},format=yuv420p[v]`);
+    const segList = path.join(work, `${id}-segs.txt`);
+    fs.writeFileSync(segList, segFiles.map(f => `file '${f}'`).join('\n'));
+    const cat = path.join(work, `${id}-cat.mp4`);
+    ff(['-f', 'concat', '-safe', '0', '-i', segList, '-c', 'copy', cat]);
     const out = path.join(work, `${String(n + 1).padStart(2, '0')}-${id}.mp4`);
-    ff(['-i', raw.out, '-loop', '1', '-i', cap, '-loop', '1', '-i', badge, '-filter_complex', fc.join(';'), '-map', '[v]', '-t', tOut.toFixed(3), ...enc, out]);
+    ff(['-i', cat, '-i', cap, '-filter_complex', `[0:v][1:v]overlay=0:0:eof_action=repeat,fade=in:0:5,format=yuv420p[v]`, '-map', '[v]', ...enc, out]);
     const d = probeDur(out);
     console.log(`[edit] ${id}: raw ${raw.dur.toFixed(1)}s → ${d.toFixed(1)}s (fast ${speed}×, ${segs.length} segments)`);
     timeline.push({ id, start: clock, dur: d, marks });
@@ -533,7 +576,7 @@ function edit() {
   console.log(`[edit] demo.mp4: ${total.toFixed(1)}s, ${(fs.statSync(mp4).size / 1e6).toFixed(1)} MB (${kbps} kbps)`);
 
   // GIF: ~4 s per scene around its best moment.
-  const pick = { mj: ['card', 'downloads-panel', 'done'], hotel: ['done'], prices: ['done'], steam: ['ring'], news: ['done'], flight: ['done'] };
+  const pick = { mj: ['card', 'downloads-panel', 'done'], hotel: ['table', 'done'], prices: ['table', 'done'], steam: ['ring'], news: ['table', 'done'], flight: ['table', 'done'] };
   const clips = [];
   for (const s of timeline) {
     const want = pick[s.id] || ['done'];
@@ -554,7 +597,7 @@ function edit() {
   const stills = path.join(take, 'stills');
   fs.mkdirSync(stills, { recursive: true });
   const shots = [['00-title', 1.5]];
-  for (const s of timeline) for (const x of s.marks) if (['card', 'chosen', 'ring', 'done', 'downloads-panel', 'plan'].includes(x.label)) shots.push([`${s.id}-${x.label}`, Math.min(x.t + 1.2, s.start + s.dur - 0.2)]);
+  for (const s of timeline) for (const x of s.marks) if (['card', 'chosen', 'ring', 'done', 'table', 'downloads-panel', 'plan'].includes(x.label)) shots.push([`${s.id}-${x.label}`, Math.min(x.t + 1.2, s.start + s.dur - 0.2)]);
   for (const [name, t] of shots) ff(['-ss', t.toFixed(2), '-i', mp4, '-frames:v', '1', path.join(stills, `${name}.png`)]);
   console.log(`[edit] stills → ${stills}`);
 }
