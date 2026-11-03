@@ -229,6 +229,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   schedSave: (list: any[]) => ipcRenderer.invoke('sched:save', list),
   schedClock: () => ipcRenderer.invoke('sched:clock'),
   e2eSearchResults: (q: string) => ipcRenderer.invoke('e2e:search-results', q),
+  e2ePriceStores: () => ipcRenderer.invoke('e2e:price-stores'),
   schedNotify: (n: { title: string; body: string; taskId?: string }) => ipcRenderer.invoke('sched:notify', n),
   onSchedFocus: (cb: (taskId: string) => void) => {
     const listener = (_e: any, id: string) => cb(id);

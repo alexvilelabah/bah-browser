@@ -14,9 +14,16 @@ const AMAZON_BY_COUNTRY: Record<string, string> = {
 function userLocale(): string {
   try { return (typeof navigator !== 'undefined' && (navigator.languages?.[0] || navigator.language)) || 'en-US'; } catch { return 'en-US'; }
 }
+/** País (ISO-2) do locale do sistema: "en-GB" → GB; "pt" sozinho → BR; senão US. */
+export function localeCountry(locale = userLocale()): string {
+  return (locale.split(/[-_]/)[1] || (locale.toLowerCase().startsWith('pt') ? 'BR' : 'US')).toUpperCase();
+}
+/** Amazon de um país (ISO-2); país sem Amazon própria → amazon.com. */
+export function amazonDomainForCountry(country: string): string {
+  return AMAZON_BY_COUNTRY[(country || '').toUpperCase()] || 'amazon.com';
+}
 export function userAmazonDomain(locale = userLocale()): string {
-  const country = (locale.split(/[-_]/)[1] || (locale.toLowerCase().startsWith('pt') ? 'BR' : 'US')).toUpperCase();
-  return AMAZON_BY_COUNTRY[country] || 'amazon.com';
+  return amazonDomainForCountry(localeCountry(locale));
 }
 
 export interface OfficialSite {

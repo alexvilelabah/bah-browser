@@ -1830,9 +1830,23 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_SEARCH_RESULTS) return null;
     try { const r = JSON.parse(process.env.E2E_SEARCH_RESULTS); return Array.isArray(r) ? r : null; } catch { return null; }
   });
+  // E2E: lojas falsas pro comparador de preço (E2E_PRICE_STORES = JSON [{id,label,names,domain,search}]),
+  // servidas em *.localhost pelo teste. Só no teste; no app de verdade devolve null e valem as lojas reais.
+  ipcMain.handle('e2e:price-stores', () => {
+    if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_PRICE_STORES) return null;
+    try { const r = JSON.parse(process.env.E2E_PRICE_STORES); return Array.isArray(r) ? r : null; } catch { return null; }
+  });
   ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text?: unknown; keepDoc?: unknown }) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
+    // E2E: respostas de chat em sequência (E2E_MOCK_CHAT_SCRIPT = JSON [texto, …]); cada pedido fica em
+    // global.__e2eChats pro teste conferir o que o modelo viu.
+    if (process.env.E2E_MOCK_AI === '1' && process.env.E2E_MOCK_CHAT_SCRIPT) {
+      const g = global as any;
+      g.__e2eChats = [...(g.__e2eChats || []), { message, image: !!image }];
+      const script = JSON.parse(process.env.E2E_MOCK_CHAT_SCRIPT);
+      return { response: String(script[g.__e2eChats.length - 1] ?? '') };
+    }
     // E2E: resposta fixa de chat (E2E_MOCK_CHAT) — pra testar fluxos que pedem um texto ao modelo.
     if (process.env.E2E_MOCK_AI === '1' && process.env.E2E_MOCK_CHAT) return { response: process.env.E2E_MOCK_CHAT };
     const engine = (local && localEngine) ? localEngine : aiEngine;
