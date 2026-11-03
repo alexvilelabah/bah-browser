@@ -43,7 +43,9 @@ test('accepts a disambiguation that keeps the request', () => {
   assert.equal(validateExpansion(TOP, `{"understood": "${GOOD}"}`), GOOD);
   // typo fixed by the model ("cruse" → "Cruise") and movie → film still count as the same words
   assert.ok(validateExpansion('download all the songs from the movie top gun with tom cruse', 'download all the songs from the 1986 film Top Gun with Tom Cruise'));
-  assert.ok(validateExpansion('baixe todas as músicas da trilha sonora de titanic', 'baixe todas as músicas da trilha sonora do filme Titanic (1997, James Horner)'));
+  assert.ok(validateExpansion('baixe todas as músicas da trilha sonora de titanic', 'baixe todas as músicas da trilha sonora do filme Titanic (1997)'));
+  // a composer the user never named is a new name → original wins
+  assert.equal(validateExpansion('baixe todas as músicas da trilha sonora de titanic', 'baixe todas as músicas da trilha sonora do filme Titanic (1997, James Horner)'), null);
 });
 
 test('falls back on junk, too long, missing key nouns, changed intent', () => {
@@ -72,4 +74,13 @@ test('the note for the big model carries the expansion and says the original win
   assert.match(n, /^\nUNDERSTOOD AS/);
   assert.match(n, /GOAL wins/);
   assert.ok(n.endsWith(GOOD));
+});
+
+test('a new name (album, artist, work) is rejected: it narrows or changes the request', () => {
+  const mj = "Find Michael Jackson's most famous songs and download all of their music videos, just the top 3";
+  assert.deepStrictEqual(checkExpansion(mj, mj + ' songs from his 1982 album Thriller'), { ok: false, reason: 'new-name' });
+  assert.deepStrictEqual(checkExpansion('download all the music videos from the album bad', 'download all the music videos from the album Bad by The Beatles'), { ok: false, reason: 'new-name' });
+  // the year and capitalising the user's own words are fine; an exclusion may name the other work
+  assert.ok(checkExpansion(TOP, 'find all the music videos from the movie Top Gun (1986) featuring Tom Cruise, download them').ok);
+  assert.ok(checkExpansion(TOP, GOOD).ok);
 });

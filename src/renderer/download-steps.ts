@@ -28,7 +28,10 @@ export function isMediaCollectionRequest(command: string): boolean {
   if (!/\b(down?load\w*|baix[ae]\w*|baixar|descarg\w+)\b/.test(c)) return false;
   return /\b(all|every|each|whole|entire|complete|full)\b.*\b(songs?|tracks?|music\s+videos?|videos?|clips?)\b/.test(c)
     || /\b(soundtrack|tracklist|track\s+list|album|discography|trilha\s+sonora|banda\s+sonora|discografia)\b/.test(c)
-    || /\b(todas|todos|cada)\b.*\b(m[uú]sicas?|v[ií]deos?|clipes?|faixas?|canciones)\b/.test(c);
+    || /\b(todas|todos|cada)\b.*\b(m[uú]sicas?|v[ií]deos?|clipes?|faixas?|canciones)\b/.test(c)
+    // "os 3 maiores sucessos do X", "top 5 music videos of X", "the most famous X songs… 3 of them": lista do conhecimento do modelo
+    || (/\b(top\s+\d+|most\s+(famous|popular|played|viewed)|greatest\s+hits|best[- ]known|biggest\s+hits|maiores\s+sucessos|mais\s+(famos[ao]s|populares|tocad[ao]s)|m[aá]s\s+(famos[ao]s|populares)|grandes\s+[eé]xitos)\b/.test(c)
+      && /\b(songs|tracks|music\s+videos|videos|clips|hits|m[uú]sicas|clipes|v[ií]deos|faixas|sucessos|canciones|[eé]xitos)\b/.test(c));
 }
 
 /** Vídeo (com som) ou só áudio? "music video/clipe" = vídeo; "songs/tracks/mp3/músicas" sem vídeo = áudio. */

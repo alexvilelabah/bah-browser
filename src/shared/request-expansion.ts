@@ -146,7 +146,7 @@ const JUNK_RE = /\b(sorry|i can(no|')t|as an ai|i'?m not sure|here (is|are)|desc
 
 export type ExpansionVerdict =
   | { ok: true; expanded: string }
-  | { ok: false; reason: 'empty' | 'same' | 'junk' | 'too-long' | 'missing-terms' | 'new-action' | 'new-number' | 'new-site' };
+  | { ok: false; reason: 'empty' | 'same' | 'junk' | 'too-long' | 'missing-terms' | 'new-action' | 'new-number' | 'new-site' | 'new-name' };
 
 /**
  * Confere a expansão contra o pedido original. Só passa o que acrescenta desambiguação:
@@ -166,6 +166,15 @@ export function checkExpansion(original: string, raw: unknown): ExpansionVerdict
   // Números novos: só anos (1900–2099) entram; "10 videos" no lugar de "all" muda o pedido.
   const origNums = new Set(fo.match(/\d+/g) || []);
   for (const n of fe.match(/\d+/g) || []) if (!origNums.has(n) && !/^(19|20)\d\d$/.test(n)) return { ok: false, reason: 'new-number' };
+  // Nome próprio novo (álbum, artista, obra) estreita ou troca o pedido: "os sucessos do Michael Jackson" virou
+  // "as 3 do álbum Thriller"; "álbum Bad" virou "Bad by The Beatles". Só ano e palavra comum podem entrar.
+  const origWords = fo.match(/[a-z0-9]+/g) || [];
+  // Exclusão ("…, not Top Gun: Maverick (2022)") não estreita o pedido: nome ali pode.
+  const kept = out.replace(/\b(not|n[aã]o|no)\s+[^,;]*/gi, ' ');
+  for (const name of kept.match(/(?<![\p{L}])\p{Lu}[\p{L}'’]*/gu) || []) {
+    const w = fold(name).replace(/[^a-z0-9]/g, '');
+    if (w && !hasTerm(w, origWords) && !STOP.has(w)) return { ok: false, reason: 'new-name' };
+  }
   if (/https?:\/\/|www\.|\b[a-z0-9-]+\.(com|org|net|io|br|app|dev)\b/.test(fe) && !/https?:\/\/|www\.|\.(com|org|net|io|br|app|dev)\b/.test(fo)) return { ok: false, reason: 'new-site' };
   return { ok: true, expanded: out };
 }
