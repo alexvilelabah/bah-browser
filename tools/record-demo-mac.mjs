@@ -597,7 +597,7 @@ function edit() {
   const stills = path.join(take, 'stills');
   fs.mkdirSync(stills, { recursive: true });
   const shots = [['00-title', 1.5]];
-  for (const s of timeline) for (const x of s.marks) if (['card', 'chosen', 'ring', 'done', 'table', 'downloads-panel', 'plan'].includes(x.label)) shots.push([`${s.id}-${x.label}`, Math.min(x.t + 1.2, s.start + s.dur - 0.2)]);
+  for (const s of timeline) for (const x of s.marks) if (['card', 'chosen', 'ring', 'done', 'table', 'downloads-panel', 'plan'].includes(x.label)) shots.push([`${s.id}-${x.label}`, Math.min(x.t + (x.label === 'table' ? 2.3 : 1.2), s.start + s.dur - 0.2)]);
   for (const [name, t] of shots) ff(['-ss', t.toFixed(2), '-i', mp4, '-frames:v', '1', path.join(stills, `${name}.png`)]);
   console.log(`[edit] stills → ${stills}`);
 }
