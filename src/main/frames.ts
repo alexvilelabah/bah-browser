@@ -67,6 +67,38 @@ export function setupFrames(ensureDebugger: (wc: WebContents, id: number) => Pro
     } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   });
 
+  // get { ref }: estado do elemento (valor, texto, marcado, habilitado, visível, atributos úteis). Nó da página
+  // (backendNodeId), de iframe (key + id) ou, sem id, o elemento na posição.
+  ipcMain.handle('cdp:inspect', async (_e, wcId: number, target: { backendNodeId?: number; key?: string; id?: number; x?: number; y?: number }) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'tab not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      let sid: string | undefined, node = target.backendNodeId;
+      if (target.key && target.id != null) { const s = sessionOf(wcId, target.key); if (!s.ok) return { ok: false, error: 'frame is gone — re-observe' }; sid = s.sid; node = target.id; }
+      if (node == null && target.x != null && target.y != null) node = (await wc.debugger.sendCommand('DOM.getNodeForLocation', { x: Math.round(target.x), y: Math.round(target.y) }) as any)?.backendNodeId;
+      if (node == null) return { ok: false, error: 'element not found' };
+      const objectId = (await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId: node }, sid) as any)?.object?.objectId;
+      if (!objectId) return { ok: false, error: 'element is gone — re-observe' };
+      const fn = `function(){
+        var el = this.nodeType === 1 ? this : this.parentElement; if (!el) return null;
+        var r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        var o = { tag: el.tagName.toLowerCase(), type: el.type || undefined,
+          text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+          visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none',
+          enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true' };
+        if ('value' in el && el.tagName !== 'BUTTON') { o.value = String(el.value).slice(0, 300); o.valueLength = String(el.value).length; }
+        if (el.type === 'checkbox' || el.type === 'radio') o.checked = !!el.checked;
+        else if (el.getAttribute('aria-checked')) o.checked = el.getAttribute('aria-checked') === 'true';
+        if (el.tagName === 'SELECT') o.selected = Array.prototype.filter.call(el.options, function(x){ return x.selected; }).map(function(x){ return x.text; }).join(', ');
+        ['href','name','placeholder','aria-label','aria-expanded','aria-selected','required','readonly','min','max','maxlength','pattern','title'].forEach(function(a){ var v = el.getAttribute(a); if (v != null && v !== '') o[a] = v.slice(0, 160); });
+        return o;
+      }`;
+      const r = await wc.debugger.sendCommand('Runtime.callFunctionOn', { objectId, functionDeclaration: fn, returnByValue: true }, sid) as any;
+      return { ok: true, state: r?.result?.value };
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+  });
+
   // Clique num elemento de iframe de OUTRO processo: sendInputEvent entrega no widget da página (o
   // <iframe> recebe o clique, o botão de dentro não). CDP Input na sessão do próprio frame, em
   // coordenadas do frame. Frame do mesmo processo: clique normal funciona (nem chega aqui).

@@ -27,6 +27,11 @@ export type BrowserAction =
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
   | { type: 'select_option'; ref: number; option: string }
+  | { type: 'click_role'; role: string; name?: string; nth?: number }
+  | { type: 'get'; ref: number }
+  | { type: 'keydown'; key: string }
+  | { type: 'keyup'; key: string }
+  | { type: 'insert_text'; text: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
   | { type: 'web_search'; query: string }
@@ -63,6 +68,7 @@ export interface InteractiveElement {
   pressed?: boolean;
   checked?: boolean;
   backendNodeId?: number; // CDP node id for precise clicking
+  disabled?: boolean;     // listado mas desabilitado (formulário incompleto, botão cinza)
   frame?: string;         // dentro de um iframe (host dele): sem backendNodeId — clique por coordenada
   frameNode?: { key: string; id: number };   // nó no documento do iframe (preencher sem depender de foco)
   repeatNote?: number;    // "+N elementos similares" colapsados após este (poda de payload)
@@ -126,6 +132,11 @@ export function formatAction(action: BrowserAction): string {
     case 'drag': return `drag(@${action.ref} → @${action.to_ref})`;
     case 'check': case 'uncheck': return `${action.type}(@${action.ref})`;
     case 'select_option': return `select_option(@${action.ref}, "${shorten(action.option, 50)}")`;
+    case 'get': return `get(@${action.ref})`;
+    case 'keydown': return `keydown(${action.key})`;
+    case 'keyup': return `keyup(${action.key})`;
+    case 'insert_text': return `insert_text("${shorten(action.text, 40)}")`;
+    case 'click_role': return `click_role(${action.role}${action.name ? ` "${shorten(action.name, 40)}"` : ''}${action.nth ? ` #${action.nth}` : ''})`;
     case 'fill_ref': return `fill_ref(@${action.ref}, "${shorten(action.value)}")`;
     case 'click_text': return `click_text("${action.text}"${action.nth ? `, nth=${action.nth}` : ''})`;
     case 'click_at': return `click_at(${Math.round(action.x)}, ${Math.round(action.y)})`;
@@ -358,8 +369,8 @@ function buildElementsFromAXTree(nodes: any[]): InteractiveElement[] {
     const pressedProp = node.properties?.find((p: any) => p.name === 'pressed');
     const checkedProp = node.properties?.find((p: any) => p.name === 'checked');
     const disabledProp = node.properties?.find((p: any) => p.name === 'disabled');
-    // Skip truly disabled elements
-    if (disabledProp?.value?.value === true) continue;
+    // Desabilitado continua na lista, marcado: "Enviar" cinza diz ao agente que falta algo no formulário.
+    const disabled = disabledProp?.value?.value === true;
 
     elements.push({
       id: elements.length,
@@ -374,6 +385,7 @@ function buildElementsFromAXTree(nodes: any[]): InteractiveElement[] {
       placeholder: getProp(node, 'placeholder')?.slice(0, 40),
       pressed: pressedProp ? pressedProp.value?.value === true || pressedProp.value?.value === 'true' : undefined,
       checked: checkedProp ? checkedProp.value?.value === true || checkedProp.value?.value === 'true' : undefined,
+      ...(disabled ? { disabled: true } : {}),
       backendNodeId: node.backendDOMNodeId as number,
     });
   }
@@ -579,6 +591,7 @@ const OBSERVE_SCRIPT = `
         aria: ariaLabel ? ariaLabel.slice(0, 80) : undefined,
         pressed: pressed === 'true' ? true : (pressed === 'false' ? false : undefined),
         checked: checked === 'true' ? true : (checked === 'false' ? false : undefined),
+        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true' || undefined,
       };
     });
   return {

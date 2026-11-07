@@ -210,6 +210,10 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - select_option: { "action": "select_option", "ref": number, "option": "macOS 26.x" } — chooses an option in a drop-down (<select>/combobox) by its visible text (partial match OK). Use it for OS/version/language/country/size selectors — clicking or typing into a <select> does NOT change it. If the option is not found, the result lists the available options; pick one of those.
 - click_ref: { "action": "click_ref", "ref": number } — PREFERRED. Clicks the element with that id from interactive_elements. Most reliable.
 - fill_ref: { "action": "fill_ref", "ref": number, "value": string } — PREFERRED for inputs. Fills the input element with that id.
+- get: { "action": "get", "ref": number } — reads an element's state: tag, value, text, checked, enabled, visible, selected option, href/placeholder/aria/required… Use it to CHECK a field took your input, a box is ticked, a button is enabled, before moving on.
+- keydown / keyup: { "action": "keydown", "key": "Shift" } … { "action": "keyup", "key": "Shift" } — hold a key while you click (shift-click, ctrl-click).
+- insert_text: { "action": "insert_text", "text": "..." } — pastes text into the FOCUSED field at once (long cover letters/descriptions); no per-key events. Click/fill_ref the field first.
+- click_role: { "action": "click_role", "role": "button", "name": "Submit", "nth"?: 2 } — clicks the element with that role whose label is (or contains) name; nth picks the 2nd, 3rd… match in page order. Roles: button, link, textbox, checkbox, radio, combobox, tab, menuitem, option, switch. Handy when several elements share a label.
 - click_text: { "action": "click_text", "text": string, "nth"?: number } fallback when the right element isn't in the ref list.
 - click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.

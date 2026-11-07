@@ -2238,9 +2238,10 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       const ty = fresh ? fresh.y : to0.y;
       wc.sendInputEvent({ type: 'mouseMove', x: tx, y: ty } as any);
       await sleepMs(40);
-      wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      const mods = [...(heldModifiers.get(wcId) || [])];
+      wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1, modifiers: mods } as any);
       await sleepMs(80);
-      wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1, modifiers: mods } as any);
       lastPointer.set(wcId, { x: tx, y: ty });
       return { success: true, info: { x: tx, y: ty, refreshed: !!fresh } };
     } catch (e: any) {
@@ -2394,6 +2395,28 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
     }
+  });
+
+  // Teclas modificadoras seguradas por keydown (por aba) — o clique real as leva junto (shift-clique).
+  const heldModifiers = new Map<number, Set<string>>();
+  // keydown/keyup separados (segurar Shift pra um shift-clique etc.) e insert_text (cola texto longo de uma vez).
+  ipcMain.handle('input:key-state', async (_e, wcId: number, key: string, down: boolean) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      const mod = ({ shift: 'shift', control: 'control', ctrl: 'control', meta: 'meta', cmd: 'meta', command: 'meta', alt: 'alt', option: 'alt' } as Record<string, string>)[String(key).toLowerCase()];
+      const held = heldModifiers.get(wcId) || new Set<string>();
+      if (mod) { if (down) held.add(mod); else held.delete(mod); heldModifiers.set(wcId, held); }
+      wc.focus(); wc.sendInputEvent({ type: down ? 'keyDown' : 'keyUp', keyCode: key, modifiers: [...held] } as any);
+      return { success: true, info: { held: [...held] } };
+    }
+    catch (e: any) { return { success: false, error: String(e?.message || e) }; }
+  });
+  ipcMain.handle('input:insert-text', async (_e, wcId: number, text: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try { await sharedEnsureDebugger(wc, wcId); wc.focus(); await wc.debugger.sendCommand('Input.insertText', { text: String(text) }); return { success: true, info: { chars: String(text).length } }; }
+    catch (e: any) { return { success: false, error: String(e?.message || e) }; }
   });
 
   // ═══ Accessibility tree via CDP (Comet-style semantic tree) ═══

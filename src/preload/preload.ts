@@ -199,6 +199,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   markRefs: (wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => ipcRenderer.invoke('cdp:mark-refs', wcId, attr, marks),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
+  inspect: (wcId: number, target: any) => ipcRenderer.invoke('cdp:inspect', wcId, target),
+  keyState: (wcId: number, key: string, down: boolean) => ipcRenderer.invoke('input:key-state', wcId, key, down),
+  insertText: (wcId: number, text: string) => ipcRenderer.invoke('input:insert-text', wcId, text),
   // Accessibility tree via CDP
   getAxTree: (wcId: number) =>
     ipcRenderer.invoke('cdp:axtree', wcId),
