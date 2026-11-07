@@ -173,8 +173,6 @@ interface Props {
   onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
   onOpenUrl: (url: string) => void;
-  onGoogleLogin?: () => void;
-  googleLoggedIn?: boolean;
   isStartupTab?: boolean;   // só a aba inicial mostra as boas-vindas do painel
   pageOpen?: boolean;   // há uma página real aberta (não Google home/aba nova) → gate do "sobre a tela"
   activeTabTitle?: string;   // título da aba atual — mostrado no chip "lendo esta página"
@@ -207,7 +205,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -1726,12 +1724,6 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 <div className="ai-onboard-text">{t('onboard.text')}</div>
                 <button className="ai-onboard-btn" onClick={() => setShowSettings(true)}>{t('onboard.btn')}</button>
               </div>
-            )}
-            {onGoogleLogin && !googleLoggedIn && (
-              <button className="glass-login-btn" onClick={onGoogleLogin} title={t('login.google')}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 10h-8v3.6h4.6c-.4 2-2.2 3.4-4.6 3.4a5 5 0 110-10c1.3 0 2.4.5 3.3 1.3l2.6-2.6A8.8 8.8 0 0012 3a9 9 0 100 18c5.2 0 8.7-3.7 8.7-8.9 0-.7-.1-1.4-.3-2.1z"/></svg>
-                <span>{t('login.google')}</span>
-              </button>
             )}
             <div className="showcase-sub">{t('login.subline')}</div>
           </div>

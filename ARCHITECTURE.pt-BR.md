@@ -67,7 +67,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `App.tsx` | App de topo; **o loop ReAct vivo do agente** (`onExecute`) |
+| `App.tsx` | App de topo; **o loop ReAct vivo do agente** (`onExecute`); barra de ferramentas (extensões, downloads, o **ícone redondo de perfil** — login opcional do Google / trocar de conta — e ⋮) |
 | `components/AgentCommandBar.tsx` | A caixa de comando unificada, o feed de atividade e as configurações |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |

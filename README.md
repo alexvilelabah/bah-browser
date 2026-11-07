@@ -76,6 +76,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
+- **Google sign-in is optional** — a round profile icon at the top right (like Chrome's) signs in to Google for Gmail / Drive / YouTube tasks; everything else works without it
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -172,7 +173,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🧩 **Compatibility, not evasion.** We present as standard Chrome (Chrome UA + masking `navigator.webdriver`) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
 
-- **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
+- **🔑 Google login (optional) — the profile icon at the top right.** Signing in is only needed for tasks inside Google (Gmail, Drive, your YouTube). Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click the **profile icon** → **Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
 - 🚫 **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 

@@ -71,7 +71,7 @@ test('seed toggle: OFF by default, flips ON and persists', async () => {
     await page.evaluate(() => localStorage.removeItem('torrentSeed'));
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
-    await page.locator('.menu-btn').nth(1).click();   // [0]=downloads, [1]=menu ⋮
+    await page.getByTestId('main-menu-btn').click();   // menu ⋮
     const item = page.locator('.menu-item', { hasText: 'seed' });
     await expect(item).toBeVisible();
     await expect(item.locator('.menu-switch')).toHaveText('OFF');   // padrão desligado
