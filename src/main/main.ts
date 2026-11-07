@@ -1877,6 +1877,20 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
           const want = a.ref.slice(6, -2).toLowerCase();
           const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
           a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        } else if (typeof a.ref === 'string' && a.ref.startsWith('__HTMLREF:')) {
+          // "__HTMLREF:<text>__" → the [#N] of the first tag in the LATEST "PAGE HTML" block (get_html)
+          // whose tag + text contains <text> — what a model reading the HTML would pick.
+          const want = a.ref.slice(10, -2).toLowerCase();
+          const all = `${command}\n${pageContent ?? ''}`;
+          const at = all.lastIndexOf('PAGE HTML of');
+          const hit = at < 0 ? null : [...all.slice(at).matchAll(/<[a-z0-9-]+ \[#(\d+)\][^>]*>[^<]*/gi)].find(x => x[0].toLowerCase().includes(want));
+          a = { ...a, ref: hit ? Number(hit[1]) : -1 };
+        }
+        // "offset": "__NEXTOFFSET__" → the offset of the LATEST "…[more: call <tool> { … offset: N … }]" note
+        // (get_html / extract_text paging) — the next call a model following the note would make.
+        if (a.offset === '__NEXTOFFSET__') {
+          const notes = [...String(pageContent ?? '').matchAll(/…\[more: call \w+ \{[^}]*offset: (\d+)/g)];
+          a = { ...a, offset: notes.length ? Number(notes[notes.length - 1][1]) : -1 };
         }
         return {
           thought: `E2E script step ${g.__e2ePrompts.length}`,

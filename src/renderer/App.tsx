@@ -22,6 +22,8 @@ import {
 import { ENGINES, engineOrder, engineForUrl, markBlocked, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import { namesStore } from './stores';
 import { namedSiteHint } from './known-sites';
+import { collectHtmlScript, serializeHtml, selectorNotFoundMessage, pageHtmlBlock, type CollectResult } from '../shared/html-clean';
+import { readBudget, resolveReadMax, pageText as pageOfText, pageTextBlock, pastEndMessage, rangeLine, nextCall, type PageInfo } from '../shared/read-paging';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, uiLangName } from './i18n';
@@ -227,6 +229,7 @@ declare global {
       frameFill?: (wcId: number, key: string, id: number, value: string) => Promise<{ ok: boolean; value?: string; error?: string }>;
       getFramesAx?: (wcId: number) => Promise<{ ok: boolean; frames: Array<{ key: string; label: string; nodes: any[] }> }>;
       getFramesCoords?: (wcId: number, key: string, ids: number[]) => Promise<{ ok: boolean; coords: Record<number, { x: number; y: number; w: number; h: number } | null> }>;
+      markRefs?: (wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => Promise<{ ok: boolean; marked?: number; error?: string }>;
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
@@ -2415,6 +2418,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
               // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
+              // get_html / extract_text: a leitura vai INTEIRA no próximo pedido (bloco próprio — PAGE HTML /
+              // PAGE TEXT (extracted) — depois da lista de elementos e antes do PAGE TEXT, pra o corte de
+              // contexto local cortar texto da página e histórico antes dela). O RECENT HISTORY só leva os
+              // últimos 2500 caracteres e cortaria o começo; no histórico fica só uma linha. Vale 1 passo.
+              let pendingReads: string[] = [];
+              // Tokens dos blocos de leitura do último pedido: o pedido seguinte conta com eles, mas eles saem
+              // no passo seguinte — descontados no orçamento da próxima leitura (senão a página 2 encolhe).
+              let shownReadTokens = 0;
+              // Janela do modelo e tokens do último pedido, das métricas da resposta (prompt_tokens /
+              // contextTokens do engine). Sem medidor de contexto ainda: janela desconhecida = 128k na
+              // nuvem, 16k no local (shared/read-paging.ts).
+              let lastPromptTokens = 0;
+              let lastContextWindow = 0;
+              // Orçamento de UMA leitura (shared/read-paging.ts): cresce com o contexto livre do modelo.
+              const readBudgetNow = () => readBudget({ window: lastContextWindow, used: Math.max(0, lastPromptTokens - shownReadTokens), local: store.localSettings.enabled });
+              // Último bloco do extract_text: o freio anti-coleta o mostra de novo em vez de re-extrair.
+              let lastExtractBlock = '';
+              // extract_text com offset novo é PAGINAÇÃO, não re-extração: não conta pro freio anti-coleta.
+              const extractPagesRead = new Set<string>();
               // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
               const commandIsShopping = namesStore(command) || /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
@@ -3164,6 +3186,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     newElementCount > 0 ? `(${newElementCount} element(s) marked with '*' are NEW since your last action — e.g. a popup/modal/result that just appeared)` : '',
                     compactDom || '(none detected)',
                     '',
+                    pendingReads.join('\n\n'),
                     `PAGE TEXT: ${observation.text_sample.slice(0, 1500)}`,
                     // Full OCR even when a frame is attached: main may still drop the image
                     // (capability/size/rejection) AFTER this payload is built, and then the OCR
@@ -3172,6 +3195,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
                   ].filter(s => s !== '').join('\n');
+                  shownReadTokens = pendingReads.length ? Math.ceil(pendingReads.join('\n\n').length / 4) : 0;
+                  pendingReads = [];
                   // Anti-loop: track time on same URL
                   if (observation.url === lastSeenUrl) stepsOnSameUrl++;
                   else { stepsOnSameUrl = 1; lastSeenUrl = observation.url; }
@@ -3394,6 +3419,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const inT = u.prompt_tokens ?? u.input_tokens ?? '?';
                     const outT = u.completion_tokens ?? u.output_tokens ?? '?';
                     const cached = u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
+                    // Pro orçamento de leitura (get_html / extract_text): tokens deste pedido e a janela do modelo.
+                    lastPromptTokens = Number(u.prompt_tokens ?? u.input_tokens) || 0;
+                    if (Number(m.contextTokens) > 0) lastContextWindow = Number(m.contextTokens);
                     const sec = (m.latencyMs / 1000).toFixed(1);
                     // Os tokens já estavam nesta linha; só nunca viravam dinheiro. O chip 📊 é
                     // efêmero (some em ~2s), então o acumulado vai pro cabeçalho do painel —
@@ -3470,7 +3498,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // perceber que já tem a resposta → empaca sem dar report. Contamos extrações
                   // seguidas: na 2ª mandamos parar; e se persistir (ou já no local), ENCERRAMOS
                   // com a melhor resposta que o próprio modelo já escreveu (thought/eval).
-                  if (action.type === 'extract_text') consecutiveExtracts++;
+                  // Página nova (offset ainda não lido nesta URL) é paginação, não re-extração.
+                  const extractPage = action.type === 'extract_text' ? `${observation.url}#${action.offset || 0}` : '';
+                  if (action.type === 'extract_text' && (action.offset || 0) > 0 && !extractPagesRead.has(extractPage)) consecutiveExtracts = 1;
+                  else if (action.type === 'extract_text') consecutiveExtracts++;
                   else if (action.type !== 'store' && action.type !== 'plan' && action.type !== 'wait') consecutiveExtracts = 0;
                   // SÓ no modo LOCAL: o freio é pra compensar o juízo fraco do modelo local.
                   // O caminho da NUVEM (API) fica 100% intocado (ele já sabe quando parar).
@@ -3486,7 +3517,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       return { thought: thoughts.join('\n\n') || answer, results: allResults, done };
                     }
                     // 2ª/3ª extração seguida: NÃO re-extrai — manda reportar com o texto que já tem.
-                    history += `\nSTOP GATHERING: You ALREADY extracted the page text (see "EXTRACTED FROM ..." in RECENT HISTORY). Do NOT call extract_text again. Answer the user's question NOW with report({"summary":"..."}) using that text.`;
+                    // O texto já lido volta no bloco PAGE TEXT (extracted) do próximo passo (no histórico só fica a linha).
+                    if (lastExtractBlock) pendingReads.push(lastExtractBlock);
+                    history += `\nSTOP GATHERING: You ALREADY extracted the page text (it is shown again in the PAGE TEXT (extracted) block). Do NOT call extract_text again for the same part. Answer the user's question NOW with report({"summary":"..."}) using that text.`;
                     onProgress({ kind: 'status', message: `🛑 I already have the text — asking for the answer (${consecutiveExtracts}×).` });
                     continue;
                   }
@@ -4715,8 +4748,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   } else if (action.type === 'extract_text' && commandLooksLikeImageTextRead) {
                     toolResult = { success: false, error: 'Skipped extract_text: OCR image tasks must use OCR TEXT, not webpage text.' };
                   } else if (action.type === 'extract_text') {
-                    // Extract main visible text (filter scripts/styles, headings + paragraphs)
-                    const max = action.max_chars && action.max_chars > 0 ? action.max_chars : 6000;
+                    // Extract main visible text (filter scripts/styles, headings + paragraphs). The page script
+                    // returns the whole text (bounded); the page [offset, offset + max) is cut here, on line /
+                    // whitespace boundaries, sized by the read budget (shared/read-paging.ts).
+                    const rm = resolveReadMax(action.max_chars, readBudgetNow());
                     // Extrator estilo Readability: acha o MIOLO da página por densidade de
                     // texto (penalizando link-farms/menus), poda ads/nav/rodapé/sidebar e
                     // converte para Markdown semântico (títulos #, listas -, citações >).
@@ -4772,7 +4807,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         if (uniq.length) md += '\\n\\nVALORES VISÍVEIS NA PÁGINA (na ordem em que aparecem): ' + uniq.join(' · ');
                       }
-                      return md.slice(0, ${max});
+                      return md.slice(0, 400000);
                     })()`;
                     try {
                       // Hung pages (ad/video scripts holding the main thread) never resolve
@@ -4783,10 +4818,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       } else {
                         const url = wv.getURL();
                         const title = (await withTimeout<string>(wv.executeJavaScript('document.title'), 2000, '')) || '';
-                        // Inject into history so subsequent steps see it
-                        history += `\n\nEXTRACTED FROM ${title} (${url}):\n${text}\n`;
-                        lastExtractedText = text;   // guardado pro fallback do freio anti-coleta
-                        toolResult = { success: true, info: { url, title, chars: (text || '').length } };
+                        const page = pageOfText(String(text), action.offset, rm.max);
+                        const info: PageInfo = { tool: 'extract_text', page, askedMax: action.max_chars, capped: rm.capped ? rm.max : undefined };
+                        if (page.pastEnd) toolResult = { success: false, error: pastEndMessage(info) };
+                        else {
+                          // A página inteira vai no bloco PAGE TEXT (extracted) do próximo passo (não só a cauda de
+                          // 2500 caracteres do RECENT HISTORY); no histórico, a linha com o intervalo, o começo e a próxima chamada.
+                          lastExtractBlock = pageTextBlock(title, url, info);
+                          pendingReads.push(lastExtractBlock);
+                          extractPagesRead.add(`${observation.url}#${page.start}`);
+                          const head = page.text.replace(/\s+/g, ' ').trim().slice(0, 200);
+                          const next = page.more ? ` More: ${nextCall('extract_text', { max: rm.capped ? undefined : action.max_chars }, page.end)}.` : '';
+                          history += `\nEXTRACTED TEXT from ${title} (${url}): ${rangeLine(info)}${rm.capped ? ` (capped at ${rm.max} by the model's free context)` : ''} — shown in full once, in the PAGE TEXT (extracted) block of the next step; store() what you need. Starts: "${head}${page.text.length > 200 ? '…' : ''}".${next}`;
+                          lastExtractedText = page.text;   // guardado pro fallback do freio anti-coleta
+                          toolResult = { success: true, info: { url, title, chars: page.text.length, from: page.start, to: page.end, total: page.total, more: page.more } };
+                        }
                       }
                     } catch (e: any) {
                       toolResult = { success: false, error: String(e?.message || e) };
@@ -5074,6 +5120,38 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         toolResult = { success: false, error: `${r?.error || 'select failed'}${r?.options?.length ? ` — available options: ${r.options.map((o: string) => `"${o}"`).join(', ')}` : ''}` };
                       }
                     }
+                  } else if (action.type === 'get_html') {
+                    // Estrutura da página (HTML limpo) quando a lista de elementos é ambígua. Leitura passiva: o
+                    // main carimba o [N] da lista num atributo com nonce (o script lê e apaga), o script anda no
+                    // DOM pelo mesmo executeJavaScript do extract_text (recua pro mundo isolado em página sem
+                    // script) e a limpeza/segredos/corte ficam em shared/html-clean.ts.
+                    onProgress({ kind: 'status', message: t('feed.readingSource') });
+                    const wcIdH = (wv as any).getWebContentsId?.();
+                    const refAttr = `data-bah-ref-${Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('')}`;
+                    if (wcIdH != null && window.electronAPI?.markRefs) {
+                      const marks = observation.interactive_elements.filter(e => !e.frameNode && !e.frame)
+                        .map(e => (e.backendNodeId != null ? { ref: e.id, backendNodeId: e.backendNodeId } : { ref: e.id, x: e.x, y: e.y }));
+                      await withTimeout(window.electronAPI.markRefs(wcIdH, refAttr, marks).catch(() => null), 4000, null);
+                    }
+                    const got = await withTimeout(wv.executeJavaScript(collectHtmlScript(action.selector || '', refAttr))
+                      .catch((e: any) => ({ ok: false, error: String(e?.message || e) })), 6000, null) as CollectResult | null;
+                    if (got == null) toolResult = { success: false, error: 'get_html timed out — page scripts are unresponsive. Use the element list / OCR TEXT instead.' };
+                    else if (!got.ok && (got.notFound || got.invalid)) toolResult = { success: false, error: selectorNotFoundMessage(action.selector || '', got.candidates, got.invalid) };
+                    else if (!got.ok || !got.tree) toolResult = { success: false, error: got.error || 'get_html could not read the page' };
+                    else {
+                      // Tamanho da leitura: o padrão (6000 local / 12000 janela grande) ou o `max` pedido, até o
+                      // orçamento do contexto livre (shared/read-paging.ts). offset pagina o HTML limpo.
+                      const rm = resolveReadMax(action.max, readBudgetNow());
+                      const ser = serializeHtml(got.tree, { max: rm.max, offset: action.offset, cut: got.cut, selector: action.selector, askedMax: action.max, capped: rm.capped ? rm.max : undefined });
+                      const where = action.selector ? `"${action.selector}"` : 'the page body';
+                      if (ser.page.pastEnd) toolResult = { success: false, error: pastEndMessage({ tool: 'get_html', page: ser.page, walkCut: got.cut }) };
+                      else {
+                        pendingReads.push(pageHtmlBlock(where, wv.getURL(), ser.html, ser.range).trim());
+                        const next = ser.page.more ? ` More: ${nextCall('get_html', { selector: action.selector, max: rm.capped ? undefined : action.max }, ser.page.end)}.` : '';
+                        history += `\nGET_HTML ${where}: ${ser.range}${rm.capped ? ` (capped at ${rm.max} by the model's free context)` : ''} — shown once in the PAGE HTML block of the next step; act on its [#N] refs with click_ref/fill_ref.${next}`;
+                        toolResult = { success: true, info: { chars: ser.page.text.length, from: ser.page.start, to: ser.page.end, total: ser.total, more: ser.page.more } };
+                      }
+                    }
                   } else if (action.type === 'dialog') {
                     // Arma a resposta do PRÓXIMO alert/confirm desta aba (vale 60 s).
                     let wcIdDlg: number | undefined;
@@ -5098,7 +5176,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'web_search'
+                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'get_html'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'history_search';
                   let screenshotAfter: string | undefined;
@@ -5161,7 +5239,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'get_html'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
                   if (internalAction) {

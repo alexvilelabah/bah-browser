@@ -126,6 +126,8 @@ USUÁRIO → "abre o gmail e apaga os spams"
 | `type(text)` / `press(key)` | Digita no campo focado / envia uma tecla |
 | `navigate(url)` / `scroll(dir)` | Vai pra URL / rola |
 | `new_tab` / `switch_tab` / `close_tab` | Gerência de abas |
+| `extract_text(offset?, max_chars?)` | O miolo da página em Markdown; página longa em partes via `offset`, no tamanho do contexto livre do modelo |
+| `get_html(selector?, offset?, max?)` | HTML limpo de um seletor ou da página — refs `[#N]`, marca `[hidden]`, sem segredos nem scripts; pra botões duplicados, campos sem rótulo, dropdowns customizados; paginado como o `extract_text` |
 | `done(reason, success)` | Encerra o loop |
 
 O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. Antes do clique, o ponteiro vai até o alvo pelo mesmo arco do cursor do agente que o Bah desenha na tela (sem tremor aleatório), então os eventos `mousemove` da página batem com o que você vê. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
