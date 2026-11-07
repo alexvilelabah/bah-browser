@@ -184,11 +184,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),
+  pointer: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) =>
+    ipcRenderer.invoke('input:pointer', wcId, op),
   realType: (wcId: number, text: string) =>
     ipcRenderer.invoke('input:type', wcId, text),
   abortTyping: () => ipcRenderer.invoke('input:type-abort'),
+  // Iframes (formulários embutidos): árvore/coords por frame, clique e preenchimento no nó do frame.
+  getFramesAx: (wcId: number) => ipcRenderer.invoke('cdp:frames-ax', wcId),
+  getFramesCoords: (wcId: number, key: string, ids: number[]) => ipcRenderer.invoke('cdp:frames-coords', wcId, key, ids),
+  frameClick: (wcId: number, key: string, id: number) => ipcRenderer.invoke('cdp:frame-click', wcId, key, id),
+  frameFill: (wcId: number, key: string, id: number, value: string) => ipcRenderer.invoke('cdp:frame-fill', wcId, key, id, value),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
+  inspect: (wcId: number, target: any) => ipcRenderer.invoke('cdp:inspect', wcId, target),
+  keyState: (wcId: number, key: string, down: boolean) => ipcRenderer.invoke('input:key-state', wcId, key, down),
+  insertText: (wcId: number, text: string) => ipcRenderer.invoke('input:insert-text', wcId, text),
   // Accessibility tree via CDP
   getAxTree: (wcId: number) =>
     ipcRenderer.invoke('cdp:axtree', wcId),
@@ -196,6 +206,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cdp:node-coords', wcId, backendNodeIds),
   verifyClick: (wcId: number, backendNodeId: number) =>
     ipcRenderer.invoke('cdp:verify-click', wcId, backendNodeId),
+  selectOption: (wcId: number, backendNodeId: number, option: string) =>
+    ipcRenderer.invoke('cdp:select-option', wcId, backendNodeId, option),
   fillNode: (wcId: number, backendNodeId: number, value: string) =>
     ipcRenderer.invoke('cdp:fill-node', wcId, backendNodeId, value),
   downloadUrl: (url: string, filename?: string) =>
@@ -333,6 +345,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('safe-browsing-block', listener);
     return () => ipcRenderer.removeListener('safe-browsing-block', listener);
+  },
+  // alert/confirm das páginas (src/main/js-dialogs.ts): caixa do Bah e política do agente
+  jsDialogRespond: (id: number, accept: boolean, text?: string) => ipcRenderer.invoke('jsdialog:respond', id, accept, text),
+  jsDialogAgentTabs: (ids: number[]) => ipcRenderer.invoke('jsdialog:agent-tabs', ids),
+  onJsDialog: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => {
+    const o = (_e: any, d: any) => cb({ type: 'open', data: d }); const c = (_e: any, d: any) => cb({ type: 'closed', data: d }); const l = (_e: any, d: any) => cb({ type: 'left', data: d });
+    ipcRenderer.on('jsdialog:open', o); ipcRenderer.on('jsdialog:closed', c); ipcRenderer.on('jsdialog:left', l);
+    return () => { ipcRenderer.removeListener('jsdialog:open', o); ipcRenderer.removeListener('jsdialog:closed', c); ipcRenderer.removeListener('jsdialog:left', l); };
   },
   // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud).
   // frameDataUrl: optional PNG of a frame already captured, so OCR and the model agree.

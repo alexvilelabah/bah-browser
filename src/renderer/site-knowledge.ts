@@ -691,7 +691,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     // preço de produto. E "essa página"/"this"/"aberto" → o preço já está NA TELA; buscar
     // de novo no Shopping é o oposto do pedido — cede pro agente, que lê o preço exibido.
     const isDocOrOpenRef = /\b(pdf|documento|anexad\w*|attach\w*|adjunt\w*)\b/.test(n) || REFERS_TO_OPEN_ITEM.test(n);
-    if (isPrice && !isQuote && !isDocOrOpenRef) {
+    // Viagem (hotel/hospedagem/voo) não é produto do Shopping: o agente faz a busca no site de reserva.
+    const isTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|inn|ski trip|flights?|airfare|rental cars?|car rentals?|hot[eé]is|hospedage\w*|pousadas?|voos?|passage\w*|hoteles|vuelos|alojamiento)\b/.test(n);
+    if (isPrice && !isQuote && !isDocOrOpenRef && !isTravel) {
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +
