@@ -48,7 +48,7 @@ export type AgentAction =
   | { type: 'press'; key: string }
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
-  | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'wait'; ms?: number; selector?: string; timeout?: number; text?: string; gone?: string; url?: string; load?: 'load' | 'networkidle' }
   | { type: 'dialog'; accept: boolean; text?: string }
   | { type: 'done'; reason: string; success: boolean };
 
@@ -397,13 +397,20 @@ export class PageAgent {
           direction: ['up', 'down', 'top', 'bottom'].includes(action.direction) ? action.direction : 'down',
           amount: toOptionalNumber(action.amount),
         };
-      case 'wait':
+      case 'wait': {
+        const str = (v: any) => (v == null || v === '' ? undefined : String(v).trim().slice(0, 200) || undefined);
+        const load = str(action.load ?? action.state);
         return {
           type: 'wait',
           ms: toOptionalNumber(action.ms),
           selector: action.selector ? String(action.selector) : undefined,
           timeout: toOptionalNumber(action.timeout),
+          ...(str(action.text) ? { text: str(action.text) } : {}),
+          ...(str(action.gone ?? action.text_gone) ? { gone: str(action.gone ?? action.text_gone) } : {}),
+          ...(str(action.url) ? { url: str(action.url) } : {}),
+          ...(load ? { load: /idle/i.test(load) ? 'networkidle' : 'load' } : {}),
         };
+      }
       case 'dialog': {
         const acc = action.accept ?? action.value ?? (typeof action.answer === 'string' ? !/^(dismiss|cancel|no|false)$/i.test(action.answer) : true);
         const text = action.text ?? action.prompt_text ?? action.promptText;
@@ -500,7 +507,7 @@ export function validateAction(a: AgentAction): string | null {
     case 'history_search': return nonEmpty(a.query) ? null : 'history_search needs a non-empty "query"';
     case 'close_tab': return finiteInt(a.tab) ? null : 'close_tab needs a finite non-negative integer "tab"';
     case 'wait':
-      if (a.ms == null && !a.selector) return 'wait needs "ms" or "selector"';
+      if (a.ms == null && !a.selector && !(a as any).text && !(a as any).gone && !(a as any).url && !(a as any).load) return 'wait needs "ms", "text", "gone", "url", "load" or "selector"';
       if (a.ms != null && !(Number.isFinite(a.ms) && a.ms >= 0)) return 'wait "ms" must be a non-negative number';
       return null;
     case 'plan': return Array.isArray(a.steps) && a.steps.length > 0 ? null : 'plan needs a non-empty "steps" array';

@@ -2312,6 +2312,32 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     }
   });
 
+  // wait { load: 'networkidle' }: nenhuma requisição em andamento por `idleMs`. Network do CDP só durante a
+  // espera (o webRequest da sessão é do adblock — um segundo ouvinte o substituiria).
+  ipcMain.handle('cdp:wait-network-idle', async (_e, wcId: number, idleMs: number, timeoutMs: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'webContents not found' };
+    await sharedEnsureDebugger(wc, wcId);
+    const inflight = new Set<string>();
+    let last = Date.now();
+    const on = (_ev: any, method: string, p: any) => {
+      if (method === 'Network.requestWillBeSent') { inflight.add(p.requestId); last = Date.now(); }
+      else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') { if (inflight.delete(p.requestId)) last = Date.now(); }
+    };
+    wc.debugger.on('message', on);
+    try {
+      await wc.debugger.sendCommand('Network.enable', {});
+      const t0 = Date.now(), quiet = Math.max(200, idleMs || 500), cap = Math.min(Math.max(1000, timeoutMs || 15000), 60_000);
+      while (Date.now() - t0 < cap) {
+        if (wc.isDestroyed()) return { ok: false, error: 'tab closed' };
+        if (inflight.size === 0 && Date.now() - last >= quiet && !wc.isLoading()) return { ok: true, waitedMs: Date.now() - t0 };
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return { ok: false, error: `network still busy after ${Math.round(cap / 1000)}s (${inflight.size} request(s) in flight)` };
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+    finally { wc.debugger.off('message', on); await wc.debugger.sendCommand('Network.disable', {}).catch(() => {}); }
+  });
+
   // Stop must interrupt a long in-flight type (text is sent char-by-char in the main
   // process). Without this, clicking Stop kept typing the whole string into the page.
   let typingAbort = false;

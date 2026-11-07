@@ -222,6 +222,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cdp:select-option', wcId, backendNodeId, option),
   fillNode: (wcId: number, backendNodeId: number, value: string) =>
     ipcRenderer.invoke('cdp:fill-node', wcId, backendNodeId, value),
+  waitNetworkIdle: (wcId: number, idleMs: number, timeoutMs: number) => ipcRenderer.invoke('cdp:wait-network-idle', wcId, idleMs, timeoutMs),
   downloadUrl: (url: string, filename?: string) =>
     ipcRenderer.invoke('download:url', url, filename),
   searchImages: (query: string, minWidth?: number, count?: number) =>
