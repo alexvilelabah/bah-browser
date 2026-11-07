@@ -1177,10 +1177,10 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
-    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
+    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
