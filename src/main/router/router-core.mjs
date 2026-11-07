@@ -4,7 +4,7 @@
 // Velocidade: o prompt fixo (rotas + exemplos) fica avaliado no contexto; a cada consulta o
 // histórico volta pro só-system e o node-llama-cpp reaproveita esses tokens (prefixo comum) →
 // só a mensagem nova é processada. A saída é presa por gramática (JSON schema) a UMA rota.
-import { buildSystemPrompt, buildUserMessage, parseRoute, refineRoute, ROUTE_JSON_SCHEMA } from '../../shared/router-routes.ts';
+import { buildSystemPrompt, buildUserMessage, isIntegratedGpu, parseRoute, refineRoute, ROUTE_JSON_SCHEMA } from '../../shared/router-routes.ts';
 import { buildExpandSystemPrompt, buildExpandUserMessage, parseExpansion, EXPAND_JSON_SCHEMA, EXPAND_MAX_TOKENS } from '../../shared/request-expansion.ts';
 
 /**
@@ -17,8 +17,15 @@ export async function loadRouter(modelPath, opts = {}) {
   // Import tardio: o engine.mjs ajusta o child_process.fork antes do node-llama-cpp carregar.
   const { getLlama, LlamaChatSession } = await import('node-llama-cpp');
   // build:'never' → só binários pré-compilados (o app não tem cmake/compilador). gpu 'auto':
-  // Metal no Mac Apple Silicon, Vulkan/CUDA no Windows/Linux quando há, senão CPU.
-  const llama = await getLlama({ build: 'never', gpu: opts.gpu ?? 'auto', logLevel: 'error', progressLogs: false });
+  // Metal no Mac Apple Silicon, Vulkan/CUDA no Windows/Linux quando há, senão CPU. GPU integrada
+  // (ex.: Intel Iris Xe) também vai pra CPU: ver isIntegratedGpu.
+  const gpu = opts.gpu ?? 'auto';
+  const openLlama = (g) => getLlama({ build: 'never', gpu: g, logLevel: 'error', progressLogs: false });
+  let llama = await openLlama(gpu);
+  if (gpu === 'auto' && isIntegratedGpu(llama.gpu, await llama.getVramState())) {
+    await llama.dispose();
+    llama = await openLlama(false);
+  }
   const model = await llama.loadModel({ modelPath });
   const context = await model.createContext({ contextSize: 2048, sequences: 1 });
   const session = new LlamaChatSession({ contextSequence: context.getSequence(), systemPrompt: buildSystemPrompt() });

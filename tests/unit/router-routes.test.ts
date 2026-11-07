@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
 import {
-  ROUTES, ROUTE_NAMES, ROUTE_JSON_SCHEMA, buildSystemPrompt, buildUserMessage, parseRoute, refineRoute, routeToIntent,
+  ROUTES, ROUTE_NAMES, ROUTE_JSON_SCHEMA, buildSystemPrompt, buildUserMessage, isIntegratedGpu, parseRoute, refineRoute, routeToIntent,
 } from '../../src/shared/router-routes.ts';
 import { lastRunSummary } from '../../src/renderer/last-run.ts';
 
@@ -92,4 +92,13 @@ test('last run summary: last task request and how it ended, one line each', () =
   ]);
   assert.deepEqual(s, { request: 'open 2 windows with videos', outcome: 'ended with: stopped: the second window did not open' });
   assert.deepEqual(lastRunSummary([{ kind: 'task', text: 'x' }]), { request: 'x', outcome: 'unknown' });
+});
+
+test('isIntegratedGpu: só Vulkan com memória toda compartilhada vai pra CPU', () => {
+  const GB = 1024 ** 3;
+  assert.equal(isIntegratedGpu('vulkan', { total: 12 * GB, unifiedSize: 12 * GB }), true);   // Intel Iris Xe
+  assert.equal(isIntegratedGpu('vulkan', { total: 16 * GB, unifiedSize: 0 }), false);        // placa dedicada
+  assert.equal(isIntegratedGpu('metal', { total: 16 * GB, unifiedSize: 16 * GB }), false);   // Apple Silicon
+  assert.equal(isIntegratedGpu('cuda', { total: 16 * GB, unifiedSize: 0 }), false);
+  assert.equal(isIntegratedGpu(false, { total: 0, unifiedSize: 0 }), false);
 });

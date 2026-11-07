@@ -595,7 +595,7 @@ coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de 
   (`src/main/router/model-download.ts`).
 - **Motor:** `src/main/router/engine.mjs` (bundle esbuild, `node-llama-cpp` externo) num
   `utilityProcess`, que sobe 3 s depois que a janela aparece, só se o arquivo existir. `gpu: 'auto'`
-  (Metal / Vulkan / CPU); se não carregar, tenta uma vez só CPU, e então `router:status` = `error` e as
+  (Metal / Vulkan / CPU; GPU integrada no Vulkan fica na CPU); se não carregar, tenta uma vez só CPU, e então `router:status` = `error` e as
   regras de palavras decidem. Se cair, morre só esse processo. No Windows/Linux o node-llama-cpp testa o
   binário nativo num processo filho; de dentro de um utilityProcess esse fork abriria outro Bah (fuse
   `RunAsNode` desligado), então o motor repassa o fork pro `router-manager.ts`, que abre o arquivo de

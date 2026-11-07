@@ -596,7 +596,7 @@ reaches the big model — in cloud *and* local mode — and the word rules above
   `.part` with `Range`, and checks size + sha256 before renaming (`src/main/router/model-download.ts`).
 - **Engine:** `src/main/router/engine.mjs` (esbuild bundle, `node-llama-cpp` external) in a
   `utilityProcess`, started 3 s after the window shows, only if the file is there. `gpu: 'auto'`
-  (Metal / Vulkan / CPU); if it fails to load it retries once on CPU, then `router:status` = `error`
+  (Metal / Vulkan / CPU; integrated GPUs on Vulkan stay on CPU); if it fails to load it retries once on CPU, then `router:status` = `error`
   and the word rules route. A crash only kills that process. node-llama-cpp tests its native binary in a
   child process on Windows/Linux; from a utility process that fork would start another Bah (the
   `RunAsNode` fuse is off), so the engine forwards that fork to `router-manager.ts`, which opens the

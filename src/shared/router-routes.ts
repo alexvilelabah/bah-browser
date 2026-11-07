@@ -150,6 +150,14 @@ export function routeToIntent(route: RouteName | null, hasLastRun: boolean): Rou
 }
 
 // ── Modelo (Hugging Face, oficial da Qwen) ──
+/**
+ * GPU integrada no Vulkan: toda a "VRAM" é a própria RAM (unifiedSize == total), então o roteador fica
+ * na CPU. Metal fica de fora: no Apple Silicon a memória também é unificada, mas ele segue no Metal.
+ */
+export function isIntegratedGpu(backend: string | false, vram: { total: number; unifiedSize: number }): boolean {
+  return backend === 'vulkan' && vram.total > 0 && vram.unifiedSize >= vram.total;
+}
+
 export const ROUTER_MODEL = {
   file: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
   url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
