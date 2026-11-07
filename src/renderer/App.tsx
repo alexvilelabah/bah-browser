@@ -10,13 +10,21 @@ import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/t
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
+import DownloadButtonIcon from './components/DownloadButtonIcon';
+import { commandHasFollowUp, commandWantsSeveralFiles } from './download-steps';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
+import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
+import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
+import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
+import { machineProfile, machineLine, checkBuild, isDownloadControl, installerFileOf, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
 import PasswordSavePrompt from './components/PasswordSavePrompt';
+import { JsDialogHost } from './components/JsDialogHost';
+import { agentDialogsStart, agentDialogsStop, agentDialogsTab, armDialog, drainDialogLog } from './js-dialogs';
 import PasswordSuggest from './components/PasswordSuggest';
 import PasswordsPanel from './components/PasswordsPanel';
 import type { PasswordsBridge, PwOffer, PwSuggest } from '../shared/password-types';
@@ -171,6 +179,8 @@ declare global {
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
       torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
+      torrentSetBuiltin?: (on: boolean) => Promise<{ ok: boolean; builtin: boolean }>;
+      torrentOpen?: (uri: string) => Promise<{ ok: boolean }>;
       setYoutubeSkipAds?: (on: boolean) => Promise<{ ok: boolean; enabled: boolean }>;
       setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
       cancelVideoDownload?: (id: string) => Promise<any>;
@@ -180,13 +190,19 @@ declare global {
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
+      frameClick?: (wcId: number, key: string, id: number) => Promise<any>;
+      frameFill?: (wcId: number, key: string, id: number, value: string) => Promise<{ ok: boolean; value?: string; error?: string }>;
+      getFramesAx?: (wcId: number) => Promise<{ ok: boolean; frames: Array<{ key: string; label: string; nodes: any[] }> }>;
+      getFramesCoords?: (wcId: number, key: string, ids: number[]) => Promise<{ ok: boolean; coords: Record<number, { x: number; y: number; w: number; h: number } | null> }>;
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
+      pointer?: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => Promise<{ success: boolean; error?: string }>;
+      selectOption?: (wcId: number, backendNodeId: number, option: string) => Promise<{ ok: boolean; selected?: string; options?: string[]; error?: string }>;
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
-      downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
+      downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { id?: string; path: string; bytes?: number; totalBytes?: number; contentType?: string; background?: boolean }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number }) => void) => void;
       getDownloadEngine?: () => Promise<DlEngineSettings>;
       setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
       setDownloadDir?: (dir: string | null) => Promise<string>;
@@ -196,6 +212,7 @@ declare global {
       cancelDownload?: (id: string) => Promise<any>;
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
+      machineInfo?: () => Promise<MachineInput>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
@@ -242,6 +259,9 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
+      jsDialogRespond?: (id: number, accept: boolean, text?: string) => Promise<any>;
+      jsDialogAgentTabs?: (ids: number[]) => Promise<any>;
+      onJsDialog?: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => () => void;
       takeOcr?: (wcId: number, domText: string, force?: boolean, frameDataUrl?: string) => Promise<{
         ocrText: string; ocrUsed: boolean; skipped: boolean;
         confidence?: number; screenshotPath?: string; durationMs?: number; error?: string;
@@ -362,7 +382,20 @@ export default function App() {
   useEffect(() => { setPwSuggest(cur => (cur && cur.tabId !== store.activeTabId ? null : cur)); }, [store.activeTabId]);
   // Site-initiated downloads (will-download no main) — drenados pelo loop do agente
   // para a IA saber que o clique em "baixar" realmente produziu um arquivo.
-  const downloadEventsRef = useRef<Array<{ state: string; filename: string; path?: string; bytes?: number; reason?: string }>>([]);
+  // Eventos de download que vão pra história do agente. O painel recebe todos; aqui só entram
+  // os que importam pro agente: início/fim e os ticks com `notify` (cadência pelo ETA, ver
+  // download-progress.ts) — senão o progresso de 1s viraria spam na história.
+  // Downloads que começaram DURANTE uma tarefa do agente (link clicado ou ação download) e o
+  // último estado de cada um. Servem pra (a) não deixar o agente dizer "baixou" com o arquivo
+  // ainda baixando e (b) entregar o FIM na próxima tarefa, com o caminho, se acabar depois.
+  const agentDlIdsRef = useRef<Set<string>>(new Set());
+  const agentCancelledRef = useRef<Set<string>>(new Set());   // cancelados pelo próprio agente (cancel_download)
+  // Fim da última tarefa: um download que começa logo depois (página "thank you" que dispara o
+  // arquivo uns segundos após carregar) ainda é do agente — o fim dele vai pra próxima tarefa.
+  const taskEndedAtRef = useRef(0);
+  const DL_GRACE_MS = 30_000;
+  const dlLatestRef = useRef<Map<string, { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; etaSec?: number | null }>>(new Map());
+  const downloadEventsRef = useRef<Array<{ id?: string; kind?: string; state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; reason?: string; stalled?: boolean; stalledForSec?: number }>>([]);
 
   // ── Supercut: abas "armadas" em pausa ───────────────────────────────────────
   // open_video_cuts abre abas do YouTube já na minutagem certa, mas o YouTube dá
@@ -589,6 +622,7 @@ export default function App() {
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
+    try { window.electronAPI?.torrentSetBuiltin?.(localStorage.getItem('torrentBuiltin') === '1'); } catch {}   // cliente embutido: padrão desligado
     try { window.electronAPI?.setYoutubeSkipAds?.(localStorage.getItem('ytSkipAds') !== '0'); } catch {}   // aplica a pref de pular anúncio salva
     try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}   // botão "Baixar" no YouTube
     // Gerenciador de downloads: preferências salvas + a pasta escolhida (vazia = Downloads).
@@ -598,7 +632,13 @@ export default function App() {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
     offs.push(window.electronAPI?.onDownloadEvent?.((info) => {
-      downloadEventsRef.current.push(info);
+      const dlKey = info.id || info.path || info.filename;
+      // startedAt = quando o download apareceu pela 1ª vez → a qual tarefa ele pertence.
+      dlLatestRef.current.set(dlKey, { ...info, at: Date.now(), startedAt: (dlLatestRef.current.get(dlKey) as any)?.startedAt ?? Date.now() } as any);
+      const agentWindow = taskRunningRef.current || Date.now() - taskEndedAtRef.current < DL_GRACE_MS;
+      if (agentWindow && (info.state === 'started' || info.state === 'queued' || info.kind === 'agent' || info.kind === 'video')) agentDlIdsRef.current.add(dlKey);
+      if (info.state !== 'progress' || info.notify) downloadEventsRef.current.push(info);
+      if (info.state === 'duplicate') return;   // só pro agente; o painel já tem a linha do original
       setDownloads(prev => {
         const key = info.id || info.path || info.filename;
         const existing = prev.find(d => (d.id || d.path || d.filename) === key);
@@ -620,7 +660,8 @@ export default function App() {
           state: info.state,
           paused: done ? false : (info.paused ?? existing?.paused),
           speedBps: done ? 0 : (info.speedBps ?? existing?.speedBps),
-          etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec),
+          etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec ?? undefined),
+          stalled: done ? false : (info.stalled ?? existing?.stalled),
         };
         return [merged, ...rest].slice(0, 50);
       });
@@ -658,6 +699,11 @@ export default function App() {
   const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
   const toggleTorrentSeed = useCallback(() => {
     setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
+  }, []);
+  // Cliente de torrent embutido — padrão DESLIGADO (.torrent baixa como arquivo; magnet vai pro app do sistema).
+  const [torrentBuiltin, setTorrentBuiltin] = useState<boolean>(() => { try { return localStorage.getItem('torrentBuiltin') === '1'; } catch { return false; } });
+  const toggleTorrentBuiltin = useCallback(() => {
+    setTorrentBuiltin(v => { const n = !v; try { localStorage.setItem('torrentBuiltin', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetBuiltin?.(n); return n; });
   }, []);
   // Pular anúncio do YouTube sozinho, fantasma — clica em "Pular" assim que aparece, sem
   // highlight nem aviso nosso na tela. Padrão LIGADO (mesmo espírito do adblock).
@@ -885,7 +931,10 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean }>>([]);
+  // Espelho do painel pro loop do agente (o state fica velho dentro do loop async): list_downloads.
+  const downloadsRef = useRef(downloads);
+  downloadsRef.current = downloads;
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   // Gerenciador de downloads (Downloads → ⚙): várias conexões, igual ao IDM Caseiro.
   const [dlSettingsOpen, setDlSettingsOpen] = useState(false);
@@ -1104,16 +1153,10 @@ export default function App() {
 
 
   const navigate = useCallback((url: string) => {
-    // Magnet colado na barra → card "Salvar ou Tocar" (não navega). O will-navigate do main
-    // não cobre loadURL programático, então detectamos aqui e disparamos o mesmo fluxo.
+    // Magnet colado na barra (não navega). O will-navigate do main não cobre loadURL
+    // programático, então mandamos pro mesmo handleUri: card (cliente embutido) ou app do sistema.
     if (/^magnet:/i.test(url.trim())) {
-      const uri = url.trim();
-      setTorrent({ uri, phase: 'fetching', saving: {}, saved: {} });
-      window.electronAPI?.torrentAdd?.(uri).then((r) => {
-        setTorrent(cur => (cur && cur.uri === uri)
-          ? (r?.ok ? { ...cur, id: r.id, name: r.name, files: r.files, phase: 'choosing' } : { ...cur, phase: 'error', error: r?.error })
-          : cur);
-      });
+      window.electronAPI?.torrentOpen?.(url.trim());
       return;
     }
     let finalUrl = url;
@@ -1369,7 +1412,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
    *  NativeImage is what stops OCR and the model from describing different frames.
    *  The model image is downscaled JPEG (never upscaled); OCR keeps the full-res PNG,
    *  because vision encoders blur small type that Tesseract reads exactly. */
-  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean }): Promise<{
+  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean; crop?: { x: number; y: number; w: number; h: number } | null }): Promise<{
     thumb?: string;
     image?: VisionImage;
     png?: string;
@@ -1396,6 +1439,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           // CSS pixels, so click_at needs no scaling at all. Never upscaled.
           // Agent vision frames go up to VISION_AGENT_MAX_SIDE; other paths keep 1280.
           const cap = o.agentVision ? VISION_AGENT_MAX_SIDE : VISION_MAX_SIDE;
+          // look_at: recorta a área pedida nos pixels NATIVOS do frame (Retina = 2x) — nítido,
+          // em vez da página inteira encolhida. Nunca amplia além do nativo.
+          if (o.crop) {
+            const k = size.width / cssW;
+            const cx = Math.max(0, Math.min(cssW - 1, o.crop.x)), cy = Math.max(0, Math.min(cssH - 1, o.crop.y));
+            const cw = Math.max(1, Math.min(cssW - cx, o.crop.w)), ch = Math.max(1, Math.min(cssH - cy, o.crop.h));
+            const piece = img.crop({ x: Math.round(cx * k), y: Math.round(cy * k), width: Math.round(cw * k), height: Math.round(ch * k) });
+            const ps = piece.getSize();
+            const pscale = Math.min(1, cap / Math.max(ps.width, ps.height));
+            const pDataUrl = piece.resize({ width: Math.max(1, Math.round(ps.width * pscale)), height: Math.max(1, Math.round(ps.height * pscale)), quality: 'best' }).toDataURL();
+            const pb64 = pDataUrl.slice(pDataUrl.indexOf(',') + 1);
+            const pReal = encodedImageSize(base64Head(pb64));
+            out.image = {
+              dataUrl: pDataUrl,
+              width: pReal?.width ?? Math.round(ps.width * pscale), height: pReal?.height ?? Math.round(ps.height * pscale),
+              cssWidth: cw, cssHeight: ch, bytes: Math.floor(pb64.length * 3 / 4),
+            };
+            return out;
+          }
           const scale = Math.min(1, cap / Math.max(cssW, cssH));
           const w = Math.max(1, Math.round(cssW * scale));
           const h = Math.max(1, Math.round(cssH * scale));
@@ -1604,7 +1666,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onClick={() => { setDownloadsOpen(o => !o); setDlSettingsOpen(false); }}
             title={t('downloads.open')}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            {/* Seta normal; com download ativo, o anel de progresso do Chrome em volta dela. */}
+            <DownloadButtonIcon downloads={downloads} />
           </button>
           {downloadsOpen && (
             <>
@@ -1666,6 +1729,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const active = d.state === 'started' || d.state === 'progress' || d.state === 'queued';
                       const label = d.state === 'queued' ? t('dl.queued')
                         : d.paused ? t('dl.paused')
+                        : d.stalled && (d.state === 'started' || d.state === 'progress') ? t('dl.stalled')
                         : (d.state === 'started' || d.state === 'progress') ? t('dl.downloading')
                         : d.state === 'completed' ? t('dl.done')
                         : d.state === 'blocked' ? t('dl.blocked')
@@ -1696,7 +1760,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
                                   e tentar de novo vão pro job de vídeo, não pro download comum. */}
-                              {d.id && active && d.kind !== 'video' && (
+                              {d.id && active && d.kind !== 'video' && d.kind !== 'agent' && (
                                 (d.paused || d.state === 'queued')
                                   ? <button title={t('dl.resume')} onClick={() => window.electronAPI?.resumeDownload?.(d.id!)}>▶</button>
                                   : <button title={t('dl.pause')} onClick={() => window.electronAPI?.pauseDownload?.(d.id!)}>⏸</button>
@@ -1771,6 +1835,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">💤</span>
                   <span className="menu-label">{t('menu.memSaver')}</span>
                   <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => toggleTorrentBuiltin()} title={t('menu.torrentBuiltinTitle')}>
+                  <span className="menu-ic">🧲</span>
+                  <span className="menu-label">{t('menu.torrentBuiltin')}</span>
+                  <span className={`menu-switch ${torrentBuiltin ? 'on' : ''}`}>{torrentBuiltin ? 'ON' : 'OFF'}</span>
                 </button>
                 <button className="menu-item" onClick={() => toggleTorrentSeed()} title={t('menu.torrentSeedTitle')}>
                   <span className="menu-ic">🌱</span>
@@ -1926,6 +1995,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {/* Aba anônima que ainda não abriu nada: a explicação (desenhada aqui, sem internet). */}
           {activeIncognito && isIncognitoBlank(store.activeTab.url) && <IncognitoPage />}
           <PermissionPrompt ask={permAsks.find(a => a.tabId === store.activeTabId)} onAnswer={answerPerm} />
+          <JsDialogHost />
           <PasswordSavePrompt offer={pwOffers.find(o => o.tabId === store.activeTabId)} onAnswer={answerPwOffer} onReveal={revealPwOffer} />
           {pwSuggest && pwSuggest.tabId === store.activeTabId && (
             <PasswordSuggest
@@ -2059,12 +2129,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               privateTaskRef.current = !!tabsRef.current.find(t => t.id === taskTabId)?.incognito;
               if (privateTaskRef.current) window.electronAPI?.setPrivateAi?.(true);
               const runLog = startAgentRun(command);
+              agentDialogsStart();   // alert/confirm das abas do agente seguem a política dele (js-dialogs.ts)
               taskRunningRef.current = true;   // a partir daqui, trocas MANUAIS de aba não mexem na aba do agente
               interjectRef.current = { running: true, queue: [], abortStep: null };
               // Suspende o bypass do adblock enquanto o agente trabalha: senão ele lê os
               // anúncios do YouTube/Google como se fossem conteúdo e age no anúncio errado.
               try { await window.electronAPI?.adblockSetAgentBusy?.(true); } catch {}
-              downloadEventsRef.current = [];  // downloads velhos (manuais/da tarefa anterior) não entram na história DESTA
+              // Downloads velhos (manuais/da tarefa anterior) não entram na história DESTA — exceto o
+              // FIM de um download do agente em background que terminou depois da tarefa anterior:
+              // a IA precisa saber que ele acabou e ONDE o arquivo está.
+              downloadEventsRef.current = downloadEventsRef.current.filter(d =>
+                agentDlIdsRef.current.has(d.id || d.path || d.filename) && (d.state === 'completed' || d.state === 'failed'));
+              for (const d of downloadEventsRef.current) agentDlIdsRef.current.delete(d.id || d.path || d.filename);
               try {
               if (isTrashDestroyerCommand(command)) {
                 const wv = getActiveWebview();
@@ -2192,6 +2268,31 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // observation; if the element vanished, the whole batch is discarded.
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
+              // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
+              let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
+              // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
+              const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
+              // O download é o ÚLTIMO passo do pedido? Sim → a tarefa acaba quando ele começa. Não ("baixe e
+              // instale", "baixe os dois e compare") → o Bah espera TODOS os downloads da tarefa terminarem
+              // antes do próximo passo, senão o modelo acha que o arquivo já está lá.
+              const downloadIsLastStep = commandWantsDownload && !commandWantsSeveralFiles(command) && !commandHasFollowUp(command);
+              // Pedido de download: não deixa encerrar "com sucesso" antes de QUALQUER download
+              // começar (o modelo lê a página "Thank you for downloading" como arquivo baixado).
+              let noDownloadYetBlocks = 0;
+              const commandIsShopping = /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
+              const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
+              const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
+              const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
+              // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
+              let carefulNavs = 0, carefulRefusals = 0;
+              // Download que começou NESTA tarefa (não um que terminou depois, vindo da anterior).
+              const ofThisTask = (d: any) => !!d && (d.startedAt ?? 0) >= taskStartedAt;
+              let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
+              let unfinishedBlocks = 0;    // encerrou dizendo que "vai continuar"
+              let planNudged = false;      // tarefa em vários sites sem plano
+              let lastEvalText = '';       // avaliação/pensamento do passo anterior (checagem de "popup")
+              let popupComplaints = 0, popupComplaintsUrl = '';
+              const commandMultiSite = /\b(\d+|several|multiple|many|various|vários|varios|diversos)\s+(sites|stores|shops|websites|sellers|retailers|insurers|portals|lojas|sites)\b|\b(compare|comparar)\b.*\b(sites|stores|shops|lojas)\b/i.test(command);
               let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
               let lastActionSummary = '';  // what the previous step did
               let lastActionOutcome = '';  // what the page looked like after it
@@ -2503,6 +2604,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   usedInitialShortcut = true;
                 }
 
+                let stepDlButtons: Array<{ id: number; text?: string; aria?: string }> = [];   // os LIKELY DOWNLOAD BUTTON deste passo
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
@@ -2581,7 +2683,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
-                    const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    let manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    // Download atrás de conta (SolidWorks, Altium, Adobe, Office): para JÁ e a pessoa decide.
+                    // A política geral só pausa tarefa "da conta"; "baixe o X" não parece uma — o agente
+                    // seguia e tentava o formulário. Nunca digita senha nem cria conta. Não no 1º passo:
+                    // a aba em que a pessoa estava pode ser qualquer login.
+                    if (!manualHelpNeed && commandWantsDownload && step > 0) {
+                      const wall = signInWall({ url: observation.url, title: observation.title, text: observation.text_sample, elements: observation.interactive_elements as any });
+                      if (wall) {
+                        const host = paceHostOf(observation.url) || 'this site';
+                        manualHelpNeed = { kind: 'login', reason: t('dl.signinWall.reason', { host }), instruction: t('dl.signinWall.instruction') };
+                        history += `\nSIGN-IN WALL (${wall}) on ${host}: the download needs the user's account. Bah paused and asked the user. Never type a password, never create an account.`;
+                      }
+                    }
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow
@@ -2645,8 +2759,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     imagesSent,
                     command,
                     provider: shotProvider,
+                    zoomRequested: !!pendingZoom,
                   });
                   lastVisionReason = visionDec.reason;
+                  const zoomNow = visionDec.attach ? pendingZoom : null;
+                  pendingZoom = null;
                   prevStepUrl = observation.url;
                   const ocrWillRun = !observationWasCarried && !commandLooksLikeGoogleLogin
                     && (commandLooksLikeImageTextRead || (observation.text_sample || '').length < 200);
@@ -2655,10 +2772,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
                   // Carried observation = same page, so reuse its frame instead of recapturing.
-                  const reuseFrame = observationWasCarried && !!carriedShot;
+                  const reuseFrame = observationWasCarried && !!carriedShot && !zoomNow;
                   const frameP = reuseFrame
                     ? Promise.resolve({ thumb: carriedThumb, image: visionDec.attach ? carriedShot : undefined, png: (ocrWillRun && visionDec.attach) ? carriedPng : undefined })
-                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
+                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach && !zoomNow, agentVision: true, crop: zoomNow }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -2731,6 +2848,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (e.checked !== undefined) attrs.push(`checked="${e.checked}"`);
                       if (e.placeholder) attrs.push(`placeholder="${e.placeholder.slice(0, 40)}"`);
                       if (e.href) attrs.push(`href="${e.href.slice(0, 60)}"`);
+                      if (e.frame) attrs.push(`frame="${e.frame}"`);
                       const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
                       const text = (e.text || '').slice(0, 80).replace(/\s+/g, ' ').trim();
                       const key = elementKey(e);
@@ -2754,8 +2872,177 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const memoryBlock = memory.length
                     ? `MEMORY:\n${memory.map(m => `  • ${m.key} = ${JSON.stringify(m.value)}${m.source ? ` (from ${m.source})` : ''}`).join('\n')}`
                     : 'MEMORY: (empty — use store action to save extracted data)';
+                  // Estado AO VIVO dos downloads desta tarefa, no topo do prompt. Na história as linhas
+                  // ficavam no fim (depois de elementos/texto/OCR, e cortadas primeiro no contexto
+                  // local) — o modelo achava que nada andava.
+                  const taskDls = [...agentDlIdsRef.current].map(k => dlLatestRef.current.get(k)).filter((d): d is NonNullable<typeof d> => !!d);
+                  const downloadsBlock = taskDls.length
+                    ? `DOWNLOADS (live status — the file downloads in the background; the page does not need to change):\n${taskDls.map(d => {
+                        const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
+                        if (d.state === 'completed') return `  • ${d.filename} — COMPLETED (${fmtSize(d.bytes)}), saved at ${d.path || 'the Downloads folder'}${ofThisTask(d) ? '' : ' (from a PREVIOUS task — not this request)'}${wrongOsNote(d.filename)}`;
+                        if (d.state === 'failed' || d.state === 'cancelled') return `  • ${d.filename} — ${d.state.toUpperCase()}`;
+                        if ((d as any).stalled) return `  • ${d.filename} — STALLED at ${of} (no data for ${(d as any).stalledForSec || 15}s)`;
+                        const pct = d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : '';
+                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is downloading (the user follows it on the download button). Do not wait for it' : 'Bah waits for it to finish before your next step'}; do not look for another source.`;
+                      }).join('\n')}`
+                    : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
+                  // Download task: aponta o(s) botão(ões) de baixar DESTA página. O modelo pequeno lia
+                  // "Agree to the EULA and Download" como página de confirmação e desistia.
+                  // Fabricante escreve "Install Steam", "Get the app", "Try free"… (ver isDownloadControl);
+                  // link direto pra instalador vem primeiro, e o do SO/CPU errado fica de fora.
+                  // A lista da árvore de acessibilidade NÃO tem href: o destino de cada candidato vem do DOM
+                  // e casa com o [id] por texto + posição (Steam: o "Install Steam" do menu vai pra uma página,
+                  // o grande vai pro .dmg — sem o href o modelo clicava no do menu em loop).
+                  const domCtls: PageControl[] = commandWantsDownload ? await withTimeout(wv.executeJavaScript(`(function(){
+                    var re = /download|install|get|try|free|trial|baixar|descargar|instalar|agree|accept/i;
+                    return Array.prototype.slice.call(document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit]')).map(function(b){
+                      var r = b.getBoundingClientRect(); var t = (b.innerText || b.value || b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+                      return r.width > 4 && r.height > 4 && t.length <= 60 && re.test(t) ? { text: t, href: b.href || '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null;
+                    }).filter(Boolean).slice(0, 60);
+                  })()`), 2000, [] as PageControl[]).catch(() => [] as PageControl[]) : [];
+                  const hrefOf = (e: { id: number; href?: string }) => e.href || (domCtls.find(c => c.href && matchControl(observation.interactive_elements, c)?.id === e.id)?.href) || '';
+                  const dlButtons = commandWantsDownload
+                    ? observation.interactive_elements
+                      .filter(e => isDownloadControl(String(e.text || (e as any).aria || ''), hrefOf(e)))
+                      .filter(e => { const f = installerFileOf(hrefOf(e)); return !f || !isWrongBuild(f); })
+                      .sort((a, b) => Number(!!installerFileOf(hrefOf(b))) - Number(!!installerFileOf(hrefOf(a))))
+                      .slice(0, 3)
+                    : [];
+                  stepDlButtons = dlButtons;
+                  const dlButtonsBlock = dlButtons.length
+                    ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for this computer)` : ''}`; }).join('\n')}`
+                    : '';
+                  // Dica ao vivo de UI que trava modelo pequeno (vale pra qualquer site):
+                  //  • diálogo modal aberto → a página de trás fica inerte e SOME da lista de elementos
+                  //    (Booking: popup "sign in" e o agente digitava "Los Angeles" no e-mail do popup);
+                  //  • sugestões de autocomplete visíveis → tem que escolher uma antes de buscar.
+                  // A mesma passada lê os outros estados da página (calendário, EULA, seletor de SO, caixa de
+                  // busca, abas, cartões, parede de login), pra quem escolhe orientação por tipo de página.
+                  const uiState = await withTimeout(wv.executeJavaScript(`(function(){
+                    var vis = function(e){ var r = e.getBoundingClientRect(); var cs = getComputedStyle(e); return r.width > 20 && r.height > 20 && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity > 0.05; };
+                    var dlg = Array.prototype.slice.call(document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open],[aria-modal=true]')).filter(vis)
+                      .filter(function(d){ var r = d.getBoundingClientRect(); return r.width * r.height > innerWidth * innerHeight * 0.04; })[0];
+                    // Painel flutuante sem role de diálogo (ex.: "Trending" do campo de busca, banner que cobre
+                    // a página): fixo/absoluto, z-index alto, cobrindo ≥20% da tela, e que não é o cabeçalho.
+                    // Mesma passada coleta também os candidatos a modal "caseiro" (div fixa sem ARIA, menor
+                    // que 20% — ex.: o de download da HP) e se há um fundo escuro; quem decide é pickOverlay
+                    // (shared/page-controls.ts), no renderer.
+                    var overlays = [], backdrop = false, legacyHits = [];
+                    if (!dlg) Array.prototype.slice.call(document.querySelectorAll('body *')).forEach(function(e){
+                      var cs = getComputedStyle(e); if (!(cs.position === 'fixed' || cs.position === 'absolute')) return;
+                      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.1) return;
+                      var z = parseInt(cs.zIndex, 10) || 0, r = e.getBoundingClientRect();
+                      // Fundo escuro vazio ANTES da regra antiga: com z alto ele ganhava dela e virava um
+                      // "diálogo" sem título (= nenhum aviso) escondendo o painel de verdade.
+                      if (cs.position === 'fixed' && r.width * r.height >= innerWidth * innerHeight * 0.6 && (e.innerText || '').trim().length < 20 && !e.querySelector('button,a,input')) { backdrop = true; return; }
+                      if (z >= 10 && r.height >= 120 && !(r.top < 0 && r.bottom < 120) && r.width * r.height > innerWidth * innerHeight * 0.20 && !(r.top <= 0 && r.height < 140)) { legacyHits.push(e); return; }
+                      if (r.width < 40 || r.height < 40 || r.bottom <= 0 || r.top >= innerHeight) return;
+                      var area = Math.min(r.width, innerWidth) * Math.min(r.height, innerHeight) / (innerWidth * innerHeight);
+                      if (area >= 0.015 && (cs.position === 'fixed' ? z >= 1 : z >= 100)) overlays.push({ el: e, z: z, area: area, top: r.top, height: r.height });
+                    });
+                    if (!dlg) dlg = legacyHits.sort(function(a, b){ return (parseInt(getComputedStyle(b).zIndex, 10) || 0) - (parseInt(getComputedStyle(a).zIndex, 10) || 0); })[0];
+                    var btnsOf = function(el){ return Array.prototype.slice.call(el.querySelectorAll('button,a[href],[role=button],input[type=button],input[type=submit]')).filter(function(b){ var r = b.getBoundingClientRect(); return r.width > 4 && r.height > 4 && getComputedStyle(b).visibility !== 'hidden'; }).slice(0, 8)
+                      .map(function(b){ var r = b.getBoundingClientRect(); return { text: (b.getAttribute('aria-label') || b.innerText || b.value || b.title || '').replace(/\\s+/g, ' ').trim().slice(0, 60), href: b.href || '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; }).filter(function(b){ return b.text; }); };
+                    var hitC = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+                    overlays = dlg ? [] : overlays.filter(function(o){ return !overlays.some(function(p){ return p !== o && p.el.contains(o.el); }); }).slice(0, 12).map(function(o){
+                      return { z: o.z, area: o.area, top: o.top, height: o.height, viewportH: innerHeight, hitCenter: !!hitC && o.el.contains(hitC), legacy: false, buttons: btnsOf(o.el),
+                        label: (o.el.getAttribute('aria-label') || (o.el.querySelector('h1,h2,h3,h4,[role=heading]') || {}).innerText || o.el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 90) };
+                    });
+                    var label = dlg ? (dlg.getAttribute('aria-label') || (dlg.querySelector('h1,h2,h3,[role=heading]') || {}).innerText || dlg.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 90) : '';
+                    // Cupom/desconto no popup: guarda o trecho (quase todo popup só precisa sair do caminho).
+                    var promo = dlg ? ((dlg.innerText || '').replace(/\\s+/g, ' ').match(/[^.!?]{0,80}(\\d+\\s?% off|promo ?code|coupon|discount code|use code|save \\$\\d+|\\$\\d+ off|cupom|c[oó]digo promocional|descuento)[^.!?]{0,80}/i) || [''])[0].trim() : '';
+                    var closers = dlg ? Array.prototype.slice.call(dlg.querySelectorAll('button,[role=button],a')).filter(vis).map(function(b){ return (b.getAttribute('aria-label') || b.innerText || b.title || '').replace(/\\s+/g, ' ').trim(); })
+                      .filter(function(t){ return /^(close|dismiss|×|x|no thanks|not now|maybe later|skip|cancel|fechar|cerrar|agora não)\\b|dismiss|close/i.test(t); }).slice(0, 3) : [];
+                    var visRow = function(e){ var r = e.getBoundingClientRect(); var cs = getComputedStyle(e); return r.width > 20 && r.height > 8 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+                    var opts = Array.prototype.slice.call(document.querySelectorAll('[role=option],[role=listbox] li,[data-testid*=autocomplete] li')).filter(visRow).map(function(o){ return o.innerText.replace(/\\s+/g, ' ').trim().slice(0, 80); }).filter(Boolean).slice(0, 6);
+                    var ctlText = Array.prototype.slice.call(document.querySelectorAll('button,a,label,[role=button],input[type=checkbox],option,[role=tab]')).filter(visRow)
+                      .map(function(e){ return (e.innerText || e.value || e.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim(); }).join(' | ').slice(0, 20000);
+                    var datepicker = !!Array.prototype.slice.call(document.querySelectorAll('input[type=date],[role=grid],[data-date],[class*=datepicker i],[class*=calendar i],[aria-label*=calendar i]')).filter(visRow)[0];
+                    var eula = /\\b(eula|end[- ]user licen[cs]e|licen[cs]e agreement|agree to the (licen[cs]e|terms)|accept (the )?(licen[cs]e|terms))\\b/i.test(ctlText);
+                    var osSel = /\\bwindows\\b/i.test(ctlText) && /\\b(mac ?os|os x|linux)\\b/i.test(ctlText);
+                    var searchbox = !!Array.prototype.slice.call(document.querySelectorAll('input[type=search],[role=searchbox],[role=combobox],input[type=text],input:not([type])')).filter(visRow).filter(function(i){
+                      var t = ((i.getAttribute('placeholder') || '') + ' ' + (i.getAttribute('aria-label') || '') + ' ' + (i.name || '') + ' ' + (i.type || '')).toLowerCase();
+                      return /search|where|destination|city|going|find|location|keyword|query|looking for|i'm looking|what are you looking|busca|pesquis|buscar|destino|procur/.test(t);
+                    })[0];
+                    // Abas: tablist ARIA de verdade, ou ≥2 controles com nome típico de aba (Overview, Specifications…).
+                    var tabWords = /^(overview|specifications|specs|tech specs|technical specifications|models|accessories|parts|reviews|details|documentation|downloads|features|support|description|q&a|vis[aã]o geral|especifica[cç][oõ]es|acess[oó]rios|avalia[cç][oõ]es|detalhes)$/i;
+                    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role=tablist]')).filter(visRow).some(function(t){ return t.querySelectorAll('[role=tab]').length >= 2; })
+                      || Array.prototype.slice.call(document.querySelectorAll('a,button,[role=tab],li')).filter(visRow).filter(function(e){ return tabWords.test((e.innerText || '').trim()); }).length >= 2;
+                    // Cartões: ≥3 irmãos visíveis do mesmo tipo (tag + classe), cada um com link e um pouco de texto —
+                    // lista de vagas, hotéis, produtos, e-mails… (ver skill card-list).
+                    var cards = Array.prototype.slice.call(document.querySelectorAll('ul,ol,div,section,main')).some(function(p){
+                      if (p.children.length < 3) return false;
+                      var kids = Array.prototype.slice.call(p.children).filter(function(c){ var t = (c.textContent || '').length; return t > 20 && t < 3000 && c.querySelector('a[href],[role=link],button') && visRow(c); });
+                      if (kids.length < 3) return false;
+                      var sig = function(c){ return c.tagName + '.' + String(c.className || '').split(/\\s+/)[0]; };
+                      var n = {}; kids.forEach(function(c){ n[sig(c)] = (n[sig(c)] || 0) + 1; });
+                      return Object.keys(n).some(function(k){ return n[k] >= 3; });
+                    });
+                    // Parede de login: campo de senha à vista, página de login (título/endereço) ou aviso "entre para ver…".
+                    var signin = Array.prototype.slice.call(document.querySelectorAll('input[type=password]')).filter(visRow).length > 0
+                      || /\\b(log ?in|sign ?in|sign ?up)\\b|\\bentrar\\b|iniciar sesi[oó]n/i.test(document.title || '')
+                      || /\\/(login|signin|sign-in|log-in|uas\\/login|auth|account\\/login)\\b/i.test(location.pathname)
+                      || /\\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\\b/i.test((document.body.innerText || '').slice(0, 4000));
+                    return { promo: promo, dialog: label, closers: closers, buttons: dlg ? btnsOf(dlg) : [], overlays: overlays, backdrop: backdrop, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
+                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; buttons?: PageControl[]; overlays?: OverlayCandidate[]; backdrop?: boolean; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
+                  // Modal sem ARIA (div fixa por cima): vira o "dialog" daqui pra frente — o mesmo aviso
+                  // e o Escape dos popups de sempre, mais a lista dos botões dele.
+                  if (uiState && !uiState.dialog && uiState.overlays?.length) {
+                    const ov = pickOverlay(uiState.overlays, !!uiState.backdrop);
+                    if (ov) {
+                      uiState.dialog = ov.label || 'untitled overlay';
+                      uiState.buttons = ov.buttons;
+                      uiState.closers = ov.buttons.map(b => b.text).filter(t => /^(close|dismiss|×|x|✕|no thanks|not now|maybe later|skip|cancel|fechar|cerrar|agora não)\b|dismiss|close/i.test(t)).slice(0, 3);
+                    }
+                  }
+                  const elFor = (txt: string) => observation.interactive_elements.find(e => {
+                    const t = String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    return t && (t === txt.toLowerCase() || t.startsWith(txt.toLowerCase().slice(0, 40)));
+                  });
+                  if (uiState?.promo && !memory.some(m => m.key === 'promo' && m.value === uiState.promo)) {
+                    memory.push({ key: 'promo', value: uiState.promo, source: paceHostOf(observation.url), ts: Date.now() });
+                    onProgress({ kind: 'status', message: `🏷️ Noted an offer from a popup: ${uiState.promo.slice(0, 80)}` });
+                  }
+                  // Os botões DO diálogo, com o [id] certo pela posição (o "Download" do modal × o da página atrás).
+                  const dlgBtns = (uiState?.buttons || []).map(b => { const e = matchControl(observation.interactive_elements, b); return e ? `[${e.id}] "${b.text}"` : ''; }).filter(Boolean);
+                  const dialogBlock = uiState?.dialog
+                    ? `OPEN DIALOG/POPUP: "${uiState.dialog}".${dlgBtns.length ? ` Its own buttons: ${dlgBtns.join(', ')} — if one of them is what the task needs (e.g. the dialog's Download/Continue), click THAT [id], not a same-named button on the page behind.` : ''}${uiState.promo ? ` It mentions an offer — Bah saved it to MEMORY ("${uiState.promo.slice(0, 100)}"); mention it in your answer only if it applies to what the user wants.` : ''} While it is open the page behind it cannot be used (its fields/buttons are not in the list). Close it FIRST${uiState.closers.length ? ': ' + uiState.closers.map(c => { const e = elFor(c); return e ? `[${e.id}] "${c}"` : `"${c}"`; }).join(' or ') + ' — or press "Escape"' : ': press "Escape" (or click an empty part of the page)'} — unless this dialog IS what the task needs.`
+                    // Realidade da página ATUAL: o modelo pequeno repete "travado num popup" de passos antigos.
+                    : /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)
+                      ? `PAGE CHECK: Bah sees NO open popup/dialog on ${paceHostOf(observation.url) || 'this page'} right now — the page is usable. Do not repeat earlier observations; act on the current page.`
+                      : '';
+                  // O agente diz duas vezes seguidas que um popup bloqueia ESTA página e Bah vê um aberto:
+                  // Bah aperta Escape por ele (fecha painel de busca/"Trending", menus, a maioria dos modais).
+                  if (uiState?.dialog && /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)) {
+                    popupComplaints = popupComplaintsUrl === observation.url ? popupComplaints + 1 : 1;
+                    popupComplaintsUrl = observation.url;
+                    if (popupComplaints >= 2) {
+                      popupComplaints = 0;
+                      const wcIdE = (wv as any).getWebContentsId?.();
+                      if (wcIdE != null) { try { await window.electronAPI?.realKey?.(wcIdE, 'Escape'); } catch {} }
+                      history += `\nBAH PRESSED ESCAPE: the agent reported the same popup twice, so Bah pressed Escape to close it. Re-check the page.`;
+                      onProgress({ kind: 'status', message: '⎋ Pressed Escape to close the popup.' });
+                    }
+                  }
+                  const suggestBlock = uiState?.options?.length
+                    ? `SUGGESTIONS LIST is open (autocomplete/drop-down) — click the matching one (click_ref) BEFORE searching; typed text alone is often not accepted:\n${uiState.options.map(o => { const e = elFor(o); return `  ${e ? `[${e.id}]` : '-'} "${o}"`; }).join('\n')}`
+                    : '';
+                  // Abas que o agente usa seguem a política dele pra alert/confirm; o que aconteceu
+                  // com os diálogos desde o último passo entra no histórico como linhas DIALOG:.
+                  { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
+                    agentDialogsTab(dlgWcId); }
+                  history += drainDialogLog();
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
+                    '',
+                    dialogBlock,
+                    suggestBlock,
+                    // Download: a máquina e o que escolher bem ao lado dos downloads (o bloco do sistema
+                    // fica longe e o modelo pequeno pegava o .exe num Mac); e o aviso de agregador.
+                    commandWantsDownload ? machineLine(MACHINE) : '',
+                    commandWantsDownload ? thirdPartyNote(thirdPartyDownloadSite(observation.url)) : '',
+                    downloadsBlock,
+                    dlButtonsBlock,
                     '',
                     planBlock,
                     '',
@@ -2765,7 +3052,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `URL: ${observation.url}`,
                     `TITLE: ${observation.title}`,
-                    `INTERACTIVE ELEMENTS (use the [N] id with click_ref/fill_ref):`,
+                    `INTERACTIVE ELEMENTS (use the [N] id with click_ref/fill_ref):${observation.interactive_elements.some(e => e.frame) ? ' frame="…" marks elements inside an embedded frame (form, payment, booking widget) — click_ref/fill_ref work on them the same way.' : ''}`,
                     newElementCount > 0 ? `(${newElementCount} element(s) marked with '*' are NEW since your last action — e.g. a popup/modal/result that just appeared)` : '',
                     compactDom || '(none detected)',
                     '',
@@ -2783,6 +3070,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
                   if (step >= 20 && !replanRequested) replanRequested = true;
                   const stuckOnUrl = stepsOnSameUrl >= 5;
+                  // Ritmo por site: página com cara de checagem anti-robô → esperas maiores neste host por 30 min.
+                  { const h = paceHostOf(observation.url);
+                    if (h && BOT_CHECK_RE.test(`${observation.title} ${(observation.text_sample || '').slice(0, 600)}`)) backoff(h); }
+                  const pacingLine = isBackedOff(paceHostOf(observation.url))
+                    ? `PACING: ${paceHostOf(observation.url)} flagged automated access — Bah now waits 15–30s between actions here for 30 minutes. Do only what is necessary on this site; prefer another source when the task allows.`
+                    : '';
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
@@ -2799,6 +3092,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ].join(' ') : '',
                     selfFailCount >= 2 ? 'STUCK: you reported the last ' + selfFailCount + ' actions as failed. Do not repeat them. Pick a different route or emit done with an honest reason.' : '',
                     // Measured: without this the model narrated the page for steps and clicked nothing.
+                    zoomNow && shotForModel ? `ZOOMED VIEW: the attached image is a sharp CROP of ${zoomNow.label} (viewport area x=${Math.round(zoomNow.x)}, y=${Math.round(zoomNow.y)}, ${Math.round(zoomNow.w)}x${Math.round(zoomNow.h)} px), not the whole page. Read it, then act with refs (click_ref / select_option / check) — do not use click_at on this crop.` : '',
                     shotForModel ? [
                       'A SCREENSHOT of the live page is attached to this request.',
                       'You are the ACTOR, not the narrator: answer with an ACTION that changes the page.',
@@ -2845,6 +3139,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ].join(' ') : '',
                     isHungObservation(observation) && ocrText ? 'PAGE UNRESPONSIVE: This page\'s scripts are hung — interactive elements, extract_text and scroll will NOT work here, and RELOADING THIS SAME URL WILL NOT FIX IT. The OCR TEXT below is a reliable snapshot of what is visible. If it contains what you need, answer now with report/done. Otherwise navigate to a DIFFERENT website (e.g. another source for the same information).' : '',
                     stuckOnUrl ? `STUCK: You have spent ${stepsOnSameUrl} steps on ${observation.url} without finishing. ABANDON this source NOW. Either: (a) navigate to a different site (Wikipedia, NotebookCheck, Wccftech), (b) use the data you already have in MEMORY and call report. Do NOT scroll or extract again on this page.` : '',
+                    pacingLine,
                     replanRequested && step >= 20 ? 'REPLAN: You have used 20+ steps. If you have ANY useful data in MEMORY, call report() with what you have. Better partial answer than no answer.' : '',
                     `[STEP ${step + 1}/${MAX_STEPS === Infinity ? '∞' : MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
                   ].filter(Boolean).join('\n');
@@ -2968,6 +3263,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     finishRun('failed', result.error, { errorCode: code, retryable });
                     return { error: result.error, errorCode: code, retryable, thought: thoughts.join('\n'), results: allResults };
                   }
+                  lastEvalText = `${result?.evaluation || ''} ${result?.thought || ''}`;
                   // browser-use style: surface the model's self-evaluation of its previous action.
                   if (result?.evaluation && step > 0) {
                     const evalStr = String(result.evaluation);
@@ -3022,7 +3318,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // download/download_video ficam FORA: baixar de novo é loop de verdade.
                   const internalForDedupe = action.type === 'plan' || action.type === 'store'
                     || action.type === 'extract_text' || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'find_file'
-                    || action.type === 'ask_ai' || action.type === 'read_aloud' || action.type === 'wait'
+                    || action.type === 'ask_ai' || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'list_downloads'
                     || action.type === 'done' || action.type === 'report';
                   const priorRepeats = recentActionHashes.slice(-3).filter(h => h === actionHash).length;
                   recentActionHashes.push(actionHash);
@@ -3099,6 +3395,42 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   }
                   throwIfCancelled();
+                  // done SEM "success" (o modelo local nunca manda; mock/rotas sem o parser): decide pelo que
+                  // a mensagem diz — sucesso, a não ser que admita falha. Antes caía em "failed" mesmo com a
+                  // tarefa feita. "success": false explícito continua sendo falha.
+                  if (action.type === 'done' && action.success !== true && action.success !== false) {
+                    (action as any).success = !!String(action.reason || '').trim()
+                      && !/\b(unable|could ?n[o']t|cannot|can't|failed|not (?:able|found|possible|available)|no viable|blocked|n[aã]o consegui|no pude)\b/i.test(String(action.reason || ''));
+                  }
+                  // Tarefa de download que JÁ entregou o arquivo: o done é sucesso, mesmo que o
+                  // modelo não mande "success" (o local nunca manda → aparecia "done(failed: …)" num
+                  // download completo). Antes do onProgress, que é quem desenha o rótulo.
+                  if (action.type === 'done' && !action.success && commandWantsDownload) {
+                    const mine = [...dlLatestRef.current.values()].filter(ofThisTask) as Array<{ state: string; filename: string }>;
+                    const completed = mine.some(d => d.state === 'completed' && !isWrongBuild(d.filename));
+                    const running = mine.some(d => d.state === 'started' || d.state === 'progress' || d.state === 'queued');
+                    // ...e a mensagem final NÃO admite falha (meta pode ter mudado no meio — um ISO
+                    // concluído antes não faz o pedido NOVO de drivers dar "success").
+                    const admitsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed|inaccessible|not (?:able|found|possible)|no viable|não consegui|no pude)\b/i.test(action.reason || '');
+                    if (completed && !running && !admitsFailure) action.success = true;
+                  }
+                  // Encerrar dizendo que AINDA vai fazer algo ("Will now search other sites…") não é
+                  // terminar: devolve pro agente seguir (até 2x por tarefa). Vale pra done e report.
+                  if ((action.type === 'done' || action.type === 'report') && unfinishedBlocks < 2) {
+                    const fin = String((action as any).reason || (action as any).summary || '');
+                    if (/\b(will now|i will (now )?(search|check|look|continue|visit|go)|next,? i('| wi)ll|then (i('| wi)ll )?(search|check|visit)|vou (agora )?(buscar|procurar|verificar|continuar)|a seguir vou)\b/i.test(fin)) {
+                      unfinishedBlocks++;
+                      history += `\nNOT FINISHED: your final message says you will still do more ("${fin.slice(0, 120)}…"). Do that now instead of finishing — continue with the next site/step, then finish when everything is covered.`;
+                      onProgress({ kind: 'status', message: '↪️ The agent said it would continue — continuing instead of finishing.' });
+                      continue;
+                    }
+                  }
+                  // Pedido em VÁRIOS sites sem plano depois de 2 passos: pede o checklist (modelo pequeno
+                  // esquece os sites que faltam e encerra no primeiro).
+                  if (commandMultiSite && !planNudged && step >= 2 && plan.length === 0 && action.type !== 'plan') {
+                    planNudged = true;
+                    history += `\nPLAN FIRST: this task covers several sites. Emit a plan action now listing each site/step, then work through it; finish only when every site is covered (or shown to have nothing).`;
+                  }
                   onProgress({ kind: 'action', action });
                   if (action.type === 'done') {
                     // Robustness: a malformed model response is parsed into a sentinel 'done'.
@@ -3118,6 +3450,45 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       action.reason = (!store.aiSettings.apiKey && !store.localSettings.enabled)
                         ? 'The free model struggled with this multi-step task. For the full agent, add a DeepSeek key in settings (cheap) — the free tier is best for chat and image generation.'
                         : 'The model kept returning an invalid response for this task. Try rephrasing it, or run it again.';
+                    }
+                    // Vale também com success=false: o modelo local manda done "failed" com o texto
+                    // "download successfully completed". O que conta é o que ele AFIRMA pro usuário.
+                    const claimsDone = action.success === true || (
+                      /\b(success\w*|complete\w*|finished|downloaded|baixad\w*|conclu\w*)\b/i.test(action.reason || '')
+                      && !/\b(unable|could ?n[o']t|cannot|can't|failed to|não consegui|no pude)\b/i.test(action.reason || ''));
+                    if (commandWantsDownload && claimsDone && noDownloadYetBlocks < 2) {
+                      const anyDownload = [...dlLatestRef.current.values()]
+                        .some(d => ofThisTask(d) && d.state !== 'failed');   // cancelado = tratado (agente ou pessoa decidiu)
+                      if (!anyDownload) {
+                        noDownloadYetBlocks++;
+                        history += `\nNOT DONE YET: no download has started in this task (no DOWNLOAD STARTED line). A "thank you for downloading" page is NOT the file — it usually starts the download a few seconds after loading. Use { "action": "wait", "ms": 5000 } and look for DOWNLOAD STARTED; if none appears, use the download action with a direct file URL. Do not claim the file was downloaded.`;
+                        onProgress({ kind: 'status', message: '⏳ No download has started yet — waiting for it before finishing.' });
+                        continue;
+                      }
+                    }
+                    // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
+                    // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
+                    // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
+                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel) && !commandWantsDownload) {
+                      const r = String(action.reason || '');
+                      const hasList = /\n\s*(?:[-*•]|\d+[.)])\s|\|/.test(r) || (r.match(/\d/g) || []).length >= 3 || r.length > 260;
+                      if (!hasList) {
+                        vagueFinishBlocks++;
+                        history += `\nSUMMARIZE FIRST: the user wants the actual results, not "they are visible". List what this page shows (people: name, title, company, location; jobs: title, company, location, pay; products/hotels: name, price, rating), mark the best matches and why. Use extract_text on THIS page if you have not — do not load another page. Then finish with done (or render_view for a table).`;
+                        onProgress({ kind: 'status', message: '📝 Asking for the actual results before finishing.' });
+                        continue;
+                      }
+                    }
+                    // Rede de segurança: a tarefa acaba com um download DELA ainda baixando → a
+                    // resposta final diz isso (o modelo costuma ler "STARTED" como "baixou").
+                    {
+                      const running = [...agentDlIdsRef.current]
+                        .map(k => dlLatestRef.current.get(k))
+                        .filter((d): d is NonNullable<typeof d> => !!d && (d.state === 'started' || d.state === 'progress' || d.state === 'queued'));
+                      if (running.length) {
+                        const lines = running.map(d => `⏳ ${d.filename}: still downloading — ${fmtSize(d.bytes)}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}${d.path ? ' → ' + d.path : ''}`);
+                        action.reason = `${action.reason || ''}\n\nNote: the download is NOT finished yet — it continues in the background (Downloads panel, Cmd/Ctrl+J):\n${lines.join('\n')}`;
+                      }
                     }
                     if (commandLooksLikeSendEmail && action.success && !gmailDraftFilled) {
                       history += '\nSAFETY BLOCK: Gmail email task cannot be marked done because the local helper did not verify a filled/sent draft.';
@@ -3163,11 +3534,79 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
+                  // Download: click_text com o rótulo de um LIKELY DOWNLOAD BUTTON vira click_ref nele. O
+                  // click_text pega a 1ª ocorrência — na Steam o "Install Steam" do menu, que só leva à página
+                  // (o modelo local repetia em loop; visto no ensaio real).
+                  if (action.type === 'click_text' && stepDlButtons.length) {
+                    const want = String((action as any).text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    const hit = stepDlButtons.find(e => String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+                    if (hit) { action = { type: 'click_ref', ref: hit.id } as BrowserAction; history += `\nBAH: "${want}" is the download button [${hit.id}] — clicked that one (not a same-named menu link).`; }
+                  }
+                  // Login/cadastro/SSO SÓ quando a pessoa pediu algo de conta. O modelo tentava "contornar" popup
+                  // de login clicando "Sign in with Google" — buscar em site de reserva/loja não exige conta.
+                  if (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'dblclick') {
+                    const tgtText = action.type === 'click_text' ? String((action as any).text || '')
+                      : String((observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.text || (observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.aria || '');
+                    if (/^\W*(sign ?in|log ?in|sign ?up|register|create (an )?account|join( now)?|continue with (google|apple|facebook|microsoft|email)|sign in with|log in with|entrar|fazer login|cadastr|iniciar sesi[oó]n|reg[ií]strate)\b/i.test(tgtText.trim())
+                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command)) {
+                      history += `\nNOT SIGNING IN: "${tgtText.slice(0, 50)}" starts a sign-in/sign-up, and the user did not ask for anything that needs an account. Close the popup (its close button or press "Escape") and continue without an account — searching does not need one. If the site truly blocks without an account, try another site.`;
+                      onProgress({ kind: 'status', message: `🔒 Not signing in ("${tgtText.slice(0, 40)}") — the task doesn't need an account.` });
+                      continue;
+                    }
+                  }
+                  // Site cuidadoso (termos proíbem automação, ex.: LinkedIn): UMA navegação por pedido +
+                  // leitura. Clique/digitação/scroll/paginação ficam com a pessoa — recusa com explicação.
+                  {
+                    const targetHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                    if (isCarefulHost(targetHost)) {
+                      const refuse = (why: string) => {
+                        history += `\nCAREFUL SITE (${targetHost}): ${why} The user continues by hand — summarize what is visible (extract_text) and finish with done/report telling them the next step.`;
+                        onProgress({ kind: 'status', message: `🛡️ ${targetHost} forbids automated browsing — ${why}` });
+                      };
+                      // O modelo pequeno insistia no mesmo clique recusado (6× "Jobs") e a tarefa morria como
+                      // "repetição", sem dizer o porquê. Segunda recusa → para e diz à pessoa o que fazer à mão.
+                      const stopCareful = () => {
+                        const signInWall = /\b(log ?in|sign ?in|sign ?up|join)\b/i.test(observation.title || '') || /\/(login|signup|uas\/login|checkpoint)\b/i.test(observation.url || '');
+                        const msg = `🛡️ ${targetHost} is in careful mode: its terms forbid automated browsing, so Bah only opens and reads pages there — no clicking or typing.`
+                          + (signInWall ? ' Sign in yourself in this tab (once — the session stays), then ask again.' : '')
+                          + ' Continue by hand from here.';
+                        const done: BrowserAction = { type: 'done', success: false, reason: msg };
+                        finishRun('failed', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done };
+                      };
+                      if (action.type === 'navigate') {
+                        if (carefulNavs >= 1) { if (++carefulRefusals >= 2) return stopCareful(); refuse('only one page load per request is allowed here.'); continue; }
+                        carefulNavs++;
+                      } else if (!CAREFUL_ALLOWED.has(action.type)) {
+                        if (++carefulRefusals >= 2) return stopCareful();
+                        refuse(`"${action.type}" is not done automatically on this site.`);
+                        continue;
+                      }
+                    }
+                  }
+                  // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
+                  // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
+                  // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll'].includes(action.type);
+                  const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                  if (touchesPage && paceHost) {
+                    const waitMs = paceDelay(paceHost);
+                    if (waitMs > 0) {
+                      if (waitMs > 3000) onProgress({ kind: 'status', message: `🐢 Pacing ${paceHost}: waiting ${Math.ceil(waitMs / 1000)}s` });
+                      const until = Date.now() + waitMs;
+                      while (Date.now() < until) { await new Promise(r => setTimeout(r, Math.min(500, until - Date.now()))); throwIfCancelled(); }
+                    }
+                    recordHit(paceHost);
+                  }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;
                   const wvRect = wvEl?.getBoundingClientRect?.();
-                  const offX = wvRect?.left ?? 0;
-                  const offY = wvRect?.top ?? 0;
+                  // O overlay do agente fica POR CIMA da área da página (position:absolute; inset:0 no mesmo
+                  // contêiner): a origem é o canto do overlay, não o da janela. Somar o deslocamento da janela
+                  // (barra de abas + endereço ≈ 100 px) desenhava o cursor/ondinha ~100 px abaixo do clique real.
+                  const ovRect = (document.querySelector('.agent-overlay') as HTMLElement | null)?.getBoundingClientRect?.();
+                  const offX = (wvRect?.left ?? 0) - (ovRect?.left ?? 0);
+                  const offY = (wvRect?.top ?? 0) - (ovRect?.top ?? 0);
                   if (action.type === 'click_at') addRipple(offX + action.x, offY + action.y);
                   else if (action.type === 'click_ref' || action.type === 'fill_ref') {
                     const target = observation.interactive_elements.find(e => e.id === action.ref);
@@ -3261,9 +3700,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               executeBrowserAction(wv, { type: 'click_text', text: target.text }),
                               12000,
                               { success: false, error: `click_text timed out — page scripts are unresponsive. Re-observe or navigate elsewhere.` })
-                          : await window.electronAPI?.realClick?.(wcId, clickX, clickY, target.backendNodeId);
+                          : target.frameNode?.key.startsWith('oopif:')
+                            // Iframe de OUTRO processo: sendInputEvent para no <iframe>; clica pela sessão CDP do frame.
+                            ? await window.electronAPI?.frameClick?.(wcId, target.frameNode.key, target.frameNode.id)
+                            : await window.electronAPI?.realClick?.(wcId, clickX, clickY, target.backendNodeId);
                       }
-                      if (action.type === 'fill_ref') {
+                      if (action.type === 'fill_ref' && target.frameNode) {
+                        // Campo dentro de iframe: preenche no nó do documento do iframe (o foco do iframe se perde
+                        // quando a UI do Bah atualiza; tecla real ia pro <iframe>, não pro campo).
+                        const f = await window.electronAPI?.frameFill?.(wcId, target.frameNode.key, target.frameNode.id, action.value);
+                        if (!f?.ok) r = { success: false, error: f?.error || 'could not fill the field inside the frame' };
+                        else if (f.value !== action.value) r = { success: false, error: `The field inside the frame shows "${String(f.value).slice(0, 60)}" instead — it may reformat or reject input.` };
+                        else r = { success: true, info: { ref: action.ref, filledVia: `frame ${target.frame}` } };
+                      } else if (action.type === 'fill_ref') {
                         await new Promise(rr => setTimeout(rr, 200));
                         // Select existing content via JS (works for inputs and contenteditable)
                         await withTimeout(
@@ -3407,11 +3856,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = { success: true, info: { stored: action.key, total_keys: memory.length } };
                   } else if (action.type === 'download') {
                     // Agent-driven download (image/pdf/...) → user's Downloads folder via main process
+                    // Roda em background (worker thread no main): volta assim que COMEÇA, com o caminho
+                    // final. Progresso/fim chegam pelos eventos de download (DOWNLOAD PROGRESS/COMPLETED).
                     const dl = await window.electronAPI?.downloadUrl?.(action.url, action.filename);
                     toolResult = dl ?? { success: false, error: 'download API unavailable' };
+                    // O 'started' desse download já entrou nos eventos; a linha abaixo o substitui.
+                    const startedId = dl?.success ? dl.info?.id : undefined;
+                    if (startedId) downloadEventsRef.current = downloadEventsRef.current.filter(d => !(d.id === startedId && d.state === 'started'));
                     if (dl?.success && dl.info) {
-                      history += `\nDOWNLOADED: ${dl.info.path} (${Math.round(dl.info.bytes / 1024)} KB)`;
-                      onProgress({ kind: 'status', message: `💾 Downloaded: ${dl.info.path.split(/[\\/]/).pop()} (${Math.round(dl.info.bytes / 1024)} KB)` });
+                      const size = dl.info.totalBytes ? fmtSize(dl.info.totalBytes) : 'unknown size';
+                      history += `\nDOWNLOAD STARTED in the background: ${dl.info.path} (${size}). Updates will appear as DOWNLOAD PROGRESS / STALLED / COMPLETED / FAILED lines.`;
+                      onProgress({ kind: 'status', message: `💾 Downloading: ${dl.info.path.split(/[\\/]/).pop()} (${size})` });
                     }
                   } else if (action.type === 'ask_ai') {
                     // Responde uma pergunta usando a NOSSA IA (DeepSeek/Ollama) — instantâneo,
@@ -3523,7 +3978,33 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (action.query) {
                         lastQuickActionRef.current = { type: 'download_video', query: action.query, audio_only: action.audio_only, count, quality: qual };
                       }
-                      const vr = await window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      const callAt = Date.now();
+                      const vrP = window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      // UM vídeo e nada mais na fila: a tarefa acaba quando o download COMEÇA (primeiros bytes),
+                      // não quando termina — senão o painel fica "trabalhando" só esperando. O anel do botão de
+                      // downloads mostra o progresso e o fim. Se o yt-dlp falhar antes de começar, segue o
+                      // caminho de sempre (fallbacks abaixo).
+                      if (vrP && count === 1 && actionQueue.length === 0 && downloadIsLastStep) {
+                        const startedDl = await new Promise<any>(resolve => {
+                          let settled = false;
+                          const finish = (v: any) => { if (!settled) { settled = true; clearInterval(iv); resolve(v); } };
+                          vrP.then(() => finish(null), () => finish(null));
+                          const iv = setInterval(() => {
+                            const d = [...dlLatestRef.current.values()].find((x: any) => x.kind === 'video' && (x.startedAt ?? 0) >= callAt
+                              && (x.state === 'progress' || x.state === 'started') && ((x.bytes || 0) > 0));
+                            if (d) finish(d);
+                          }, 500);
+                        });
+                        if (startedDl) {
+                          const size = startedDl.totalBytes ? ` (~${fmtSize(startedDl.totalBytes)})` : '';
+                          const what = startedDl.filename && startedDl.filename !== 'download' ? startedDl.filename : (action.query || (action.audio_only ? 'the song' : 'the video'));
+                          const msg = `⬇️ Downloading ${what}${size} to Downloads — follow its progress on the download button.`;
+                          onProgress({ kind: 'status', message: msg });
+                          finishRun('success', msg);
+                          return { thought: msg, results: [...allResults, { action, result: { success: true, info: { started: true } } }], done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                        }
+                      }
+                      const vr = await vrP;
                       if (vr?.success) {
                         // A finished media download IS the goal — auto-complete the task here.
                         // Don't let a weaker model second-guess success (it was reporting
@@ -3545,13 +4026,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { paths: vr.paths, title: vr.title } } });
-                        // Auto-finish ONLY when nothing else is queued. A batch of named songs
-                        // (actions:[download_video A, B, C]) must run them all before ending.
-                        if (actionQueue.length === 0) {
+                        // Auto-finish ONLY when nothing else is queued AND this download was the whole
+                        // request. A batch of named songs (actions:[download_video A, B, C]) must run them all;
+                        // "…and then X" goes on to X.
+                        if (actionQueue.length === 0 && (downloadIsLastStep || !commandWantsDownload)) {
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
-                        history += `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`;
+                        history += actionQueue.length
+                          ? `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`
+                          : `\nDOWNLOADED: ${list}. The request continues after this download: do the rest of it now.`;
                         toolResult = { success: true, info: { paths: vr.paths } };
                       } else {
                         // ── FALLBACK CHAIN (self-healing, Gemini): yt-dlp falhou →
@@ -4283,6 +4767,240 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { closed: action.tab } };
                     } else toolResult = { success: false, error: `Tab ${action.tab} not found` };
+                  } else if (action.type === 'look_at') {
+                    // Só marca a área; o recorte vai na próxima captura (decideAgentShot força a imagem).
+                    if (action.ref != null) {
+                      const target = observation.interactive_elements.find(e => e.id === action.ref);
+                      const wcIdZ = (wv as any).getWebContentsId?.();
+                      if (!target) {
+                        toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                      } else {
+                        let cx = target.x, cy = target.y;
+                        if (target.backendNodeId != null && wcIdZ != null && window.electronAPI?.verifyClick) {
+                          const v = await window.electronAPI.verifyClick(wcIdZ, target.backendNodeId).catch(() => null);   // rola até ele
+                          if (v && typeof v.x === 'number' && typeof v.y === 'number') { cx = v.x; cy = v.y; }
+                        }
+                        const vp = await withTimeout(wv.executeJavaScript('({w: innerWidth, h: innerHeight})').catch(() => null), 1500, null) as { w: number; h: number } | null;
+                        const W = Math.min(720, vp?.w || 720), H = Math.min(460, vp?.h || 460);
+                        const x = Math.max(0, Math.min((vp?.w || cx + W / 2) - W, cx - W / 2)), y = Math.max(0, Math.min((vp?.h || cy + H / 2) - H, cy - H / 2));
+                        pendingZoom = { x, y, w: W, h: H, label: `the area around @${action.ref} "${String(target.text || target.aria || '').slice(0, 40)}"` };
+                        toolResult = { success: true, info: { zoom: `@${action.ref}` } };
+                      }
+                    } else {
+                      pendingZoom = { x: action.x!, y: action.y!, w: action.w!, h: action.h!, label: 'the requested area' };
+                      toolResult = { success: true, info: { zoom: `${action.x},${action.y} ${action.w}x${action.h}` } };
+                    }
+                    if (toolResult.success) history += `\nZOOM: the next screenshot will be a sharp crop of ${pendingZoom!.label}.`;
+                  } else if (action.type === 'find') {
+                    // Busca na página INTEIRA (fora da tela e além do limite da lista), rola o melhor
+                    // resultado pra vista — ele aparece na lista de elementos do próximo passo.
+                    const res = await withTimeout(wv.executeJavaScript(`(function(want){
+                      var w = String(want).trim().toLowerCase();
+                      var sel = 'a,button,input,select,textarea,label,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=combobox],h1,h2,h3,h4,th,td,li';
+                      var seen = new Set(), hits = [];
+                      document.querySelectorAll(sel).forEach(function(el){
+                        var r = el.getBoundingClientRect(); if (r.width < 1 || r.height < 1) return;
+                        var cs = getComputedStyle(el); if (cs.visibility === 'hidden' || cs.display === 'none') return;
+                        var t = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim();
+                        if (!t || t.length > 200 || t.toLowerCase().indexOf(w) < 0) return;
+                        var ctl = el.closest('a,button,label,select,[role=button],[role=link],[role=checkbox]') || el;
+                        if (seen.has(ctl)) return; seen.add(ctl);
+                        var exact = t.toLowerCase() === w ? 0 : 1, isCtl = /^(A|BUTTON|INPUT|SELECT|LABEL)$/.test(ctl.tagName) || ctl.getAttribute('role') ? 0 : 1;
+                        hits.push({ el: ctl, t: t.slice(0, 80), tag: ctl.tagName.toLowerCase(), rank: exact * 2 + isCtl + t.length / 1000, y: Math.round(r.top + scrollY) });
+                      });
+                      hits.sort(function(a, b){ return a.rank - b.rank; });
+                      if (hits[0]) hits[0].el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                      return { count: hits.length, hits: hits.slice(0, 8).map(function(h){ return { tag: h.tag, text: h.t, pageY: h.y }; }) };
+                    })(${JSON.stringify(action.text)})`).catch((e: any) => ({ count: 0, hits: [], error: String(e?.message || e) })), 5000, { count: 0, hits: [], error: 'page did not respond' }) as { count: number; hits: Array<{ tag: string; text: string; pageY: number }>; error?: string };
+                    if (res.count > 0) {
+                      toolResult = { success: true, info: { matches: res.count, scrolledTo: res.hits[0].text } };
+                      history += `\nFIND "${action.text}": ${res.count} match(es). Scrolled to <${res.hits[0].tag}> "${res.hits[0].text}" — it is now on screen and in INTERACTIVE ELEMENTS (use its [id]).${res.hits.length > 1 ? ' Other matches: ' + res.hits.slice(1).map(h => `<${h.tag}> "${h.text}"`).join('; ') : ''}`;
+                    } else {
+                      toolResult = { success: false, error: res.error || `"${action.text}" was not found anywhere on this page — try other words, or another page.` };
+                    }
+                  } else if (action.type === 'hover' || action.type === 'dblclick' || action.type === 'focus' || action.type === 'drag') {
+                    // Ponteiro além do clique: alvo rolado pra vista e medido (verifyClick), input real.
+                    const wcIdP = (wv as any).getWebContentsId?.();
+                    const locate = async (ref: number) => {
+                      const el = observation.interactive_elements.find(e => e.id === ref);
+                      if (!el) return null;
+                      let x = el.x, y = el.y;
+                      if (el.backendNodeId != null && wcIdP != null && window.electronAPI?.verifyClick) {
+                        const v = await window.electronAPI.verifyClick(wcIdP, el.backendNodeId).catch(() => null);
+                        if (v && typeof v.x === 'number' && typeof v.y === 'number') { x = v.x; y = v.y; }
+                      }
+                      return { x, y, backendNodeId: el.backendNodeId };
+                    };
+                    const a = await locate(action.ref);
+                    const b = action.type === 'drag' ? await locate(action.to_ref) : null;
+                    if (!a || wcIdP == null || (action.type === 'drag' && !b)) {
+                      toolResult = { success: false, error: `No element with ref @${!a ? action.ref : (action as any).to_ref} — re-observe the page.` };
+                    } else {
+                      const r = await window.electronAPI?.pointer?.(wcIdP, { kind: action.type, x: a.x, y: a.y, x2: b?.x, y2: b?.y, backendNodeId: a.backendNodeId });
+                      toolResult = r?.success ? { success: true, info: { [action.type]: action.ref } } : { success: false, error: r?.error || `${action.type} failed` };
+                      if (action.type !== 'hover' && action.type !== 'focus') await waitForWebviewSettled(wv, wv.getURL());
+                    }
+                  } else if (action.type === 'forward' || action.type === 'reload') {
+                    const beforeUrl = wv.getURL();
+                    if (action.type === 'forward' && !wv.canGoForward()) {
+                      toolResult = { success: false, error: 'There is no next page in this tab.' };
+                    } else {
+                      try { action.type === 'forward' ? wv.goForward() : wv.reload(); } catch {}
+                      await waitForWebviewSettled(wv, action.type === 'reload' ? '' : beforeUrl);
+                      toolResult = { success: true, info: { url: wv.getURL() } };
+                    }
+                  } else if (action.type === 'back') {
+                    if (!wv.canGoBack()) {
+                      toolResult = { success: false, error: 'There is no previous page in this tab.' };
+                    } else {
+                      const beforeUrl = wv.getURL();
+                      try { wv.goBack(); } catch {}
+                      await waitForWebviewSettled(wv, beforeUrl);
+                      toolResult = { success: true, info: { url: wv.getURL() } };
+                    }
+                  } else if (action.type === 'check' || action.type === 'uncheck') {
+                    // Lê o estado, clica com input real SÓ se precisa mudar, e confere depois.
+                    const want = action.type === 'check';
+                    const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdC = (wv as any).getWebContentsId?.();
+                    if (!target || wcIdC == null) {
+                      toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    } else {
+                      let cx = target.x, cy = target.y;
+                      if (target.backendNodeId != null && window.electronAPI?.verifyClick) {
+                        const v = await window.electronAPI.verifyClick(wcIdC, target.backendNodeId).catch(() => null);
+                        if (v && typeof v.x === 'number' && typeof v.y === 'number') { cx = v.x; cy = v.y; }
+                      }
+                      const readState = () => withTimeout(wv.executeJavaScript(`(function(x, y){
+                        var el = document.elementFromPoint(x, y); if (!el) return null;
+                        var box = (el.matches && el.matches('input[type=checkbox],input[type=radio]')) ? el
+                          : (el.closest && (el.closest('[role=checkbox],[role=radio],[role=switch]') || (el.closest('label') && el.closest('label').querySelector('input[type=checkbox],input[type=radio]'))))
+                          || (el.querySelector && el.querySelector('input[type=checkbox],input[type=radio]'));
+                        if (!box && el.tagName === 'LABEL' && el.control) box = el.control;
+                        if (!box) return null;
+                        return box.tagName === 'INPUT' ? !!box.checked : box.getAttribute('aria-checked') === 'true';
+                      })(${Math.round(cx)}, ${Math.round(cy)})`).catch(() => null), 3000, null) as Promise<boolean | null>;
+                      const before = await readState();
+                      if (before === null) {
+                        toolResult = { success: false, error: `@${action.ref} is not a checkbox/radio — use click_ref instead.` };
+                      } else if (before === want) {
+                        toolResult = { success: true, info: { already: want ? 'checked' : 'unchecked' } };
+                      } else {
+                        await window.electronAPI?.realClick?.(wcIdC, cx, cy, target.backendNodeId);
+                        await new Promise(r => setTimeout(r, 300));
+                        const after = await readState();
+                        toolResult = after === want
+                          ? { success: true, info: { now: want ? 'checked' : 'unchecked' } }
+                          : { success: false, error: `Clicked @${action.ref} but it is still ${after ? 'checked' : 'unchecked'}.` };
+                      }
+                    }
+                  } else if (action.type === 'select_option') {
+                    // <select> nativo (ex.: SO/versão no site de driver): escolhe no nó via CDP.
+                    const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdSel = (wv as any).getWebContentsId?.();
+                    if (!target) {
+                      toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    } else {
+                      const beforeUrl = wv.getURL();
+                      // Com nó da árvore de acessibilidade → CDP no próprio nó. Observação pelo DOM (sem
+                      // backendNodeId) → acha o <select> na posição do elemento, na página.
+                      const r = target.backendNodeId != null && wcIdSel != null
+                        ? await window.electronAPI?.selectOption?.(wcIdSel, target.backendNodeId, action.option)
+                        : await withTimeout(wv.executeJavaScript(`(function(x, y, want){
+                            var el = document.elementFromPoint(x, y);
+                            var sel = el && (el.tagName === 'SELECT' ? el : (el.closest && el.closest('select')) || (el.querySelector && el.querySelector('select')));
+                            if (!sel) return { ok: false, error: 'not a <select> drop-down — click it, then click the option' };
+                            var opts = Array.prototype.slice.call(sel.options);
+                            var norm = function(s){ return String(s || '').trim().toLowerCase(); };
+                            var w = norm(want);
+                            var o = opts.find(function(x){ return norm(x.text) === w; }) || opts.find(function(x){ return norm(x.value) === w; })
+                              || opts.find(function(x){ return norm(x.text).indexOf(w) >= 0; }) || opts.find(function(x){ return w.indexOf(norm(x.text)) >= 0 && norm(x.text).length > 2; });
+                            var list = opts.map(function(x){ return x.text.trim(); }).filter(Boolean).slice(0, 40);
+                            if (!o) return { ok: false, error: 'no option matching "' + want + '"', options: list };
+                            sel.focus(); sel.value = o.value; o.selected = true;
+                            sel.dispatchEvent(new Event('input', { bubbles: true }));
+                            sel.dispatchEvent(new Event('change', { bubbles: true }));
+                            return { ok: true, selected: o.text.trim(), options: list };
+                          })(${Math.round(target.x)}, ${Math.round(target.y)}, ${JSON.stringify(action.option)})`).catch((e: any) => ({ ok: false, error: String(e?.message || e) })),
+                          5000, { ok: false, error: 'page did not respond' }) as any;
+                      if (r?.ok) {
+                        await waitForWebviewSettled(wv, beforeUrl);   // muitos combos recarregam a página/lista
+                        toolResult = { success: true, info: { selected: r.selected } };
+                        history += `\nSELECTED "${r.selected}" in drop-down @${action.ref}.`;
+                      } else {
+                        toolResult = { success: false, error: `${r?.error || 'select failed'}${r?.options?.length ? ` — available options: ${r.options.map((o: string) => `"${o}"`).join(', ')}` : ''}` };
+                      }
+                    }
+                  } else if (action.type === 'dialog') {
+                    // Arma a resposta do PRÓXIMO alert/confirm desta aba (vale 60 s).
+                    let wcIdDlg: number | undefined;
+                    try { wcIdDlg = (wv as any).getWebContentsId?.(); } catch {}
+                    agentDialogsTab(wcIdDlg);
+                    if (wcIdDlg != null) {
+                      armDialog(wcIdDlg, action.accept, action.text);
+                      toolResult = { success: true, info: { armed: action.accept ? `accept${action.text != null ? ` with "${action.text}"` : ''}` : 'dismiss', note: 'Now do the action that opens the dialog.' } };
+                    } else toolResult = { success: false, error: 'The tab is not ready yet; try again after the page loads.' };
+                  } else if (action.type === 'list_downloads') {
+                    // A fila do painel de Downloads (Cmd/Ctrl+J), como o agente precisa: id pra
+                    // controlar, estado, progresso, caminho e quem começou.
+                    const all = downloadsRef.current;
+                    const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
+                    const rows = [...all.filter(isActive), ...all.filter(d => !isActive(d))].slice(0, 20).map(d => {
+                      const key = d.id || d.path || d.filename;
+                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING'
+                        : d.state.toUpperCase();
+                      const pct = d.totalBytes ? ` ${Math.floor(((d.bytes || 0) / d.totalBytes) * 100)}%,` : '';
+                      const size = ` ${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
+                      const live = isActive(d) && !d.paused ? `${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}` : '';
+                      const who = agentDlIdsRef.current.has(key) ? 'agent' : 'user';
+                      return `  [${d.id || '-'}] ${d.filename} — ${st}${pct}${size}${live}${d.path ? ' → ' + d.path : ''} (started by ${who}${d.kind === 'video' ? ', video' : ''})`;
+                    });
+                    const active = all.filter(isActive).length;
+                    history += `\nDOWNLOADS LIST (${active} active, ${all.length} total; use the [id] with cancel_download / pause_download / resume_download / retry_download):\n${rows.length ? rows.join('\n') : '  (no downloads)'}`;
+                    onProgress({ kind: 'status', message: `📥 Downloads: ${active} active, ${all.length} total` });
+                    toolResult = { success: true, info: { active, total: all.length } };
+                  } else if (action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download') {
+                    // Acha por id exato, senão pelo nome do arquivo (preferindo o ativo).
+                    const all = downloadsRef.current;
+                    const q = action.id.toLowerCase();
+                    const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
+                    const byName = all.filter(d => (d.filename || '').toLowerCase().includes(q));
+                    const d = all.find(x => (x.id || '').toLowerCase() === q) || byName.find(isActive) || byName[0];
+                    const verb = action.type.replace('_download', '');
+                    if (!d || !d.id) {
+                      toolResult = { success: false, error: `No download matches "${action.id}". Call list_downloads to see the ids.` };
+                    } else if (action.type === 'cancel_download' && !isActive(d)) {
+                      toolResult = { success: false, error: `${d.filename} is not active (${d.state}) — nothing to cancel.` };
+                    } else if ((action.type === 'pause_download' || action.type === 'resume_download') && (d.kind === 'video' || d.kind === 'agent')) {
+                      toolResult = { success: false, error: `${d.filename} cannot be paused/resumed (${d.kind} download) — only cancelled.` };
+                    } else if (action.type === 'retry_download' && d.state !== 'failed' && d.state !== 'cancelled') {
+                      toolResult = { success: false, error: `${d.filename} is ${d.state} — only failed or cancelled downloads can be retried.` };
+                    } else {
+                      // Cancelar um download que a PESSOA começou passa pelo freio de segurança.
+                      const mine = agentDlIdsRef.current.has(d.id);
+                      let allowed = true;
+                      if (action.type === 'cancel_download' && !mine) {
+                        allowed = await confirmRisky({ kind: 'a download you started', label: `cancel ${d.filename}` });
+                        throwIfCancelled();
+                      }
+                      if (!allowed) {
+                        toolResult = { success: false, reason: 'user_cancelled', error: `You declined — ${d.filename} keeps downloading.` };
+                      } else {
+                        const api = window.electronAPI;
+                        if (action.type === 'cancel_download') agentCancelledRef.current.add(d.id);
+                        const r: any = action.type === 'cancel_download'
+                          ? (d.kind === 'video' ? await api?.cancelVideoDownload?.(d.id) : await api?.cancelDownload?.(d.id))
+                          : action.type === 'pause_download' ? await api?.pauseDownload?.(d.id)
+                          : action.type === 'resume_download' ? await api?.resumeDownload?.(d.id)
+                          : (d.kind === 'video' ? await api?.retryVideoDownload?.(d.id) : await api?.retryDownload?.(d.id, d.url));
+                        const ok = r?.ok !== false && r?.success !== false;
+                        toolResult = ok ? { success: true, info: { [verb]: d.filename, id: d.id } } : { success: false, error: `Could not ${verb} ${d.filename}.` };
+                        if (ok) {
+                          history += `\nDOWNLOAD ${verb.toUpperCase()}: ${d.filename} [${d.id}].`;
+                          onProgress({ kind: 'status', message: `📥 ${verb}: ${d.filename}` });
+                        }
+                      }
+                    }
                   } else {
                     // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
@@ -4297,7 +5015,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
-                  const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
+                  const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
+                    || action.type === 'look_at'
+                    || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
                   let screenshotAfter: string | undefined;
@@ -4359,7 +5079,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     note: formatAction(action),
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
-                  const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
+                  const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
+                    || action.type === 'look_at' || action.type === 'find'
+                    || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';
                   if (internalAction) {
@@ -4389,20 +5111,90 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Site-initiated downloads triggered by this action (clicking a "baixar"
                   // button fires will-download; the page itself doesn't change). Tell the AI
                   // the click WORKED so it doesn't repeat it, and clear the no-effect penalty.
-                  const dlEvents = downloadEventsRef.current.splice(0);
+                  // Um passo pode juntar vários ticks de progresso: só o ÚLTIMO de cada download entra —
+                  // várias linhas "ainda não terminou" deixavam o modelo achar que nada andava.
+                  // O "download começou" chega DEPOIS do clique voltar (o Chromium só avisa quando o servidor
+                  // responde). Numa tarefa de download, um clique espera até 2,5 s por ele — senão o passo seguinte
+                  // já roda sem saber do download (e a tarefa nem acaba quando ele começa, nem espera por ele).
+                  if (commandWantsDownload && downloadEventsRef.current.length === 0
+                      && (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'click_at' || action.type === 'navigate')) {
+                    for (let w = 0; w < 25 && downloadEventsRef.current.length === 0; w++) await new Promise(r => setTimeout(r, 100));
+                  }
+                  const dlEvents = (() => {
+                    const all = downloadEventsRef.current.splice(0);
+                    const lastProg = new Map<string, number>();
+                    all.forEach((d, i) => { if (d.state === 'progress' && !d.stalled) lastProg.set(d.id || d.path || d.filename, i); });
+                    return all.filter((d, i) => d.state !== 'progress' || d.stalled || lastProg.get(d.id || d.path || d.filename) === i);
+                  })();
                   if (dlEvents.length > 0) {
                     for (const d of dlEvents) {
+                      const latest = dlLatestRef.current.get(d.id || d.path || d.filename) as any;
+                      const prevTask = latest && (latest.startedAt ?? 0) < taskStartedAt ? ' (from a PREVIOUS task — not this request)' : '';
+                      // Arquivo errado pra esta máquina, ou baixado de agregador de "free download" (não do fabricante).
+                      const dlFrom = d.state === 'started' && commandWantsDownload ? thirdPartyDownloadSite(String((d as any).url || '')) || thirdPartyDownloadSite(observation.url) : '';
+                      const osNote = (d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '') + (dlFrom ? ' ' + thirdPartyNote(dlFrom) : '');
+                      const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const line = d.state === 'completed'
-                        ? `DOWNLOAD COMPLETED: ${d.filename} saved to Downloads (${Math.round((d.bytes || 0) / 1024)} KB). This is SUCCESS — do not click the download button again.`
-                        : d.state === 'blocked'
-                        ? `DOWNLOAD BLOCKED: ${d.filename} — ${d.reason || 'executable files are not allowed'}.`
+                        ? `DOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready to use at that path. This is SUCCESS — do not download it again.`
+                        : d.state === 'progress' && d.stalled
+                        ? `DOWNLOAD STALLED: ${d.filename} — no data for ${d.stalledForSec || 15}s at ${of}. It is aborted after 60s without data; you may wait, or retry/try another source.`
+                        : d.state === 'progress'
+                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally in the background — ${downloadIsLastStep ? 'if this is what the user asked for, finish with done now (say it is downloading)' : 'Bah waits for it to complete before your next step'}; do NOT start another copy or look for another source.`
+                        : d.state === 'duplicate'
+                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. The first one continues in the background${downloadIsLastStep ? ': finish with done saying it is downloading' : ' and Bah waits for it'}.`
+                        : d.state === 'failed' && d.stalled
+                        ? `DOWNLOAD FAILED (stalled): ${d.filename} — the server stopped sending data after ${of}; the partial file was removed. Retry once, or try another mirror/source.`
                         : d.state === 'failed'
-                        ? `DOWNLOAD FAILED: ${d.filename} — try another link/source.`
-                        : `DOWNLOAD STARTED: ${d.filename} (saving automatically, no dialog).`;
-                      history += `\n${line}`;
-                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}` });
+                        ? `DOWNLOAD FAILED: ${d.filename}${d.reason ? ' — ' + d.reason : ''} — try another link/source.`
+                        : d.state === 'cancelled'
+                        ? (d.id && agentCancelledRef.current.has(d.id)
+                          ? `DOWNLOAD CANCELLED (by your cancel_download): ${d.filename}; the partial file was removed.`
+                          : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
+                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.' : 'Bah waits for it to COMPLETE before your next step; the rest of the request continues after DOWNLOAD COMPLETED.'}`;
+                      history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
+                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${isWrongBuild(d.filename) ? ' ⚠️ ' + t('dl.wrongBuild') : dlFrom ? ' ⚠️ ' + t('dl.thirdParty') : ''}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
+                    // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
+                    // O resto (progresso, fim) aparece no botão de downloads — não segura o painel "trabalhando".
+                    // Fica de fora: pedido de VÁRIOS arquivos, arquivo do SO/processador errado e download parado.
+                    if (downloadIsLastStep && actionQueue.length === 0) {
+                      const started = dlEvents.find(d => (d.state === 'started' || (d.state === 'progress' && !d.stalled))
+                        && ((dlLatestRef.current.get(d.id || d.path || d.filename) as any)?.startedAt ?? 0) >= taskStartedAt
+                        && !wrongOsNote(d.filename));
+                      if (started) {
+                        const size = started.totalBytes ? ` (${fmtSize(started.totalBytes)})` : '';
+                        const msg = `⬇️ Downloading ${started.filename}${size} to ${started.path ? started.path.split(/[\\/]/).slice(0, -1).join('/') || 'Downloads' : 'Downloads'} — follow its progress on the download button.`;
+                        onProgress({ kind: 'status', message: msg });
+                        finishRun('success', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                      }
+                    } else if (commandWantsDownload && !downloadIsLastStep) {
+                      // Pedido continua depois do download (ou são vários): o BAH espera todos os downloads desta
+                      // tarefa (sem gastar chamada de modelo), mostrando o que espera; o modelo só volta com as
+                      // linhas DOWNLOAD COMPLETED — assim o próximo passo sabe que o arquivo existe e onde está.
+                      const mine = () => [...agentDlIdsRef.current].map(k => dlLatestRef.current.get(k) as any)
+                        .filter(d => !!d && (d.startedAt ?? 0) >= taskStartedAt);
+                      const running = () => mine().filter(d => (d.state === 'started' || d.state === 'progress' || d.state === 'queued') && !d.stalled);
+                      if (running().length) {
+                        deadline.suspend();   // esperar download não é o modelo demorando
+                        try {
+                          while (running().length) {
+                            throwIfCancelled();
+                            const parts = mine().map(d => d.state === 'completed' ? `${d.filename} ✓`
+                              : `${d.filename}${d.totalBytes ? ' ' + Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%' : ''}${d.etaSec != null ? ` (ETA ${fmtEta(d.etaSec)})` : ''}`);
+                            onProgress({ kind: 'status', message: `⏳ Waiting for downloads: ${parts.join(', ')}` });
+                            await new Promise(r => setTimeout(r, 2000));
+                          }
+                        } finally { deadline.resume(); }
+                        for (const d of mine()) {
+                          history += d.state === 'completed'
+                            ? `\nDOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready; continue with the rest of the request.`
+                            : `\nDOWNLOAD ${String(d.state).toUpperCase()}${d.stalled ? ' (stalled)' : ''}: ${d.filename}${d.reason ? ' — ' + d.reason : ''}`;
+                        }
+                        noEffectCount = 0;
+                      }
+                    }
                   }
                   if (toolResult && toolResult.reason === 'element_covered') {
                     history += `\nHINT: The target element is covered by an overlay (${toolResult.covering || 'unknown'}). Close the modal / cookie banner / popup first (look for "Aceitar", "Accept", "Fechar", "X", "OK"), then retry.`;
@@ -4436,6 +5228,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     stepsOnSameUrl,
                     step,
                     commandRequiresThisSite: commandMentionsDomain(afterObservation.url),
+                    commandWantsDownload,
                   });
                   const urlChangedByAction = afterObservation.url !== observation.url;
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);
@@ -4555,6 +5348,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // tarefa acabou (sucesso, erro OU cancelamento): solta o freio e a aba do
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
+                agentDialogsStop();
+                taskEndedAtRef.current = Date.now();
                 if (privateTaskRef.current) { privateTaskRef.current = false; window.electronAPI?.setPrivateAi?.(false); }
                 // O que chegou depois do último passo (a IA já tinha decidido terminar) fica na
                 // fila: a barra pega e roda como o próximo pedido — mensagem nunca some.
@@ -4710,6 +5505,21 @@ function youtubeWatchId(u: string): string | null {
     }
   } catch {}
   return null;
+}
+
+// Arquivo de OUTRO sistema (o agente baixou o .exe de Windows num Mac), CPU errada (arm64 num Mac
+// Intel não roda) ou tipo de pacote errado no Linux: vale pra qualquer site de driver/instalador.
+// O perfil de verdade vem do main (machine:info); até ele chegar, o palpite pelo navigator (só o SO).
+const NAV_PLATFORM = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
+let MACHINE: MachineProfile = machineProfile({ platform: /^Win/i.test(NAV_PLATFORM) ? 'win32' : /Mac/i.test(NAV_PLATFORM) ? 'darwin' : /Linux/i.test(NAV_PLATFORM) ? 'linux' : 'other', arch: 'other' });
+try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
+/** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
+function wrongOsNote(filename: string): string {
+  return checkBuild(filename, MACHINE).note;
+}
+/** Só o erro de verdade: um download "concluído" que não roda aqui não conta como sucesso. */
+function isWrongBuild(filename: string): boolean {
+  return checkBuild(filename, MACHINE).level === 'error';
 }
 
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
