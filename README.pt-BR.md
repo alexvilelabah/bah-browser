@@ -164,6 +164,8 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
 
+- **Ritmo por site.** Ações que mexem na página esperam um intervalo aleatório de 1–5 s entre si no mesmo site; depois que o site mostra uma checagem anti-robô, 15–30 s pelos próximos 30 minutos. Só deixa o agente mais lento — não contorna a checagem.
+
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
 - **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos.
@@ -172,7 +174,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Adblock pausa em sites conhecidos.** YouTube e Twitch entram em bypass automático pro player não ser bloqueado pelo anti-adblock deles. No resto, o adblock fica ativo.
 
-**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar, sandbox separado por aba, e rate-limit de cliques pra evitar comportamento agressivo de bot.
+**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar e sandbox separado por aba.
 
 ---
 

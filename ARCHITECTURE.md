@@ -114,6 +114,19 @@ around a block.
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `pacing.ts` | Per-site pacing between agent actions (random 1–5 s; 15–30 s for 30 min after a bot check) |
+
+### Per-site pacing
+
+`pacing.ts`, used by the agent loop in `App.tsx`. Before each action that touches a page (navigate,
+clicks, fill/type, press, scroll), the agent waits until the next allowed time for that host; after
+the action the next gap is drawn at random between **1 and 5 s**, so no run of actions has a regular
+rhythm (a steady click every 2–4 s was what got the agent treated as a bot on shopping sites). When an
+observed page looks like a bot check (`BOT_CHECK_RE`: "robot check", "unusual traffic", "verify you
+are human", "just a moment", captcha…), that host gets **15–30 s** gaps for **30 minutes**, and the
+prompt tells the model to do only what is necessary there and to prefer another source. Other hosts
+and internal actions (extract, store, report…) are not delayed; Stop still cancels during a wait.
+Pacing only slows the agent down; it does not solve or skip the check.
 
 ---
 

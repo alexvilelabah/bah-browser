@@ -11,6 +11,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
+import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
@@ -2783,6 +2784,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
                   if (step >= 20 && !replanRequested) replanRequested = true;
                   const stuckOnUrl = stepsOnSameUrl >= 5;
+                  // Ritmo por site: página com cara de checagem anti-robô → esperas maiores neste host por 30 min.
+                  { const h = paceHostOf(observation.url);
+                    if (h && BOT_CHECK_RE.test(`${observation.title} ${(observation.text_sample || '').slice(0, 600)}`)) backoff(h); }
+                  const pacingLine = isBackedOff(paceHostOf(observation.url))
+                    ? `PACING: ${paceHostOf(observation.url)} flagged automated access — Bah now waits 15–30s between actions here for 30 minutes. Do only what is necessary on this site; prefer another source when the task allows.`
+                    : '';
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
@@ -2845,6 +2852,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ].join(' ') : '',
                     isHungObservation(observation) && ocrText ? 'PAGE UNRESPONSIVE: This page\'s scripts are hung — interactive elements, extract_text and scroll will NOT work here, and RELOADING THIS SAME URL WILL NOT FIX IT. The OCR TEXT below is a reliable snapshot of what is visible. If it contains what you need, answer now with report/done. Otherwise navigate to a DIFFERENT website (e.g. another source for the same information).' : '',
                     stuckOnUrl ? `STUCK: You have spent ${stepsOnSameUrl} steps on ${observation.url} without finishing. ABANDON this source NOW. Either: (a) navigate to a different site (Wikipedia, NotebookCheck, Wccftech), (b) use the data you already have in MEMORY and call report. Do NOT scroll or extract again on this page.` : '',
+                    pacingLine,
                     replanRequested && step >= 20 ? 'REPLAN: You have used 20+ steps. If you have ANY useful data in MEMORY, call report() with what you have. Better partial answer than no answer.' : '',
                     `[STEP ${step + 1}/${MAX_STEPS === Infinity ? '∞' : MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
                   ].filter(Boolean).join('\n');
@@ -3162,6 +3170,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       noEffectCount = Math.max(noEffectCount, 1);
                       continue;
                     }
+                  }
+                  // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
+                  // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
+                  // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'scroll'].includes(action.type);
+                  const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                  if (touchesPage && paceHost) {
+                    const waitMs = paceDelay(paceHost);
+                    if (waitMs > 0) {
+                      if (waitMs > 3000) onProgress({ kind: 'status', message: `🐢 Pacing ${paceHost}: waiting ${Math.ceil(waitMs / 1000)}s` });
+                      const until = Date.now() + waitMs;
+                      while (Date.now() < until) { await new Promise(r => setTimeout(r, Math.min(500, until - Date.now()))); throwIfCancelled(); }
+                    }
+                    recordHit(paceHost);
                   }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;

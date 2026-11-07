@@ -168,6 +168,8 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
+- 🐢 **Per-site pacing.** Actions that touch a page wait a random 1–5 s between them on the same site; after a site shows a bot check, 15–30 s for the next 30 minutes. It only slows the agent down — it does not get around the check.
+
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
 - 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
@@ -176,7 +178,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🚫 **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 
-**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running, a per-tab sandbox, and click rate-limiting to avoid aggressive bot-like behavior.
+**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running and a per-tab sandbox.
 
 ---
 

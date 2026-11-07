@@ -113,6 +113,20 @@ Nada aqui resolve CAPTCHA nem contorna bloqueio.
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
+| `pacing.ts` | Ritmo por site entre ações do agente (aleatório 1–5 s; 15–30 s por 30 min depois de uma checagem anti-robô) |
+
+### Ritmo por site
+
+`pacing.ts`, usado pelo loop do agente no `App.tsx`. Antes de cada ação que mexe na página (navegar,
+cliques, preencher/digitar, tecla, rolar), o agente espera até o próximo horário permitido pra aquele
+host; depois da ação o próximo intervalo é sorteado entre **1 e 5 s**, então nenhuma sequência sai
+com ritmo regular (um clique certinho a cada 2–4 s foi o que fez sites de compra tratarem o agente
+como robô). Quando uma página observada parece checagem anti-robô (`BOT_CHECK_RE`: "robot check",
+"unusual traffic", "verify you are human", "just a moment", captcha…), aquele host passa a ter
+intervalos de **15–30 s** por **30 minutos**, e o prompt avisa o modelo pra fazer só o necessário ali
+e preferir outra fonte. Outros hosts e ações internas (extrair, guardar, relatar…) não esperam; o
+Parar continua cancelando durante a espera. O ritmo só deixa o agente mais lento; não resolve nem
+pula a checagem.
 
 ---
 
