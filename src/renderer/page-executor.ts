@@ -50,6 +50,8 @@ export interface InteractiveElement {
   pressed?: boolean;
   checked?: boolean;
   backendNodeId?: number; // CDP node id for precise clicking
+  frame?: string;         // dentro de um iframe (host dele): sem backendNodeId — clique por coordenada
+  frameNode?: { key: string; id: number };   // nó no documento do iframe (preencher sem depender de foco)
   repeatNote?: number;    // "+N elementos similares" colapsados após este (poda de payload)
 }
 
@@ -222,8 +224,10 @@ export async function observePageViaAXTree(
             }
           }
 
+          // Iframes (formulário de vaga, pagamento, reserva embutidos): a árvore da página não os inclui.
+          const frameEls = await collectFrameElements(wcId).catch(() => [] as InteractiveElement[]);
           // Filter out elements with no resolved coordinates (off-screen / hidden)
-          const allVisible = elements.filter(e => e.w > 0 && e.h > 0 && e.x > 0 && e.y > 0);
+          const allVisible = [...elements, ...frameEls].filter(e => e.w > 0 && e.h > 0 && e.x > 0 && e.y > 0);
           if (allVisible.length >= 4) {
             // PRIORIZAÇÃO POR VIEWPORT (pedido do Gemini): coords do getBoxModel são
             // relativas à viewport, então y <= innerHeight = está na tela. Elementos
@@ -264,6 +268,27 @@ export async function observePageViaAXTree(
   }
   if (dismissed && fallback) fallback.dismissed = dismissed;
   return fallback;
+}
+
+/** Elementos dos iframes, com coordenadas na viewport da página e o host do iframe em `frame`. */
+async function collectFrameElements(wcId: number): Promise<InteractiveElement[]> {
+  const api = window.electronAPI as any;
+  if (!api?.getFramesAx || !api?.getFramesCoords) return [];
+  const r = await api.getFramesAx(wcId);
+  const out: InteractiveElement[] = [];
+  for (const f of r?.frames || []) {
+    const els = buildElementsFromAXTree(f.nodes).slice(0, 60);
+    const ids = els.map(e => e.backendNodeId).filter((x): x is number => x != null);
+    if (!ids.length) continue;
+    const c = await api.getFramesCoords(wcId, f.key, ids);
+    for (const el of els) {
+      const b = el.backendNodeId != null ? c?.coords?.[el.backendNodeId] : null;
+      if (!b) continue;
+      // Sem backendNodeId: o id é de OUTRO documento (colidiria com os da página). Age por coordenada.
+      out.push({ ...el, ...b, backendNodeId: undefined, frame: f.label, frameNode: { key: f.key, id: el.backendNodeId! } });
+    }
+  }
+  return out;
 }
 
 // Roles considered interactive by the AX tree

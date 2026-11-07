@@ -60,6 +60,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `validate.ts` | Helpers de segurança de caminho (`isInsideAllowedRoot` etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
 | `job-queue.ts` | Serializa tarefas longas |
+| `frames.ts` (+ `src/shared/frames.ts`) | Conteúdo de iframes pro agente (formulário de vaga/pagamento/reserva embutido): árvores de acessibilidade dos frames do mesmo processo (por `frameId`) e dos cross-origin (sessões CDP achatadas via `Target.setAutoAttach`), coordenadas na viewport da página; elementos aparecem com `frame="host"`. Preencher grava no nó dentro do frame (sem depender de foco); clique em frame cross-origin usa CDP `Input` na sessão do frame (`sendInputEvent` para no `<iframe>`). Frames `chrome-extension://` injetados por extensões ficam de fora |
 
 ---
 

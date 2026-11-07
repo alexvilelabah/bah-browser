@@ -62,6 +62,7 @@ sites behave exactly as they would for a human.
 | `validate.ts` | Path-safety helpers (`isInsideAllowedRoot`, etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Popup/overlay handling and dismissal |
 | `job-queue.ts` | Serialises long-running jobs |
+| `frames.ts` (+ `src/shared/frames.ts`) | Iframe content for the agent (embedded job/payment/booking forms): accessibility trees of same-process frames (by `frameId`) and cross-origin frames (flattened CDP sessions via `Target.setAutoAttach`), coordinates mapped to the page viewport; elements are listed with `frame="host"`. Fills set the value on the node inside its frame (focus-independent); clicks in cross-origin frames use CDP `Input` on the frame's session (`sendInputEvent` stops at the `<iframe>`). Extension-injected `chrome-extension://` frames are left out |
 
 ---
 

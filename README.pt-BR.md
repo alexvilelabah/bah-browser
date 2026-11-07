@@ -123,6 +123,8 @@ USUÁRIO → "abre o gmail e apaga os spams"
 
 O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
 
+Iframes também contam: campos e botões de formulários embutidos (candidatura de vaga, campos de pagamento, widget de reserva) — da mesma origem ou de outro site — aparecem na lista de elementos marcados com `frame="host"`, e `click_ref` / `fill_ref` funcionam neles do mesmo jeito.
+
 ---
 
 ## Como rodar

@@ -41,6 +41,7 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { setupFrames } from './frames';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
@@ -1783,6 +1784,27 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        let a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        // "ref": "__REF:<text>__" → the [N] of the first listed element whose line contains <text>.
+        if (typeof a.ref === 'string' && a.ref.startsWith('__REF:')) {
+          const want = a.ref.slice(6, -2).toLowerCase();
+          const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
+          a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        }
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',
@@ -2851,6 +2873,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
     privateSessions: [incognitoSession()],
   });
+  // Iframes pro agente: campos/botões de formulários embutidos (mesma origem e cross-origin).
+  setupFrames(sharedEnsureDebugger);
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.
