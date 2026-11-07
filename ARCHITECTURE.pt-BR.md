@@ -524,6 +524,37 @@ a caixa "histórico de conversas" (mesmo período). Aba anônima nunca chega a n
 `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
 `session-restore.test.ts`; ponta a ponta `tests/e2e/sessions-thread.spec.ts`.
 
+## Tarefas agendadas (com o Bah aberto)
+
+O assistente roda um pedido nos horários marcados — "every weekday at 8am check my Indeed recommendations",
+"toda segunda às 9h resuma as notícias", "a cada 2 horas …" — ou pelo ⋮ → ⏰ **Tarefas agendadas** (criar,
+editar, pausar, apagar, rodar agora, histórico). Regras puras em `src/shared/schedule.ts` (testadas em
+`tests/unit/schedule.test.ts`): parser en/pt/es (todo dia, dias úteis, fim de semana, dias da semana,
+a cada N minutos/horas com mínimo de 15 minutos, às HH:MM / 8am / 8h / meio-dia), próxima vez em **hora
+local** (8h continua 8h na troca do horário de verão; a hora pulada na primavera roda logo depois; a hora
+repetida no outono roda uma vez), vezes perdidas e validação/tetos do que vai pro disco. Pedido ambíguo
+(sem hora, "at 9" manhã ou noite, intervalo abaixo do mínimo) ganha um cartão com as próximas 3 vezes antes
+de salvar; o claro é salvo e a resposta diz a próxima vez. A checagem cedo fica em
+`AgentCommandBar.runUnified` (antes do roteador).
+- **Onde fica**: `src/main/scheduled-tasks.ts` — `userData/scheduled-tasks.enc`, cifrado com `safeStorage`
+  (sem cofre → só na memória), ≤50 tarefas, pedido ≤1000 caracteres, ≤20 entradas de histórico cada.
+- **Execução**: `src/renderer/scheduler.ts` (`useScheduler`). Um tique (15 s) acha as que venceram e põe
+  na fila; uma por vez e só com o painel do assistente livre (tarefa ou chat da pessoa nunca é
+  atropelado: eventos `bah:sched-busy` / `bah:sched-run` no `AgentCommandBar`). Cada tarefa roda na sua
+  aba e sessão (chip "⏰ <nome>"), reaproveitada nas próximas vezes enquanto estiver aberta. O loop do
+  agente recebe `unattended: true`: o freio também para num "Send/Post/Book/Order" puro (`risk.ts`) e os
+  assistentes de envio automático do Gmail/YouTube ficam desligados. Resultado + resumo curto vão pro
+  histórico da tarefa.
+- **Esperando a pessoa**: um cartão de confirmação (freio, permissão) ou uma pausa de login
+  para a vez; o agendador marca "esperando você" no painel/menu e manda uma notificação do sistema
+  (`sched:notify`; clique → a aba da tarefa). O relógio da tarefa (`task-deadline.ts`) dorme enquanto o
+  cartão espera. Nada arriscado acontece até a pessoa responder.
+- **Vezes perdidas**: na abertura, toda tarefa ligada cuja hora já passou é oferecida (`MissedRunsCard`:
+  Rodar agora / Pular), nunca roda escondida. Com o Bah aberto, uma hora perdida por mais de 10 minutos
+  (o computador dormiu) é oferecida do mesmo jeito. Pular grava "pulado" e vai pra próxima vez.
+- **Testes**: `tests/e2e/scheduled-tasks.spec.ts` usa um relógio injetável (`E2E_SCHED_NOW` e
+  `window.__bahSched.setNow`, só com `NODE_ENV=test`).
+
 ## Skills de navegação (`skills/*/SKILL.md`)
 
 Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que

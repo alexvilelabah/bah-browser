@@ -222,6 +222,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatHistoryGet: (id: string) => ipcRenderer.invoke('chat-history:get', id),
   chatHistoryDelete: (id: string) => ipcRenderer.invoke('chat-history:delete', id),
   chatHistoryClear: (since: number | null) => ipcRenderer.invoke('chat-history:clear', since),
+  // Tarefas agendadas (guardadas cifradas no main; relógio/fila no renderer)
+  schedList: () => ipcRenderer.invoke('sched:list'),
+  schedSave: (list: any[]) => ipcRenderer.invoke('sched:save', list),
+  schedClock: () => ipcRenderer.invoke('sched:clock'),
+  schedNotify: (n: { title: string; body: string; taskId?: string }) => ipcRenderer.invoke('sched:notify', n),
+  onSchedFocus: (cb: (taskId: string) => void) => {
+    const listener = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('sched:focus', listener);
+    return () => ipcRenderer.removeListener('sched:focus', listener);
+  },
   skillsSave: (markdown: string) => ipcRenderer.invoke('skills:save', markdown),
   skillsOpenFolder: () => ipcRenderer.invoke('skills:open-folder'),
   verifyClick: (wcId: number, backendNodeId: number) =>

@@ -49,6 +49,7 @@ import { setupMemorySaverSignals } from './memory-saver-signals';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
+import { setupScheduledTasks } from './scheduled-tasks';
 import { setupFrames } from './frames';
 import { setupPageSave } from './page-save';
 import { setupHwMonitor } from './hw-monitor';
@@ -3954,6 +3955,7 @@ function setupAutoUpdater(): void {
 
 app.whenReady().then(async () => {
   setupChatStore(() => mainWindow);
+  setupScheduledTasks({ getMainWindow: () => mainWindow, showMainWindow });
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
   // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork
   // castLabs (mesma versão, +wvcus). O CDM vem por component updater: baixa na PRIMEIRA

@@ -43,6 +43,8 @@ import PasswordSuggest from './components/PasswordSuggest';
 import PasswordsPanel from './components/PasswordsPanel';
 import type { PasswordsBridge, PwOffer, PwSuggest } from '../shared/password-types';
 import MonitorsPanel from './components/MonitorsPanel';
+import { ScheduledTasksPanel, MissedRunsCard } from './components/ScheduledTasksPanel';
+import { useScheduler } from './scheduler';
 import ClearDataDialog, { type ClearChoice } from './components/ClearDataDialog';
 import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange } from '../shared/clear-data';
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
@@ -327,6 +329,11 @@ declare global {
       getHwAccel?: () => Promise<{ enabled: boolean }>;
       setHwAccel?: (on: boolean) => Promise<{ ok: boolean; enabled?: boolean }>;
       onSafeBrowsingBlock?: (cb: (info: { url: string; host: string }) => void) => void;
+      schedList?: () => Promise<{ tasks: import('../shared/schedule').ScheduledTask[]; available: boolean }>;
+      schedSave?: (list: import('../shared/schedule').ScheduledTask[]) => Promise<{ ok: boolean; tasks: import('../shared/schedule').ScheduledTask[] }>;
+      schedClock?: () => Promise<{ offset: number; test: boolean }>;
+      schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
+      onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       jsDialogRespond?: (id: number, accept: boolean, text?: string) => Promise<any>;
       jsDialogAgentTabs?: (ids: number[]) => Promise<any>;
       onJsDialog?: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => () => void;
@@ -1149,6 +1156,25 @@ export default function App() {
   }, []);
   const [torrent, setTorrent] = useState<TorrentSheetData | null>(null);
   const [monitorsOpen, setMonitorsOpen] = useState(false);
+  // ⏰ Tarefas agendadas (renderer/scheduler.ts): cada uma roda numa aba com sessão própria.
+  const [schedOpen, setSchedOpen] = useState(false);
+  const sched = useScheduler({
+    openRunTab: (_task, reuse) => {
+      if (reuse && tabsRef.current.some(x => x.id === reuse && !x.hidden)) { store.setActiveTabId(reuse); return reuse; }
+      return store.addTab();
+    },
+    ensureRunSession: (tabId, task) => {
+      if (!tabsRef.current.some(x => x.id === tabId)) return false;   // a aba nova ainda não chegou no estado
+      const had = store.threadKeyOf(tabId) !== tabId;
+      const sid = store.ensureSession(tabId, { command: task.command });
+      if (sid === tabId) return false;
+      // Nome reconhecível no chip ("⏰ News"); se a pessoa renomeou a sessão depois, fica o nome dela.
+      if (!had) store.renameSession(sid, `⏰ ${task.name}`);
+      return true;
+    },
+    focusTab: (id) => { if (tabsRef.current.some(x => x.id === id && !x.hidden)) store.setActiveTabId(id); },
+    openPanel: () => store.setSidebarOpen(true),
+  });
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
   const zoomBadgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2193,6 +2219,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">🔓</span>
                   <span className="menu-label">{t('menu.siteLogin')}</span>
                 </button>
+                <button className="menu-item" data-testid="menu-scheduled" onClick={() => { setMenuOpen(false); setSchedOpen(true); }} title={t('sched.menuTitle')}>
+                  <span className="menu-ic">⏰</span>
+                  <span className="menu-label">{t('sched.title')}</span>
+                  {sched.run?.status === 'waiting' && <span className="menu-kbd">{t('sched.waiting')}</span>}
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setMonitorsOpen(true); }} title={t('mon.menuTitle')}>
                   <span className="menu-ic">🛰️</span>
                   <span className="menu-label">{t('mon.title')}</span>
@@ -2291,6 +2322,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {/* Aba anônima que ainda não abriu nada: a explicação (desenhada aqui, sem internet). */}
           {activeIncognito && isIncognitoBlank(store.activeTab.url) && <IncognitoPage />}
           <PermissionPrompt ask={permAsks.find(a => a.tabId === store.activeTabId)} onAnswer={answerPerm} />
+          {schedOpen && <ScheduledTasksPanel sched={sched} onClose={() => setSchedOpen(false)} />}
+          <MissedRunsCard sched={sched} />
           <JsDialogHost />
           <PasswordSavePrompt offer={pwOffers.find(o => o.tabId === store.activeTabId)} onAnswer={answerPwOffer} onReveal={revealPwOffer} />
           {pwSuggest && pwSuggest.tabId === store.activeTabId && (
@@ -2369,6 +2402,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             tabIds={store.tabs.map(t => t.sessionId || t.id).join(',')}
             threadKeyOf={store.threadKeyOf}
             onEnsureSession={(tabId, text) => { store.ensureSession(tabId, { command: text }); }}
+            onCreateSchedule={(command, spec) => { const task = sched.add(command, spec); return task ? { nextAt: task.nextAt } : null; }}
+            schedNow={sched.now}
             viewSession={(() => {
               const sid = store.activeTab?.sessionId;
               const s = sid ? store.sessions.find(x => x.id === sid) : undefined;
@@ -2631,6 +2666,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
               // Skills de navegação: carregadas uma vez por tarefa; escolhidas a cada passo.
               const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
+              // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
+              const unattended = !!opts?.unattended;
+              const riskOpts = { unattended };
               // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
               let carefulNavs = 0, carefulRefusals = 0;
               // A última coisa em que o agente agiu (texto do clique + página): o próximo pedido pode dizer "it/that".
@@ -2816,9 +2854,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
                 setAgentVisual('idle');
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
+                // Pessoa pensando não é o modelo lento: o relógio da tarefa dorme enquanto o cartão espera
+                // (numa tarefa agendada ele pode esperar horas, até a pessoa voltar).
+                deadline.suspend();
                 return new Promise<boolean>((resolve) => {
                   let done = false;
-                  const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+                  const finish = (v: boolean) => { if (!done) { done = true; deadline.resume(); resolve(v); } };
                   if (signal) signal.addEventListener('abort', () => finish(false), { once: true });
                   onProgress({
                     kind: 'confirm',
@@ -2862,7 +2903,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   onProgress({ kind: 'status', message: `🔁 Automation: "${macro.command.slice(0, 70)}" — ${macro.steps.length} step(s) × ${times >= 100000 ? '∞ (until you stop)' : times}${repeatIntent.intervalMs ? `, every ${Math.round(repeatIntent.intervalMs / 1000)}s` : ''}. Zero AI.` });
                   // FREIO: se a automação inclui uma ação de risco (pagar/excluir/cartão),
                   // confirma UMA vez antes de repetir (não a cada repetição — seria absurdo).
-                  const riskyStep = macro.steps.map(s => riskForAction(s as any)).find((r): r is RiskInfo => !!r);
+                  const riskyStep = macro.steps.map(s => riskForAction(s as any, undefined, undefined, riskOpts)).find((r): r is RiskInfo => !!r);
                   if (riskyStep) {
                     const ok = await confirmRisky(riskyStep);
                     throwIfCancelled();
@@ -2956,7 +2997,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   console.log(`[Agent] fast path -> ${initialShortcut.reason}`);
                   const beforeUrl = wv.getURL();
                   // FREIO: atalho aprendido também passa pela confirmação se for de risco.
-                  const scCancel = await gateRisk(riskForAction(initialShortcut.action as any, undefined, beforeUrl));
+                  const scCancel = await gateRisk(riskForAction(initialShortcut.action as any, undefined, beforeUrl, riskOpts));
                   if (scCancel) {
                     allResults.push({ action: initialShortcut.action as BrowserAction, result: scCancel });
                     finishRun('cancelled', scCancel.error);
@@ -3105,7 +3146,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
-                  if (!aiDrive && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
+                  if (!aiDrive && !unattended && commandLooksLikeSendEmail && isGmailUrl(observation.url) && parsedEmailDraft && !gmailDraftFilled) {
                     gmailComposeAttempted = true;
                     const compose = await tryComposeGmailDraft(wv, parsedEmailDraft);
                     if (compose.success) {
@@ -3122,7 +3163,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       onProgress({ kind: 'status', message: `Gmail: draft assistant could not fill it (${compose.reason || 'no detail'}).` });
                     }
                   }
-                  if (!aiDrive && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
+                  if (!aiDrive && !unattended && commandLooksLikeYouTubeComment && isYouTubeWatchUrl(observation.url) && !youtubeCommentFilled && step >= 2) {
                     const assist = await tryRevealYouTubeCommentBox(wv);
                     if (assist.success) {
                       onProgress({ kind: 'status', message: 'YouTube: comment box located/activated.' });
@@ -4109,7 +4150,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: `No element with ref @${action.ref}` };
                     } else {
                       // FREIO DE SEGURANÇA: pagamento/exclusão/cartão → confirma antes de agir.
-                      const risk = classifyRisk(action.type, target.text, target.placeholder, target.aria);
+                      const risk = classifyRisk(action.type, target.text, target.placeholder, target.aria, riskOpts);
                       let cancelled = false;
                       if (risk) {
                         const ok = await confirmRisky(risk);
@@ -4231,11 +4272,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // FREIO: resolve o rótulo do elemento SOB a coordenada e confirma se for de risco.
                     // Same point that will be clicked — checking anywhere else defeats the gate.
                     const lblAt = await withTimeout(wv.executeJavaScript(`(function(x,y){try{const e=document.elementFromPoint(x,y);if(!e)return '';const t=e.closest('a,button,[role=button],[role=link]')||e;return (t.innerText||t.textContent||t.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,80);}catch(_){return '';}})(${cx},${cy})`), 3000, '');
-                    const cancelAt = await gateRisk(riskForAction(action as any, { text: String(lblAt || '') }));
+                    const cancelAt = await gateRisk(riskForAction(action as any, { text: String(lblAt || '') }, undefined, riskOpts));
                     toolResult = cancelAt ?? await window.electronAPI?.realClick?.(wcId, cx, cy);
                   } else if (action.type === 'click_text' && wcId != null) {
                     // FREIO DE SEGURANÇA: confirma antes de clicar em pagamento/exclusão.
-                    const riskT = classifyRisk('click_text', action.text);
+                    const riskT = classifyRisk('click_text', action.text, undefined, undefined, riskOpts);
                     let cancelledT = false;
                     if (riskT) {
                       const ok = await confirmRisky(riskT);
@@ -4283,7 +4324,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // FREIO: Enter (press) numa página de checkout pode submeter pagamento.
                     // Esta é a 1ª branch que pega press — sem o gate aqui, o freio do `else`
                     // lá embaixo nunca rodava pra press.
-                    const c = await gateRisk(riskForAction(action as any, undefined, wv?.getURL?.() || ''));
+                    const c = await gateRisk(riskForAction(action as any, undefined, wv?.getURL?.() || '', riskOpts));
                     toolResult = c ?? await window.electronAPI?.realKey?.(wcId, action.key);
                   } else if (action.type === 'plan') {
                     plan = action.steps || [];
@@ -5836,7 +5877,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
                     // gate só checava `press`. riskForAction devolve null pra ação inofensiva,
                     // então o caminho normal (scroll/click/fill comum) não muda.
-                    const riskCancel = await gateRisk(riskForAction(action as any, undefined, wv.getURL?.() || ''));
+                    const riskCancel = await gateRisk(riskForAction(action as any, undefined, wv.getURL?.() || '', riskOpts));
                     // Bounded: on hung pages any executeJavaScript-based action (scroll,
                     // click_text fallback, fill...) would otherwise never resolve.
                     toolResult = riskCancel ?? await withTimeout(executeBrowserAction(wv, action),
