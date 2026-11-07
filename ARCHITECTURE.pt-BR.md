@@ -242,6 +242,51 @@ Onde se decide (tudo no processo main, então toda entrada se comporta igual):
 
 A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só importa com o embutido LIGADO.
 
+#### "Baixe o <programa> pra este computador" (instaladores e drivers)
+
+Steam, driver de impressora, Office, SolidWorks… o agente tem que pegar a versão **do site oficial** que roda
+**nesta máquina**. A lógica pura fica em [`src/shared/software-download.ts`](src/shared/software-download.ts)
+(testes em `tests/unit/software-download.test.ts`); [`src/main/machine-info.ts`](src/main/machine-info.ts) lê o
+sistema uma vez (`process.platform`/`arch`, `getSystemVersion()`, Rosetta via `app.runningUnderARM64Translation`,
+`/etc/os-release` no Linux) e entrega ao renderer pelo `machine:info`.
+
+- **Perfil da máquina → agente.** `machineProfile()` dá SO + versão (codinome do macOS, Windows 10 × 11 pelo build,
+  distro Linux e `.deb`/`.rpm`), CPU (Intel x64 / Apple Silicon / ARM64 / 32-bit) e `pickHint()`: uma frase do que
+  escolher (Mac Intel → "Intel / x64 / Universal .dmg ou .pkg, não só-arm64"; Windows x64 → ".exe/.msi x64";
+  Linux → tipo de pacote). Vai no prompt do sistema (`USER'S COMPUTER`) e, em tarefa de download, numa linha
+  `THIS COMPUTER: … PICK: …` ao lado de `DOWNLOADS` a cada passo.
+- **Conferindo o arquivo que começou.** `checkBuild(nome)` classifica pela extensão e por pedaços do nome
+  (`arm64`/`aarch64`/`apple-silicon`, `x64`/`x86_64`/`amd64`/`intel`, `universal`, `win`/`mac`/`darwin`/`linux`).
+  `error` = não roda aqui (SO errado, build arm64 num Mac Intel, `.rpm` no Ubuntu) → `WRONG OS` / `WRONG CPU` /
+  `WRONG PACKAGE` na linha `DOWNLOAD STARTED` (e em `DOWNLOADS`), e esse download nunca conta como sucesso.
+  `warn` = roda, mas não é nativo (Intel no Apple Silicon via Rosetta, x86 no Windows x64) → nota leve.
+- **Sites de "free download"** (Softonic, FileHippo, Uptodown, CNET…): `thirdPartyDownloadSite()` marca a página e
+  os downloads vindos deles com `THIRD-PARTY DOWNLOAD SITE` (instalador velho ou com bundleware) e manda o agente
+  pro fabricante. Qual domínio *é* o oficial fica com o agente (busca) e com o `site-knowledge.ts`.
+- **O botão de baixar, com qualquer texto.** `isDownloadControl(rótulo, href)`: "Download…" sempre conta; o
+  jeito do fabricante ("Install Steam", "Get the app", "Install now", "Try free") só se leva a um arquivo de
+  instalador ou é um botão sem link. Link de loja de apps ou de extensões nunca conta. A lista de elementos do
+  agente vem da árvore de acessibilidade, sem `href`, então o destino de cada candidato é lido do DOM e casado
+  com o `[id]` por texto e posição (`matchControl`, [`src/shared/page-controls.ts`](src/shared/page-controls.ts)).
+  `LIKELY DOWNLOAD BUTTON` mostra o arquivo, deixa de fora os de SO/CPU errado, e um `click_text` com o mesmo
+  rótulo vira `click_ref` nesse botão. Sem isso o "Install Steam" do menu da Steam (que só recarrega a página)
+  era clicado em loop.
+- **Modal sem ARIA.** A passada do `uiState` também coleta painéis fixos de z-index alto; `pickOverlay` pontua por
+  cobrir o meio da tela, fundo escuro, z-index e botões de ação. Um fundo vazio não ganha mais a regra antiga
+  ("≥ 20% da tela"). A linha `OPEN DIALOG/POPUP` lista os botões do próprio diálogo com o `[id]` (no modal de
+  download da HP: o "Download" do modal × o da página). `tests/unit/page-scripts-syntax.test.ts` faz o parse de
+  todo script de página do `App.tsx`; uma regex com barra simples num deles tinha desligado o `uiState` inteiro.
+- **Parede de login.** Em tarefa de download (depois do 1º passo), `signInWall()` — campo de senha, host de login
+  (`login.*`, `auth.*`, `login.microsoftonline.com`…), caminho `/signin`/`/register` ou o texto "sign in to download" —
+  pausa o agente com o cartão de ajuda manual (`dl.signinWall.*`): a pessoa entra ela mesma ou para. O agente nunca
+  digita senha nem cria conta. Um link "Sign in" no cabeçalho do site não conta.
+- **Nunca executa nada.** Nada abre um download sozinho: `download:open-file` só roda no clique da pessoa (painel de
+  Downloads, bloco do resultado), e o agente não tem ação de "abrir arquivo". A skill `software-download`
+  (`skills/software-download/SKILL.md`, lida quando o carregador de skills entrar) também diz ao modelo pra nunca
+  abrir nem rodar o instalador.
+
+Testado com `tests/e2e/software-download.spec.ts` (páginas de fabricante sintéticas: botão que detecta o SO, lista
+por SO/CPU, seletor de modelo de impressora com modal sem ARIA, página tipo Steam cujo único botão diz "Install Steam", parede de login).
 #### Vídeo / áudio (`media-downloader.ts`, `media-parts.ts`)
 
 O yt-dlp baixa um vídeo em alta resolução em dois **pedaços** — `Título [id].f313.webm` (só imagem) e

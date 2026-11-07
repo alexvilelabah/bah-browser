@@ -19,6 +19,8 @@ import { ThinkingBudget, LOCAL_SERVER_THINK_TOKENS } from './thinking-budget';
 import { chooseDeepSeekModel, isModelMissingError, DEEPSEEK_FLASH_IDS } from './deepseek-models';
 import { clampWindow, outputBudget as _outputBudget, ollamaAutoNumCtx, ollamaThink, recoverOutputBudget, fitOutputToWindow } from './local-providers';
 import { readSseStream, readOllamaNdjson, createLiveMeter, type LiveMetrics } from './stream-readers';
+import { currentMachineProfile } from './machine-info';
+import { pickHint } from '../shared/software-download';
 import { readBlocksLength } from '../shared/read-paging';
 
 /** Ollama auto num_ctx: the floor it asks for, and the answer room it sizes the window for. */
@@ -140,7 +142,27 @@ function sanitizeForJson(s: string): string {
   return out;
 }
 
-const BROWSER_AGENT_SYSTEM_PROMPT = `You are an AI browser agent embedded in a web browser. You operate the page by choosing exactly one structured browser tool per step.
+// O computador e a região da pessoa — "drivers pra minha máquina", "o instalador certo pro meu
+// PC". Sem isto o modelo chutava (SO errado; site do Brasil/pt por causa dos exemplos em pt).
+function machineBlock(): string {
+  // SO/versão/CPU (Rosetta = Apple Silicon) e o que escolher: machine-info + shared/software-download.
+  const m = currentMachineProfile();
+  const osName = m.osName, arch = m.archLabel;
+  let region = '';
+  try {
+    const { app } = require('electron');
+    const country = app?.getLocaleCountryCode?.() || '';
+    const locale = app?.getSystemLocale?.() || app?.getLocale?.() || '';
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    region = [country && `country ${country}`, locale && `locale ${locale}`, tz && `time zone ${tz}`].filter(Boolean).join(', ');
+  } catch {}
+  return `USER'S COMPUTER: ${osName}, ${arch}${region ? `. USER'S REGION: ${region}` : ''}.
+- When the user says "my machine", "my computer", "my PC/Mac" or asks for drivers, software or an installer without naming an OS, pick the download for THIS operating system and architecture: ${pickHint(m)} On driver sites choose this OS in the OS selector — if the page shows another OS (e.g. Windows downloads) or an OS/version drop-down, change it FIRST with select_option (e.g. option "macOS 26.x"), then pick the download; do not accept a different OS the site pre-selected.
+- On sites with a country/language choice (vendor support, stores), use the user's region above — not Brazil/Portuguese unless that IS the region.
+- Do not invent deep URLs with ids/product keys you have not seen (they lead to error pages). Start from the site's home or support page and use its search box with the product/model name.`;
+}
+
+const BROWSER_AGENT_BASE_PROMPT = `You are an AI browser agent embedded in a web browser. You operate the page by choosing exactly one structured browser tool per step.
 
 You MUST return ONLY a JSON object with this EXACT shape — no other keys, no nested wrappers, no arrays:
 {
@@ -305,6 +327,7 @@ STRATEGY (in order of preference):
 LEAN ON THE GIANTS (be street-smart, not heroic):
 - To SEARCH the web, navigate in ONE action to the search URL named on the SEARCH ENGINE line at the top of the page state (Google by default: https://www.google.com/search?q={query}). If a search engine shows "unusual traffic", "sorry" or a captcha, do NOT stop or ask the user — switch to another engine from that line (Bing https://www.bing.com/search?q={query}, DuckDuckGo https://html.duckduckgo.com/html/?q={query}, Yahoo https://search.yahoo.com/search?p={query}, or Perplexity https://www.perplexity.ai/search?q={query} for a summarized answer). NEVER fill a search engine's homepage box and click the button — that wastes steps and hits overlays.
 - Google answers most questions directly in the results page (featured snippets, conversion boxes, weather).
+- DOWNLOAD tasks are not research: open the official vendor/download page from the results and keep going.
 - If the user names a site listed under KNOWN SITE SHORTCUTS / OFFICIAL SITES (LinkedIn, Indeed, Walmart, GitHub…), navigate straight to its listed address — no web_search first.
 - If the user names a store, brand or site that is NOT listed and whose web address you do not know (any country), never guess a domain: use web_search for its name and open its OFFICIAL site, then use that site's own search. Do not answer from search snippets when the user asked you to look on a specific site.
 - RESEARCH / RECOMMENDATION questions ("qual a melhor X", "procure um Y barato", "compare Z", "quanto custa W"): after the Google search, your NEXT action is extract_text to READ THE SNIPPETS, then answer. The snippets already contain product names, prices, specs and recommendations. Do NOT click the result links — they are slow, frequently fail (Google truncates/overlays them), and waste many steps. Only open a specific site if the snippets are truly insufficient.
@@ -386,7 +409,18 @@ Emit at most ONE [[ACTION:]] line, only when acting would genuinely help, and ne
 
 // Prompts constantes — sanitizados UMA vez no carregamento do módulo para não varrer
 // ~8KB caractere a caractere a cada chamada de IA (era feito em todo callDeepSeek).
-const SANITIZED_AGENT_PROMPT = sanitizeForJson(BROWSER_AGENT_SYSTEM_PROMPT);
+// O bloco do computador/região: antes do app 'ready' o getSystemLocale() LANÇA (e o
+// getLocaleCountryCode volta vazio) — a região sumia calada e o modelo chutava Brasil/pt.
+// Os nomes ficam os mesmos (os corpos de nuvem são travados por texto em tests/goldens) e
+// são remontados uma vez quando o app fica pronto.
+let BROWSER_AGENT_SYSTEM_PROMPT = BROWSER_AGENT_BASE_PROMPT + '\n\n' + machineBlock();
+let SANITIZED_AGENT_PROMPT = sanitizeForJson(BROWSER_AGENT_SYSTEM_PROMPT);
+try {
+  require('electron').app?.whenReady?.().then(() => {
+    BROWSER_AGENT_SYSTEM_PROMPT = BROWSER_AGENT_BASE_PROMPT + '\n\n' + machineBlock();
+    SANITIZED_AGENT_PROMPT = sanitizeForJson(BROWSER_AGENT_SYSTEM_PROMPT);
+  });
+} catch {}
 const SANITIZED_CHAT_PROMPT = sanitizeForJson(CHAT_ASSISTANT_SYSTEM_PROMPT);
 
 // ── Idioma da "voz" do agente (i18n Fase 2) ────────────────────────────────

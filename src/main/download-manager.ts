@@ -13,6 +13,7 @@ import { isInsideAllowedRoot } from './validate';
 import { MultiDownload, probeDownload, partPathFor, DEFAULT_ENGINE_CONFIG, MAX_CONNECTIONS, type EngineConfig } from './multi-download';
 import { downloadRoots, getDownloadDir, setDownloadDir } from './download-dir';
 import { agentCadenceMs } from './download-progress';
+import { currentMachineInput } from './machine-info';
 
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
@@ -421,6 +422,9 @@ export function setupDownloadManager(deps: Deps) {
     try { shell.openPath(p); } catch {}
     return { ok: true };
   });
+  // O computador (SO/versão/CPU) pro renderer: checar se o arquivo que o agente baixou serve AQUI
+  // (navigator.platform mente — num Mac M-series diz "MacIntel").
+  ipcMain.handle('machine:info', () => currentMachineInput());
 
   // Fechando o Bah no meio: os parciais (.bahpart) não têm como continuar depois — some com eles.
   app.on('before-quit', () => {
