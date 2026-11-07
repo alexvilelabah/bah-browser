@@ -212,7 +212,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc. Combos work too: { "action": "press", "key": "Control+Enter" }.
 - navigate: { "action": "navigate", "url": string } navigates directly to a URL.
 - scroll: { "action": "scroll", "direction": "up"|"down"|"top"|"bottom", "amount"?: number }
-- wait: { "action": "wait", "ms": number } or { "action": "wait", "selector": string, "timeout": number }
+- wait: { "action": "wait", "ms": number } — or wait for a CONDITION (ends as soon as it is true, max "timeout" ms, default 15000, max 60000): { "action": "wait", "text": "Results" } (text appears on the page), { "action": "wait", "gone": "Loading" } (text disappears), { "action": "wait", "url": "/checkout" } (URL contains it; "**/orders/*" globs work), { "action": "wait", "load": "networkidle" } (no network activity; "load" = page finished loading). Prefer a condition over a fixed sleep after search/submit buttons.
 - dialog: { "action": "dialog", "accept": true|false } — sets the answer for the NEXT alert/confirm box on this tab (60 s); then do the action that opens it. Without it Bah closes alerts and accepts confirms (payment/delete confirms go to the user) — DIALOG: lines in the history say what happened.
 - done: { "action": "done", "reason": string, "success": boolean } ends the task.
 

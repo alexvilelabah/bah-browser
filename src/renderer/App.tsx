@@ -194,6 +194,7 @@ declare global {
       pointer?: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => Promise<{ success: boolean; error?: string }>;
       selectOption?: (wcId: number, backendNodeId: number, option: string) => Promise<{ ok: boolean; selected?: string; options?: string[]; error?: string }>;
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
+      waitNetworkIdle?: (wcId: number, idleMs: number, timeoutMs: number) => Promise<{ ok: boolean; waitedMs?: number; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
       onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => void;
@@ -4719,6 +4720,38 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       armDialog(wcIdDlg, action.accept, action.text);
                       toolResult = { success: true, info: { armed: action.accept ? `accept${action.text != null ? ` with "${action.text}"` : ''}` : 'dismiss', note: 'Now do the action that opens the dialog.' } };
                     } else toolResult = { success: false, error: 'The tab is not ready yet; try again after the page loads.' };
+                  } else if (action.type === 'wait' && (action.text || action.gone || action.url || action.load)) {
+                    // Espera por CONDIÇÃO (texto aparece/some, URL, carregamento) — termina assim que for verdade.
+                    const cap = Math.min(Math.max(Number(action.timeout) || 15_000, 1000), 60_000);
+                    const t0 = Date.now();
+                    const norm = (x: string) => x.toLowerCase().replace(/\s+/g, ' ');
+                    const urlOk = (u: string) => {
+                      const want = action.url!;
+                      if (!want.includes('*')) return u.includes(want);
+                      const re = new RegExp('^' + want.split('**').map(p => p.split('*').map(q => q.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')).join('.*') + '$');
+                      return re.test(u) || re.test(u.replace(/^https?:\/\/[^/]+/, ''));
+                    };
+                    let met = false, why = '';
+                    if (action.load === 'networkidle' && wcId != null) {
+                      const r = await window.electronAPI?.waitNetworkIdle?.(wcId, 500, cap);
+                      met = !!r?.ok; why = r?.error || '';
+                    } else {
+                      while (Date.now() - t0 < cap) {
+                        throwIfCancelled();
+                        const body = action.text || action.gone
+                          ? norm(String(await withTimeout(wv.executeJavaScript('document.body ? document.body.innerText : ""').catch(() => ''), 3000, '')))
+                          : '';
+                        met = (!action.text || body.includes(norm(action.text)))
+                          && (!action.gone || !body.includes(norm(action.gone)))
+                          && (!action.url || urlOk(wv.getURL()))
+                          && (action.load !== 'load' || !wv.isLoading());
+                        if (met) break;
+                        await new Promise(r => setTimeout(r, 300));
+                      }
+                    }
+                    const what = action.text ? `text "${action.text}"` : action.gone ? `"${action.gone}" to disappear` : action.url ? `URL ${action.url}` : `page ${action.load}`;
+                    toolResult = met ? { success: true, info: { waitedFor: what, waitedMs: Date.now() - t0 } }
+                      : { success: false, error: `Waited ${Math.round((Date.now() - t0) / 1000)}s for ${what} — not yet.${why ? ' ' + why : ''} Re-check the page; it may need another action.` };
                   } else {
                     // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
