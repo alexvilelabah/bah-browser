@@ -41,6 +41,12 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
+- **Arquivos do seu computador (uploads):** o agente nunca escolhe caminho. No `upload`, o Bah mostra um cartão e
+  *você* escolhe o arquivo no diálogo do SO (o agente só vê o nome). Ou você pode **liberar uma pasta nesta sessão**:
+  o agente então lista, lê PDF/Word/texto dela (ex.: escolher o currículo que combina com a vaga) e anexa arquivos
+  dela — tudo resolvido e conferido no processo principal (sem fuga por `../` ou symlink), até fechar o Bah ou
+  revogar (menu ⋮ → 📂 Pastas liberadas ao agente). Nada é enviado até o formulário do site ser enviado. Ver
+  [`src/main/upload.ts`](src/main/upload.ts).
 
 ---
 
@@ -67,6 +73,8 @@ uns dois pulos.
 | Binário blindado (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignorado, `--inspect` ignorado |
 | Bridge IPC = único portão | [`preload.ts`](src/preload/preload.ts) | todo canal é `ipcRenderer.invoke(...)`; nenhum primitivo Node exposto |
 | Freio (pagar / comprar / excluir / cartão) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + o loop do agente em `App.tsx` | `riskForAction` classifica; clique, **fill** (cartão) e **press** (Enter no checkout) pedem confirmação antes de rodar |
+| Agente fora de contas que não pediram | o loop do agente em `App.tsx` | clique em Entrar / Cadastrar / "Continuar com o Google" é recusado, a não ser que o pedido fale de conta ou login |
+| Sites cuidadosos (termos proíbem automação) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + o loop do agente em `App.tsx` | LinkedIn por padrão (mais `localStorage.carefulSites`): uma navegação por pedido, depois só ações de `CAREFUL_ALLOWED` (ler/relatar); a segunda ação recusada encerra a tarefa |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
 | Sem download de executável | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` bloqueados no download |
 | `openFile` / reveal não abrem caminho arbitrário | [`download-manager.ts`](src/main/download-manager.ts) + `main.ts` (`shell:reveal`) | ambos chamam `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → só Downloads / userData / temp |
