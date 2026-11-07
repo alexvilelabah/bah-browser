@@ -29,6 +29,11 @@ export type AgentAction =
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
   | { type: 'select_option'; ref: number; option: string }
+  | { type: 'click_role'; role: string; name?: string; nth?: number }
+  | { type: 'get'; ref: number }
+  | { type: 'keydown'; key: string }
+  | { type: 'keyup'; key: string }
+  | { type: 'insert_text'; text: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
   | { type: 'back' }
@@ -80,6 +85,11 @@ const VALID_ACTIONS = new Set([
   'check',
   'uncheck',
   'select_option',
+  'click_role',
+  'get',
+  'keydown',
+  'keyup',
+  'insert_text',
   'store',
   'extract_text',
   'extract_images',
@@ -358,6 +368,14 @@ export class PageAgent {
         return { type: action.type, ref: toRef(action.ref) };
       case 'select_option':
         return { type: 'select_option', ref: toRef(action.ref), option: String(action.option ?? action.value ?? action.text ?? action.label ?? '').trim() };
+      case 'get':
+        return { type: 'get', ref: toRef(action.ref) };
+      case 'keydown': case 'keyup':
+        return { type: action.type, key: String(action.key ?? '').trim() };
+      case 'insert_text':
+        return { type: 'insert_text', text: String(action.text ?? action.value ?? '') };
+      case 'click_role':
+        return { type: 'click_role', role: String(action.role ?? '').trim().toLowerCase(), ...(action.name ?? action.text ?? action.label ? { name: String(action.name ?? action.text ?? action.label).trim() } : {}), ...(toOptionalNumber(action.nth) ? { nth: toOptionalNumber(action.nth) } : {}) };
       case 'fill_ref':
         return { type: 'fill_ref', ref: toRef(action.ref), value: String(action.value ?? '') };
       case 'click_text':
@@ -460,6 +478,10 @@ export function validateAction(a: AgentAction): string | null {
     case 'select_option':
       if (!finiteInt(a.ref)) return `select_option needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
       return nonEmpty(a.option) ? null : 'select_option needs the "option" text to choose';
+    case 'get': return finiteInt(a.ref) ? null : 'get needs the "ref" of an element';
+    case 'keydown': case 'keyup': return nonEmpty(a.key) ? null : `${a.type} needs a "key"`;
+    case 'insert_text': return nonEmpty(a.text) ? null : 'insert_text needs "text"';
+    case 'click_role': return nonEmpty(a.role) ? null : 'click_role needs a "role" (button, link, textbox, checkbox, radio, combobox, tab, menuitem, option, switch)';
     case 'click_ref': return finiteInt(a.ref) ? null : `click_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
     case 'fill_ref':
       if (!finiteInt(a.ref)) return `fill_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;

@@ -20,6 +20,7 @@ import WebViewContainer from './components/WebViewContainer';
 import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
 import PasswordSavePrompt from './components/PasswordSavePrompt';
 import { JsDialogHost } from './components/JsDialogHost';
+import { matchRole } from '../shared/role-target';
 import { agentDialogsStart, agentDialogsStop, agentDialogsTab, armDialog, drainDialogLog } from './js-dialogs';
 import PasswordSuggest from './components/PasswordSuggest';
 import PasswordsPanel from './components/PasswordsPanel';
@@ -184,6 +185,9 @@ declare global {
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
+      inspect?: (wcId: number, target: any) => Promise<{ ok: boolean; state?: any; error?: string }>;
+      keyState?: (wcId: number, key: string, down: boolean) => Promise<any>;
+      insertText?: (wcId: number, text: string) => Promise<any>;
       frameClick?: (wcId: number, key: string, id: number) => Promise<any>;
       frameFill?: (wcId: number, key: string, id: number, value: string) => Promise<{ ok: boolean; value?: string; error?: string }>;
       getFramesAx?: (wcId: number) => Promise<{ ok: boolean; frames: Array<{ key: string; label: string; nodes: any[] }> }>;
@@ -2785,6 +2789,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (e.placeholder) attrs.push(`placeholder="${e.placeholder.slice(0, 40)}"`);
                       if (e.href) attrs.push(`href="${e.href.slice(0, 60)}"`);
                       if (e.frame) attrs.push(`frame="${e.frame}"`);
+                      if (e.disabled) attrs.push('disabled');
                       const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
                       const text = (e.text || '').slice(0, 80).replace(/\s+/g, ' ').trim();
                       const key = elementKey(e);
@@ -3169,6 +3174,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `⚡ batch of ${result.actions.length} actions planned` });
                   }
                   } // end if (!fromQueue)
+                  // click_role → click_ref do elemento que casa (passa pelos mesmos freios e verificações).
+                  let roleMiss = '';
+                  if (action?.type === 'click_role') {
+                    const hits = matchRole(observation.interactive_elements, action.role, action.name);
+                    const pick = hits[Math.max(1, action.nth || 1) - 1];
+                    if (pick) { onProgress({ kind: 'status', message: `🎯 ${action.role}${action.name ? ` "${action.name}"` : ''}${action.nth ? ` #${action.nth}` : ''} → @${pick.id}` }); action = { type: 'click_ref', ref: pick.id }; }
+                    else roleMiss = hits.length ? `only ${hits.length} ${action.role}(s) match "${action.name || ''}" — nth ${action.nth} does not exist` : `no ${action.role} labelled "${action.name || ''}" in INTERACTIVE ELEMENTS (scroll, use find, or pick a ref)`;
+                  }
                   if (!action) {
                     finishRun('failed', 'AI did not return an action.');
                     return { error: 'AI did not return an action.', thought: thoughts.join('\n'), results: allResults };
@@ -3401,7 +3414,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
                   // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
                   // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
-                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll'].includes(action.type);
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll', 'insert_text', 'keydown', 'keyup'].includes(action.type);
                   const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
                   if (touchesPage && paceHost) {
                     const waitMs = paceDelay(paceHost);
@@ -4528,6 +4541,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Then wait for it to load
                     await sleep(4000);
                     }
+                  } else if (action.type === 'get') {
+                    const el = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdG = (wv as any).getWebContentsId?.();
+                    if (!el || wcIdG == null) toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    else {
+                      const r = await window.electronAPI?.inspect?.(wcIdG, el.frameNode ? { key: el.frameNode.key, id: el.frameNode.id } : el.backendNodeId != null ? { backendNodeId: el.backendNodeId } : { x: el.x, y: el.y });
+                      if (r?.ok && r.state) { history += `\nGET @${action.ref}: ${JSON.stringify(r.state)}`; toolResult = { success: true, info: { ref: action.ref } }; }
+                      else toolResult = { success: false, error: r?.error || 'could not read the element' };
+                    }
+                  } else if ((action.type === 'keydown' || action.type === 'keyup' || action.type === 'insert_text') && wcId != null) {
+                    toolResult = action.type === 'insert_text'
+                      ? await window.electronAPI?.insertText?.(wcId, action.text)
+                      : await window.electronAPI?.keyState?.(wcId, action.key, action.type === 'keydown');
+                  } else if (action.type === 'click_role') {
+                    toolResult = { success: false, error: roleMiss || 'no matching element' };
                   } else if (action.type === 'close_tab') {
                     const target = tabsRef.current[action.tab];
                     if (target && target.incognito && !privateTaskRef.current) {
@@ -4734,7 +4762,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at'
+                    || action.type === 'look_at' || action.type === 'get'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
                   let screenshotAfter: string | undefined;
@@ -4797,7 +4825,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'find'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'get'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';
                   if (internalAction) {
