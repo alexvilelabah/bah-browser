@@ -43,6 +43,17 @@ sites behave exactly as they would for a human.
 > generate an image, compare prices, news) are handled in `detectQuickAction` with **zero
 > AI tokens**; the model is only called when real reasoning is needed.
 
+### Agent cursor (what the user sees)
+
+`components/AgentVisualOverlay.tsx` draws an agent cursor over the page that glides on an arc
+(`src/shared/agent-cursor-path.ts`, ~450 ms, ease-in-out; it jumps straight there with reduce-motion)
+from its last position to each click, and the click ripple appears where it stops. The overlay is
+`position:absolute; inset:0` over the page area, so positions are measured from the overlay's own
+corner; adding the page's offset in the whole window (as before) drew the cursor and ripple about
+100 px below the real click. `tests/e2e/agent-cursor.spec.ts` compares the drawn cursor and ripple
+with the click the page received. It drives the real agent loop with `E2E_MOCK_SCRIPT` (a JSON list
+of actions the mocked model returns, one per step; test-only, needs `E2E_MOCK_AI=1`).
+
 ---
 
 ## `src/main/` — privileged process

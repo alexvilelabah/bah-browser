@@ -1198,6 +1198,10 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 @keyframes dotPulse{0%,100%{opacity:0.5;transform:scale(0.82);}50%{opacity:1;transform:scale(1.1);}}
 
 /* Click ripple — softened to match the aurora palette */
+/* Cursor do agente: a PONTA da seta (canto de cima à esquerda) fica exatamente no ponto do clique. */
+.agent-cursor{position:absolute;width:16px;height:16px;pointer-events:none;z-index:2;
+  background:linear-gradient(135deg,#a5f3fc,#818cf8);clip-path:polygon(0 0,0 100%,30% 72%,52% 100%,66% 92%,45% 64%,85% 64%);
+  filter:drop-shadow(0 0 6px rgba(34,211,238,0.7));}
 .agent-ripple{position:absolute;width:0;height:0;pointer-events:none;transform:translate(-50%,-50%);}
 .agent-ripple .ripple-core{position:absolute;left:0;top:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:radial-gradient(circle,#a5f3fc 0%,#22d3ee 55%,transparent 100%);box-shadow:0 0 18px 4px rgba(34,211,238,0.6);animation:rippleCore 0.9s ease-out forwards;}
 .agent-ripple .ripple-wave{position:absolute;left:0;top:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;border:2px solid rgba(129,140,248,0.8);animation:rippleWave 1s ease-out forwards;}

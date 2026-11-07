@@ -41,6 +41,17 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 > comparar preço, notícias) são tratados no `detectQuickAction` com **zero tokens de IA**; o
 > modelo só é chamado quando precisa raciocinar de verdade.
 
+### Cursor do agente (o que a pessoa vê)
+
+O `components/AgentVisualOverlay.tsx` desenha por cima da página um cursor do agente que desliza num
+arco (`src/shared/agent-cursor-path.ts`, ~450 ms, ease-in-out; com "reduzir movimento" pula direto)
+da última posição até cada clique, e a ondinha aparece onde ele para. O overlay é
+`position:absolute; inset:0` sobre a área da página, então as posições contam do canto do próprio
+overlay; somar o deslocamento da página na janela inteira (como antes) desenhava cursor e ondinha
+uns 100 px abaixo do clique real. `tests/e2e/agent-cursor.spec.ts` compara o cursor e a ondinha
+desenhados com o clique que a página recebeu. Ele conduz o loop real do agente com `E2E_MOCK_SCRIPT`
+(lista JSON de ações que o modelo simulado devolve, uma por passo; só pra teste, exige `E2E_MOCK_AI=1`).
+
 ---
 
 ## `src/main/` — processo privilegiado
