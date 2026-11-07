@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
+import { arcPath, ARC_MS } from '../shared/agent-cursor-path';
 import { classifyError } from '../shared/error-codes';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
@@ -41,9 +42,11 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
+import { setupFrames } from './frames';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
 import { setupChromeExtensions } from './chrome-extensions';
@@ -57,6 +60,7 @@ import { parseHostsList, SAFE_BROWSING_MIN_HOSTS } from '../shared/safe-browsing
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { chromeIdentity, userAgentOverrideParams, sendsClientHints, orderChromeHeaders } from './chrome-identity';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -382,11 +386,15 @@ const lastAuthPopupAt = new Map<number, number>();
 let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
 
-const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
-const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
-// Keep HTTP UA and JS Client Hints aligned with the Chromium embedded in Electron.
-const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
-const CHROME_SEC_CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR}"`;
+// Identidade Chrome (UA, sec-ch-ua, navigator.userAgentData): UMA fonte, chrome-identity.ts.
+// Versão = Chrome estável atual (CURRENT_CHROME_MAJOR) no formato reduzido; SO e arquitetura REAIS.
+const CHROME_ID = chromeIdentity({
+  engineChrome: process.versions.chrome,
+  platform: process.platform,
+  arch: process.arch,
+  arm64Translation: app.runningUnderARM64Translation,
+});
+const CHROME_UA = CHROME_ID.userAgent;
 const BROWSER_PARTITION = 'persist:browser';
 const GOOGLE_LOGIN_PARTITION = 'persist:google-login';
 // Quanto silêncio antes de apagar o ícone de som da aba (pausa de fala não pisca o ícone).
@@ -396,6 +404,8 @@ const AUDIO_OFF_DELAY_MS = 3000;
 // NOTE: only attaches + enables Accessibility — exactly as the original.
 // DOM.enable / Page.enable are enabled on-demand inside page-capture.ts.
 const debuggerAttachedSet = new Set<number>();
+// Onde o ponteiro do agente parou em cada aba (o próximo arco sai daqui).
+const lastPointer = new Map<number, { x: number; y: number }>();
 async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Promise<void> {
   if (!debuggerAttachedSet.has(wcId)) {
     try { wc.debugger.attach('1.3'); } catch (err: any) {
@@ -403,7 +413,24 @@ async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Pro
     }
     debuggerAttachedSet.add(wcId);
     wc.once('destroyed', () => debuggerAttachedSet.delete(wcId));
+    wc.debugger.once('detach', () => debuggerAttachedSet.delete(wcId));   // reanexa (e reaplica a identidade) depois
     await wc.debugger.sendCommand('Accessibility.enable');
+    await applyChromeIdentity(wc);
+  }
+}
+
+// Identidade do navegador DE DENTRO do motor (CDP Emulation.setUserAgentOverride): UA, os headers
+// sec-ch-ua (ordem e formato nativos), navigator.userAgentData (brands, versões, plataforma, arch) e
+// Accept-Language + navigator.languages saem TODOS da mesma fonte, antes de qualquer script da
+// página. Antes: header reescrito à mão + navigator remendado no dom-ready — a página lia o valor
+// real antes do remendo, e a contradição (header × JS) é sinal clássico de adulteração.
+async function applyChromeIdentity(wc: Electron.WebContents): Promise<void> {
+  let platformVersion = '';
+  try { platformVersion = process.getSystemVersion(); } catch {}
+  try {
+    await wc.debugger.sendCommand('Emulation.setUserAgentOverride', userAgentOverrideParams(CHROME_ID, NAV_LANGUAGES, platformVersion));
+  } catch (e: any) {
+    console.warn('[Identity] setUserAgentOverride failed:', e?.message || e);
   }
 }
 
@@ -1176,9 +1203,20 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    // Identidade Chrome nativa (UA + client hints + userAgentData + idiomas) já na criação da aba.
+    sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Identity] attach failed:', e?.message || e));
+    // Diagnóstico (BAH_DEBUG_IDENTITY=1): registra no agent.log o que a página vê da identidade.
+    if (process.env.BAH_DEBUG_IDENTITY === '1') {
+      wc.on('dom-ready', () => {
+        wc.executeJavaScript(`JSON.stringify({ url: location.href, webdriver: navigator.webdriver, ua: navigator.userAgent, brands: navigator.userAgentData && navigator.userAgentData.brands.map(function (b) { return b.brand + ' ' + b.version; }).join(', '), langs: navigator.languages })`)
+          .then((v) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'agent.log'), `${new Date().toISOString()} [Identity] ${v}\n`); } catch {} })
+          .catch(() => {});
+      });
+    }
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
+    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
@@ -1783,6 +1821,41 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        let a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        // "ref": "__REF:<text>__" → the [N] of the first listed element whose line contains <text>.
+        if (typeof a.ref === 'string' && a.ref.startsWith('__REF:')) {
+          const want = a.ref.slice(6, -2).toLowerCase();
+          const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
+          a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        } else if (typeof a.ref === 'string' && a.ref.startsWith('__HTMLREF:')) {
+          // "__HTMLREF:<text>__" → the [#N] of the first tag in the LATEST "PAGE HTML" block (get_html)
+          // whose tag + text contains <text> — what a model reading the HTML would pick.
+          const want = a.ref.slice(10, -2).toLowerCase();
+          const all = `${command}\n${pageContent ?? ''}`;
+          const at = all.lastIndexOf('PAGE HTML of');
+          const hit = at < 0 ? null : [...all.slice(at).matchAll(/<[a-z0-9-]+ \[#(\d+)\][^>]*>[^<]*/gi)].find(x => x[0].toLowerCase().includes(want));
+          a = { ...a, ref: hit ? Number(hit[1]) : -1 };
+        }
+        // "offset": "__NEXTOFFSET__" → the offset of the LATEST "…[more: call <tool> { … offset: N … }]" note
+        // (get_html / extract_text paging) — the next call a model following the note would make.
+        if (a.offset === '__NEXTOFFSET__') {
+          const notes = [...String(pageContent ?? '').matchAll(/…\[more: call \w+ \{[^}]*offset: (\d+)/g)];
+          a = { ...a, offset: notes.length ? Number(notes[notes.length - 1][1]) : -1 };
+        }
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',
@@ -2103,27 +2176,93 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         } catch { /* alvo sumiu/erro → cai no x,y recebido */ }
         return null;
       };
-      // Humanizado: leve desvio do centro (±2px) + trajeto curto com easing + jitter.
-      const tx0 = Math.round(x + rnd(-2, 2));
-      const ty0 = Math.round(y + rnd(-2, 2));
-      const sx = Math.max(0, Math.round(tx0 - rnd(40, 90)));
-      const sy = Math.max(0, Math.round(ty0 - rnd(25, 60)));
-      const steps = 4 + Math.floor(rnd(0, 3));
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps; const e = t * t * (3 - 2 * t); // smoothstep
-        wc.sendInputEvent({ type: 'mouseMove', x: Math.round(sx + (tx0 - sx) * e), y: Math.round(sy + (ty0 - sy) * e) } as any);
-        await sleepMs(rnd(8, 22));
+      // O ponteiro de verdade segue o MESMO arco que o cursor desenhado pelo Bah (shared/agent-cursor-path.ts):
+      // sai de onde parou na última ação desta aba e chega no centro do alvo, sem tremor aleatório. Antes a
+      // página recebia uma aproximação curta e reta com desvio aleatório enquanto o overlay desenhava outra
+      // coisa. Quem grava a sessão (HotJar etc.) vê os arcos — reconhecíveis como o agente do Bah.
+      const to0 = { x: Math.round(x), y: Math.round(y) };
+      const from = lastPointer.get(wcId) || { x: Math.max(0, to0.x - 120), y: Math.max(0, to0.y - 80) };
+      const pts = arcPath(from, to0);
+      const stepMs = Math.round(ARC_MS / pts.length);
+      for (const p of pts.slice(0, -1)) {
+        wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y } as any);
+        await sleepMs(stepMs);
       }
       // ÚLTIMO instante: re-resolve a posição (pega resize/scroll ocorrido no trajeto).
       const fresh = await resolveCenter();
-      const tx = fresh ? Math.round(fresh.x + rnd(-2, 2)) : tx0;
-      const ty = fresh ? Math.round(fresh.y + rnd(-2, 2)) : ty0;
+      const tx = fresh ? fresh.x : to0.x;
+      const ty = fresh ? fresh.y : to0.y;
       wc.sendInputEvent({ type: 'mouseMove', x: tx, y: ty } as any);
-      await sleepMs(rnd(30, 70));
+      await sleepMs(40);
       wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
-      await sleepMs(rnd(60, 130));
+      await sleepMs(80);
       wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      lastPointer.set(wcId, { x: tx, y: ty });
       return { success: true, info: { x: tx, y: ty, refreshed: !!fresh } };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // Ponteiro além do clique (paridade com agent-browser): hover, dblclick, drag, focus — mesmo
+  // caminho de input REAL do clique (sendInputEvent), em coordenadas do viewport da aba.
+  ipcMain.handle('input:pointer', async (_e, wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      wc.focus();
+      const move = async (x: number, y: number, steps = 5) => {
+        for (let i = 1; i <= steps; i++) { wc.sendInputEvent({ type: 'mouseMove', x: Math.round(x - (steps - i) * 6), y: Math.round(y - (steps - i) * 3) } as any); await sleepMs(rnd(10, 25)); }
+      };
+      if (op.kind === 'focus') {
+        if (op.backendNodeId == null) return { success: false, error: 'focus needs an element' };
+        await sharedEnsureDebugger(wc, wcId);
+        await wc.debugger.sendCommand('DOM.focus', { backendNodeId: op.backendNodeId });
+        return { success: true };
+      }
+      await move(op.x, op.y);
+      // Re-mede o alvo DEPOIS de mover o ponteiro (menu de hover fechando, layout que desliza): o
+      // clique cai onde o elemento ESTÁ agora, como o input:click.
+      if (op.backendNodeId != null) {
+        try {
+          await sharedEnsureDebugger(wc, wcId);
+          const bm = await wc.debugger.sendCommand('DOM.getBoxModel', { backendNodeId: op.backendNodeId }) as any;
+          const q = bm?.model?.border;
+          if (q && q.length === 8) {
+            op.x = Math.round((Math.min(q[0], q[2], q[4], q[6]) + Math.max(q[0], q[2], q[4], q[6])) / 2);
+            op.y = Math.round((Math.min(q[1], q[3], q[5], q[7]) + Math.max(q[1], q[3], q[5], q[7])) / 2);
+            wc.sendInputEvent({ type: 'mouseMove', x: op.x, y: op.y } as any);
+            await sleepMs(rnd(30, 60));
+          }
+        } catch { /* alvo sumiu: usa a posição medida antes */ }
+      }
+      if (op.kind === 'hover') { await sleepMs(rnd(300, 600)); return { success: true, info: { x: op.x, y: op.y } }; }
+      if (op.kind === 'dblclick') {
+        // Pelo CDP: o sendInputEvent do Electron não gera o evento 'dblclick' da página com clickCount 2.
+        await sharedEnsureDebugger(wc, wcId);
+        for (const clickCount of [1, 2]) {
+          await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: op.x, y: op.y, button: 'left', clickCount });
+          await sleepMs(rnd(30, 60));
+          await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: op.x, y: op.y, button: 'left', clickCount });
+          await sleepMs(rnd(50, 90));
+        }
+        return { success: true };
+      }
+      if (op.kind === 'drag') {
+        if (op.x2 == null || op.y2 == null) return { success: false, error: 'drag needs a target' };
+        wc.sendInputEvent({ type: 'mouseDown', x: op.x, y: op.y, button: 'left', clickCount: 1 } as any);
+        await sleepMs(rnd(120, 200));
+        const steps = 12;
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          wc.sendInputEvent({ type: 'mouseMove', x: Math.round(op.x + (op.x2 - op.x) * t), y: Math.round(op.y + (op.y2 - op.y) * t), button: 'left', buttons: 1 } as any);
+          await sleepMs(rnd(15, 35));
+        }
+        await sleepMs(rnd(80, 150));
+        wc.sendInputEvent({ type: 'mouseUp', x: op.x2, y: op.y2, button: 'left', clickCount: 1 } as any);
+        return { success: true };
+      }
+      return { success: false, error: `unknown pointer op ${(op as any).kind}` };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
     }
@@ -2172,9 +2311,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     passwordManager?.noteAgentInput(wcId);
     try {
       wc.focus();
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key } as any);
-      wc.sendInputEvent({ type: 'char', keyCode: key } as any);
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key } as any);
+      // Combinação "Meta+A", "Control+Shift+Tab": modificadores + a tecla final. Com Meta/Control não
+      // manda 'char' (senão digita a letra). Sozinha: igual a antes.
+      const parts = String(key).split('+').map(x => x.trim()).filter(Boolean);
+      const MOD: Record<string, string> = { meta: 'meta', cmd: 'meta', command: 'meta', control: 'control', ctrl: 'control', shift: 'shift', alt: 'alt', option: 'alt' };
+      const mods = parts.length > 1 ? parts.slice(0, -1).map(m => MOD[m.toLowerCase()]).filter(Boolean) : [];
+      const k = parts.length > 1 && mods.length === parts.length - 1 ? parts[parts.length - 1] : key;
+      wc.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: mods } as any);
+      if (!mods.includes('meta') && !mods.includes('control')) wc.sendInputEvent({ type: 'char', keyCode: k, modifiers: mods } as any);
+      wc.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: mods } as any);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
@@ -2244,11 +2389,58 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   //   stale=true   → element no longer exists (caller should re-observe)
   //   covered=true → an unrelated element is on top at the click point
   //   x, y         → fresh center coordinates to click (use instead of cached ones)
+  // <select> nativo: escolhe a opção NO PRÓPRIO nó (pelo texto exato, parcial ou value) e dispara
+  // input/change como a escolha de verdade — combobox de SO/versão em site de driver etc. Erra →
+  // devolve as opções disponíveis pro modelo tentar de novo.
+  ipcMain.handle('cdp:select-option', async (_e, wcId: number, backendNodeId: number, option: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      const obj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+      const objectId = obj?.object?.objectId;
+      if (!objectId) return { ok: false, error: 'element no longer exists — re-observe the page' };
+      const r = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(want) {
+          const sel = this.tagName === 'SELECT' ? this : (this.querySelector && this.querySelector('select'));
+          if (!sel) return { ok: false, error: 'not a <select> drop-down — click it, then click the option' };
+          const opts = Array.from(sel.options);
+          const norm = s => String(s || '').trim().toLowerCase();
+          const w = norm(want);
+          const o = opts.find(x => norm(x.text) === w) || opts.find(x => norm(x.value) === w)
+            || opts.find(x => norm(x.text).includes(w)) || opts.find(x => w.includes(norm(x.text)) && norm(x.text).length > 2);
+          const list = opts.map(x => x.text.trim()).filter(Boolean).slice(0, 40);
+          if (!o) return { ok: false, error: 'no option matching "' + want + '"', options: list };
+          sel.focus();
+          sel.value = o.value;
+          o.selected = true;
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return { ok: true, selected: o.text.trim(), options: list };
+        }`,
+        arguments: [{ value: String(option ?? '') }],
+        returnByValue: true,
+      }) as any;
+      wc.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {});
+      return r?.result?.value ?? { ok: false, error: 'select failed' };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+
   ipcMain.handle('cdp:verify-click', async (_e, wcId: number, backendNodeId: number) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { error: 'webContents not found' };
     try {
       await ensureDebugger(wc, wcId);
+      // 0. Bring THIS node into the viewport first (no-op when already visible). Without it a
+      // target below the fold measured off-screen and the renderer fell back to click_text by
+      // label — ambiguous when many links share it (ubuntu.com: six "Download" buttons).
+      try {
+        await wc.debugger.sendCommand('DOM.scrollIntoViewIfNeeded', { backendNodeId });
+        await new Promise(r => setTimeout(r, 120));
+      } catch { /* detached/stale — the box model below reports it */ }
       // 1. Fresh bounding box of the intended target
       let box: any = null;
       try {
@@ -2302,6 +2494,28 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
           if (hId) wc.debugger.sendCommand('Runtime.releaseObject', { objectId: hId }).catch(() => {});
         }
       } catch { /* hit-test unavailable (e.g. off-screen) — don't block the click */ }
+
+      // 3. "Covered" right after scrollIntoViewIfNeeded moved the page: the CDP hit-test can land on
+      // the spot where the node was BEFORE the scroll (seen on a support form whose Submit sat below the
+      // fold: "covered by input#ln", the field one scroll-length above). Ask the page itself — the
+      // node's own rect and elementFromPoint, in the same layout — before calling it covered.
+      if (covered) {
+        try {
+          const tObj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+          const tId = tObj?.object?.objectId;
+          if (tId) {
+            const chk = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+              objectId: tId,
+              functionDeclaration: 'function(){var r=this.getBoundingClientRect();if(r.width<1||r.height<1)return null;var x=r.left+r.width/2,y=r.top+r.height/2;var o=document.elementFromPoint(x,y);if(!o)return null;var l=o.closest&&o.closest("label");var mine=o===this||this.contains(o)||o.contains(this)||!!(l&&(l.contains(this)||l.control===this));return mine?{x:x,y:y,top:window===window.top}:null;}',
+              returnByValue: true,
+            }) as any;
+            wc.debugger.sendCommand('Runtime.releaseObject', { objectId: tId }).catch(() => {});
+            const v = chk?.result?.value;
+            // Só no documento principal as coordenadas do elementFromPoint são as da janela; num iframe fica o veredito do CDP.
+            if (v && v.top === true) { covered = false; covering = undefined; return { ok: true, stale: false, covered: false, x: Math.round(v.x), y: Math.round(v.y) }; }
+          }
+        } catch { /* best effort — keep the CDP verdict */ }
+      }
 
       return { ok: true, stale: false, covered, covering, x: cx, y: cy };
     } catch (e: any) {
@@ -2843,6 +3057,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     googleLoginSession: session.fromPartition(GOOGLE_LOGIN_PARTITION),
     extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
   });
+  setupJsDialogs();
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({
@@ -2851,6 +3066,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
     privateSessions: [incognitoSession()],
   });
+  // Iframes pro agente: campos/botões de formulários embutidos (mesma origem e cross-origin).
+  setupFrames(sharedEnsureDebugger);
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.
@@ -3434,8 +3651,8 @@ function stopYtSkipPolling(wcId: number) {
 const STEALTH_SCRIPT = `
 (function(){
   try {
-    // 1. navigator.webdriver — must be undefined (not false)
-    Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => undefined, configurable: true });
+    // 1. navigator.webdriver: NÃO mexer — numa execução normal o motor já diz false, igual ao Chrome.
+    //    (O remendo antigo trocava pra undefined depois do load: valor que nenhum Chrome real tem.)
 
     // 2. navigator.plugins — populate with realistic Chrome plugins
     Object.defineProperty(navigator, 'plugins', {
@@ -3454,22 +3671,7 @@ const STEALTH_SCRIPT = `
       configurable: true,
     });
 
-    // 2.5. navigator.userAgentData (Crucial para login do Google)
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: () => ({
-        brands: [
-          { brand: 'Google Chrome', version: '${CHROME_MAJOR}' },
-          { brand: 'Not;A=Brand', version: '8' },
-          { brand: 'Chromium', version: '${CHROME_MAJOR}' }
-        ],
-        mobile: false,
-        platform: 'Windows'
-      }),
-      configurable: true
-    });
-
-    // 3. languages
-    Object.defineProperty(navigator, 'languages', { get: () => ${JSON.stringify(NAV_LANGUAGES)}, configurable: true });
+    // (userAgentData e languages: nativos via applyChromeIdentity — CDP setUserAgentOverride.)
 
     // 4. window.chrome — populate with realistic structure
     if (!window.chrome) window.chrome = {};
@@ -3501,25 +3703,9 @@ const STEALTH_SCRIPT = `
       };
     }
 
-    // 6. WebGL vendor — pretend to be a real GPU
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-      if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100'; // UNMASKED_RENDERER_WEBGL
-      return getParameter.call(this, p);
-    };
-    if (window.WebGL2RenderingContext) {
-      const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-      WebGL2RenderingContext.prototype.getParameter = function(p) {
-        if (p === 37445) return 'Intel Inc.';
-        if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100';
-        return getParameter2.call(this, p);
-      };
-    }
-
-    // 7. Hardware concurrency / device memory
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+    // 6–7. GPU (WebGL), núcleos e memória: os VALORES REAIS do motor, sem remendo. O antigo
+    //      "Intel Iris 6100 / 8 núcleos / 8 GB" contradizia o resto (o worker da página via o número
+    //      real) — contradição é o sinal clássico de adulteração. A memória o Chromium já arredonda.
 
     // 8. Chromium-detected automation flag
     delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Array;
@@ -3745,10 +3931,17 @@ app.whenReady().then(async () => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = CHROME_UA;
     headers['Accept-Language'] = ACCEPT_LANGUAGE;
-    headers['sec-ch-ua'] = CHROME_SEC_CH_UA;
-    headers['sec-ch-ua-mobile'] = '?0';
-    headers['sec-ch-ua-platform'] = '"Windows"';
-    callback({ requestHeaders: headers });
+    // Brand hints: os mesmos valores de navigator.userAgentData (applyChromeIdentity). Só em https
+    // e localhost (o Chrome não manda client hints em http comum).
+    if (sendsClientHints(details.url || '')) {
+      headers['sec-ch-ua'] = CHROME_ID.secChUa;
+      headers['sec-ch-ua-mobile'] = '?0';
+      headers['sec-ch-ua-platform'] = `"${CHROME_ID.chPlatform}"`;
+    }
+    // sec-ch-ua-arch/bitness NÃO vão em toda requisição: o Chrome de verdade só manda quando o
+    // site pede (Accept-CH). A arquitetura continua disponível via navigator.userAgentData.getHighEntropyValues().
+    // Ordem dos headers igual à do Chrome (os acrescentados aqui iam pro fim).
+    callback({ requestHeaders: orderChromeHeaders(headers) });
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
   persistSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);

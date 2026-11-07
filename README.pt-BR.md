@@ -71,7 +71,7 @@
 - **Adblock** completo (EasyList + EasyPrivacy) com bypass automático em sites que quebram (YouTube, Twitch)
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
-- **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
+- **Compatibilidade com sites modernos** — se apresenta como um Chrome atual no seu SO real (user agent, client hints e idiomas definidos de forma consistente dentro do motor; GPU/CPU/memória reais; `navigator.webdriver` fica com o motor) pra não ser bloqueado por engano
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -119,9 +119,13 @@ USUÁRIO → "abre o gmail e apaga os spams"
 | `type(text)` / `press(key)` | Digita no campo focado / envia uma tecla |
 | `navigate(url)` / `scroll(dir)` | Vai pra URL / rola |
 | `new_tab` / `switch_tab` / `close_tab` | Gerência de abas |
+| `extract_text(offset?, max_chars?)` | O miolo da página em Markdown; página longa em partes via `offset`, no tamanho do contexto livre do modelo |
+| `get_html(selector?, offset?, max?)` | HTML limpo de um seletor ou da página — refs `[#N]`, marca `[hidden]`, sem segredos nem scripts; pra botões duplicados, campos sem rótulo, dropdowns customizados; paginado como o `extract_text` |
 | `done(reason, success)` | Encerra o loop |
 
-O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
+O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. Antes do clique, o ponteiro vai até o alvo pelo mesmo arco do cursor do agente que o Bah desenha na tela (sem tremor aleatório), então os eventos `mousemove` da página batem com o que você vê. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
+
+Iframes também contam: campos e botões de formulários embutidos (candidatura de vaga, campos de pagamento, widget de reserva) — da mesma origem ou de outro site — aparecem na lista de elementos marcados com `frame="host"`, e `click_ref` / `fill_ref` funcionam neles do mesmo jeito.
 
 ---
 
@@ -158,21 +162,25 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, excluir ou meter dados de cartão**, o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
 
+- **Pop-ups das páginas não travam nada.** O `alert`/`confirm` de um site abre na caixa do próprio Bah, não na nativa que travava a página (e o agente). Durante uma tarefa, alerts são fechados e confirms comuns aceitos (o agente pode armar a resposta antes com a ação `dialog`); um confirm que parece **pagamento ou exclusão vai pra você**.
+
 - **Parar é parar.** O botão ■ Parar cancela na hora, mesmo no meio de uma chamada ao modelo ou do loop; uma resposta atrasada não "ressuscita" a tarefa cancelada.
 
 - **Sem falso sucesso.** Depois de um preenchimento, o agente confere se o campo realmente ficou com o valor; se uma ação não surtiu efeito, ele muda de estratégia em vez de relatar sucesso.
 
 - **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
 
+- **Ritmo por site.** Ações que mexem na página esperam um intervalo aleatório de 1–5 s entre si no mesmo site; depois que o site mostra uma checagem anti-robô, 15–30 s pelos próximos 30 minutos. Só deixa o agente mais lento — não contorna a checagem.
+
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
-- **Compatibilidade, não evasão.** A gente se apresenta como Chrome padrão (UA Chrome + mascara `navigator.webdriver`) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos.
+- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão.
 
 - **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 
 - **Adblock pausa em sites conhecidos.** YouTube e Twitch entram em bypass automático pro player não ser bloqueado pelo anti-adblock deles. No resto, o adblock fica ativo.
 
-**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar, sandbox separado por aba, e rate-limit de cliques pra evitar comportamento agressivo de bot.
+**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar e sandbox separado por aba.
 
 ---
 
