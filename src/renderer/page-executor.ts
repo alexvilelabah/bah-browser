@@ -24,6 +24,14 @@ export type BrowserAction =
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
+  | { type: 'select_option'; ref: number; option: string }
+  | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'find'; text: string }
+  | { type: 'back' }
+  | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
+  | { type: 'drag'; ref: number; to_ref: number }
+  | { type: 'forward' | 'reload' }
+  | { type: 'check' | 'uncheck'; ref: number }
   | { type: 'fill_ref'; ref: number; value: string }
   | { type: 'click_text'; text: string; nth?: number }
   | { type: 'click_at'; x: number; y: number }
@@ -101,6 +109,15 @@ export function formatAction(action: BrowserAction): string {
     case 'new_tab': return `new_tab("${action.url}")`;
     case 'close_tab': return `close_tab(${action.tab})`;
     case 'click_ref': return `click_ref(@${action.ref})`;
+    case 'look_at': return action.ref != null ? `look_at(@${action.ref})` : `look_at(${action.x},${action.y} ${action.w}x${action.h})`;
+    case 'find': return `find("${shorten(action.text, 50)}")`;
+    case 'back': return 'back()';
+    case 'forward': return 'forward()';
+    case 'reload': return 'reload()';
+    case 'hover': case 'dblclick': case 'focus': return `${action.type}(@${action.ref})`;
+    case 'drag': return `drag(@${action.ref} → @${action.to_ref})`;
+    case 'check': case 'uncheck': return `${action.type}(@${action.ref})`;
+    case 'select_option': return `select_option(@${action.ref}, "${shorten(action.option, 50)}")`;
     case 'fill_ref': return `fill_ref(@${action.ref}, "${shorten(action.value)}")`;
     case 'click_text': return `click_text("${action.text}"${action.nth ? `, nth=${action.nth}` : ''})`;
     case 'click_at': return `click_at(${Math.round(action.x)}, ${Math.round(action.y)})`;
@@ -533,9 +550,13 @@ const OBSERVE_SCRIPT = `
       const r = el.getBoundingClientRect();
       const ariaLabel = el.getAttribute('aria-label') || '';
       const innerText = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-      const text = (innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || (secret(el) ? '' : el.value) || '').slice(0, 120);
+      // Checkbox/radio: o nome é o texto do <label> (o value é só "on") + estado real. Sem isso a
+      // caixinha "I accept the license" aparecia como <input>on</input> e ninguém sabia o que era.
+      const isBox = el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio');
+      const labelText = isBox ? ((el.labels && el.labels[0] ? el.labels[0].innerText : '') || (el.closest('label') ? el.closest('label').innerText : '')).replace(/\\s+/g, ' ').trim() : '';
+      const text = (labelText || innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || ((isBox || secret(el)) ? '' : el.value) || '').slice(0, 120);
       const pressed = el.getAttribute('aria-pressed');
-      const checked = el.getAttribute('aria-checked');
+      const checked = isBox ? String(!!el.checked) : el.getAttribute('aria-checked');
       return {
         id,
         tag: el.tagName.toLowerCase(),
@@ -544,7 +565,7 @@ const OBSERVE_SCRIPT = `
         y: Math.round(r.top + r.height / 2),
         w: Math.round(r.width),
         h: Math.round(r.height),
-        role: el.getAttribute('role') || undefined,
+        role: el.getAttribute('role') || (isBox ? el.type : (el.tagName === 'SELECT' ? 'combobox' : undefined)),
         href: el.href || undefined,
         placeholder: el.getAttribute('placeholder') || undefined,
         aria: ariaLabel ? ariaLabel.slice(0, 80) : undefined,

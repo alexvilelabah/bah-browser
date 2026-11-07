@@ -176,7 +176,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
+- 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms. Sites whose terms forbid automation (LinkedIn by default) get **careful mode**: one page load per request plus reading — no automated clicking, typing or scrolling; a second refused action ends the task and tells you what to do by hand.
 
 - **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 

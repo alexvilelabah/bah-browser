@@ -214,10 +214,13 @@ export function decideAgentShot(o: {
   imagesSent: number;
   command: string;
   provider?: string;
+  /** The model asked to zoom (look_at) last step: it gets that crop now. */
+  zoomRequested?: boolean;
 }): ShotDecision {
   if (o.mode === 'off') return { attach: false, reason: 'mode_off' };
   if (!providerAcceptsImages(o.provider)) return { attach: false, reason: 'provider_no_vision' };
   if (o.mode === 'always') return { attach: true, reason: 'mode_always' };
+  if (o.zoomRequested) return { attach: true, reason: 'zoom_requested' };
   if (o.imagesSent >= VISION_MAX_IMAGES_PER_RUN) return { attach: false, reason: 'run_budget' };
   if (o.step === 0) return { attach: true, reason: 'first_step' };
   if (o.pageChanged) return { attach: true, reason: 'page_changed' };

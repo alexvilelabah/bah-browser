@@ -12,6 +12,7 @@ import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBa
 import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
+import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
@@ -190,6 +191,8 @@ declare global {
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
+      pointer?: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => Promise<{ success: boolean; error?: string }>;
+      selectOption?: (wcId: number, backendNodeId: number, option: string) => Promise<{ ok: boolean; selected?: string; options?: string[]; error?: string }>;
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
@@ -1379,7 +1382,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
    *  NativeImage is what stops OCR and the model from describing different frames.
    *  The model image is downscaled JPEG (never upscaled); OCR keeps the full-res PNG,
    *  because vision encoders blur small type that Tesseract reads exactly. */
-  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean }): Promise<{
+  const captureFrame = useCallback(async (o: { image: boolean; png: boolean; agentVision?: boolean; crop?: { x: number; y: number; w: number; h: number } | null }): Promise<{
     thumb?: string;
     image?: VisionImage;
     png?: string;
@@ -1406,6 +1409,25 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           // CSS pixels, so click_at needs no scaling at all. Never upscaled.
           // Agent vision frames go up to VISION_AGENT_MAX_SIDE; other paths keep 1280.
           const cap = o.agentVision ? VISION_AGENT_MAX_SIDE : VISION_MAX_SIDE;
+          // look_at: recorta a área pedida nos pixels NATIVOS do frame (Retina = 2x) — nítido,
+          // em vez da página inteira encolhida. Nunca amplia além do nativo.
+          if (o.crop) {
+            const k = size.width / cssW;
+            const cx = Math.max(0, Math.min(cssW - 1, o.crop.x)), cy = Math.max(0, Math.min(cssH - 1, o.crop.y));
+            const cw = Math.max(1, Math.min(cssW - cx, o.crop.w)), ch = Math.max(1, Math.min(cssH - cy, o.crop.h));
+            const piece = img.crop({ x: Math.round(cx * k), y: Math.round(cy * k), width: Math.round(cw * k), height: Math.round(ch * k) });
+            const ps = piece.getSize();
+            const pscale = Math.min(1, cap / Math.max(ps.width, ps.height));
+            const pDataUrl = piece.resize({ width: Math.max(1, Math.round(ps.width * pscale)), height: Math.max(1, Math.round(ps.height * pscale)), quality: 'best' }).toDataURL();
+            const pb64 = pDataUrl.slice(pDataUrl.indexOf(',') + 1);
+            const pReal = encodedImageSize(base64Head(pb64));
+            out.image = {
+              dataUrl: pDataUrl,
+              width: pReal?.width ?? Math.round(ps.width * pscale), height: pReal?.height ?? Math.round(ps.height * pscale),
+              cssWidth: cw, cssHeight: ch, bytes: Math.floor(pb64.length * 3 / 4),
+            };
+            return out;
+          }
           const scale = Math.min(1, cap / Math.max(cssW, cssH));
           const w = Math.max(1, Math.round(cssW * scale));
           const h = Math.max(1, Math.round(cssH * scale));
@@ -2204,6 +2226,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // observation; if the element vanished, the whole batch is discarded.
               let actionQueue: Array<{ action: BrowserAction; stableId?: number }> = [];
               let invalidActionRetries = 0; // re-prompt on malformed model output instead of ending
+              // look_at: a próxima captura vai pro modelo como recorte ampliado desta área (1 passo).
+              let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
+              // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
+              const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
+              const commandIsShopping = /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
+              const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
+              const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
+              const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
+              // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
+              let carefulNavs = 0, carefulRefusals = 0;
+              let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
+              let unfinishedBlocks = 0;    // encerrou dizendo que "vai continuar"
+              let planNudged = false;      // tarefa em vários sites sem plano
+              let lastEvalText = '';       // avaliação/pensamento do passo anterior (checagem de "popup")
+              let popupComplaints = 0, popupComplaintsUrl = '';
+              const commandMultiSite = /\b(\d+|several|multiple|many|various|vários|varios|diversos)\s+(sites|stores|shops|websites|sellers|retailers|insurers|portals|lojas|sites)\b|\b(compare|comparar)\b.*\b(sites|stores|shops|lojas)\b/i.test(command);
               let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
               let lastActionSummary = '';  // what the previous step did
               let lastActionOutcome = '';  // what the page looked like after it
@@ -2657,8 +2695,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     imagesSent,
                     command,
                     provider: shotProvider,
+                    zoomRequested: !!pendingZoom,
                   });
                   lastVisionReason = visionDec.reason;
+                  const zoomNow = visionDec.attach ? pendingZoom : null;
+                  pendingZoom = null;
                   prevStepUrl = observation.url;
                   const ocrWillRun = !observationWasCarried && !commandLooksLikeGoogleLogin
                     && (commandLooksLikeImageTextRead || (observation.text_sample || '').length < 200);
@@ -2667,10 +2708,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // The full-res PNG is only worth encoding when it is awaited before OCR (vision
                   // steps); otherwise OCR takes its own capture exactly as it always did.
                   // Carried observation = same page, so reuse its frame instead of recapturing.
-                  const reuseFrame = observationWasCarried && !!carriedShot;
+                  const reuseFrame = observationWasCarried && !!carriedShot && !zoomNow;
                   const frameP = reuseFrame
                     ? Promise.resolve({ thumb: carriedThumb, image: visionDec.attach ? carriedShot : undefined, png: (ocrWillRun && visionDec.attach) ? carriedPng : undefined })
-                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach, agentVision: true }), 8000, undefined as any);
+                    : withTimeout(captureFrame({ image: visionDec.attach, png: ocrWillRun && visionDec.attach && !zoomNow, agentVision: true, crop: zoomNow }), 8000, undefined as any);
                   let screenshot: string | undefined;
                   let shotForModel: VisionImage | undefined;
                   let framePngForOcr: string | undefined;
@@ -2767,6 +2808,91 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const memoryBlock = memory.length
                     ? `MEMORY:\n${memory.map(m => `  • ${m.key} = ${JSON.stringify(m.value)}${m.source ? ` (from ${m.source})` : ''}`).join('\n')}`
                     : 'MEMORY: (empty — use store action to save extracted data)';
+                  // Dica ao vivo de UI que trava modelo pequeno (vale pra qualquer site):
+                  //  • diálogo modal aberto → a página de trás fica inerte e SOME da lista de elementos
+                  //    (Booking: popup "sign in" e o agente digitava "Los Angeles" no e-mail do popup);
+                  //  • sugestões de autocomplete visíveis → tem que escolher uma antes de buscar.
+                  // A mesma passada lê os outros estados da página (calendário, EULA, seletor de SO, caixa de
+                  // busca, abas, cartões, parede de login), pra quem escolhe orientação por tipo de página.
+                  const uiState = await withTimeout(wv.executeJavaScript(`(function(){
+                    var vis = function(e){ var r = e.getBoundingClientRect(); var cs = getComputedStyle(e); return r.width > 20 && r.height > 20 && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity > 0.05; };
+                    var dlg = Array.prototype.slice.call(document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open],[aria-modal=true]')).filter(vis)
+                      .filter(function(d){ var r = d.getBoundingClientRect(); return r.width * r.height > innerWidth * innerHeight * 0.04; })[0];
+                    // Painel flutuante sem role de diálogo (ex.: "Trending" do campo de busca, banner que cobre
+                    // a página): fixo/absoluto, z-index alto, cobrindo ≥20% da tela, e que não é o cabeçalho.
+                    if (!dlg) dlg = Array.prototype.slice.call(document.querySelectorAll('body *')).filter(function(e){
+                      var cs = getComputedStyle(e); if (!(cs.position === 'fixed' || cs.position === 'absolute')) return false;
+                      if ((parseInt(cs.zIndex, 10) || 0) < 10 || cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.1) return false;
+                      var r = e.getBoundingClientRect(); if (r.height < 120 || r.top < 0 && r.bottom < 120) return false;
+                      return r.width * r.height > innerWidth * innerHeight * 0.20 && !(r.top <= 0 && r.height < 140);
+                    }).sort(function(a, b){ return (parseInt(getComputedStyle(b).zIndex, 10) || 0) - (parseInt(getComputedStyle(a).zIndex, 10) || 0); })[0];
+                    var label = dlg ? (dlg.getAttribute('aria-label') || (dlg.querySelector('h1,h2,h3,[role=heading]') || {}).innerText || dlg.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 90) : '';
+                    // Cupom/desconto no popup: guarda o trecho (quase todo popup só precisa sair do caminho).
+                    var promo = dlg ? ((dlg.innerText || '').replace(/\\s+/g, ' ').match(/[^.!?]{0,80}(\\d+\\s?% off|promo ?code|coupon|discount code|use code|save \\$\\d+|\\$\\d+ off|cupom|c[oó]digo promocional|descuento)[^.!?]{0,80}/i) || [''])[0].trim() : '';
+                    var closers = dlg ? Array.prototype.slice.call(dlg.querySelectorAll('button,[role=button],a')).filter(vis).map(function(b){ return (b.getAttribute('aria-label') || b.innerText || b.title || '').replace(/\\s+/g, ' ').trim(); })
+                      .filter(function(t){ return /^(close|dismiss|×|x|no thanks|not now|maybe later|skip|cancel|fechar|cerrar|agora não)\\b|dismiss|close/i.test(t); }).slice(0, 3) : [];
+                    var visRow = function(e){ var r = e.getBoundingClientRect(); var cs = getComputedStyle(e); return r.width > 20 && r.height > 8 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+                    var opts = Array.prototype.slice.call(document.querySelectorAll('[role=option],[role=listbox] li,[data-testid*=autocomplete] li')).filter(visRow).map(function(o){ return o.innerText.replace(/\\s+/g, ' ').trim().slice(0, 80); }).filter(Boolean).slice(0, 6);
+                    var ctlText = Array.prototype.slice.call(document.querySelectorAll('button,a,label,[role=button],input[type=checkbox],option,[role=tab]')).filter(visRow)
+                      .map(function(e){ return (e.innerText || e.value || e.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim(); }).join(' | ').slice(0, 20000);
+                    var datepicker = !!Array.prototype.slice.call(document.querySelectorAll('input[type=date],[role=grid],[data-date],[class*=datepicker i],[class*=calendar i],[aria-label*=calendar i]')).filter(visRow)[0];
+                    var eula = /\\b(eula|end[- ]user licen[cs]e|licen[cs]e agreement|agree to the (licen[cs]e|terms)|accept (the )?(licen[cs]e|terms))\\b/i.test(ctlText);
+                    var osSel = /\\bwindows\\b/i.test(ctlText) && /\\b(mac ?os|os x|linux)\\b/i.test(ctlText);
+                    var searchbox = !!Array.prototype.slice.call(document.querySelectorAll('input[type=search],[role=searchbox],[role=combobox],input[type=text],input:not([type])')).filter(visRow).filter(function(i){
+                      var t = ((i.getAttribute('placeholder') || '') + ' ' + (i.getAttribute('aria-label') || '') + ' ' + (i.name || '') + ' ' + (i.type || '')).toLowerCase();
+                      return /search|where|destination|city|going|find|location|keyword|query|looking for|i'm looking|what are you looking|busca|pesquis|buscar|destino|procur/.test(t);
+                    })[0];
+                    // Abas: tablist ARIA de verdade, ou ≥2 controles com nome típico de aba (Overview, Specifications…).
+                    var tabWords = /^(overview|specifications|specs|tech specs|technical specifications|models|accessories|parts|reviews|details|documentation|downloads|features|support|description|q&a|vis[aã]o geral|especifica[cç][oõ]es|acess[oó]rios|avalia[cç][oõ]es|detalhes)$/i;
+                    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role=tablist]')).filter(visRow).some(function(t){ return t.querySelectorAll('[role=tab]').length >= 2; })
+                      || Array.prototype.slice.call(document.querySelectorAll('a,button,[role=tab],li')).filter(visRow).filter(function(e){ return tabWords.test((e.innerText || '').trim()); }).length >= 2;
+                    // Cartões: ≥3 irmãos visíveis do mesmo tipo (tag + classe), cada um com link e um pouco de texto —
+                    // lista de vagas, hotéis, produtos, e-mails… (ver skill card-list).
+                    var cards = Array.prototype.slice.call(document.querySelectorAll('ul,ol,div,section,main')).some(function(p){
+                      if (p.children.length < 3) return false;
+                      var kids = Array.prototype.slice.call(p.children).filter(function(c){ var t = (c.textContent || '').length; return t > 20 && t < 3000 && c.querySelector('a[href],[role=link],button') && visRow(c); });
+                      if (kids.length < 3) return false;
+                      var sig = function(c){ return c.tagName + '.' + String(c.className || '').split(/\\s+/)[0]; };
+                      var n = {}; kids.forEach(function(c){ n[sig(c)] = (n[sig(c)] || 0) + 1; });
+                      return Object.keys(n).some(function(k){ return n[k] >= 3; });
+                    });
+                    // Parede de login: campo de senha à vista, página de login (título/endereço) ou aviso "entre para ver…".
+                    var signin = Array.prototype.slice.call(document.querySelectorAll('input[type=password]')).filter(visRow).length > 0
+                      || /\\b(log ?in|sign ?in|sign ?up)\\b|\\bentrar\\b|iniciar sesi[oó]n/i.test(document.title || '')
+                      || /\\/(login|signin|sign-in|log-in|uas\\/login|auth|account\\/login)\\b/i.test(location.pathname)
+                      || /\\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\\b/i.test((document.body.innerText || '').slice(0, 4000));
+                    return { promo: promo, dialog: label, closers: closers, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
+                  })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
+                  const elFor = (txt: string) => observation.interactive_elements.find(e => {
+                    const t = String(e.text || e.aria || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    return t && (t === txt.toLowerCase() || t.startsWith(txt.toLowerCase().slice(0, 40)));
+                  });
+                  if (uiState?.promo && !memory.some(m => m.key === 'promo' && m.value === uiState.promo)) {
+                    memory.push({ key: 'promo', value: uiState.promo, source: paceHostOf(observation.url), ts: Date.now() });
+                    onProgress({ kind: 'status', message: `🏷️ Noted an offer from a popup: ${uiState.promo.slice(0, 80)}` });
+                  }
+                  const dialogBlock = uiState?.dialog
+                    ? `OPEN DIALOG/POPUP: "${uiState.dialog}".${uiState.promo ? ` It mentions an offer — Bah saved it to MEMORY ("${uiState.promo.slice(0, 100)}"); mention it in your answer only if it applies to what the user wants.` : ''} While it is open the page behind it cannot be used (its fields/buttons are not in the list). Close it FIRST${uiState.closers.length ? ': ' + uiState.closers.map(c => { const e = elFor(c); return e ? `[${e.id}] "${c}"` : `"${c}"`; }).join(' or ') + ' — or press "Escape"' : ': press "Escape" (or click an empty part of the page)'} — unless this dialog IS what the task needs.`
+                    // Realidade da página ATUAL: o modelo pequeno repete "travado num popup" de passos antigos.
+                    : /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)
+                      ? `PAGE CHECK: Bah sees NO open popup/dialog on ${paceHostOf(observation.url) || 'this page'} right now — the page is usable. Do not repeat earlier observations; act on the current page.`
+                      : '';
+                  // O agente diz duas vezes seguidas que um popup bloqueia ESTA página e Bah vê um aberto:
+                  // Bah aperta Escape por ele (fecha painel de busca/"Trending", menus, a maioria dos modais).
+                  if (uiState?.dialog && /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)) {
+                    popupComplaints = popupComplaintsUrl === observation.url ? popupComplaints + 1 : 1;
+                    popupComplaintsUrl = observation.url;
+                    if (popupComplaints >= 2) {
+                      popupComplaints = 0;
+                      const wcIdE = (wv as any).getWebContentsId?.();
+                      if (wcIdE != null) { try { await window.electronAPI?.realKey?.(wcIdE, 'Escape'); } catch {} }
+                      history += `\nBAH PRESSED ESCAPE: the agent reported the same popup twice, so Bah pressed Escape to close it. Re-check the page.`;
+                      onProgress({ kind: 'status', message: '⎋ Pressed Escape to close the popup.' });
+                    }
+                  }
+                  const suggestBlock = uiState?.options?.length
+                    ? `SUGGESTIONS LIST is open (autocomplete/drop-down) — click the matching one (click_ref) BEFORE searching; typed text alone is often not accepted:\n${uiState.options.map(o => { const e = elFor(o); return `  ${e ? `[${e.id}]` : '-'} "${o}"`; }).join('\n')}`
+                    : '';
                   // Abas que o agente usa seguem a política dele pra alert/confirm; o que aconteceu
                   // com os diálogos desde o último passo entra no histórico como linhas DIALOG:.
                   { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
@@ -2774,6 +2900,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   history += drainDialogLog();
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
+                    '',
+                    dialogBlock,
+                    suggestBlock,
                     '',
                     planBlock,
                     '',
@@ -2823,6 +2952,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ].join(' ') : '',
                     selfFailCount >= 2 ? 'STUCK: you reported the last ' + selfFailCount + ' actions as failed. Do not repeat them. Pick a different route or emit done with an honest reason.' : '',
                     // Measured: without this the model narrated the page for steps and clicked nothing.
+                    zoomNow && shotForModel ? `ZOOMED VIEW: the attached image is a sharp CROP of ${zoomNow.label} (viewport area x=${Math.round(zoomNow.x)}, y=${Math.round(zoomNow.y)}, ${Math.round(zoomNow.w)}x${Math.round(zoomNow.h)} px), not the whole page. Read it, then act with refs (click_ref / select_option / check) — do not use click_at on this crop.` : '',
                     shotForModel ? [
                       'A SCREENSHOT of the live page is attached to this request.',
                       'You are the ACTOR, not the narrator: answer with an ACTION that changes the page.',
@@ -2993,6 +3123,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     finishRun('failed', result.error, { errorCode: code, retryable });
                     return { error: result.error, errorCode: code, retryable, thought: thoughts.join('\n'), results: allResults };
                   }
+                  lastEvalText = `${result?.evaluation || ''} ${result?.thought || ''}`;
                   // browser-use style: surface the model's self-evaluation of its previous action.
                   if (result?.evaluation && step > 0) {
                     const evalStr = String(result.evaluation);
@@ -3124,6 +3255,30 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     }
                   }
                   throwIfCancelled();
+                  // done SEM "success" (o modelo local nunca manda; mock/rotas sem o parser): decide pelo que
+                  // a mensagem diz — sucesso, a não ser que admita falha. Antes caía em "failed" mesmo com a
+                  // tarefa feita. "success": false explícito continua sendo falha.
+                  if (action.type === 'done' && action.success !== true && action.success !== false) {
+                    (action as any).success = !!String(action.reason || '').trim()
+                      && !/\b(unable|could ?n[o']t|cannot|can't|failed|not (?:able|found|possible|available)|no viable|blocked|n[aã]o consegui|no pude)\b/i.test(String(action.reason || ''));
+                  }
+                  // Encerrar dizendo que AINDA vai fazer algo ("Will now search other sites…") não é
+                  // terminar: devolve pro agente seguir (até 2x por tarefa). Vale pra done e report.
+                  if ((action.type === 'done' || action.type === 'report') && unfinishedBlocks < 2) {
+                    const fin = String((action as any).reason || (action as any).summary || '');
+                    if (/\b(will now|i will (now )?(search|check|look|continue|visit|go)|next,? i('| wi)ll|then (i('| wi)ll )?(search|check|visit)|vou (agora )?(buscar|procurar|verificar|continuar)|a seguir vou)\b/i.test(fin)) {
+                      unfinishedBlocks++;
+                      history += `\nNOT FINISHED: your final message says you will still do more ("${fin.slice(0, 120)}…"). Do that now instead of finishing — continue with the next site/step, then finish when everything is covered.`;
+                      onProgress({ kind: 'status', message: '↪️ The agent said it would continue — continuing instead of finishing.' });
+                      continue;
+                    }
+                  }
+                  // Pedido em VÁRIOS sites sem plano depois de 2 passos: pede o checklist (modelo pequeno
+                  // esquece os sites que faltam e encerra no primeiro).
+                  if (commandMultiSite && !planNudged && step >= 2 && plan.length === 0 && action.type !== 'plan') {
+                    planNudged = true;
+                    history += `\nPLAN FIRST: this task covers several sites. Emit a plan action now listing each site/step, then work through it; finish only when every site is covered (or shown to have nothing).`;
+                  }
                   onProgress({ kind: 'action', action });
                   if (action.type === 'done') {
                     // Robustness: a malformed model response is parsed into a sentinel 'done'.
@@ -3143,6 +3298,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       action.reason = (!store.aiSettings.apiKey && !store.localSettings.enabled)
                         ? 'The free model struggled with this multi-step task. For the full agent, add a DeepSeek key in settings (cheap) — the free tier is best for chat and image generation.'
                         : 'The model kept returning an invalid response for this task. Try rephrasing it, or run it again.';
+                    }
+                    // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
+                    // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
+                    // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
+                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel) && !commandWantsDownload) {
+                      const r = String(action.reason || '');
+                      const hasList = /\n\s*(?:[-*•]|\d+[.)])\s|\|/.test(r) || (r.match(/\d/g) || []).length >= 3 || r.length > 260;
+                      if (!hasList) {
+                        vagueFinishBlocks++;
+                        history += `\nSUMMARIZE FIRST: the user wants the actual results, not "they are visible". List what this page shows (people: name, title, company, location; jobs: title, company, location, pay; products/hotels: name, price, rating), mark the best matches and why. Use extract_text on THIS page if you have not — do not load another page. Then finish with done (or render_view for a table).`;
+                        onProgress({ kind: 'status', message: '📝 Asking for the actual results before finishing.' });
+                        continue;
+                      }
                     }
                     if (commandLooksLikeSendEmail && action.success && !gmailDraftFilled) {
                       history += '\nSAFETY BLOCK: Gmail email task cannot be marked done because the local helper did not verify a filled/sent draft.';
@@ -3188,10 +3356,52 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
+                  // Login/cadastro/SSO SÓ quando a pessoa pediu algo de conta. O modelo tentava "contornar" popup
+                  // de login clicando "Sign in with Google" — buscar em site de reserva/loja não exige conta.
+                  if (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'dblclick') {
+                    const tgtText = action.type === 'click_text' ? String((action as any).text || '')
+                      : String((observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.text || (observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.aria || '');
+                    if (/^\W*(sign ?in|log ?in|sign ?up|register|create (an )?account|join( now)?|continue with (google|apple|facebook|microsoft|email)|sign in with|log in with|entrar|fazer login|cadastr|iniciar sesi[oó]n|reg[ií]strate)\b/i.test(tgtText.trim())
+                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command)) {
+                      history += `\nNOT SIGNING IN: "${tgtText.slice(0, 50)}" starts a sign-in/sign-up, and the user did not ask for anything that needs an account. Close the popup (its close button or press "Escape") and continue without an account — searching does not need one. If the site truly blocks without an account, try another site.`;
+                      onProgress({ kind: 'status', message: `🔒 Not signing in ("${tgtText.slice(0, 40)}") — the task doesn't need an account.` });
+                      continue;
+                    }
+                  }
+                  // Site cuidadoso (termos proíbem automação, ex.: LinkedIn): UMA navegação por pedido +
+                  // leitura. Clique/digitação/scroll/paginação ficam com a pessoa — recusa com explicação.
+                  {
+                    const targetHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                    if (isCarefulHost(targetHost)) {
+                      const refuse = (why: string) => {
+                        history += `\nCAREFUL SITE (${targetHost}): ${why} The user continues by hand — summarize what is visible (extract_text) and finish with done/report telling them the next step.`;
+                        onProgress({ kind: 'status', message: `🛡️ ${targetHost} forbids automated browsing — ${why}` });
+                      };
+                      // O modelo pequeno insistia no mesmo clique recusado (6× "Jobs") e a tarefa morria como
+                      // "repetição", sem dizer o porquê. Segunda recusa → para e diz à pessoa o que fazer à mão.
+                      const stopCareful = () => {
+                        const signInWall = /\b(log ?in|sign ?in|sign ?up|join)\b/i.test(observation.title || '') || /\/(login|signup|uas\/login|checkpoint)\b/i.test(observation.url || '');
+                        const msg = `🛡️ ${targetHost} is in careful mode: its terms forbid automated browsing, so Bah only opens and reads pages there — no clicking or typing.`
+                          + (signInWall ? ' Sign in yourself in this tab (once — the session stays), then ask again.' : '')
+                          + ' Continue by hand from here.';
+                        const done: BrowserAction = { type: 'done', success: false, reason: msg };
+                        finishRun('failed', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done };
+                      };
+                      if (action.type === 'navigate') {
+                        if (carefulNavs >= 1) { if (++carefulRefusals >= 2) return stopCareful(); refuse('only one page load per request is allowed here.'); continue; }
+                        carefulNavs++;
+                      } else if (!CAREFUL_ALLOWED.has(action.type)) {
+                        if (++carefulRefusals >= 2) return stopCareful();
+                        refuse(`"${action.type}" is not done automatically on this site.`);
+                        continue;
+                      }
+                    }
+                  }
                   // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
                   // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
                   // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
-                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'scroll'].includes(action.type);
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll'].includes(action.type);
                   const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
                   if (touchesPage && paceHost) {
                     const waitMs = paceDelay(paceHost);
@@ -4336,6 +4546,170 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { closed: action.tab } };
                     } else toolResult = { success: false, error: `Tab ${action.tab} not found` };
+                  } else if (action.type === 'look_at') {
+                    // Só marca a área; o recorte vai na próxima captura (decideAgentShot força a imagem).
+                    if (action.ref != null) {
+                      const target = observation.interactive_elements.find(e => e.id === action.ref);
+                      const wcIdZ = (wv as any).getWebContentsId?.();
+                      if (!target) {
+                        toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                      } else {
+                        let cx = target.x, cy = target.y;
+                        if (target.backendNodeId != null && wcIdZ != null && window.electronAPI?.verifyClick) {
+                          const v = await window.electronAPI.verifyClick(wcIdZ, target.backendNodeId).catch(() => null);   // rola até ele
+                          if (v && typeof v.x === 'number' && typeof v.y === 'number') { cx = v.x; cy = v.y; }
+                        }
+                        const vp = await withTimeout(wv.executeJavaScript('({w: innerWidth, h: innerHeight})').catch(() => null), 1500, null) as { w: number; h: number } | null;
+                        const W = Math.min(720, vp?.w || 720), H = Math.min(460, vp?.h || 460);
+                        const x = Math.max(0, Math.min((vp?.w || cx + W / 2) - W, cx - W / 2)), y = Math.max(0, Math.min((vp?.h || cy + H / 2) - H, cy - H / 2));
+                        pendingZoom = { x, y, w: W, h: H, label: `the area around @${action.ref} "${String(target.text || target.aria || '').slice(0, 40)}"` };
+                        toolResult = { success: true, info: { zoom: `@${action.ref}` } };
+                      }
+                    } else {
+                      pendingZoom = { x: action.x!, y: action.y!, w: action.w!, h: action.h!, label: 'the requested area' };
+                      toolResult = { success: true, info: { zoom: `${action.x},${action.y} ${action.w}x${action.h}` } };
+                    }
+                    if (toolResult.success) history += `\nZOOM: the next screenshot will be a sharp crop of ${pendingZoom!.label}.`;
+                  } else if (action.type === 'find') {
+                    // Busca na página INTEIRA (fora da tela e além do limite da lista), rola o melhor
+                    // resultado pra vista — ele aparece na lista de elementos do próximo passo.
+                    const res = await withTimeout(wv.executeJavaScript(`(function(want){
+                      var w = String(want).trim().toLowerCase();
+                      var sel = 'a,button,input,select,textarea,label,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=combobox],h1,h2,h3,h4,th,td,li';
+                      var seen = new Set(), hits = [];
+                      document.querySelectorAll(sel).forEach(function(el){
+                        var r = el.getBoundingClientRect(); if (r.width < 1 || r.height < 1) return;
+                        var cs = getComputedStyle(el); if (cs.visibility === 'hidden' || cs.display === 'none') return;
+                        var t = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim();
+                        if (!t || t.length > 200 || t.toLowerCase().indexOf(w) < 0) return;
+                        var ctl = el.closest('a,button,label,select,[role=button],[role=link],[role=checkbox]') || el;
+                        if (seen.has(ctl)) return; seen.add(ctl);
+                        var exact = t.toLowerCase() === w ? 0 : 1, isCtl = /^(A|BUTTON|INPUT|SELECT|LABEL)$/.test(ctl.tagName) || ctl.getAttribute('role') ? 0 : 1;
+                        hits.push({ el: ctl, t: t.slice(0, 80), tag: ctl.tagName.toLowerCase(), rank: exact * 2 + isCtl + t.length / 1000, y: Math.round(r.top + scrollY) });
+                      });
+                      hits.sort(function(a, b){ return a.rank - b.rank; });
+                      if (hits[0]) hits[0].el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                      return { count: hits.length, hits: hits.slice(0, 8).map(function(h){ return { tag: h.tag, text: h.t, pageY: h.y }; }) };
+                    })(${JSON.stringify(action.text)})`).catch((e: any) => ({ count: 0, hits: [], error: String(e?.message || e) })), 5000, { count: 0, hits: [], error: 'page did not respond' }) as { count: number; hits: Array<{ tag: string; text: string; pageY: number }>; error?: string };
+                    if (res.count > 0) {
+                      toolResult = { success: true, info: { matches: res.count, scrolledTo: res.hits[0].text } };
+                      history += `\nFIND "${action.text}": ${res.count} match(es). Scrolled to <${res.hits[0].tag}> "${res.hits[0].text}" — it is now on screen and in INTERACTIVE ELEMENTS (use its [id]).${res.hits.length > 1 ? ' Other matches: ' + res.hits.slice(1).map(h => `<${h.tag}> "${h.text}"`).join('; ') : ''}`;
+                    } else {
+                      toolResult = { success: false, error: res.error || `"${action.text}" was not found anywhere on this page — try other words, or another page.` };
+                    }
+                  } else if (action.type === 'hover' || action.type === 'dblclick' || action.type === 'focus' || action.type === 'drag') {
+                    // Ponteiro além do clique: alvo rolado pra vista e medido (verifyClick), input real.
+                    const wcIdP = (wv as any).getWebContentsId?.();
+                    const locate = async (ref: number) => {
+                      const el = observation.interactive_elements.find(e => e.id === ref);
+                      if (!el) return null;
+                      let x = el.x, y = el.y;
+                      if (el.backendNodeId != null && wcIdP != null && window.electronAPI?.verifyClick) {
+                        const v = await window.electronAPI.verifyClick(wcIdP, el.backendNodeId).catch(() => null);
+                        if (v && typeof v.x === 'number' && typeof v.y === 'number') { x = v.x; y = v.y; }
+                      }
+                      return { x, y, backendNodeId: el.backendNodeId };
+                    };
+                    const a = await locate(action.ref);
+                    const b = action.type === 'drag' ? await locate(action.to_ref) : null;
+                    if (!a || wcIdP == null || (action.type === 'drag' && !b)) {
+                      toolResult = { success: false, error: `No element with ref @${!a ? action.ref : (action as any).to_ref} — re-observe the page.` };
+                    } else {
+                      const r = await window.electronAPI?.pointer?.(wcIdP, { kind: action.type, x: a.x, y: a.y, x2: b?.x, y2: b?.y, backendNodeId: a.backendNodeId });
+                      toolResult = r?.success ? { success: true, info: { [action.type]: action.ref } } : { success: false, error: r?.error || `${action.type} failed` };
+                      if (action.type !== 'hover' && action.type !== 'focus') await waitForWebviewSettled(wv, wv.getURL());
+                    }
+                  } else if (action.type === 'forward' || action.type === 'reload') {
+                    const beforeUrl = wv.getURL();
+                    if (action.type === 'forward' && !wv.canGoForward()) {
+                      toolResult = { success: false, error: 'There is no next page in this tab.' };
+                    } else {
+                      try { action.type === 'forward' ? wv.goForward() : wv.reload(); } catch {}
+                      await waitForWebviewSettled(wv, action.type === 'reload' ? '' : beforeUrl);
+                      toolResult = { success: true, info: { url: wv.getURL() } };
+                    }
+                  } else if (action.type === 'back') {
+                    if (!wv.canGoBack()) {
+                      toolResult = { success: false, error: 'There is no previous page in this tab.' };
+                    } else {
+                      const beforeUrl = wv.getURL();
+                      try { wv.goBack(); } catch {}
+                      await waitForWebviewSettled(wv, beforeUrl);
+                      toolResult = { success: true, info: { url: wv.getURL() } };
+                    }
+                  } else if (action.type === 'check' || action.type === 'uncheck') {
+                    // Lê o estado, clica com input real SÓ se precisa mudar, e confere depois.
+                    const want = action.type === 'check';
+                    const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdC = (wv as any).getWebContentsId?.();
+                    if (!target || wcIdC == null) {
+                      toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    } else {
+                      let cx = target.x, cy = target.y;
+                      if (target.backendNodeId != null && window.electronAPI?.verifyClick) {
+                        const v = await window.electronAPI.verifyClick(wcIdC, target.backendNodeId).catch(() => null);
+                        if (v && typeof v.x === 'number' && typeof v.y === 'number') { cx = v.x; cy = v.y; }
+                      }
+                      const readState = () => withTimeout(wv.executeJavaScript(`(function(x, y){
+                        var el = document.elementFromPoint(x, y); if (!el) return null;
+                        var box = (el.matches && el.matches('input[type=checkbox],input[type=radio]')) ? el
+                          : (el.closest && (el.closest('[role=checkbox],[role=radio],[role=switch]') || (el.closest('label') && el.closest('label').querySelector('input[type=checkbox],input[type=radio]'))))
+                          || (el.querySelector && el.querySelector('input[type=checkbox],input[type=radio]'));
+                        if (!box && el.tagName === 'LABEL' && el.control) box = el.control;
+                        if (!box) return null;
+                        return box.tagName === 'INPUT' ? !!box.checked : box.getAttribute('aria-checked') === 'true';
+                      })(${Math.round(cx)}, ${Math.round(cy)})`).catch(() => null), 3000, null) as Promise<boolean | null>;
+                      const before = await readState();
+                      if (before === null) {
+                        toolResult = { success: false, error: `@${action.ref} is not a checkbox/radio — use click_ref instead.` };
+                      } else if (before === want) {
+                        toolResult = { success: true, info: { already: want ? 'checked' : 'unchecked' } };
+                      } else {
+                        await window.electronAPI?.realClick?.(wcIdC, cx, cy, target.backendNodeId);
+                        await new Promise(r => setTimeout(r, 300));
+                        const after = await readState();
+                        toolResult = after === want
+                          ? { success: true, info: { now: want ? 'checked' : 'unchecked' } }
+                          : { success: false, error: `Clicked @${action.ref} but it is still ${after ? 'checked' : 'unchecked'}.` };
+                      }
+                    }
+                  } else if (action.type === 'select_option') {
+                    // <select> nativo (ex.: SO/versão no site de driver): escolhe no nó via CDP.
+                    const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdSel = (wv as any).getWebContentsId?.();
+                    if (!target) {
+                      toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    } else {
+                      const beforeUrl = wv.getURL();
+                      // Com nó da árvore de acessibilidade → CDP no próprio nó. Observação pelo DOM (sem
+                      // backendNodeId) → acha o <select> na posição do elemento, na página.
+                      const r = target.backendNodeId != null && wcIdSel != null
+                        ? await window.electronAPI?.selectOption?.(wcIdSel, target.backendNodeId, action.option)
+                        : await withTimeout(wv.executeJavaScript(`(function(x, y, want){
+                            var el = document.elementFromPoint(x, y);
+                            var sel = el && (el.tagName === 'SELECT' ? el : (el.closest && el.closest('select')) || (el.querySelector && el.querySelector('select')));
+                            if (!sel) return { ok: false, error: 'not a <select> drop-down — click it, then click the option' };
+                            var opts = Array.prototype.slice.call(sel.options);
+                            var norm = function(s){ return String(s || '').trim().toLowerCase(); };
+                            var w = norm(want);
+                            var o = opts.find(function(x){ return norm(x.text) === w; }) || opts.find(function(x){ return norm(x.value) === w; })
+                              || opts.find(function(x){ return norm(x.text).indexOf(w) >= 0; }) || opts.find(function(x){ return w.indexOf(norm(x.text)) >= 0 && norm(x.text).length > 2; });
+                            var list = opts.map(function(x){ return x.text.trim(); }).filter(Boolean).slice(0, 40);
+                            if (!o) return { ok: false, error: 'no option matching "' + want + '"', options: list };
+                            sel.focus(); sel.value = o.value; o.selected = true;
+                            sel.dispatchEvent(new Event('input', { bubbles: true }));
+                            sel.dispatchEvent(new Event('change', { bubbles: true }));
+                            return { ok: true, selected: o.text.trim(), options: list };
+                          })(${Math.round(target.x)}, ${Math.round(target.y)}, ${JSON.stringify(action.option)})`).catch((e: any) => ({ ok: false, error: String(e?.message || e) })),
+                          5000, { ok: false, error: 'page did not respond' }) as any;
+                      if (r?.ok) {
+                        await waitForWebviewSettled(wv, beforeUrl);   // muitos combos recarregam a página/lista
+                        toolResult = { success: true, info: { selected: r.selected } };
+                        history += `\nSELECTED "${r.selected}" in drop-down @${action.ref}.`;
+                      } else {
+                        toolResult = { success: false, error: `${r?.error || 'select failed'}${r?.options?.length ? ` — available options: ${r.options.map((o: string) => `"${o}"`).join(', ')}` : ''}` };
+                      }
+                    }
                   } else if (action.type === 'dialog') {
                     // Arma a resposta do PRÓXIMO alert/confirm desta aba (vale 60 s).
                     let wcIdDlg: number | undefined;
@@ -4360,6 +4734,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
+                    || action.type === 'look_at'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
                   let screenshotAfter: string | undefined;
@@ -4422,6 +4797,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
+                    || action.type === 'look_at' || action.type === 'find'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';
                   if (internalAction) {

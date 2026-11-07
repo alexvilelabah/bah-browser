@@ -172,7 +172,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
-- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos.
+- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão.
 
 - **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 
