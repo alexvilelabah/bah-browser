@@ -67,6 +67,8 @@ uns dois pulos.
 | Binário blindado (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignorado, `--inspect` ignorado |
 | Bridge IPC = único portão | [`preload.ts`](src/preload/preload.ts) | todo canal é `ipcRenderer.invoke(...)`; nenhum primitivo Node exposto |
 | Freio (pagar / comprar / excluir / cartão) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + o loop do agente em `App.tsx` | `riskForAction` classifica; clique, **fill** (cartão) e **press** (Enter no checkout) pedem confirmação antes de rodar |
+| Agente fora de contas que não pediram | o loop do agente em `App.tsx` | clique em Entrar / Cadastrar / "Continuar com o Google" é recusado, a não ser que o pedido fale de conta ou login |
+| Sites cuidadosos (termos proíbem automação) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + o loop do agente em `App.tsx` | LinkedIn por padrão (mais `localStorage.carefulSites`): uma navegação por pedido, depois só ações de `CAREFUL_ALLOWED` (ler/relatar); a segunda ação recusada encerra a tarefa |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
 | Sem download de executável | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` bloqueados no download |
 | `openFile` / reveal não abrem caminho arbitrário | [`download-manager.ts`](src/main/download-manager.ts) + `main.ts` (`shell:reveal`) | ambos chamam `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → só Downloads / userData / temp |
