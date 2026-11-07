@@ -72,7 +72,7 @@
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
 - **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
-- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6")
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -183,6 +183,18 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
   existem — nunca mostra nem envia os seus endereços.
 - **Extensões de VPN:** uma extensão do Chrome que controla o proxy (`chrome.proxy`) vence enquanto está ligada,
   como no Chrome; quando solta, as abas voltam pro proxy configurado aqui.
+
+### Região e hora (VPN, viagem)
+
+Menu ⋮ → **🌍 Região e hora**:
+- **Local da rede:** com VPN ou proxy, os sites mostram preços, moeda e estoque do país onde a conexão sai.
+  No **Automático** (padrão) o Bah confere esse país com uma requisição ao `cdn-cgi/trace` da Cloudflare quando
+  o painel abre (cache de 10 min, de novo quando o proxy muda) e avisa quando é diferente da região do
+  computador. **Região do computador** ou **um país específico** nunca consultam a rede.
+- **Fuso dos sites:** o do computador (padrão), um fuso escolhido pra planejar viagem ou voo, ou **UTC** (esconde
+  seu fuso real dos scripts). Aplicado no motor como o override do DevTools; um selo 🕐 na barra mostra; volta pro
+  fuso do computador ao reiniciar, a não ser que marque *Manter*. Agendas com login costumam seguir o fuso da
+  conta, não o do navegador.
 
 ---
 

@@ -55,6 +55,7 @@ sites behave exactly as they would for a human.
 | `page-agent.ts` | Cloud-side reasoning helpers for the agent |
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
 | `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |
+| `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Region & time: network exit country (Cloudflare trace, Auto mode only, 10-min cache), shopping region, time zone for sites via CDP `Emulation.setTimezoneOverride` (resets on restart unless kept; with a zone chosen, every tab gets the debugger attached for it) |
 | `proxy.ts`, `proxy-config.ts` | Proxy for **every** session (system / manual http·https·socks5 / PAC / direct), 407 sign-in prompt with keychain-encrypted saved credentials, `proxy:*` IPC. Main-process `fetch` is routed through the `persist:browser` session's `session.fetch`, so one setting covers Bah's own requests too |
 | `proxy-base.ts` | Bridge between Bah's proxy settings and Chrome extensions' `chrome.proxy` (VPN extensions): an extension in control wins (as in Chrome); when it lets go, the tabs return to the proxy configured in Bah, not a fixed "system"; Bah's WebRTC leak policy is the extensions' baseline |
 | `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | Secure DNS (DNS-over-HTTPS) chosen by the user: `app.configureHostResolver` for the whole app, `dns:*` IPC. See [Secure DNS](#secure-dns-dns-over-https) |

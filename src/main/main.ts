@@ -49,6 +49,7 @@ import { setupTorrentManager } from './torrent-manager';
 import { setupProxy, getProxyConfig, refreshWebRtcPolicy } from './proxy';
 import { setupSecureDns, getSecureDns } from './secure-dns';
 import { setupNetworkPrivacy, applyNetworkStartupSwitches } from './network-privacy';
+import { setupRegion, getTimezoneOverride } from './region';
 import { loadSystemCAs, installCAs } from './system-ca';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
@@ -408,6 +409,24 @@ async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Pro
     debuggerAttachedSet.add(wcId);
     wc.once('destroyed', () => debuggerAttachedSet.delete(wcId));
     await wc.debugger.sendCommand('Accessibility.enable');
+    await applyTimezone(wc);
+  }
+}
+
+// Fuso que os sites veem: o do computador, ou o que a PESSOA escolheu (🌍 Região e hora → viagem/voo).
+// Emulation.setTimezoneOverride é o mesmo do DevTools; '' volta pro do sistema.
+async function applyTimezone(wc: Electron.WebContents): Promise<void> {
+  try { await wc.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: getTimezoneOverride() }); }
+  catch (e: any) { console.warn('[Region] setTimezoneOverride failed:', e?.message || e); }
+}
+// Com fuso escolhido, toda aba recebe o override (o debugger é anexado só pra isso); sem fuso escolhido
+// nada é anexado a mais — as abas onde o agente já anexou voltam pro do sistema.
+function applyTimezoneEverywhere(): void {
+  const override = !!getTimezoneOverride();
+  for (const wc of webContents.getAllWebContents()) {
+    if (wc.isDestroyed()) continue;
+    if (debuggerAttachedSet.has(wc.id)) void applyTimezone(wc);
+    else if (override && wc.getType() === 'webview') sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Region] attach failed:', e?.message || e));
   }
 }
 
@@ -1180,6 +1199,8 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    // Fuso escolhido pra viagem (🌍 Região e hora): a aba nova já nasce nele.
+    if (getTimezoneOverride()) sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Region] attach failed:', e?.message || e));
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
@@ -3702,6 +3723,7 @@ app.whenReady().then(async () => {
   setupSecureDns();
   // ⋮ → Rede: WebRTC (vazamento de IP) + avisos de vazamento (proxy/DNS/IPv4×IPv6).
   setupNetworkPrivacy({ getProxy: getProxyConfig, getSecureDns, refreshWebRtc: refreshWebRtcPolicy });
+  setupRegion(applyTimezoneEverywhere, () => mainWindow);
   loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
   {
     const browsingSession = session.fromPartition('persist:browser');

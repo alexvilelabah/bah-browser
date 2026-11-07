@@ -46,6 +46,12 @@ the entire boundary between the web/UI side and the privileged side (see below).
 - **Company root certificates:** Bah adds the OS-trusted root certificates to Node so it trusts what the
   browser engine already trusts. It does not add or trust anything the OS does not. See
   [`src/main/system-ca.ts`](src/main/system-ca.ts).
+- **Network country check:** in *Auto* shopping region only, one request to `https://www.cloudflare.com/cdn-cgi/trace`
+  (through the browser engine, same route as your tabs) when the 🌍 panel opens, cached 10 minutes.
+  Only the country code is used. Choose *My computer's region* or a fixed country to turn it off. See
+  [`src/main/region.ts`](src/main/region.ts).
+- **Time zone:** like every browser, page scripts can read your time zone. Choose **UTC** in 🌍
+  Region & time to hide it from pages.
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 

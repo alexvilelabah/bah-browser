@@ -341,6 +341,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('proxy:auth-request', listener);
     return () => ipcRenderer.removeListener('proxy:auth-request', listener);
   },
+  regionGet: (force?: boolean) => ipcRenderer.invoke('region:get', force),
+  regionSet: (r: any) => ipcRenderer.invoke('region:set', r),
+  onRegionChanged: (cb: () => void) => { const l = () => cb(); ipcRenderer.on('region:changed', l); return () => ipcRenderer.removeListener('region:changed', l); },
   getHwAccel: () => ipcRenderer.invoke('app:get-hw-accel'),
   setHwAccel: (on: boolean) => ipcRenderer.invoke('app:set-hw-accel', on),
   // Safe browsing notifications

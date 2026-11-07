@@ -2603,3 +2603,17 @@ body {
 .net-warning.warn{ border-color:rgba(230,160,40,0.7); background:rgba(230,160,40,0.10); }
 .net-warning.info{ background:rgba(255,255,255,0.04); }
 .net-warning .net-fix{ height:26px; padding:0 10px; font-size:12px; background:rgba(255,255,255,0.08); color:var(--text-primary); }
+
+/* Região e hora */
+.region-panel{ max-height:86vh; overflow:auto; }
+.region-panel select, .region-panel .region-zone{
+  height:32px; padding:0 10px; border-radius:8px; border:1px solid var(--border);
+  background:var(--bg-primary); color:var(--text-primary); font:inherit; font-size:13px;
+}
+.region-net{ display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-primary); }
+.region-net .tour-btn{ height:26px; padding:0 10px; font-size:12px; background:rgba(255,255,255,0.08); color:var(--text-primary); white-space:nowrap; }
+.tz-chip{
+  flex:none; height:24px; padding:0 9px; margin-right:6px; border-radius:12px; border:1px solid var(--accent);
+  background:transparent; color:var(--accent); font:inherit; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;
+}
+.tz-chip:hover{ background:rgba(255,255,255,0.06); }

@@ -76,7 +76,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
-- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), **WebRTC IP-leak protection on by default**, IP-version and leak warnings ("your proxy is IPv4-only but this computer also has IPv6")
+- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), **WebRTC IP-leak protection on by default**, IP-version and leak warnings ("your proxy is IPv4-only but this computer also has IPv6"), VPN-aware region and a "time zone for sites" setting
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -188,6 +188,18 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
   your addresses.
 - **VPN extensions:** a Chrome extension that controls the proxy (`chrome.proxy`) wins while it is on, as in
   Chrome; when it lets go, the tabs return to the proxy set here.
+
+### Region & time (VPN, travel)
+
+Menu ⋮ → **🌍 Region & time**:
+- **Network location:** with a VPN or proxy, sites show the prices, currency and stock of the country your
+  connection exits in. In **Auto** (default) Bah checks that country with one request to Cloudflare's
+  `cdn-cgi/trace` when the panel opens (cached 10 min, rechecked when the proxy changes) and says when it
+  differs from your computer's region. **My computer's region** or **a specific country** never checks the network.
+- **Time zone for sites:** your computer's (default), a chosen zone for planning a trip or a flight, or
+  **UTC** (hides your real zone from page scripts). Set in the engine like DevTools' override; a 🕐 chip in
+  the address bar shows it; it goes back to your computer's zone on restart unless you tick *Keep*.
+  Signed-in calendars usually follow the time zone in your account settings, not the browser's.
 
 ---
 

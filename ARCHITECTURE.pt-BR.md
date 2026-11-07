@@ -53,6 +53,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `page-agent.ts` | Helpers de raciocínio do agente (lado nuvem) |
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
 | `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
+| `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Região e hora: país de saída da rede (trace da Cloudflare, só no Automático, cache de 10 min), região de compras, fuso dos sites via CDP `Emulation.setTimezoneOverride` (volta ao reiniciar, salvo se mantido; com fuso escolhido, toda aba recebe o debugger pra isso) |
 | `proxy.ts`, `proxy-config.ts` | Proxy pra **todas** as sessões (sistema / manual http·https·socks5 / PAC / direto), caixa de login 407 com credencial salva cifrada no chaveiro, IPC `proxy:*`. O `fetch` do processo principal passa pelo `session.fetch` da sessão `persist:browser` — uma configuração vale também pras requisições do próprio Bah |
 | `proxy-base.ts` | Ponte entre o proxy do Bah e o `chrome.proxy` das extensões (VPN de extensão): extensão no controle vence (como no Chrome); quando solta, as abas voltam pro proxy configurado no Bah, não um "sistema" fixo; a política de WebRTC do Bah é a base das extensões |
 | `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | DNS seguro (DNS sobre HTTPS) escolhido pela pessoa: `app.configureHostResolver` pro app inteiro, IPC `dns:*`. Veja [DNS seguro](#dns-seguro-dns-sobre-https) |
