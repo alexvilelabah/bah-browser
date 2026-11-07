@@ -19,6 +19,7 @@ import { closeOthersIds, closeRightIds, dragShift, dragTarget, siteKey, stripTab
 import { isIncognitoBlank } from '../../shared/incognito';
 import { letterTile } from '../../shared/favicons';
 import IncognitoIcon from './IncognitoIcon';
+import { IS_MAC } from '../platform';
 
 // Itens do menu do botão direito (quem executa é o App: webview, som do site, store).
 export type TabCommand =
@@ -37,7 +38,7 @@ interface Props {
   canReopen: () => boolean;                           // tem aba fechada pro Ctrl+Shift+T?
 }
 
-const MAC = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '');
+const MAC = IS_MAC;
 const KEY_RELOAD = MAC ? '⌘R' : 'Ctrl+R';
 const KEY_CLOSE = MAC ? '⌘W' : 'Ctrl+W';
 const KEY_REOPEN = MAC ? '⇧⌘T' : 'Ctrl+Shift+T';
