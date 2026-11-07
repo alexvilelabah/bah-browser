@@ -11,7 +11,7 @@ chmod +x Bah-*.AppImage
 ./Bah-*.AppImage
 ```
 
-If it refuses to start, try `--no-sandbox`. On some distros you may need `libsecret` and `fuse2`.
+If it aborts with a `chrome-sandbox` error (Ubuntu 24.04), add the AppArmor profile from the README's *Linux: build and install* section rather than using `--no-sandbox`, which turns off Chromium's sandbox for every site. On some distros you may need `libsecret` and `fuse2`.
 
 ### What should work
 

@@ -77,7 +77,7 @@ git clone https://github.com/alexvilelabah/bah-browser.git      # or the fork/br
 cd bah-browser
 # git checkout <branch>                                          # if the user asked for a branch
 npm install
-node node_modules/electron/install.js   # fetches the castLabs Electron binary (npm 11 may hold install scripts back)
+node node_modules/electron/install.js   # fetches the castLabs Electron binary (npm does not fetch it on its own)
 npm run build
 npm start                                                        # or: npx electron .
 ```
@@ -86,6 +86,38 @@ npm start                                                        # or: npx elect
 Optional: `npm run test:unit` should report `fail 0`.
 
 macOS: for video/audio downloads, `brew bundle` in the repo installs the tools from `Brewfile`.
+
+### Linux (tested on Ubuntu 24.04 x64)
+
+Ask the user before each `sudo` block, and do these **before** `npm start`. `npm run test:unit` needs Node 22.18 or newer.
+
+```bash
+sudo apt-get install -y git libfuse2t64 libnss3 libgtk-3-0t64 libasound2t64 libgbm1 libnotify4 \
+  libxss1 libxtst6 libatspi2.0-0t64 libuuid1 libsecret-1-0 xdg-utils
+```
+
+Ubuntu 24.04 restricts the user namespaces Chromium's sandbox needs, so Bah aborts with a `chrome-sandbox` error until it has an AppArmor profile. From the cloned folder:
+
+```bash
+sudo tee /etc/apparmor.d/bah-browser > /dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bah-browser "/{tmp/.mount_Bah-*/bah-browser,${PWD#/}/release/linux-unpacked/bah-browser,${PWD#/}/node_modules/electron/dist/electron}" flags=(unconfined) {
+  userns,
+  include if exists <local/bah-browser>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bah-browser
+```
+
+Never launch with `--no-sandbox` as a workaround; report the failure instead. To build an installable AppImage after `npm run build`:
+
+```bash
+npx electron-builder --linux AppImage --publish never     # writes release/Bah-<version>.AppImage
+```
+
+**Check:** the app stays open and its output has no `chrome-sandbox` line. If it logs `MESA-LOADER: failed to open nvidia-drm` on a machine without NVIDIA, see README → *Linux: build and install*; don't change `/etc/environment` without asking.
 
 **Behind a corporate proxy:** `npm install` needs the proxy and, with TLS inspection, the company root
 certificate: `export HTTPS_PROXY=http://proxy.corp:8080` and `export NODE_EXTRA_CA_CERTS=/path/to/company-root.pem`
@@ -126,4 +158,4 @@ prompts, API key, Homebrew tools).
 
 - macOS: quit Bah, delete `/Applications/Bah.app`; settings live in `~/Library/Application Support/bah-browser`.
 - Windows: Settings → Apps → Bah → Uninstall; settings in `%APPDATA%\bah-browser`.
-- From source: delete the cloned folder (and the settings folder above).
+- From source: delete the cloned folder (and the settings folder above). Linux, if you added the AppArmor profile: `sudo apparmor_parser -R /etc/apparmor.d/bah-browser && sudo rm /etc/apparmor.d/bah-browser`.
