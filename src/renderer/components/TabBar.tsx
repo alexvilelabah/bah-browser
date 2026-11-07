@@ -47,6 +47,7 @@ interface Props {
   canReopen: () => boolean;                           // tem aba fechada pro Ctrl+Shift+T?
   sessions?: AgentSession[];                          // sessões do agente abertas (chips)
   onSession?: (cmd: SessionCommand) => void;
+  keptReason?: (id: string) => string | undefined;    // Economia de memória: "Mantida ativa: …" no balão
 }
 
 const MAC = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '');
@@ -71,7 +72,7 @@ interface Press {
 // O que o React desenha durante o arrasto.
 interface DragView { id: string; from: number; to: number; dx: number; width: number; key: string }
 
-export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onMove, onCommand, isMuted, canReopen, sessions = [], onSession }: Props) {
+export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onMove, onCommand, isMuted, canReopen, sessions = [], onSession, keptReason }: Props) {
   const visible = stripTabs(tabs);
   const stripKey = visible.map(x => x.id).join(',');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -414,7 +415,9 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
           // Fixada não mostra o nome: vai no balão do mouse.
           const tip0 = tab.pinned ? name : undefined;
           // Anônima: o balão diz isso (a em branco já se chama "Nova aba anônima").
-          const tip = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
+          const tip1 = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
+          const kept = keptReason?.(tab.id);
+          const tip = kept ? `${tip1 || name}\n${kept}` : tip1;
           const ses = tab.sessionId ? sessionById.get(tab.sessionId) : undefined;
           const chip = ses && starts.has(tab.id) ? (
             <button

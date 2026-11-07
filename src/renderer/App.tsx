@@ -49,6 +49,11 @@ import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsTo
 import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
 import ChatHistoryPanel from './components/ChatHistoryPanel';
+import MemorySaverMenu from './components/MemorySaverMenu';
+import {
+  cheapKeepReason, signalKeepReason, isShownReason, idleMsFor, sanitizeLevel, sanitizeKeepList, PAGE_SIGNALS_SCRIPT,
+  type KeepReason, type MemSaverLevel, type SweepCtx, type TabSignals,
+} from '../shared/memory-saver';
 import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
 import { isAboutLastRun, reportsIncompleteRun } from './last-run';
@@ -57,7 +62,7 @@ import { shouldExpandRequest, understoodNote } from '../shared/request-expansion
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
-import { canDiscard, isIncognitoBlank, mayRecord, opensIncognito } from '../shared/incognito';
+import { isIncognitoBlank, mayRecord, opensIncognito } from '../shared/incognito';
 import { incognitoReady, setAiIncognitoProbe } from './incognito';
 import {
   BrowserAction,
@@ -192,6 +197,7 @@ declare global {
       incognitoWipe?: () => Promise<boolean>;
       setPrivateAi?: (on: boolean) => void;
       onTabAudio?: (cb: (p: { wcId: number; audible: boolean }) => void) => (() => void);
+      memSaverSignals?: (wcIds: number[]) => Promise<Record<number, { capture?: boolean; notifications?: boolean; download?: boolean }>>;
       onSitePermissionAsk?: (cb: (p: SitePermAsk) => void) => (() => void);
       onSitePermissionCancel?: (cb: (id: string) => void) => (() => void);
       answerSitePermission?: (id: string, answer: 'allow' | 'block' | 'dismiss') => Promise<any>;
@@ -799,6 +805,22 @@ export default function App() {
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
   }, []);
+  // Nível (Moderada 2 h / Equilibrada 30 min / Máxima 10 min) e "Manter estes sites sempre ativos".
+  const [memSaverLevel, setMemSaverLevelState] = useState<MemSaverLevel>(() => { try { return sanitizeLevel(localStorage.getItem('memSaverLevel')); } catch { return sanitizeLevel(null); } });
+  const setMemSaverLevel = useCallback((l: MemSaverLevel) => {
+    setMemSaverLevelState(l); try { localStorage.setItem('memSaverLevel', l); } catch {}
+  }, []);
+  const [memSaverKeep, setMemSaverKeepState] = useState<string[]>(() => { try { return sanitizeKeepList(JSON.parse(localStorage.getItem('memSaverKeep') || '[]')); } catch { return []; } });
+  const memSaverKeepRef = useRef(memSaverKeep); memSaverKeepRef.current = memSaverKeep;
+  const setMemSaverKeep = useCallback((list: string[]) => {
+    const clean = sanitizeKeepList(list);
+    setMemSaverKeepState(clean); try { localStorage.setItem('memSaverKeep', JSON.stringify(clean)); } catch {}
+  }, []);
+  // Por que cada aba candidata ficou acordada na última varredura (balão da aba).
+  const [memKept, setMemKept] = useState<Record<string, KeepReason>>({});
+  // Abas de onde partiu uma tarefa do agente que ainda não acabou (rodando ou parada num cartão
+  // esperando a pessoa). A varredura protege a SESSÃO inteira delas (store.threadKeyOf).
+  const agentBusyTabsRef = useRef(new Set<string>());
   const [, setPermTick] = useState(0);   // re-render ao trocar uma permissão do agente no menu
   // Compartilhar (seed) do torrent — padrão DESLIGADO (baixa/streama sem subir nada).
   const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
@@ -912,23 +934,68 @@ export default function App() {
   const sweepTabsRef = useRef(store.tabs); sweepTabsRef.current = store.tabs;
   const sweepActiveIdRef = useRef(store.activeTabId); sweepActiveIdRef.current = store.activeTabId;
   useEffect(() => {
-    if (!memSaverOn) return;
-    let idleMs = 30 * 60 * 1000;
-    try { const o = Number(localStorage.getItem('memSaverIdleMs')); if (o > 0) idleMs = o; } catch {}   // override p/ testes internos
-    const iv = setInterval(() => {
-      const now = Date.now();
-      for (const tb of sweepTabsRef.current) {
-        // Aba anônima nunca dorme (shared/incognito.ts → canDiscard).
-        if (tb.id === sweepActiveIdRef.current || tb.discarded || !canDiscard(tb)) continue;
-        if (now - (tb.lastActiveAt || now) < idleMs) continue;
-        const wv = webviewRefs.current.get(tb.id) as any;
-        try { if (wv?.isCurrentlyAudible?.()) continue; } catch {}   // nunca dorme aba tocando som
-        // audible:false junto — a webview morre sem emitir o "parou de tocar" final.
-        store.updateTab(tb.id, { discarded: true, audible: false, restored: false });
-      }
-    }, 60000);
-    return () => clearInterval(iv);
-  }, [memSaverOn, store.updateTab]);
+    if (!memSaverOn) { setMemKept({}); return; }
+    // Overrides só p/ testes: memSaverIdleMs (tempo parada) e memSaverSweepMs (intervalo da varredura).
+    let override = 0, sweepMs = 60000;
+    try { override = Number(localStorage.getItem('memSaverIdleMs')) || 0; const sw = Number(localStorage.getItem('memSaverSweepMs')); if (sw > 0) sweepMs = sw; } catch {}
+    const idleMs = idleMsFor(memSaverLevel, override);
+    let alive = true, running = false;
+    const ctxFor = (now: number): ((tabId: string) => SweepCtx) => {
+      const busy = new Set<string>();
+      for (const id of agentBusyTabsRef.current) busy.add(store.threadKeyOf(id));
+      return (tabId) => ({ now, idleMs, activeId: sweepActiveIdRef.current, agentBusy: busy.has(store.threadKeyOf(tabId)), keepList: memSaverKeepRef.current });
+    };
+    const sweep = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const reasons: Record<string, KeepReason> = {};
+        let ctx = ctxFor(Date.now());
+        // 1) Regras baratas (sem falar com a página): ativa, fixada, anônima, sessão do agente, lista, tempo.
+        const cands: Array<{ id: string; wv: any; wcId: number | null }> = [];
+        for (const tb of sweepTabsRef.current) {
+          const r = cheapKeepReason(tb, ctx(tb.id));
+          if (r) { if (isShownReason(r)) reasons[tb.id] = r; continue; }
+          const wv = webviewRefs.current.get(tb.id) as any;
+          let wcId: number | null = null;
+          try { const n = wv?.getWebContentsId?.(); if (typeof n === 'number') wcId = n; } catch {}
+          cands.push({ id: tb.id, wv, wcId });
+        }
+        // 2) Só pras candidatas: o que o main sabe (câmera/tela, notificações, download) e o que a
+        //    página sabe (formulário, vídeo tocando mesmo mudo, dispositivo).
+        if (cands.length) {
+          const ids = cands.map(c => c.wcId).filter((n): n is number => n != null);
+          const fromMain = ids.length ? await window.electronAPI?.memSaverSignals?.(ids).catch(() => ({})) || {} : {};
+          await Promise.all(cands.map(async c => {
+            let page: Partial<TabSignals> | null = null;
+            if (c.wv) {
+              page = await Promise.race([
+                Promise.resolve(c.wv.executeJavaScript(PAGE_SIGNALS_SCRIPT)).catch(() => null),
+                new Promise<null>(r => setTimeout(() => r(null), 3000)),
+              ]);
+            }
+            let audible = false;
+            try { audible = !!c.wv?.isCurrentlyAudible?.(); } catch {}
+            const m = (c.wcId != null && (fromMain as any)[c.wcId]) || {};
+            const sig: TabSignals = { ...(page || {}), ...m, audible, capture: !!(m.capture || page?.capture) };
+            const r = signalKeepReason(sig);
+            if (r) { reasons[c.id] = r; return; }
+            // A pessoa pode ter voltado pra aba (ou a IA começado nela) enquanto a página respondia.
+            const cur = sweepTabsRef.current.find(x => x.id === c.id);
+            if (!alive || !cur || cheapKeepReason(cur, ctxFor(Date.now())(c.id))) return;
+            // audible:false junto — a webview morre sem emitir o "parou de tocar" final.
+            store.updateTab(c.id, { discarded: true, audible: false, restored: false });
+          }));
+        }
+        if (alive) setMemKept(prev => {
+          const a = Object.keys(prev), b = Object.keys(reasons);
+          return a.length === b.length && b.every(k => prev[k] === reasons[k]) ? prev : reasons;
+        });
+      } finally { running = false; }
+    };
+    const iv = setInterval(() => { void sweep(); }, sweepMs);
+    return () => { alive = false; clearInterval(iv); };
+  }, [memSaverOn, memSaverLevel, store.updateTab, store.threadKeyOf]);
 
   // ── Favoritos (estilo Chrome) ──
   // Salva a lista; false = não coube no localStorage (aí o import desiste em vez de perder no reinício).
@@ -1811,6 +1878,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             canReopen={store.hasClosedTabs}
             sessions={store.sessions}
             onSession={onSessionCommand}
+            keptReason={id => (memKept[id] ? t('memsaver.kept', { reason: t(`memsaver.reason.${memKept[id]}`) }) : undefined)}
           />
         </div>
         <HwMonitor />
@@ -2035,11 +2103,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.hwAccel')}</span>
                   <span className={`menu-switch ${hwAccelOn ? 'on' : ''}`}>{hwAccelOn ? 'ON' : 'OFF'}</span>
                 </button>
-                <button className="menu-item" onClick={() => toggleMemSaver()} title={t('menu.memSaverTitle')}>
-                  <span className="menu-ic">💤</span>
-                  <span className="menu-label">{t('menu.memSaver')}</span>
-                  <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
-                </button>
+                <MemorySaverMenu on={memSaverOn} onToggle={toggleMemSaver} level={memSaverLevel} onLevel={setMemSaverLevel}
+                  keep={memSaverKeep} onKeep={setMemSaverKeep} currentUrl={store.activeTab.url} />
                 {(['userTabs', 'history', 'clipboard'] as PermKind[]).map(k => (
                   <button key={k} className="menu-item" onClick={() => { setPerm(k, nextMode(getPerm(k))); setPermTick(x => x + 1); }} title={t('menu.agentPermTitle')}>
                     <span className="menu-ic">{k === 'userTabs' ? '🗂️' : k === 'clipboard' ? '📋' : '🕘'}</span>
@@ -2372,6 +2437,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const runLog = startAgentRun(command);
               agentDialogsStart();   // alert/confirm das abas do agente seguem a política dele (js-dialogs.ts)
               taskRunningRef.current = true;   // a partir daqui, trocas MANUAIS de aba não mexem na aba do agente
+              agentBusyTabsRef.current.add(taskTabId);   // Economia de memória: a sessão desta tarefa não dorme
               interjectRef.current = { running: true, queue: [], abortStep: null };
               // Suspende o bypass do adblock enquanto o agente trabalha: senão ele lê os
               // anúncios do YouTube/Google como se fossem conteúdo e age no anúncio errado.
@@ -6117,6 +6183,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // tarefa acabou (sucesso, erro OU cancelamento): solta o freio e a aba do
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
+                agentBusyTabsRef.current.delete(taskTabId);
                 agentDialogsStop();
                 taskEndedAtRef.current = Date.now();
                 for (const t of tabsRef.current) if (t.agentTask) store.updateTab(t.id, { agentTask: false });

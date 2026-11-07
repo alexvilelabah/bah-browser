@@ -554,6 +554,31 @@ revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.m
 
 ---
 
+## Economia de memória (abas dormindo)
+
+O "Memory Saver" do Chrome, mais uma regra do Bah. Uma varredura no `App.tsx` (a cada 60 s) desmonta o
+`<webview>` da aba parada há tempo suficiente (`discarded: true`); clicar na aba remonta na URL dela. Regras
+puras em `src/shared/memory-saver.ts` (testadas em `tests/unit/memory-saver.test.ts`); tela em
+`components/MemorySaverMenu.tsx` (⋮ → 💤 Economia de memória ▸: liga/desliga, nível, lista de sites ativos).
+- **Níveis** (o Chrome não publica os tempos; estes são do Bah): Moderada 2 h, Equilibrada 30 min (padrão, o
+  comportamento antigo), Máxima 10 min parada. Guardados no `localStorage` `memSaver` / `memSaverLevel` /
+  `memSaverKeep`.
+- **Nunca dorme**: a aba ativa, aba anônima/escondida (`incognito.ts` `canDiscard`), aba fixada, site da
+  lista "sempre ativos", aba cuja **sessão** (`store.threadKeyOf`) tem tarefa do agente rodando ou esperando
+  a pessoa (cartão de confirmação/perguntas, pausa de login — o `onExecute` inteiro) e — colhido só pras abas que passam nessas regras baratas — aba tocando áudio ou vídeo (mesmo
+  `<video>` mudo), com câmera/microfone/tela liberados na página atual, com notificações permitidas pro
+  site, com download em andamento que saiu dela, com formulário preenchido pela metade, ou com dispositivo
+  USB/HID/serial/Bluetooth aberto. A parte da página é um script só (`PAGE_SIGNALS_SCRIPT`; formulário compara `value`/`checked`/`selected` com os padrões do HTML,
+  ignorando campos hidden e de busca); a parte do main é o `memsaver:signals`
+  (`src/main/memory-saver-signals.ts`, alimentado por `site-permissions.ts` e `download-manager.ts`).
+  Câmera/tela contam da liberação até a página navegar (o Electron não avisa quando a captura para).
+- **Lista "sempre ativos"**, regras do Chrome: `google.com` vale pros subdomínios, `.google.com` só esse
+  domínio, os prefixos `[*.]`/`*.` são o mesmo que nada, um caminho opcional casa em fronteira de segmento
+  (`site.com/app`), e esquema ou porta escritos precisam bater.
+- O balão da aba diz por que uma candidata ficou acordada ("Mantida ativa: formulário preenchido pela metade").
+- **Testes**: `tests/e2e/memory-saver.spec.ts` usa `memSaverIdleMs` / `memSaverSweepMs` (overrides no
+  localStorage só pra testes) pra encurtar o tempo parada e a varredura.
+
 ## Build e release
 
 - **Build:** Renderer = Vite + typecheck `tsc`; Main = `tsc`. Um gate de paridade de i18n
