@@ -46,6 +46,10 @@ import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupProxy, getProxyConfig, refreshWebRtcPolicy } from './proxy';
+import { setupSecureDns, getSecureDns } from './secure-dns';
+import { setupNetworkPrivacy, applyNetworkStartupSwitches } from './network-privacy';
+import { loadSystemCAs, installCAs } from './system-ca';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -3598,6 +3602,8 @@ app.commandLine.appendSwitch('lang', LANG_SWITCH);
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// ⋮ → Rede: WebRTC sem IPv6 (field trial do WebRTC; só vale no boot).
+applyNetworkStartupSwitches();
 
 // Aceleração de hardware (GPU): em alguns PCs com vídeo integrado/driver velho, abrir uma aba
 // nova dá "tela branca" (o compositor da GPU não pinta o 1º frame; só carrega com F5). O usuário
@@ -3688,6 +3694,19 @@ function setupAutoUpdater(): void {
 
 
 app.whenReady().then(async () => {
+  // Rede corporativa: proxy (System/Manual/PAC/Direct + login 407) em todas as sessões, e as raízes do
+  // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
+  // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
+  setupProxy(() => mainWindow);
+  // DNS seguro (DoH) escolhido pela pessoa — app inteiro; padrão "system" não mexe em nada.
+  setupSecureDns();
+  // ⋮ → Rede: WebRTC (vazamento de IP) + avisos de vazamento (proxy/DNS/IPv4×IPv6).
+  setupNetworkPrivacy({ getProxy: getProxyConfig, getSecureDns, refreshWebRtc: refreshWebRtcPolicy });
+  loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
+  {
+    const browsingSession = session.fromPartition('persist:browser');
+    (globalThis as any).fetch = (input: any, init?: any) => browsingSession.fetch(input, init);
+  }
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
   // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork
   // castLabs (mesma versão, +wvcus). O CDM vem por component updater: baixa na PRIMEIRA
