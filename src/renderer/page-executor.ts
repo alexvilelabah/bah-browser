@@ -25,6 +25,9 @@ export type BrowserAction =
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
   | { type: 'select_option'; ref: number; option: string }
+  | { type: 'upload'; ref: number; multiple?: boolean; file?: string[] }
+  | { type: 'list_files'; query?: string }
+  | { type: 'read_file'; file: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
   | { type: 'back' }
@@ -118,6 +121,9 @@ export function formatAction(action: BrowserAction): string {
     case 'drag': return `drag(@${action.ref} → @${action.to_ref})`;
     case 'check': case 'uncheck': return `${action.type}(@${action.ref})`;
     case 'select_option': return `select_option(@${action.ref}, "${shorten(action.option, 50)}")`;
+    case 'upload': return `upload(@${action.ref}${action.file ? ` ${([] as string[]).concat(action.file).join(', ')}` : ''})`;
+    case 'list_files': return 'list_files()';
+    case 'read_file': return `read_file(${shorten(action.file, 60)})`;
     case 'fill_ref': return `fill_ref(@${action.ref}, "${shorten(action.value)}")`;
     case 'click_text': return `click_text("${action.text}"${action.nth ? `, nth=${action.nth}` : ''})`;
     case 'click_at': return `click_at(${Math.round(action.x)}, ${Math.round(action.y)})`;
@@ -553,8 +559,13 @@ const OBSERVE_SCRIPT = `
       // Checkbox/radio: o nome é o texto do <label> (o value é só "on") + estado real. Sem isso a
       // caixinha "I accept the license" aparecia como <input>on</input> e ninguém sabia o que era.
       const isBox = el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio');
-      const labelText = isBox ? ((el.labels && el.labels[0] ? el.labels[0].innerText : '') || (el.closest('label') ? el.closest('label').innerText : '')).replace(/\\s+/g, ' ').trim() : '';
-      const text = (labelText || innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || ((isBox || secret(el)) ? '' : el.value) || '').slice(0, 120);
+      // Campo de arquivo: aparecia como <input></input> vazio — o agente não sabia que era upload.
+      const isFile = el.tagName === 'INPUT' && el.type === 'file';
+      const labelText = (isBox || isFile) ? ((el.labels && el.labels[0] ? el.labels[0].innerText : '') || (el.closest('label') ? el.closest('label').innerText : '')).replace(/\\s+/g, ' ').trim() : '';
+      const fileNames = isFile && el.files && el.files.length ? Array.prototype.map.call(el.files, function(f){ return f.name; }).join(', ') : '';
+      const text = isFile
+        ? ((labelText || ariaLabel || el.getAttribute('title') || 'Choose file') + ' [file upload: ' + (fileNames || 'no file chosen') + ']').slice(0, 120)
+        : (labelText || innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || ((isBox || secret(el)) ? '' : el.value) || '').slice(0, 120);
       const pressed = el.getAttribute('aria-pressed');
       const checked = isBox ? String(!!el.checked) : el.getAttribute('aria-checked');
       return {
@@ -565,7 +576,7 @@ const OBSERVE_SCRIPT = `
         y: Math.round(r.top + r.height / 2),
         w: Math.round(r.width),
         h: Math.round(r.height),
-        role: el.getAttribute('role') || (isBox ? el.type : (el.tagName === 'SELECT' ? 'combobox' : undefined)),
+        role: el.getAttribute('role') || (isBox ? el.type : isFile ? 'file' : (el.tagName === 'SELECT' ? 'combobox' : undefined)),
         href: el.href || undefined,
         placeholder: el.getAttribute('placeholder') || undefined,
         aria: ariaLabel ? ariaLabel.slice(0, 80) : undefined,

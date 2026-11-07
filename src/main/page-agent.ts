@@ -29,6 +29,9 @@ export type AgentAction =
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
   | { type: 'select_option'; ref: number; option: string }
+  | { type: 'upload'; ref: number; multiple?: boolean; file?: string[] }
+  | { type: 'list_files'; query?: string }
+  | { type: 'read_file'; file: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
   | { type: 'back' }
@@ -80,6 +83,9 @@ const VALID_ACTIONS = new Set([
   'check',
   'uncheck',
   'select_option',
+  'upload',
+  'list_files',
+  'read_file',
   'store',
   'extract_text',
   'extract_images',
@@ -356,6 +362,14 @@ export class PageAgent {
         return { type: 'drag', ref: toRef(action.ref ?? action.from_ref ?? action.from), to_ref: toRef(action.to_ref ?? action.to ?? action.target_ref) };
       case 'check': case 'uncheck':
         return { type: action.type, ref: toRef(action.ref) };
+      case 'upload':
+        { const f = action.file ?? action.files ?? action.path;
+          const files = (Array.isArray(f) ? f : f != null && f !== '' ? [f] : []).map((x: any) => String(x).trim()).filter(Boolean).slice(0, 10);
+          return { type: 'upload', ref: toRef(action.ref), multiple: !!action.multiple || files.length > 1, ...(files.length ? { file: files } : {}) }; }
+      case 'list_files':
+        return { type: 'list_files', query: String(action.query ?? action.q ?? '').trim() || undefined };
+      case 'read_file':
+        return { type: 'read_file', file: String(action.file ?? action.path ?? action.name ?? '').trim() };
       case 'select_option':
         return { type: 'select_option', ref: toRef(action.ref), option: String(action.option ?? action.value ?? action.text ?? action.label ?? '').trim() };
       case 'fill_ref':
@@ -457,6 +471,10 @@ export function validateAction(a: AgentAction): string | null {
       return finiteInt(a.ref) && finiteInt(a.to_ref) ? null : 'drag needs "ref" (what to drag) and "to_ref" (where to drop) as element ids';
     case 'check': case 'uncheck':
       return finiteInt(a.ref) ? null : `${a.type} needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'list_files': return null;
+    case 'read_file': return nonEmpty(a.file) ? null : 'read_file needs a "file" name from list_files';
+    case 'upload':
+      return finiteInt(a.ref) ? null : `upload needs the "ref" of the upload button or file field, got ${JSON.stringify((a as any).ref)}`;
     case 'select_option':
       if (!finiteInt(a.ref)) return `select_option needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
       return nonEmpty(a.option) ? null : 'select_option needs the "option" text to choose';
