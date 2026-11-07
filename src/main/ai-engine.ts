@@ -171,8 +171,10 @@ Rules for "actions":
 
 Never generate JavaScript, CSS selectors unless using the fill tool selector field, or invented function names. The browser will execute only these action types:
 - switch_tab: { "action": "switch_tab", "tab": number } — focus another open tab by its number from the TABS list.
-- new_tab: { "action": "new_tab", "url": string } — open a new tab on the given URL.
+- new_tab: { "action": "new_tab", "url": string } — open a new tab on the given URL. MULTI-SITE tasks: open each new site with new_tab (one tab per site) so earlier results stay open and the user's starting tab is not navigated away.
+- TABS marks each tab: (agent tab) = opened by you, use freely; (starting tab) = the tab the task began in; (your tab) = the USER's other tab — switching to it asks the user first, and close_tab only works on agent tabs.
 - close_tab: { "action": "close_tab", "tab": number } — close a tab by its number.
+- history_search: { "action": "history_search", "query": "..." } — finds pages the USER visited before in this browser (title + URL), e.g. "the laptop page I looked at yesterday". Asks the user's permission (or follows their saved choice). Then navigate/new_tab to the link.
 - plan: { "action": "plan", "steps": string[] } — EMIT FIRST on complex/multi-step tasks. List the steps you'll take.
 - store: { "action": "store", "key": string, "value": any, "source"?: string } — save extracted data into agent MEMORY.
 - extract_text: { "action": "extract_text", "max_chars"?: number } — extracts the MAIN CONTENT of the page (Readability-style: picks the densest text block, strips ads/nav/sidebar/footer) and returns it as clean Markdown (# headings, - lists). Token-efficient — use it for reading/summarizing articles and pages.
@@ -193,16 +195,27 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - find_file: { "action": "find_file", "query": string, "filetype"?: string } — finds DIRECT download links to a specific file type using Google's filetype: operator. For "ache um PDF sobre X", "um manual em PDF de Y", "uma planilha de Z": call find_file { "query": "X", "filetype": "pdf" } (or xlsx, docx, pptx, mp3...). Results land in history as "FILES FOUND" with [fileN] URLs — then use download to save the chosen one. Default filetype is pdf.
 - read_aloud: { "action": "read_aloud", "text"?: string } — reads text ALOUD with the computer's voice (text-to-speech, pt-BR). With no "text" it reads the current page's main content. Use for "leia isso pra mim", "leia a notícia em voz alta".
 - report: { "action": "report", "summary": string } — FINAL action. Delivers your synthesized answer/summary to the user and ends the task.
+- look_at: { "action": "look_at", "ref": number } or { "action": "look_at", "x": n, "y": n, "w": n, "h": n } — ZOOM: the NEXT screenshot is a sharp, full-resolution crop of that element's area (or that viewport rectangle) instead of the whole shrunken page. Use it when text/buttons in the screenshot are too small to read (download tables, OS/version lists, form fields). One step only; while zoomed, act with refs (click_ref/select_option), not click_at.
+- find: { "action": "find", "text": "Agree to the EULA" } — searches the WHOLE page (including off-screen parts and items missing from INTERACTIVE ELEMENTS) for controls/labels containing that text, scrolls the best match into view so it appears in the element list next step, and reports the other matches. Use it when the button/link you need is not in the list.
+- hover: { "action": "hover", "ref": number } — move the mouse over an element and stay (opens hover menus / tooltips). Next step, the menu's items appear in INTERACTIVE ELEMENTS.
+- dblclick: { "action": "dblclick", "ref": number } — double-click (select a word, open an item in file-like lists, edit a cell).
+- focus: { "action": "focus", "ref": number } — put the keyboard focus on a field without clicking it (then type/press).
+- drag: { "action": "drag", "ref": number, "to_ref": number } — drag one element and drop it on another (sliders, sortable lists, upload drop zones are NOT supported this way).
+- forward / reload: { "action": "forward" } / { "action": "reload" } — browser Forward and Reload.
+- back: { "action": "back" } — the browser Back button (previous page). Prefer it over clicking a site's "Downloads"/breadcrumb menu to return.
+- check / uncheck: { "action": "check", "ref": number } — makes sure a checkbox/radio (e.g. "I accept the license agreement") ends up ticked (or unticked). Safer than click_ref, which toggles and can untick an already ticked box.
+- select_option: { "action": "select_option", "ref": number, "option": "macOS 26.x" } — chooses an option in a drop-down (<select>/combobox) by its visible text (partial match OK). Use it for OS/version/language/country/size selectors — clicking or typing into a <select> does NOT change it. If the option is not found, the result lists the available options; pick one of those.
 - click_ref: { "action": "click_ref", "ref": number } — PREFERRED. Clicks the element with that id from interactive_elements. Most reliable.
 - fill_ref: { "action": "fill_ref", "ref": number, "value": string } — PREFERRED for inputs. Fills the input element with that id.
 - click_text: { "action": "click_text", "text": string, "nth"?: number } fallback when the right element isn't in the ref list.
 - click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.
 - fill: { "action": "fill", "selector"?: string, "label"?: string, "value": string } fills an input, textarea, or rich text editor by selector, visible label, placeholder, name, or currently focused editable area.
-- press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc.
+- press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc. Combos work too: { "action": "press", "key": "Control+Enter" }.
 - navigate: { "action": "navigate", "url": string } navigates directly to a URL.
 - scroll: { "action": "scroll", "direction": "up"|"down"|"top"|"bottom", "amount"?: number }
 - wait: { "action": "wait", "ms": number } or { "action": "wait", "selector": string, "timeout": number }
+- dialog: { "action": "dialog", "accept": true|false } — sets the answer for the NEXT alert/confirm box on this tab (60 s); then do the action that opens it. Without it Bah closes alerts and accepts confirms (payment/delete confirms go to the user) — DIALOG: lines in the history say what happened.
 - done: { "action": "done", "reason": string, "success": boolean } ends the task.
 
 You receive the current observed state on every step in this compact format:
