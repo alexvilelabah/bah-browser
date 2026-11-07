@@ -134,6 +134,7 @@ around a block.
 | `page-executor.ts` | Executes browser actions inside the page |
 | `risk.ts` | The safety-brake classifier (`riskForAction`) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
+| `agent-permissions.ts` | What the agent may use besides its own task tabs — your other tabs and your history: Ask (default) / Always / Never |
 | `agent-run-logger.ts` | Opt-in run logging (local training-data collector) |
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |

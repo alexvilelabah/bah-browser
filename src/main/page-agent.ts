@@ -25,6 +25,7 @@ export type AgentAction =
   | { type: 'read_aloud'; text?: string }
   | { type: 'report'; summary: string }
   | { type: 'switch_tab'; tab: number }
+  | { type: 'history_search'; query: string }
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
@@ -102,6 +103,7 @@ const VALID_ACTIONS = new Set([
   'read_aloud',
   'report',
   'switch_tab',
+  'history_search',
   'new_tab',
   'close_tab',
   'click_ref',
@@ -338,6 +340,8 @@ export class PageAgent {
         return { type: 'report', summary: String(action.summary ?? action.text ?? '') };
       case 'switch_tab':
         return { type: 'switch_tab', tab: Number(action.tab) };
+      case 'history_search':
+        return { type: 'history_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
       case 'new_tab':
         return { type: 'new_tab', url: String(action.url ?? '') };
       case 'close_tab':
@@ -487,6 +491,7 @@ export function validateAction(a: AgentAction): string | null {
       if (a.url != null && String(a.url).trim() !== '' && !httpUrl(a.url)) return `download_video "url" must be http(s), got ${JSON.stringify((a as any).url)}`;
       return null;
     case 'switch_tab': return finiteInt(a.tab) ? null : 'switch_tab needs a finite non-negative integer "tab"';
+    case 'history_search': return nonEmpty(a.query) ? null : 'history_search needs a non-empty "query"';
     case 'close_tab': return finiteInt(a.tab) ? null : 'close_tab needs a finite non-negative integer "tab"';
     case 'wait':
       if (a.ms == null && !a.selector) return 'wait needs "ms" or "selector"';

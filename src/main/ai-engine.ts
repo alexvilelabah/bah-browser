@@ -171,8 +171,10 @@ Rules for "actions":
 
 Never generate JavaScript, CSS selectors unless using the fill tool selector field, or invented function names. The browser will execute only these action types:
 - switch_tab: { "action": "switch_tab", "tab": number } — focus another open tab by its number from the TABS list.
-- new_tab: { "action": "new_tab", "url": string } — open a new tab on the given URL.
+- new_tab: { "action": "new_tab", "url": string } — open a new tab on the given URL. MULTI-SITE tasks: open each new site with new_tab (one tab per site) so earlier results stay open and the user's starting tab is not navigated away.
+- TABS marks each tab: (agent tab) = opened by you, use freely; (starting tab) = the tab the task began in; (your tab) = the USER's other tab — switching to it asks the user first, and close_tab only works on agent tabs.
 - close_tab: { "action": "close_tab", "tab": number } — close a tab by its number.
+- history_search: { "action": "history_search", "query": "..." } — finds pages the USER visited before in this browser (title + URL), e.g. "the laptop page I looked at yesterday". Asks the user's permission (or follows their saved choice). Then navigate/new_tab to the link.
 - plan: { "action": "plan", "steps": string[] } — EMIT FIRST on complex/multi-step tasks. List the steps you'll take.
 - store: { "action": "store", "key": string, "value": any, "source"?: string } — save extracted data into agent MEMORY.
 - extract_text: { "action": "extract_text", "max_chars"?: number } — extracts the MAIN CONTENT of the page (Readability-style: picks the densest text block, strips ads/nav/sidebar/footer) and returns it as clean Markdown (# headings, - lists). Token-efficient — use it for reading/summarizing articles and pages.

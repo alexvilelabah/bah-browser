@@ -4,6 +4,7 @@ import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
+import { getPerm, setPerm, nextMode, applyAnswer, type PermKind, type PermAnswer } from './agent-permissions';
 import TabBar, { type TabCommand } from './components/TabBar';
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
@@ -685,6 +686,7 @@ export default function App() {
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
   }, []);
+  const [, setPermTick] = useState(0);   // re-render ao trocar uma permissão do agente no menu
   // Compartilhar (seed) do torrent — padrão DESLIGADO (baixa/streama sem subir nada).
   const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
   const toggleTorrentSeed = useCallback(() => {
@@ -1863,6 +1865,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.memSaver')}</span>
                   <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
                 </button>
+                {(['userTabs', 'history'] as PermKind[]).map(k => (
+                  <button key={k} className="menu-item" onClick={() => { setPerm(k, nextMode(getPerm(k))); setPermTick(x => x + 1); }} title={t('menu.agentPermTitle')}>
+                    <span className="menu-ic">{k === 'userTabs' ? '🗂️' : '🕘'}</span>
+                    <span className="menu-label">{t(k === 'userTabs' ? 'menu.agentPermTabs' : 'menu.agentPermHistory')}</span>
+                    <span className={`menu-switch ${getPerm(k) === 'allow' ? 'on' : ''}`}>{t(`menu.perm.${getPerm(k)}` as any)}</span>
+                  </button>
+                ))}
                 <button className="menu-item" onClick={() => toggleTorrentSeed()} title={t('menu.torrentSeedTitle')}>
                   <span className="menu-ic">🌱</span>
                   <span className="menu-label">{t('menu.torrentSeed')}</span>
@@ -2316,6 +2325,27 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let lastEvalText = '';       // avaliação/pensamento do passo anterior (checagem de "popup")
               let popupComplaints = 0, popupComplaintsUrl = '';
               const commandMultiSite = /\b(\d+|several|multiple|many|various|vários|varios|diversos)\s+(sites|stores|shops|websites|sellers|retailers|insurers|portals|lojas|sites)\b|\b(compare|comparar)\b.*\b(sites|stores|shops|lojas)\b/i.test(command);
+              // Abas desta tarefa: a de partida + as que o agente abriu. Abas da PESSOA e o histórico
+              // passam pela permissão (perguntar / sempre / nunca — menu ou resposta na pergunta).
+              const agentOpenedTabs = new Set<string>();
+              const grantedTabs = new Set<string>([taskTabId]);
+              const askPermission = async (kind: PermKind, what: string): Promise<boolean> => {
+                const mode = getPerm(kind);
+                if (mode === 'allow') return true;
+                if (mode === 'deny') return false;
+                const label = kind === 'userTabs' ? 'one of your tabs' : 'your browsing history';
+                const answer = await new Promise<PermAnswer>((resolve) => {
+                  onProgress({ kind: 'confirm', risk: 'permission', label, title: `🔐 The agent wants to use ${label}`,
+                    message: `${what}\nYou can change this later in the menu.`,
+                    choices: [
+                      { label: '✅ Allow for this task', value: 'once' }, { label: '✅ Always allow', value: 'always' },
+                      { label: 'Deny', value: 'deny' }, { label: '🚫 Always deny', value: 'never' },
+                    ],
+                    onChoose: (v: string) => resolve(v as PermAnswer), onConfirm: () => resolve('once'), onCancel: () => resolve('deny') });
+                });
+                throwIfCancelled();
+                return applyAnswer(kind, answer);
+              };
               let localHelpPauses = 0;   // a dead local model pauses for help, it does not kill the run
               let lastActionSummary = '';  // what the previous step did
               let lastActionOutcome = '';  // what the page looked like after it
@@ -2879,7 +2909,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const tabsList = tabsRef.current
                     .map((t, i) => (t.incognito && !privateTaskRef.current)
                       ? `[${i}] (incognito tab — not available to this task)`
-                      : `[${i}]${t.id === activeTabIdRef.current ? ' (active)' : ''} "${(t.title || 'Untitled').slice(0, 60)}" — ${t.url}`)
+                      : `[${i}]${t.id === activeTabIdRef.current ? ' (active)' : ''}${agentOpenedTabs.has(t.id) ? ' (agent tab)' : t.id === taskTabId ? ' (starting tab)' : grantedTabs.has(t.id) ? ' (your tab — allowed)' : getPerm('userTabs') === 'deny' ? ' (your tab — no access)' : ' (your tab — ask first)'} "${(t.title || 'Untitled').slice(0, 60)}" — ${t.url}`)
                     .join('\n');
                   const planBlock = plan.length
                     ? `PLAN (${plan.length} steps):\n${plan.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`
@@ -4585,11 +4615,28 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       results: [...allResults, { action, result: { reported } }],
                       done: { type: 'done', reason: reported, success: true } as any,
                     };
+                  } else if (action.type === 'history_search') {
+                    if (!(await askPermission('history', `Search your browsing history for "${action.query.slice(0, 80)}".`))) {
+                      toolResult = { success: false, error: 'The user did not allow the agent to read their browsing history.' };
+                    } else {
+                      const words = action.query.toLowerCase().split(/\s+/).filter(Boolean);
+                      const hits = historyRef.current
+                        .map(h => ({ h, score: words.filter(w => `${h.title} ${h.url}`.toLowerCase().includes(w)).length }))
+                        .filter(x => x.score > 0).sort((a, b) => b.score - a.score || b.h.ts - a.h.ts).slice(0, 10).map(x => x.h);
+                      history += hits.length
+                        ? `\nHISTORY MATCHES for "${action.query}" (pages the user visited, newest first among equals):\n${hits.map((h, i) => `  ${i + 1}. ${h.title || '(no title)'} — ${h.url} (${new Date(h.ts).toLocaleDateString()})`).join('\n')}`
+                        : `\nHISTORY: no visited page matches "${action.query}".`;
+                      toolResult = { success: true, info: { matches: hits.length } };
+                    }
                   } else if (action.type === 'switch_tab') {
                     const target = tabsRef.current[action.tab];
                     if (target && target.incognito && !privateTaskRef.current) {
                       toolResult = { success: false, error: `Tab ${action.tab} is an incognito tab: not available to this task.` };
+                    } else if (target && !(grantedTabs.has(target.id) || agentOpenedTabs.has(target.id)
+                      || await askPermission('userTabs', `Switch to your tab "${(target.title || target.url).slice(0, 80)}" for this task.`))) {
+                      toolResult = { success: false, error: `The user did not allow the agent to use their tab "${(target.title || '').slice(0, 60)}". Work in the starting tab or open a new tab.` };
                     } else if (target) {
+                      grantedTabs.add(target.id);
                       store.setActiveTabId(target.id);
                       activeTabIdRef.current = target.id;
                       toolResult = { success: true, info: { switchedTo: action.tab } };
@@ -4601,6 +4648,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: `Blocked: the agent only opens http(s) pages, not "${action.url}".` };
                     } else {
                     const newId = store.addTab(action.url, opensIncognito('from-tab', aiOnIncognito()));   // tarefa de aba anônima → aba anônima
+                    agentOpenedTabs.add(newId);
+                    grantedTabs.add(newId);
+                    store.updateTab(newId, { agentTask: true });
                     activeTabIdRef.current = newId;
                     toolResult = { success: true, info: { openedUrl: action.url, tabId: newId } };
                     // Wait for the new webview element to be created and attached
@@ -4616,6 +4666,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const target = tabsRef.current[action.tab];
                     if (target && target.incognito && !privateTaskRef.current) {
                       toolResult = { success: false, error: `Tab ${action.tab} is an incognito tab: not available to this task.` };
+                    } else if (target && !agentOpenedTabs.has(target.id)) {
+                      toolResult = { success: false, error: 'Only tabs the agent opened in this task can be closed — this one belongs to the user.' };
                     } else if (target) {
                       // Se a aba fechada é a aba de TRABALHO do agente, o freio anti-troca-de-aba
                       // (taskRunningRef) impede o espelhamento de corrigir o ref → ele apontaria pra
@@ -4832,7 +4884,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'web_search'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
-                    || action.type === 'read_aloud';
+                    || action.type === 'read_aloud' || action.type === 'history_search';
                   let screenshotAfter: string | undefined;
                   let afterObservation: ObservedState;
                   if (pageNeutralAction) {
@@ -4895,7 +4947,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
-                    || action.type === 'read_aloud' || action.type === 'wait';
+                    || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
                   if (internalAction) {
                     // keep noEffectCount unchanged
                   } else {
@@ -5090,6 +5142,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
                 agentDialogsStop();
+                for (const t of tabsRef.current) if (t.agentTask) store.updateTab(t.id, { agentTask: false });
                 if (privateTaskRef.current) { privateTaskRef.current = false; window.electronAPI?.setPrivateAi?.(false); }
                 // O que chegou depois do último passo (a IA já tinha decidido terminar) fica na
                 // fila: a barra pega e roda como o próximo pedido — mensagem nunca some.
