@@ -83,7 +83,7 @@ end in a couple of hops.
 
 - **No telemetry / analytics / phone-home.**
 - **No key exfiltration.** Your API key is sent only to the provider you selected, over HTTPS.
-- **No CAPTCHA-breaking, no rate-limit dodging, no automating what a site forbids in its
+- **No CAPTCHA-breaking (only an opt-in, off-by-default checkbox click — see item 4 below), no rate-limit dodging, no automating what a site forbids in its
   terms.** Presenting as standard Chrome is for *compatibility* (avoiding false blocks), not
   evasion — see "Safety & limits" in the README.
 - **No remote code execution.** The app never `eval`s content fetched from the web. The AI
@@ -108,6 +108,11 @@ machine). They are listed here so an auditor does not have to "discover" them:
 3. **Binary supply chain:** `yt-dlp` and `ffmpeg` are fetched from their upstream "latest"
    URLs without a pinned checksum ([`src/main/media-downloader.ts`](src/main/media-downloader.ts)).
    Acceptable at this scale; checksum-pinning is planned before wider distribution.
+4. **Optional captcha checkbox click** (menu ☑️, OFF by default; `tryCaptchaCheckbox` in `App.tsx`):
+   when ON, on a real human-verification gate the agent clicks a reCAPTCHA / hCaptcha / Turnstile
+   checkbox **once** with real input and checks whether it passed (response token / widget gone);
+   otherwise it asks the user as before. It never attempts image challenges. Some sites forbid
+   automated access in their terms — this is the user's choice to make.
 
 ---
 

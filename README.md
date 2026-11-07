@@ -166,11 +166,11 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🎯 **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
-- 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
+- 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail. The only exception is the opt-in menu switch (☑️ *Agent may click captcha checkboxes*, OFF by default), which clicks a simple checkbox once before asking you.
 
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- 🧩 **Compatibility, not evasion.** We present as standard Chrome (Chrome UA + masking `navigator.webdriver`) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
+- 🧩 **Compatibility, not evasion.** We present as standard Chrome (Chrome UA + masking `navigator.webdriver`) only to avoid being wrongly blocked. We do **not** solve image CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms. By default the agent stops and asks you on any human-verification page; an **opt-in** menu switch (☑️ *Agent may click captcha checkboxes*, off by default) lets it click a simple "I'm not a robot" / "Verify you are human" checkbox once — the captcha service still decides, and anything more (image puzzles) goes back to you.
 
 - **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 

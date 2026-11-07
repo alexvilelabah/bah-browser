@@ -162,11 +162,11 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Sem falso sucesso.** Depois de um preenchimento, o agente confere se o campo realmente ficou com o valor; se uma ação não surtiu efeito, ele muda de estratégia em vez de relatar sucesso.
 
-- **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
+- **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo. A única exceção é a chave opcional do menu (☑️ *Agente pode clicar em captcha de caixinha*, DESLIGADA por padrão), que clica uma vez numa caixinha simples antes de pedir sua ajuda.
 
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
-- **Compatibilidade, não evasão.** A gente se apresenta como Chrome padrão (UA Chrome + mascara `navigator.webdriver`) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos.
+- **Compatibilidade, não evasão.** A gente se apresenta como Chrome padrão (UA Chrome + mascara `navigator.webdriver`) só pra não ser bloqueado por engano. **Não** resolvemos CAPTCHA de imagem, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Por padrão o agente para e pede sua ajuda em qualquer verificação humana; uma chave **opcional** no menu (☑️ *Agente pode clicar em captcha de caixinha*, desligada por padrão) deixa ele clicar uma vez numa caixinha simples "Não sou um robô" / "Verifique que você é humano" — quem decide continua sendo o serviço de captcha, e qualquer coisa além disso (desafio de imagem) volta pra você.
 
 - **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 

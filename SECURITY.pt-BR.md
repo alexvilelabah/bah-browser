@@ -82,7 +82,7 @@ uns dois pulos.
 
 - **Sem telemetria / analytics / phone-home.**
 - **Sem exfiltração de chave.** Sua chave de API vai só pro provedor que você escolheu, por HTTPS.
-- **Não quebra CAPTCHA, não burla rate-limit, não automatiza o que o site proíbe nos termos.**
+- **Não quebra CAPTCHA (só um clique opcional na caixinha, desligado por padrão — ver item 4 abaixo), não burla rate-limit, não automatiza o que o site proíbe nos termos.**
   Se apresentar como Chrome padrão é por *compatibilidade* (evitar bloqueio falso), não evasão —
   veja "Safety & limits" no README.
 - **Sem execução de código remoto.** O app nunca dá `eval` em conteúdo da web. A IA retorna um
@@ -106,6 +106,11 @@ aqui pra o auditor não ter que "descobrir":
 3. **Cadeia de suprimentos de binários:** `yt-dlp` e `ffmpeg` são baixados das URLs "latest"
    upstream sem checksum fixo ([`media-downloader.ts`](src/main/media-downloader.ts)).
    Aceitável nessa escala; fixar versão+hash está planejado antes de distribuir em massa.
+4. **Clique opcional na caixinha de captcha** (menu ☑️, DESLIGADO por padrão; `tryCaptchaCheckbox` no
+   `App.tsx`): ligado, numa porteira de verificação humana de verdade o agente clica **uma vez** na
+   caixinha do reCAPTCHA / hCaptcha / Turnstile com input real e confere se passou (token / widget
+   sumiu); senão pede ajuda como antes. Nunca tenta desafio de imagem. Alguns sites proíbem acesso
+   automatizado nos termos — a escolha é do usuário.
 
 ---
 
