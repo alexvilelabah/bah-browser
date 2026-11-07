@@ -5670,6 +5670,30 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const what = action.text ? `text "${action.text}"` : action.gone ? `"${action.gone}" to disappear` : action.url ? `URL ${action.url}` : `page ${action.load}`;
                     toolResult = met ? { success: true, info: { waitedFor: what, waitedMs: Date.now() - t0 } }
                       : { success: false, error: `Waited ${Math.round((Date.now() - t0) / 1000)}s for ${what} — not yet.${why ? ' ' + why : ''} Re-check the page; it may need another action.` };
+                  } else if (action.type === 'wait' && !action.selector) {
+                    // `wait` simples não toca a página: dorme aqui (máx. 60s). Antes passava pelo
+                    // teto de 12s das ações de página → wait(15000) "dava timeout" com a mensagem
+                    // "page scripts are unresponsive" e o modelo abandonava uma página saudável.
+                    // Termina antes se um download desta tarefa acabar (completou/falhou).
+                    const watched = [...agentDlIdsRef.current].filter(k => {
+                      const st = dlLatestRef.current.get(k)?.state;
+                      return st === 'started' || st === 'progress' || st === 'queued';
+                    });
+                    // Com download desta tarefa rodando, o wait é paciente: dura até o download acabar
+                    // ou ETA+10s (máx. 60s), mesmo que o modelo peça 5s — senão ele espera picado e
+                    // conclui que "esperar não adianta".
+                    const etas = watched.map(k => dlLatestRef.current.get(k)?.etaSec).filter((e): e is number => typeof e === 'number');
+                    const patientMs = watched.length ? (etas.length ? Math.max(...etas) * 1000 + 10_000 : 60_000) : 0;
+                    const ms = Math.min(Math.max(Number(action.ms) || 1000, patientMs, 0), 60_000);
+                    const t0 = Date.now();
+                    let endedBy: string | null = null;
+                    while (Date.now() - t0 < ms) {
+                      await new Promise(r => setTimeout(r, 250));
+                      throwIfCancelled();
+                      const fin = watched.map(k => dlLatestRef.current.get(k)).find(d => d && (d.state === 'completed' || d.state === 'failed'));
+                      if (fin) { endedBy = `${fin.filename} ${fin.state}`; break; }
+                    }
+                    toolResult = { success: true, info: { waitedMs: Date.now() - t0, ...(endedBy ? { endedEarly: `download ${endedBy}` } : {}) } };
                   } else if ((action.type === 'save_pdf' || action.type === 'screenshot') && wcId != null) {
                     const r = action.type === 'save_pdf' ? await window.electronAPI?.savePdf?.(wcId, action.name) : await window.electronAPI?.pageScreenshot?.(wcId, action.full !== false, action.name);
                     toolResult = r ?? { success: false, error: 'not available' };
@@ -5750,7 +5774,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Bounded: on hung pages any executeJavaScript-based action (scroll,
                     // click_text fallback, fill...) would otherwise never resolve.
                     toolResult = riskCancel ?? await withTimeout(executeBrowserAction(wv, action),
-                      12000,
+                      action.type === 'wait' ? Math.min(Number(action.timeout) || 5000, 60_000) + 3000 : 12000,
                       { success: false, error: `${action.type} timed out — page scripts are unresponsive. Use OCR TEXT or navigate to a DIFFERENT site.` });
                   }
                   // Internal actions (plan/store/extract_text) never change the page — skip the

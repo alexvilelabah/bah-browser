@@ -199,7 +199,9 @@ Start, completion, failure, cancellation and stall changes are always sent immed
 lines are added to the agent's history after each step. If a background download finishes **after the
 task ended**, its completed/failed event is kept and delivered at the start of the **next** agent task
 (other old download events are dropped then). The system prompt (`ai-engine.ts`) tells the agent never to
-claim success before `COMPLETED`.
+claim success before `COMPLETED`, to `wait` for short downloads, and to hand long ones back to the user
+(Downloads panel) instead of waiting. A plain `{ "ms": N }` wait is slept in the renderer (up to 60 s) and
+ends early when a download of this task completes or fails.
 
 **Download tools for the agent** (`App.tsx`, agent loop; parsed/validated in `page-agent.ts`):
 `list_downloads` returns the Downloads panel queue (active first: `[id]`, state, %, size, speed, ETA,

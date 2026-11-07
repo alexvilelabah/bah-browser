@@ -198,7 +198,9 @@ cara, e "nenhum byte há N segundos" é uma medida exata). A IA só decide o pr�
 linhas de download entram na história do agente depois de cada passo. Se um download em background termina
 **depois que a tarefa acabou**, o evento de fim/falha é guardado e entregue no começo da **próxima** tarefa
 do agente (os outros eventos velhos são descartados nessa hora). O system prompt (`ai-engine.ts`) manda o
-agente nunca dizer que baixou antes do `COMPLETED`.
+agente nunca dizer que baixou antes do `COMPLETED`, usar `wait` em downloads curtos e devolver os longos
+pro usuário (painel de Downloads) em vez de esperar. Um `wait` simples (`{ "ms": N }`) dorme no renderer
+(até 60 s) e termina antes se um download desta tarefa terminar ou falhar.
 
 **Ferramentas de download pro agente** (`App.tsx`, loop do agente; parse/validação em `page-agent.ts`):
 `list_downloads` devolve a fila do painel de Downloads (ativos primeiro: `[id]`, estado, %, tamanho,
