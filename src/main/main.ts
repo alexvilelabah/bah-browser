@@ -51,6 +51,7 @@ import { setupHwMonitor } from './hw-monitor';
 import { setupSkills } from './skills-loader';
 import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
+import { setupChatStore } from './chat-store';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -384,6 +385,13 @@ const lastGesture = new Map<number, number>();
 const liveAuthPopups = new Map<number, number>();
 const lastAuthPopupAt = new Map<number, number>();
 // Host da janela de login enquanto ela existe ('' quando não há nenhuma) + o gancho pra
+// Visualizador de texto puro do Chromium (ver did-attach-webview): fundo e texto do MESMO esquema de
+// cor (Canvas/CanvasText), mesmo com a CSP do site bloqueando o estilo dele.
+const PLAIN_TEXT_VIEWER_CSS = `
+html:has(> head > meta[name="color-scheme"]:only-child):has(> body > pre:only-child) { color-scheme: light dark; background: Canvas; color: CanvasText; }
+html:has(> head > meta[name="color-scheme"]:only-child) > body > pre:only-child { color: CanvasText; }
+`;
+
 // reavaliar o bloqueador. Ficam no escopo de módulo porque quem liga é o handler de popup
 // (did-attach-webview) e quem lê é o evalAdblockForHost, lá dentro do setupIPC.
 let authPopupHost = '';
@@ -1223,6 +1231,15 @@ function createWindow(): void {
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
+    // Arquivo de TEXTO puro (README.md, .txt, logs) aberto direto: o Chromium mostra num <pre> e, no
+    // tema escuro, pinta o texto claro. Quando o servidor manda CSP "default-src 'none'; sandbox"
+    // (Hugging Face, GitHub raw…), o fundo escuro do próprio visualizador não vem: o texto fica claro
+    // num fundo branco (invisível). Folha de USUÁRIO (insertCSS) não
+    // passa pela CSP da página; o seletor só casa com o visualizador de texto do Chromium
+    // (<head> só com o meta color-scheme e <body> só com um <pre>), nunca com página de verdade.
+    wc.on('dom-ready', () => {
+      wc.insertCSS(PLAIN_TEXT_VIEWER_CSS, { cssOrigin: 'user' }).catch(() => {});
+    });
     // Indicador de som na aba (igual ao Chrome). O Chromium avisa quando a aba passa a
     // EMITIR áudio de verdade — vídeo mudo não conta. Só avisa o renderer (que acha a aba
     // dona pelo wcId); não mexe em som/autoplay.
@@ -1749,9 +1766,11 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_SEARCH_RESULTS) return null;
     try { const r = JSON.parse(process.env.E2E_SEARCH_RESULTS); return Array.isArray(r) ? r : null; } catch { return null; }
   });
-  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text?: unknown; keepDoc?: unknown }) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
+    // E2E: resposta fixa de chat (E2E_MOCK_CHAT) — pra testar fluxos que pedem um texto ao modelo.
+    if (process.env.E2E_MOCK_AI === '1' && process.env.E2E_MOCK_CHAT) return { response: process.env.E2E_MOCK_CHAT };
     const engine = (local && localEngine) ? localEngine : aiEngine;
     if (!engine) return { error: 'AI not configured. Open the settings.' };
     image = visionImageToJpeg(image);
@@ -1763,8 +1782,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       const onDelta = (streamId && !stateless)
         ? (delta: string) => { try { mainWindow?.webContents.send('ai:chat-delta', { streamId, delta }); } catch {} }
         : undefined;
-      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal, image);
-      return { response };
+      // thread: a conversa da sessão (renderer/threads.ts); keepDoc = o rawContext é um arquivo anexado.
+      const tRaw = typeof thread === 'string' ? thread : (thread && typeof thread === 'object' && typeof thread.text === 'string' ? thread.text : undefined);
+      const threadOpt = typeof tRaw === 'string' ? { text: tRaw.slice(0, 40000), keepDoc: typeof thread === 'object' && thread?.keepDoc === true } : undefined;
+      const response = await engine.chat(message, pageContent, stateless, tabId, rawContext, onDelta, ac?.signal, image, threadOpt);
+      // ctx.system: as instruções fixas do chat, pro medidor de contexto do painel.
+      return { response, ctx: { system: engine.chatSystemTokens() } };
     } catch (err: any) {
       const m = err?.message ?? String(err);
       if (local) {
@@ -1800,6 +1823,18 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     aiEngine?.clearHistory(tabId);
     localEngine?.clearHistory(tabId);
     return { ok: true };
+  });
+  // Janela de contexto do modelo LOCAL (a mesma detecção do agente: /props no llama.cpp, o tamanho
+  // configurado…), pro medidor do painel. Nuvem: null (a janela não é conhecida daqui).
+  ipcMain.handle('ai:context-window', async (_event, local?: boolean) => {
+    if (process.env.E2E_MOCK_AI === '1' && process.env.E2E_CONTEXT_WINDOW) return { tokens: Number(process.env.E2E_CONTEXT_WINDOW), source: 'configured' };
+    if (!local || !localEngine) return null;
+    try { const r = await localEngine.resolveContextBudget(); return { tokens: r.totalTokens, source: r.source }; } catch { return null; }
+  });
+  ipcMain.handle('ai:move-history', (_event, from: string, to: string) => {
+    if (typeof from !== 'string' || typeof to !== 'string') return;
+    aiEngine?.moveHistory(from, to);
+    localEngine?.moveHistory(from, to);
   });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine
@@ -3881,6 +3916,7 @@ function setupAutoUpdater(): void {
 
 
 app.whenReady().then(async () => {
+  setupChatStore(() => mainWindow);
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
   // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork
   // castLabs (mesma versão, +wvcus). O CDM vem por component updater: baixa na PRIMEIRA

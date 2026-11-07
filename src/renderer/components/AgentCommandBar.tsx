@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { namesStore } from '../stores';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
+import { isAboutLastRun, lastRunDigest, lastRunSummary, reportsIncompleteRun, type RunFeedItem } from '../last-run';
 import type { RoutedIntent, RouterStatus } from '../../shared/router-routes';
 import RouterModelCard from './RouterModelCard';
+import { SESSION_COLOR_HEX } from '../../shared/agent-sessions';
+import { startsWithActionVerb } from '../route-words';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
@@ -11,6 +14,9 @@ import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
 import { CommandHistory } from '../command-history';
 import { fmtUsd } from '../pricing';
+import { noteExchange, compactNow, clear as clearThread, getThread, hydratedKeys, type ThreadNotice } from '../threads';
+import { ThreadView, ThreadNoticeRow } from './ThreadView';
+import ContextMeter from './ContextMeter';
 
 export interface StepRecord {
   step: number;
@@ -35,7 +41,11 @@ export type AgentProgressEvent =
   | { kind: 'action'; action: BrowserAction }
   | { kind: 'result'; action: BrowserAction; result: any }
   | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
-  | { kind: 'step'; step: StepRecord };
+  | { kind: 'step'; step: StepRecord }
+  // Resumo das abas abertas (App.tsx → summarize_tabs): um cartão com link pra cada aba.
+  | { kind: 'tabs_summary'; tabs: TabsSummaryEntry[]; overall: string; skippedIncognito: number; skippedInternal: number; onOpen: (tabId: string) => void };
+
+export interface TabsSummaryEntry { id: string; title: string; url: string; state: 'read' | 'asleep' | 'no_access' | 'unreadable'; summary: string }
 
 interface ActionResult {
   thought?: string;
@@ -56,7 +66,10 @@ type FeedData =
   | { kind: 'report'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'help'; message: string; instruction: string }
-  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }> };
+  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }> }
+  // Thread da sessão (renderer/threads.ts): avisos de orçamento/resumo/limpeza/corte, e a conversa que voltou.
+  | { kind: 'thread-notice'; notice: ThreadNotice }
+  | { kind: 'thread-recap'; key: string };
 type FeedItem = FeedData & { id: number };
 
 const FEED_CAP = 400;
@@ -111,7 +124,7 @@ function isAffirmative(msg: string): boolean {
 // Verbo de AÇÃO na web (busca/abrir/baixar/comprar/preencher/comparar…). Backup do
 // roteador determinístico (detectQuickAction/atalhos). NÃO inclui "resuma/explique/o
 // que/qual" — essas são perguntas, respondidas pelo chat com o conteúdo da página.
-const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching)\b/i;
+const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching|browse|browsing|visit|apply|applying)\b/i;
 function isImperativeAction(msg: string): boolean {
   return ACTION_VERB_RE.test(msg);
 }
@@ -130,7 +143,7 @@ const INFO_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|
 function isInfoRequest(msg: string): boolean { return INFO_RE.test(msg) || isQuestion(msg); }
 
 // Verbo que OPERA numa página (faz algo, não só lê/pergunta) → agente.
-const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule)\b/i;
+const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule|browse|browsing|go\s+to|navigate\s+to|head\s+(?:to|over)|visit|apply|applying|application|submit|candidat\w+|postul\w+)\b/i;
 function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
 
 // Pedido de BAIXAR um arquivo → agente (ele tem a ação download). Vem ANTES do INFO_RE no
@@ -196,7 +209,7 @@ interface Props {
   onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
   /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
    *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
-  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
+  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean, docIsFile?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
   /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
@@ -231,7 +244,14 @@ interface Props {
   panelOpen?: boolean;   // painel visível? fechado é só display:none (segue montado) → pausa o que é enfeite
   onClose: () => void;
   activeTabId: string;
-  tabIds: string;   // ids das abas existentes (csv) — descarta conversas de abas fechadas
+  tabIds: string;   // chaves das conversas vivas (csv: sessão ou aba sem sessão) — descarta as que ficaram sem aba
+  /** Chave da conversa de uma aba (a sessão dela, ou ela mesma) — ver shared/agent-sessions.ts. */
+  threadKeyOf?: (tabId: string) => string;
+  /** 1º uso do assistente numa aba: cria a sessão dela (nome tirado do pedido). */
+  onEnsureSession?: (tabId: string, text: string) => void;
+  /** A sessão da aba vista (chip no topo do painel). */
+  viewSession?: { id: string; name: string; color: string; tabs: number } | null;
+  onRenameSession?: (id: string, name: string) => void;
   aiSettings: AISettings;
   onSettingsChange: (settings: AISettings) => Promise<void>;
   /** Gasto estimado desde que o app abriu (ver pricing.ts). usd=0 → nada é mostrado. */
@@ -243,7 +263,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, threadKeyOf = (id: string) => id, onEnsureSession, viewSession, onRenameSession, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -378,7 +398,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
-  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
+  // Conversa que voltou (Continuar de onde parou): o feed começa com ela, só leitura.
+  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>(() =>
+    Object.fromEntries(hydratedKeys().map((k, i) => [k, [{ kind: 'thread-recap', key: k, id: -1 - i } as FeedItem]])));
   const convoTabRef = useRef<string>(activeTabId);
   // ── CONVERSA PRESA NA ABA DE ORIGEM ──────────────────────────────────────────────
   // As mensagens já iam pra aba onde a tarefa COMEÇOU (convoTabRef), mas o painel exibia a
@@ -395,7 +417,40 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // vazava a conversa de uma aba pra outra — pior que o problema que resolvia, porque
   // abas precisam ser independentes. Sem estado, não há o que ficar preso.
   const viewTabId = (loading || chatLoading) ? (convoTabRef.current || activeTabId) : activeTabId;
-  const feed = useMemo<FeedItem[]>(() => feedsByTab[viewTabId] ?? [], [feedsByTab, viewTabId]);
+  const viewKey = threadKeyOf(viewTabId);
+  const feed = useMemo<FeedItem[]>(() => feedsByTab[viewKey] ?? [], [feedsByTab, viewKey]);
+  // A conversa de uma aba mudou de chave (a aba ganhou sessão ou entrou em outra): vai junto.
+  useEffect(() => {
+    const onMove = (e: Event) => {
+      const { from, to } = (e as CustomEvent).detail || {};
+      if (!from || !to || from === to) return;
+      setFeedsByTab(m => {
+        if (!m[from]?.length) { if (!(from in m)) return m; const { [from]: _gone, ...rest } = m; return rest; }
+        const { [from]: moved, ...rest } = m;
+        const merged = [...(rest[to] ?? []), ...moved];
+        return { ...rest, [to]: merged.length > FEED_CAP ? merged.slice(-FEED_CAP) : merged };
+      });
+    };
+    window.addEventListener('bah:move-thread', onMove);
+    return () => window.removeEventListener('bah:move-thread', onMove);
+  }, []);
+  // Avisos da thread vão pro feed DA CONVERSA deles (não necessariamente a vista); conversa retomada
+  // do 🕘 histórico começa com ela mesma, só leitura.
+  useEffect(() => {
+    const add = (key: string, item: FeedData) => setFeedsByTab(m => {
+      const prev = m[key] ?? [];
+      const next = [...prev, { ...item, id: ++idRef.current } as FeedItem];
+      return { ...m, [key]: next.length > FEED_CAP ? next.slice(-FEED_CAP) : next };
+    });
+    const onNotice = (e: Event) => { const n = (e as CustomEvent).detail as ThreadNotice; if (n?.key) add(n.key, { kind: 'thread-notice', notice: n }); };
+    const onHydrated = (e: Event) => {
+      const keys: string[] = (e as CustomEvent).detail?.keys ?? [];
+      for (const k of keys) setFeedsByTab(m => (m[k]?.length ? m : { ...m, [k]: [{ kind: 'thread-recap', key: k, id: ++idRef.current }] }));
+    };
+    window.addEventListener('bah:thread-notice', onNotice);
+    window.addEventListener('bah:thread-hydrated', onHydrated);
+    return () => { window.removeEventListener('bah:thread-notice', onNotice); window.removeEventListener('bah:thread-hydrated', onHydrated); };
+  }, []);
 
   // ── PERGUNTAS SUGERIDAS SOBRE A PÁGINA ──────────────────────────────────────────
   // Painel abrindo vazio num site = tela morta, e ninguém descobre que pode perguntar
@@ -574,7 +629,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const idRef = useRef(0);
 
   const push = (item: FeedData) => {
-    const tabId = convoTabRef.current;
+    const tabId = threadKeyOf(convoTabRef.current);
     setFeedsByTab(prevMap => {
       const prev = prevMap[tabId] ?? [];
       let next = [...prev, { ...item, id: ++idRef.current }];
@@ -655,7 +710,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // sobrescreveria o abortRef e o 1º ficaria órfão, sem Stop). Duplo-Enter → ignora.
     if (abortRef.current) return;
     busyRef.current = true;
-    convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
+    convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, cmd);   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
     setLoading(true);
@@ -747,6 +803,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
     busyRef.current = true;
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     setChatLoading(true);
     stickToBottomRef.current = true;
     if (!skipPush) push({ kind: 'chat-user', text: msg, file: fileName });
@@ -766,16 +823,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared), cancelled]);
+      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared, !!fileName), cancelled]);
       // Erro (IA fora, chave inválida…) NÃO é resposta: vira aviso vermelho COM dica
       // acionável. Antes se disfarçava de bolha normal da IA e a pessoa ficava sem saída.
-      if (isError) { push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
+      if (isError) { noteExchange(threadKeyOf(convoTabRef.current), msg); push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
       // Modelo de raciocínio: pensamento vira o chip 💭 (com duração); resposta fica limpa.
       const { clean, thinking } = splitThink(reply);
       const text = clean || thinking || reply;   // resposta vazia (só pensou) → mostra o que houver
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || text);   // a troca entra na thread da sessão
       push({ kind: 'chat-assistant', text, suggestedCommand, localFailed,
              thinking: clean ? thinking : undefined,
              thinkSecs: (clean && thinking && thinkSecsRef.current) ? thinkSecsRef.current : undefined });
@@ -796,6 +854,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (loading || chatLoading) return;
     busyRef.current = true;
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     setChatLoading(true);
     stickToBottomRef.current = true;
     if (!skipPush) push({ kind: 'chat-user', text: msg });
@@ -814,6 +873,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       pendingSuggestionRef.current = null;
       // Modelo de raciocínio local na síntese: pensamento não vaza na resposta da pesquisa.
       const { clean, thinking } = splitThink(answer);
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || answer);
       push({ kind: 'chat-assistant', text: clean || thinking || answer, sources, thinking: clean ? thinking : undefined });
     } catch (e: any) {
       if (String(e?.message) === 'CHAT_CANCELLED') push({ kind: 'event', event: { kind: 'status', message: '⏹ ' + t('composer.stopped') } });
@@ -836,9 +896,19 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
     busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
-    // Roteador local pronto: ELE decide "sobre a tela" (entende typo). A regra abaixo fica pra
-    // quando ele não está (e pro modo IA dirige, que não passa por classificação nenhuma).
+    // Roteador local pronto: ELE decide "pergunta sobre a última tarefa" / "ficou incompleta" e
+    // "sobre a tela" (entende typo e follow-up). As regras abaixo ficam pra quando ele não está
+    // (e pro modo IA dirige, que não passa por classificação nenhuma).
     const useRouter = !!routerReady && !!onClassify && !agentDrive;
+    // Pergunta sobre a ÚLTIMA tarefa ("did you click it, or block it?") → chat com o resumo dela.
+    // Vem antes de tudo: não é pedido novo (nem no modo IA dirige) e nem busca na web.
+    if (!useRouter && isQuestion(msg) && isAboutLastRun(msg)) {
+      const digest = lastRunDigest(feed as RunFeedItem[], a => formatAction(a as BrowserAction));
+      if (digest) { pendingSuggestionRef.current = null; runChat(msg, digest); return; }
+    }
+    // "one window was opened, but not the second" → o agente termina o que faltou (ele recebe o
+    // pedido anterior e como terminou). Antes ia pro chat da página, que negava ter algo faltando.
+    if (!useRouter && reportsIncompleteRun(msg) && lastRunDigest(feed as RunFeedItem[], () => '')) { pendingSuggestionRef.current = null; runAgent(msg); return; }
     // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
     // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
     if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -883,16 +953,21 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     //    fallback. Sobe a mensagem do usuário AGORA, antes do await, pra ela aparecer NA HORA
     //    (sem "engasgar" esperando a classificação). As rotas abaixo NÃO re-empurram (skipPush).
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     stickToBottomRef.current = true;
     push({ kind: 'chat-user', text: msg });
     if (onClassify && !classifyingRef.current) {
       classifyingRef.current = true;
       let cls: RoutedIntent | null = null;
-      try { cls = await onClassify(msg); } catch { cls = null; }
+      try { cls = await onClassify(msg, { lastRun: lastRunSummary(feed as RunFeedItem[]) }); } catch { cls = null; }
       classifyingRef.current = false;
-      // 'last_run' / 'fix' só vêm do roteador local quando ele recebe a última tarefa (ctx.lastRun);
-      // esta caixa ainda não manda → não chegam aqui. Se chegarem: chat / agente.
-      if (cls === 'last_run') { runChat(msg, undefined, undefined, true); return; }
+      // Só o roteador local devolve estes dois (e só quando houve tarefa).
+      if (cls === 'last_run') {
+        const digest = lastRunDigest(feed as RunFeedItem[], a => formatAction(a as BrowserAction));
+        pendingSuggestionRef.current = null;
+        runChat(msg, digest || undefined, undefined, true);
+        return;
+      }
       if (cls === 'fix') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'page' || cls === 'chat') { runChat(msg, undefined, undefined, true); return; }
@@ -917,12 +992,24 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (wantsLiveBooking(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (wantsStoreBrowse(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (wantsPartLookup(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    // ORDEM imperativa no começo ("search for a set of new golf clubs", "find me…", "look up…",
+    // "procure…") é tarefa do navegador: o agente busca e abre os resultados de verdade. Antes ia pra
+    // Pesquisa Rápida (resumo de trechos), que devolvia "os resultados são genéricos". Pergunta
+    // ("what is…", "…?") continua indo pra pesquisa.
+    if (startsWithActionVerb(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
     if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     runChat(msg, undefined, undefined, skipPush);
   };
 
   const runUnified = (msg: string) => {
+    // "/compact": resume já os itens mais velhos da conversa (o feed mostra o texto que ficou no lugar).
+    if (/^\/compact\s*$/i.test(msg.trim())) {
+      setInput('');
+      convoTabRef.current = activeTabId;
+      compactNow(threadKeyOf(activeTabId));
+      return;
+    }
     // "sim/pode/faça…" logo após uma proposta → roda a proposta (reclassificada).
     if (pendingSuggestionRef.current && isAffirmative(msg)) {
       const cmd = pendingSuggestionRef.current;
@@ -1393,6 +1480,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         <div className="sidebar-title-wrap">
           <h3>{t('assist.title')}</h3>
           <span className="sidebar-active-ai" title={activeAiLabel()}>{activeAiLabel()}</span>
+          <ContextMeter viewKey={viewKey} />
+          {viewSession && (
+            <SessionChip session={viewSession} onRename={name => onRenameSession?.(viewSession.id, name)} />
+          )}
           {/* Contador de gasto: só acende quando houve custo real (modo local nunca acende).
               Fica aqui, e não no feed, porque os chips de status somem sozinhos em 2s. */}
           {sessionCost.usd > 0 && (
@@ -1412,7 +1503,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
             </svg>
           </button>
-          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewTabId]: [] })); window.electronAPI?.clearChatHistory?.(viewTabId); }} title={t('assist.clear')}>
+          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewKey]: [] })); window.electronAPI?.clearChatHistory?.(viewKey); clearThread(viewKey); }} title={t('assist.clear')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
           <button onClick={onClose} title={t('assist.close')}>
@@ -2218,6 +2309,12 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confi
       );
     case 'step':
       return <StepCard step={item.step} />;
+    case 'thread-notice':
+      return <ThreadNoticeRow notice={item.notice} />;
+    case 'thread-recap': {
+      const th = getThread(item.key);
+      return th ? <details className="thread-notice" open data-testid="thread-recap"><summary>{t('thread.restored')}</summary><ThreadView thread={th} compact /></details> : null;
+    }
     case 'event':
       return <ProgressLine event={item.event} />;
     case 'media':
@@ -2343,6 +2440,7 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   // rendered as its own card above the composer, not as a feed row
   if (event.kind === 'plan_preview') return null;
   if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui
+  if (event.kind === 'tabs_summary') return <TabsSummaryCard event={event} />;
   if (event.kind === 'action') {
     return <div className="result-action"><span className="result-desc">▶ {formatAction(event.action)}</span></div>;
   }
@@ -2420,6 +2518,31 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   );
 }
 
+function TabsSummaryCard({ event }: { event: Extract<AgentProgressEvent, { kind: 'tabs_summary' }> }) {
+  const note = (e: TabsSummaryEntry) => e.state === 'asleep' ? t('tabsSummary.asleep')
+    : e.state === 'no_access' ? t('tabsSummary.noAccess')
+    : e.state === 'unreadable' ? t('tabsSummary.unreadable') : e.summary;
+  return (
+    <div className="tabs-summary-card" data-testid="tabs-summary">
+      <div className="tabs-summary-title">{t('tabsSummary.title')}</div>
+      <ol className="tabs-summary-list">
+        {event.tabs.map(e => (
+          <li key={e.id} className={`tabs-summary-item tabs-summary-${e.state}`}>
+            <button type="button" className="tabs-summary-link" data-testid="tabs-summary-link" title={`${t('tabsSummary.switch')}\n${e.url}`} onClick={() => event.onOpen(e.id)}>
+              {e.title || e.url}
+            </button>
+            {note(e) && <div className="tabs-summary-text">{note(e)}</div>}
+          </li>
+        ))}
+      </ol>
+      {event.overall && <div className="tabs-summary-overall"><b>{t('tabsSummary.overall')}:</b> {event.overall}</div>}
+      {(event.skippedIncognito > 0 || event.skippedInternal > 0) && (
+        <div className="tabs-summary-skipped">{t('tabsSummary.skipped').replace('{incognito}', String(event.skippedIncognito)).replace('{internal}', String(event.skippedInternal))}</div>
+      )}
+    </div>
+  );
+}
+
 function StatusChip({
   label,
   message,
@@ -2455,4 +2578,25 @@ function formatResult(result: any): string {
   if (result === undefined || result === null) return '';
   if (typeof result !== 'object') return String(result);
   return JSON.stringify(result);
+}
+
+// Chip da sessão no topo do painel: diz de quem é esta conversa (cor + nome da sessão da aba, e
+// quantas abas a dividem). Clique → renomeia ali mesmo.
+function SessionChip({ session, onRename }: { session: { id: string; name: string; color: string; tabs: number }; onRename: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(session.name);
+  useEffect(() => { setName(session.name); setEditing(false); }, [session.id, session.name]);
+  const bg = (SESSION_COLOR_HEX as Record<string, string>)[session.color] || SESSION_COLOR_HEX.grey;
+  const commit = () => { setEditing(false); if (name.trim() && name.trim() !== session.name) onRename(name); };
+  return (
+    <button type="button" className="panel-session-chip" style={{ background: bg }} data-testid="panel-session-chip"
+      title={t('session.panelTip').replace('{n}', String(session.tabs))}
+      onClick={() => setEditing(true)}>
+      {editing
+        ? <input value={name} maxLength={24} autoFocus aria-label={t('session.name')} onChange={e => setName(e.target.value)}
+            onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setName(session.name); setEditing(false); } }} />
+        : <span>{session.name}</span>}
+      {session.tabs > 1 && <span className="panel-session-count">· {session.tabs}</span>}
+    </button>
+  );
 }

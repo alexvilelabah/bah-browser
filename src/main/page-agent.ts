@@ -131,7 +131,8 @@ export class PageAgent {
     try {
       const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier, signal);
       const parsed = this.parseResponse(r.text);
-      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model }, vision: r.vision };
+      // contextTokens/contextTrimmed/promptParts: o medidor de contexto do painel e o aviso "✂️ página cortada".
+      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model, contextTokens: r.contextTokens, contextTrimmed: r.contextTrimmed, promptParts: r.promptParts }, vision: r.vision };
     } catch (err: any) {
       const e = classifyError(err);
       return {

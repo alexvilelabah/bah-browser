@@ -409,6 +409,9 @@ export class AIEngine {
   // Histórico de chat POR ABA (tabId → mensagens): cada aba do navegador tem sua própria
   // conversa (casa com o chat-por-aba da UI). Antes era um só, global, compartilhado.
   private conversationHistories = new Map<string, Message[]>();
+  // Com a thread da sessão (renderer/threads.ts) a memória do chat vem da tela a cada pedido. Só o
+  // documento anexado fica aqui (é grande demais pra thread): a pergunta seguinte ainda o enxerga.
+  private lastDocs = new Map<string, string>();
   // Models whose server refused an image (`${baseUrl}::${model}`). Discovery often says
   // "unknown"; the first real rejection is the ground truth, so later steps go text-only
   // instead of failing (and retrying) every single call.
@@ -670,10 +673,31 @@ export class AIEngine {
     return `\n\nENGINE: You are ${who}. If the user asks who/what AI you are, or who made you, answer THIS honestly and briefly — you are the browser's assistant, currently powered by the engine just described. Do NOT claim to be ChatGPT/Gemini/Claude or made by OpenAI/Google/Anthropic/Microsoft unless that is exactly the engine above.`;
   }
 
-  clearHistory(tabId?: string): void {
-    if (tabId) this.conversationHistories.delete(tabId);
-    else this.conversationHistories.clear();
+  /** A conversa de uma aba passou pra sessão (ou a aba entrou em outra): junta no destino, nesta ordem. */
+  moveHistory(from: string, to: string): void {
+    if (!from || !to || from === to) return;
+    this.moveDoc(from, to);
+    const a = this.conversationHistories.get(from);
+    if (!a?.length) { this.conversationHistories.delete(from); return; }
+    const merged = [...(this.conversationHistories.get(to) ?? []), ...a];
+    this.conversationHistories.set(to, merged.slice(-40));
+    this.conversationHistories.delete(from);
   }
+
+  /** Documento anexado: segue pra chave nova junto com a conversa. */
+  private moveDoc(from: string, to: string): void {
+    const d = this.lastDocs.get(from);
+    if (d && !this.lastDocs.has(to)) this.lastDocs.set(to, d);
+    this.lastDocs.delete(from);
+  }
+
+  clearHistory(tabId?: string): void {
+    if (tabId) { this.conversationHistories.delete(tabId); this.lastDocs.delete(tabId); }
+    else { this.conversationHistories.clear(); this.lastDocs.clear(); }
+  }
+
+  /** Tokens (estimados) das instruções fixas do chat — pro medidor de contexto do painel. */
+  chatSystemTokens(): number { return estimateTokens(this.systemPromptText(false)); }
 
   // Chama o LLM em modo chat com streaming quando há onDelta; se o stream falhar ANTES
   // do primeiro pedaço, refaz sem stream (fallback transparente — nunca pior que antes).
@@ -694,15 +718,25 @@ export class AIEngine {
     }
   }
 
-  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal, image?: VisionImage): Promise<string> {
+  async chat(userMessage: string, pageContext?: string, stateless = false, tabId = 'default', rawContext?: string, onDelta?: (d: string) => void, signal?: AbortSignal, image?: VisionImage, threadOpt?: { text: string; keepDoc?: boolean }): Promise<string> {
+    // thread = a conversa da sessão (renderer/threads.ts), já no orçamento dela. Com ela, o histórico
+    // deste engine NÃO entra: a mesma conversa que o agente lê, uma memória só.
+    const threadMode = !!threadOpt && !stateless;
+    const thread = threadOpt?.text ?? '';
+    if (threadMode && rawContext && threadOpt?.keepDoc) this.lastDocs.set(tabId, rawContext.slice(0, 24000));
+    const earlierDoc = threadMode && !rawContext ? this.lastDocs.get(tabId) : undefined;
     // rawContext = a self-contained block the caller already wrote (e.g. an attached
     // document with its own instruction). Used AS-IS, WITHOUT the "[Current page context]"
     // label — that label made weak models think there was an attachment they couldn't open.
-    const contextNote = rawContext
+    const docNote = earlierDoc ? `\n\n[Document attached earlier in this conversation — use it only if the message is about it]\n${earlierDoc.slice(0, 8000)}` : '';
+    const contextNote = docNote + (rawContext
       ? `\n\n${rawContext.slice(0, 24000)}`
       : pageContext
         ? `\n\n[Current page context]\n${pageContext.slice(0, 8000)}`
-        : '';
+        : '');
+    const threadNote = threadMode && thread
+      ? `[THIS SESSION SO FAR — the message below may refer to it ("it", "that one", "the job")]\n${thread}\n\n[NEW MESSAGE]\n`
+      : '';
 
     // Stateless: usado pela Pesquisa Rápida (síntese de snippets), classificador de
     // intenção e monitores. NÃO entra no histórico — e o retorno vai LIMPO de <think>:
@@ -716,7 +750,7 @@ export class AIEngine {
     // Conversa DAQUELA aba (chaveada por tabId). O turno do usuário vai numa CÓPIA pra
     // chamada e só entra no histórico DEPOIS do sucesso — uma falha do provedor não pode
     // deixar um 'user' órfão (dois 'user' seguidos quebram provedores estritos/Anthropic).
-    const history = this.conversationHistories.get(tabId) ?? [];
+    const history = threadMode ? [] : (this.conversationHistories.get(tabId) ?? []);
     // Chat vision: attach the page screenshot when mode+gate allow, and state it plainly
     // so the model neither refuses to look nor invents what it "sees".
     const vision = await this.resolveVision(image);
@@ -724,7 +758,7 @@ export class AIEngine {
     const visionNote = vision.attached
       ? `\n\n[PAGE SCREENSHOT attached: ${vision.width ?? '?'}x${vision.height ?? '?'} — answer from it when the question is visual.]`
       : (image ? noImageNote(vision.reason) : '');
-    let userTurn: Message = { role: 'user', content: userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
+    let userTurn: Message = { role: 'user', content: threadNote + userMessage + contextNote + visionNote, image: vision.attached ? image : undefined };
 
     // A new screenshot supersedes the one kept in history: never send two frames per call.
     const priorTurns = userTurn.image ? history.map(h => (h.image ? { ...h, image: undefined } : h)) : history;
@@ -733,7 +767,7 @@ export class AIEngine {
       msgs => this.callChatLLM(msgs, onDelta, signal),
       msgs => {
         // Restate honestly: the model is now on text only.
-        userTurn = { role: 'user', content: userMessage + contextNote + noImageNote('model_rejected_image') };
+        userTurn = { role: 'user', content: threadNote + userMessage + contextNote + noImageNote('model_rejected_image') };
         return [...msgs.slice(0, -1), userTurn];
       },
       signal,
@@ -742,6 +776,8 @@ export class AIEngine {
     // Cancelado no meio (Parar)? NÃO comita nada: o usuário não viu essa resposta, e gravar
     // deixaria um turno-fantasma que sobrescreveria a memória da PRÓXIMA mensagem daquela aba.
     if (signal?.aborted) return text;
+    // Na thread, quem guarda o turno é a tela (renderer/threads.ts).
+    if (threadMode) return text;
     // Higiene: modelos de raciocínio (qwen3 etc.) prefixam <think>…</think> na resposta.
     // O histórico guarda SÓ a resposta limpa — re-mandar raciocínio velho gasta contexto
     // e confunde o modelo. (O retorno pro renderer segue cheio: a UI exibe o pensamento.)
@@ -756,7 +792,7 @@ export class AIEngine {
     return text;
   }
 
-  async generateAction(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean; vision?: VisionReport }> {
+  async generateAction(command: string, observedState?: string, screenshot?: VisionImage, tier: 'flash' | 'pro' = 'pro', signal?: AbortSignal): Promise<{ text: string; usage?: any; latencyMs: number; model: string; contextTokens?: number; contextSource?: string; contextTrimmed?: boolean; vision?: VisionReport; promptParts?: { system: number; page: number; image: number } }> {
     const vision = await this.resolveVision(screenshot);
     // Context budget: LOCAL path only, where the window is small and knowable. Fits the
     // observation to the real context (trims page text first, then history, never the
@@ -817,7 +853,9 @@ export class AIEngine {
       signal,
     );
     const finalVision: VisionReport = rejected ? { ...vision, attached: false, reason: 'model_rejected_image' } : vision;
-    const meta = { contextTokens, contextSource, contextTrimmed, vision: finalVision };
+    // Medidor de contexto do painel: instruções fixas e a página que foi de fato (já cortada pra caber).
+    const promptParts = { system: estimateTokens(this.systemPromptText(true)), page: estimateTokens(state), image: finalVision.attached ? imageTokens : 0 };
+    const meta = { contextTokens, contextSource, contextTrimmed, vision: finalVision, promptParts };
     if (typeof reply === 'string') {
       return { text: reply, latencyMs: Date.now() - t0, model: this.provider, ...meta };
     }

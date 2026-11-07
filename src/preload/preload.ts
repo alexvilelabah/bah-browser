@@ -31,8 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:zoom', listener);
     return () => ipcRenderer.removeListener('app:zoom', listener);
   },
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image, thread),
+  contextWindow: (local?: boolean) => ipcRenderer.invoke('ai:context-window', local),
   // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
   chatCancel: (streamId: string) => ipcRenderer.invoke('ai:chat-cancel', streamId),
   // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
@@ -42,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
+  moveChatHistory: (from: string, to: string) => ipcRenderer.invoke('ai:move-history', from, to),
   // Live model progress (tokens/sec) so a slow local step reads as working, not hung.
   onActionDelta: (cb: (m: { kind: string; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => {
     const listener = (_e: any, m: any) => cb(m);
@@ -202,6 +204,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getNodeCoords: (wcId: number, backendNodeIds: number[]) =>
     ipcRenderer.invoke('cdp:node-coords', wcId, backendNodeIds),
   skillsList: () => ipcRenderer.invoke('skills:list'),
+  // Conversas do assistente (main/chat-store.ts): a viva (só volta com "Continuar de onde parou") e o
+  // 🕘 histórico de conversas. Tudo cifrado no disco pelo main.
+  threadsLoadLiveSync: () => { try { return ipcRenderer.sendSync('threads:load-live-sync'); } catch { return null; } },
+  threadsSaveLive: (payload: unknown) => ipcRenderer.send('threads:save-live', payload),
+  threadsClearLive: () => ipcRenderer.invoke('threads:clear-live'),
+  chatHistoryList: () => ipcRenderer.invoke('chat-history:list'),
+  chatHistoryGet: (id: string) => ipcRenderer.invoke('chat-history:get', id),
+  chatHistoryDelete: (id: string) => ipcRenderer.invoke('chat-history:delete', id),
+  chatHistoryClear: (since: number | null) => ipcRenderer.invoke('chat-history:clear', since),
   skillsSave: (markdown: string) => ipcRenderer.invoke('skills:save', markdown),
   skillsOpenFolder: () => ipcRenderer.invoke('skills:open-folder'),
   verifyClick: (wcId: number, backendNodeId: number) =>

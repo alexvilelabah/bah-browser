@@ -174,6 +174,36 @@ path opens it directly (`getInitialShortcutAction`). Names that are also common 
 into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
 `tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
+**Follow-ups and the last run.** Before the word rules (and before the classifier, when the local
+router is not ready):
+- a **question about the last run** ("did you click it?", "what happened?") → chat with a log of that
+  run (`src/renderer/last-run.ts` `lastRunDigest`), never a web search;
+- a **report that the last run fell short** ("one window was opened, but not the second") → back to the
+  agent (`reportsIncompleteRun`), which gets the previous requests and how they ended;
+- a message that **starts with an action verb** ("search for…", "find…", "browse to…") → agent
+  (`src/renderer/route-words.ts`); questions keep going to the web answer.
+Each finished run records the last thing it acted on, and the prompt says "it / that one" means it.
+"N <anything> … each / different" opens N videos even with a typo (`site-knowledge.ts`, tested by
+bundling in `tests/unit/quick-video.test.ts`). Web answers drop search-engine pages from their sources
+and never show a raw `[[ACTION: …]]` tag; a suggested action of "none" is not shown as a button.
+
+**"Summarize my open tabs".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) turns the request
+into the `summarize_tabs` action, even with the AI in charge (otherwise the model would visit every tab
+with `switch_tab`). The executor in `App.tsx` picks the tabs (`selectTabsForSummary`: no incognito tabs,
+no internal pages such as `about:`, `file:` or Bah's own player; sleeping tabs are listed as asleep and
+only woken when the user asks, e.g. "including the sleeping ones"), checks the **your tabs** permission
+once for the set (`tabsAccessDecision`: ask / always / never from the menu; the task's own tab needs
+none), reads each tab's text with `<webview>.executeJavaScript` and makes one stateless model call for a
+per-tab line plus an overall summary. A tab whose page blocks scripts is listed as "could not read". The
+panel shows a card with one link per tab that switches to it. Tests: `tests/unit/tabs-summary.test.ts`,
+`tests/e2e/tabs-summary.spec.ts`.
+
+**Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
+site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub raw) never
+gets the matching dark background → white on white. `main.ts` inserts a user stylesheet
+(`PLAIN_TEXT_VIEWER_CSS`, matching only the viewer's `<meta>` + `<pre>` layout) so background and text
+follow the same scheme (`tests/e2e/plain-text-dark.spec.ts`).
+
 ### Local router (Qwen2.5-1.5B, optional)
 
 When the routing model is downloaded, a small local LLM labels **every** message before anything
@@ -198,9 +228,11 @@ reaches the big model — in cloud *and* local mode — and the word rules above
   `{"route": "<one key>"}`. LAST_RUN vs FIX is then settled by the sentence's shape (question →
   LAST_RUN, statement → FIX). The router only labels text; it never acts, and the text never leaves the machine.
 - **Mapping** (`classifyIntent` → `routeCommand`): ACTION → agent, PAGE/CHAT → chat (page attached),
-  WEB → web answer; `other` / timeout (5 s) → the previous path. The box does not send the last task
-  yet (`Last task: none`), so LAST_RUN maps to chat and FIX to the agent. While the router is ready, the
-  "question that points at the open screen" word rule is skipped (the router's PAGE covers it). Still
+  WEB → web answer, LAST_RUN → chat with the last run's log, FIX → agent; `other` / timeout (5 s) →
+  the previous path. The box sends the last task as `Last task` (`lastRunSummary`: the request and how it
+  ended, one line each). While the router is ready, the box skips its own "last run" and "points at the
+  open screen" word rules (the router's LAST_RUN/FIX/PAGE cover them); if the router answers nothing,
+  `classifyIntent` applies the two last-run rules itself. Still
   ahead of the router: short greetings, the agent-drive toggle, repeat/macro intents, vague-request
   hints and the zero-token quick actions.
 - **Eval:** `npm run router:eval` runs the same core (`router-core.mjs`) in plain Node over
@@ -243,6 +275,55 @@ Pacing only slows the agent down; it does not solve or skip the check.
 
 ---
 
+## Agent sessions (tab chips + shared conversation)
+
+A **session** is the line of work the assistant follows: one tab, or a group of tabs that share one
+conversation. A tab gets a session the first time the assistant is used on it (`ensureSession`): the
+name comes from the request ("Job hunt", "Groceries", "Trip"…), the colour is one not in use. On the tab
+strip it shows like a Chrome tab group — a coloured chip with the name before the session's tabs, the
+same colour underlining each of them; the panel shows the same chip (click to rename). Tabs the agent
+opens during a task, and links opened in a new tab from a session tab, join that session; the tab's
+right-click menu adds it to another session, starts a new one or removes it; dragging a tab between two
+tabs of a session joins it, dragging it away leaves.
+The conversation is keyed by **thread key** = session id (or the tab id when the tab has none): the
+panel feed (`AgentCommandBar` `feedsByTab`) and the session's **thread**. When a tab's key changes, its
+conversation moves with it (`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in
+`tests/unit/agent-sessions.test.ts`); state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to
+end: `tests/e2e/agent-sessions.spec.ts`.
+
+**One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
+`src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
+clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site) plus 📌
+**pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
+chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
+skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
+fixed **token budget per prompt** — ~15% of the model's window, 512–4096 tokens, 3000 when the window is
+unknown — so the current page is never crowded out. At 80% the feed warns and offers 📌; over budget,
+the oldest items fold into a running summary and the feed says "🗜 Summarized N older turns", which
+expands to the exact text that replaced them; `/compact` and 🗑 do the same, visibly. When the
+observation must be trimmed to fit the window, the page is trimmed (never the thread) and the feed says
+"✂️ page trimmed to fit".
+**Context meter** (`components/ContextMeter.tsx`, math in `src/shared/context-meter.ts`): next to the
+model name, `context 6.1k / 16k · thread 2.3k`; the bar goes amber/red and names what crowds it; a tap
+shows the last call's breakdown (instructions, skills, thread, page). Window from the engine's detection
+(`ai:context-window` → `resolveContextBudget`: `/props` on llama.cpp or the configured size; unknown on
+cloud); total from the provider's `prompt_tokens` when reported, else an estimate (marked `~`). Test hook:
+`window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` fakes the window under `E2E_MOCK_AI`.
+
+**Restore + chat history.** `src/main/chat-store.ts` keeps two `safeStorage`-encrypted files (rules in
+`src/shared/chat-history.ts`): the **live** threads + session names/colours (`threads-live.enc`, saved
+≤1.5 s after a change and on window close, before the tab session's "saved" reply) and the **🕘 chat
+history** (`chat-history.enc`: one entry per session with name, colour, dates, sites, first request, its
+tabs and thread; updated as you go, like browsing history). With ⋮ → When Bah opens = "Continue where you
+left off" the tabs come back with the same tab id and `sessionId` (`session.v1` stores `id`/`sid`) and
+the thread re-attaches (`store.ts` `bootTabs`, loaded synchronously via `threads:load-live-sync`); any
+other choice deletes the live file at startup. ⋮ → 🕘 Chat history (`components/ChatHistoryPanel.tsx`)
+opens a past session read-only or **Resumes** it (`store.resumeSession`, optionally reopening its tabs).
+"Clear browsing data" has a "chat history" box (same time range). Incognito never reaches either file.
+Tests: `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; end to end `tests/e2e/sessions-thread.spec.ts`.
+
 ## Navigation skills (`skills/*/SKILL.md`)
 
 Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt
@@ -279,7 +360,9 @@ line (ISO date and the coming weekend) so small models get dates right.
 
 Task types come from the request: `download` (download words, typos included), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
-`parts` (charger/adapter/battery/compatible...), `people`. **Bundled skills are general rules, not recipes
+`parts` (charger/adapter/battery/compatible...), `people`. Per-site **account state** (signed in / signed out, read
+from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an
+`ACCOUNT:` line. **Bundled skills are general rules, not recipes
 for named sites** — site-specific recipes belong in user/contributed skills.
 User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a successful task (3+ steps, and a
 final message that does not say it failed) Bah offers to draft one ("Save as skill" → review → Save →

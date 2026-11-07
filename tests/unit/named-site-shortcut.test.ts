@@ -1,5 +1,5 @@
-// site-knowledge.ts: atalho local pro site nomeado (lista curada).
-// site-knowledge importa a UI (i18n, localStorage) → empacota com esbuild.
+// site-knowledge.ts: atalho local pro site nomeado (lista curada) e o pedido "resuma minhas abas".
+// site-knowledge importa a UI (i18n, localStorage) → empacota com esbuild, igual ao quick-video.test.ts.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { buildSync } from 'esbuild';
@@ -36,4 +36,11 @@ test('known-sites block tells the model to navigate directly', async () => {
   assert.match(b, /OFFICIAL SITES/);
   assert.match(b, /linkedin: https:\/\/www\.linkedin\.com\//);
   assert.match(b, /do not web_search its name/);
+});
+
+test('"summarize my open tabs" is a quick action; wake only on request', async () => {
+  const { detectQuickAction } = await load();
+  assert.deepStrictEqual(detectQuickAction('summarize my open tabs'), { type: 'summarize_tabs', wake: false });
+  assert.deepStrictEqual(detectQuickAction('resuma minhas abas abertas, inclusive as dormindo'), { type: 'summarize_tabs', wake: true });
+  assert.notDeepStrictEqual(detectQuickAction('summarize this page')?.type, 'summarize_tabs');
 });

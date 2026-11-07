@@ -7,6 +7,7 @@ import path from 'path';
 import {
   ROUTES, ROUTE_NAMES, ROUTE_JSON_SCHEMA, buildSystemPrompt, buildUserMessage, isIntegratedGpu, parseRoute, refineRoute, routeToIntent,
 } from '../../src/shared/router-routes.ts';
+import { lastRunSummary } from '../../src/renderer/last-run.ts';
 
 test('system prompt is fixed and lists every route with its description', () => {
   const a = buildSystemPrompt();
@@ -79,6 +80,18 @@ test('LAST_RUN ↔ FIX settled by the shape of the sentence; other routes untouc
   assert.equal(refineRoute('ACTION', 'why did you stop?'), 'ACTION');
   assert.equal(refineRoute('CHAT', 'you only opened one'), 'CHAT');
   assert.equal(refineRoute(null, 'x'), null);
+});
+
+test('last run summary: last task request and how it ended, one line each', () => {
+  assert.equal(lastRunSummary([{ kind: 'chat-user', text: 'hi' }]), null);
+  const s = lastRunSummary([
+    { kind: 'task', text: 'old' }, { kind: 'report', text: 'old done' },
+    { kind: 'task', text: 'open 2 windows\nwith videos' },
+    { kind: 'step', step: { actionLabel: 'new_tab', success: true } },
+    { kind: 'error', text: 'stopped: the second window did not open' },
+  ]);
+  assert.deepEqual(s, { request: 'open 2 windows with videos', outcome: 'ended with: stopped: the second window did not open' });
+  assert.deepEqual(lastRunSummary([{ kind: 'task', text: 'x' }]), { request: 'x', outcome: 'unknown' });
 });
 
 test('isIntegratedGpu: só Vulkan com memória toda compartilhada vai pra CPU', () => {

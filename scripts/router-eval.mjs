@@ -39,7 +39,7 @@ ${head}
 import { isNewTabPage as __isNewTab } from '../search-engine';
 export const R = { isQuestion, isInfoRequest, isPageOp, wantsDownload, wantsLiveBooking, wantsStoreBrowse, wantsPartLookup,
   isAboutCurrentPage, isImperativeAction, detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen,
-  vagueRequestKind, parseRepeatIntent, isNewTabPage: __isNewTab };`;
+  vagueRequestKind, parseRepeatIntent, isAboutLastRun, reportsIncompleteRun, startsWithActionVerb, isNewTabPage: __isNewTab };`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-route-eval-'));
   const out = path.join(dir, 'rules.mjs');
   buildSync({
@@ -52,10 +52,12 @@ export const R = { isQuestion, isInfoRequest, isPageOp, wantsDownload, wantsLive
 }
 
 function wordRoute(R, msg, ctx) {
+  const hasRun = !!ctx.lastRun;
   const url = ctx.url || '';
   const pageOpen = /^https?:\/\//.test(url) && !R.isNewTabPage(url);
-  // routeCommand (AgentCommandBar.tsx), modo "IA dirige" desligado. As regras de hoje não têm
-  // "pergunta sobre a última tarefa" nem "ficou incompleta": LAST_RUN/FIX caem nas outras.
+  // routeCommand (AgentCommandBar.tsx), modo "IA dirige" desligado.
+  if (R.isQuestion(msg) && R.isAboutLastRun(msg) && hasRun) return 'LAST_RUN';
+  if (R.reportsIncompleteRun(msg) && hasRun) return 'FIX';
   if (R.parseRepeatIntent(msg)) return 'ACTION';
   if (R.vagueRequestKind(msg)) return 'other';               // resposta fixa "peça direito"
   if (pageOpen && R.isQuestion(msg) && R.pointsAtOpenScreen(msg)) return 'PAGE';
@@ -66,7 +68,7 @@ function wordRoute(R, msg, ctx) {
   const m = msg.trim().toLowerCase();
   if (m.length <= 30 && /^(oi+|ol[áa]|e a[íi]|opa|eae|bom dia|boa tarde|boa noite|valeu|obrigad[oa]|hi|hello|hey|thanks|thank you|hola|buenos d[íi]as|buenas|gracias)[\s!,.?]*$/.test(m)) return 'CHAT';
   const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
-  const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
+  const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|browse|browsing|navigate|visit|apply|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
   if (!actionVerb && !hasUrl) {
     const qs = /^(o ?que|oq\b|qual|quais|quem|como|por ?qu[eê]|pra ?que|para ?que|quando|onde|cad[êe]|what|who|whose|how|why|when|where|which|cu[áa]l(es)?|qu[ée]\b|qui[ée]n|c[óo]mo|por ?qu[ée]|cu[áa]ndo|d[óo]nde)\b/.test(m);
     if (qs || /\?\s*$/.test(m)) {
@@ -82,6 +84,7 @@ function wordRoute(R, msg, ctx) {
   if (R.isAboutCurrentPage(msg) || pointsAtScreen) return 'PAGE';
   if (R.isPageOp(msg) && !R.isQuestion(msg)) return 'ACTION';
   if (R.wantsDownload(msg) || R.wantsLiveBooking(msg) || R.wantsStoreBrowse(msg) || R.wantsPartLookup(msg)) return 'ACTION';
+  if (R.startsWithActionVerb(msg) && !R.isQuestion(msg)) return 'ACTION';
   if (R.isInfoRequest(msg)) return 'WEB';
   if (R.getInitialShortcutAction(msg) || R.isImperativeAction(msg)) return 'ACTION';
   return 'CHAT';

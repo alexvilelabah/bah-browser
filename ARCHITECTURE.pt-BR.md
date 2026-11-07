@@ -174,6 +174,36 @@ de "go to / on / at / abra…". Nome fora da lista nunca vira domínio chutado (
 continua indo pro `web_search`. Testes: `tests/unit/known-sites.test.ts`,
 `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
+**Continuações e a última tarefa.** Antes das regras de palavras (e antes do classificador, quando o
+roteador local não está pronto):
+- **pergunta sobre a última tarefa** ("você clicou?", "o que aconteceu?") → chat com o registro dela
+  (`src/renderer/last-run.ts` `lastRunDigest`), nunca busca na web;
+- **relato de que a última tarefa ficou pela metade** ("abriu uma janela, mas não a segunda") → volta pro
+  agente (`reportsIncompleteRun`), que recebe os pedidos anteriores e como terminaram;
+- mensagem que **começa com verbo de ação** ("procure…", "pesquise…", "abra…") → agente
+  (`src/renderer/route-words.ts`); perguntas continuam indo pra resposta da web.
+Cada tarefa terminada guarda a última coisa em que agiu, e o prompt diz que "isso / essa" é ela.
+"N <qualquer coisa> … cada / diferente" abre N vídeos mesmo com erro de digitação (`site-knowledge.ts`,
+testado empacotando em `tests/unit/quick-video.test.ts`). As respostas da web tiram páginas de buscador
+das fontes e nunca mostram `[[ACTION: …]]` cru; ação sugerida "none" não vira botão.
+
+**"Resuma minhas abas abertas".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) transforma o
+pedido na ação `summarize_tabs`, mesmo com a IA no comando (senão o modelo visitaria aba por aba com
+`switch_tab`). O executor no `App.tsx` escolhe as abas (`selectTabsForSummary`: sem abas anônimas, sem
+páginas internas como `about:`, `file:` ou o player do Bah; aba dormindo aparece como dormindo e só é
+acordada se a pessoa pedir, ex.: "inclusive as dormindo"), confere a permissão **suas abas** uma vez pro
+conjunto (`tabsAccessDecision`: perguntar / sempre / nunca do menu; a aba da própria tarefa não precisa),
+lê o texto de cada aba com `<webview>.executeJavaScript` e faz uma chamada sem histórico ao modelo pra uma
+linha por aba e um resumo geral. Aba cuja página bloqueia script aparece como "não deu pra ler". O painel
+mostra um cartão com um link por aba que troca pra ela. Testes: `tests/unit/tabs-summary.test.ts`,
+`tests/e2e/tabs-summary.spec.ts`.
+
+**Arquivos de texto puro no tema escuro.** O visualizador de texto do Chromium clareia o texto no tema
+escuro, mas site que manda `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub
+raw) não ganha o fundo escuro → branco no branco. O `main.ts` insere uma folha de usuário
+(`PLAIN_TEXT_VIEWER_CSS`, que só casa com o `<meta>` + `<pre>` do visualizador) e fundo e texto seguem o
+mesmo esquema (`tests/e2e/plain-text-dark.spec.ts`).
+
 ### Roteador local (Qwen2.5-1.5B, opcional)
 
 Com o modelo de roteamento baixado, um LLM pequeno local rotula **toda** mensagem antes de qualquer
@@ -199,9 +229,11 @@ coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de 
   `{"route": "<uma key>"}`. LAST_RUN x FIX depois é decidido pela forma da frase (pergunta → LAST_RUN,
   afirmação → FIX). O roteador só rotula texto; nunca age, e o texto nunca sai do computador.
 - **Mapeamento** (`classifyIntent` → `routeCommand`): ACTION → agente, PAGE/CHAT → chat (com a página),
-  WEB → resposta da web; `other` / demora (5 s) → o caminho de antes. A caixa ainda não manda a última
-  tarefa (`Last task: none`), então LAST_RUN vira chat e FIX vira agente. Com o roteador pronto, a regra
-  de palavras "pergunta que aponta pra tela" fica de lado (o PAGE do roteador cobre). Continuam antes do
+  WEB → resposta da web, LAST_RUN → chat com o registro da última tarefa, FIX → agente; `other` /
+  demora (5 s) → o caminho de antes. A caixa manda a última tarefa como `Last task` (`lastRunSummary`: o
+  pedido e como terminou, uma linha cada). Com o roteador pronto, a caixa deixa de lado as próprias regras
+  de "última tarefa" e de "pergunta que aponta pra tela" (LAST_RUN/FIX/PAGE do roteador cobrem); se o
+  roteador não responde, o `classifyIntent` aplica as duas regras da última tarefa. Continuam antes do
   roteador: saudação curta, o "IA dirige", repetir/macro, a dica de pedido vago e os atalhos de 0 token.
 - **Eval:** `npm run router:eval` roda o mesmo núcleo (`router-core.mjs`) em node puro sobre
   `tests/fixtures/routing-cases.json` (82 casos en/pt/es, alguns com última tarefa) e pontua as regras
@@ -243,6 +275,54 @@ pula a checagem.
 
 ---
 
+## Sessões do agente (chip na aba + conversa dividida)
+
+Uma **sessão** é a linha de trabalho que o assistente acompanha: uma aba, ou um grupo de abas que dividem
+a mesma conversa. A aba ganha sessão na 1ª vez que o assistente é usado nela (`ensureSession`): nome tirado
+do pedido ("Job hunt", "Groceries", "Trip"…), cor que não está em uso. Na barra aparece como grupo de abas
+do Chrome — chip colorido com o nome antes das abas da sessão e a mesma cor sublinhando cada uma; o painel
+mostra o mesmo chip (clique renomeia). Abas que o agente abre na tarefa e links abertos em aba nova a partir
+de uma aba da sessão entram nela; o menu do botão direito da aba adiciona a outra sessão, cria uma nova ou
+tira dela; arrastar a aba pra entre duas abas de uma sessão entra, pra longe sai.
+A conversa é chaveada pela **chave da thread** = id da sessão (ou da aba, sem sessão): o feed do painel
+(`feedsByTab`) e a **thread** da sessão. Mudou a chave da aba → a conversa vai junto (`bah:move-thread`).
+Regras: `src/shared/agent-sessions.ts` (testes em `tests/unit/agent-sessions.test.ts`); estado: `store.ts`;
+UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-sessions.spec.ts`.
+
+**Uma thread por sessão.** `src/renderer/threads.ts` guarda uma thread por chave (regras em
+`src/shared/thread-store.ts`): **turnos** (o que você pediu, o que o chat respondeu — os recentes palavra
+por palavra, com teto), **resumos das tarefas do agente** (objetivo, últimos passos-chave, desfecho, o
+último alvo — não cada passo; gravados pelo `finishRun` do `App.tsx`) e **fatos** (logado ou não em cada
+site) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
+REQUESTS THIS SESSION") e o chat leem o mesmo bloco (`promptBlock`); o chat o manda pro `ai:chat` e o
+`ai-engine.ts` deixa de usar o próprio histórico por aba (lá só fica o arquivo anexado, `lastDocs`). A
+thread tem um **orçamento fixo de tokens por prompt** — ~15% da janela do modelo, de 512 a 4096; 3000 com
+janela desconhecida — e a página atual nunca perde espaço pra ela. Nos 80% o feed avisa e oferece 📌;
+passou, os itens mais velhos viram um resumo corrido e o feed diz "🗜 N itens antigos resumidos", que abre
+o texto exato que ficou no lugar; `/compact` e o 🗑 fazem o mesmo, à vista. Quando a observação precisa
+ser cortada pra caber, corta-se a página (nunca a thread) e o feed mostra "✂️ página cortada".
+**Medidor de contexto** (`components/ContextMeter.tsx`, conta em `src/shared/context-meter.ts`): ao lado
+do nome do modelo, `contexto 6.1k / 16k · conversa 2.3k`; a barra fica âmbar/vermelha dizendo quem ocupa a
+janela; um toque mostra o detalhe da última chamada (instruções, skills, conversa, página). Janela pela
+detecção do engine (`ai:context-window` → `resolveContextBudget`: `/props` no llama.cpp ou o tamanho
+configurado; desconhecida na nuvem); total pelo `prompt_tokens` do provedor quando vem, senão estimativa
+(marcada com `~`). Gancho de teste: `window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` finge a janela com
+`E2E_MOCK_AI`.
+
+**Restaurar + histórico de conversas.** `src/main/chat-store.ts` guarda dois arquivos cifrados com
+`safeStorage` (regras em `src/shared/chat-history.ts`): as threads **vivas** + nome/cor das sessões
+(`threads-live.enc`, gravado até 1,5 s depois de mudar e ao fechar a janela, antes do "gravei" da sessão
+de abas) e o **🕘 histórico de conversas** (`chat-history.enc`: uma entrada por sessão com nome, cor,
+datas, sites, 1º pedido, as abas e a thread; atualizado conforme você usa, como o histórico de
+navegação). Com ⋮ → Ao abrir o Bah = "Continuar de onde parou" as abas voltam com o mesmo id e
+`sessionId` (o `session.v1` guarda `id`/`sid`) e a thread se prende de novo (`store.ts` `bootTabs`,
+carregada síncrona por `threads:load-live-sync`); com a outra escolha o arquivo vivo é apagado ao abrir.
+⋮ → 🕘 Histórico de conversas (`components/ChatHistoryPanel.tsx`) abre uma sessão passada só pra ler ou a
+**Retoma** (`store.resumeSession`, reabrindo as abas dela se quiser). "Limpar dados de navegação" ganhou
+a caixa "histórico de conversas" (mesmo período). Aba anônima nunca chega a nenhum dos dois. Testes:
+`tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; ponta a ponta `tests/e2e/sessions-thread.spec.ts`.
+
 ## Skills de navegação (`skills/*/SKILL.md`)
 
 Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que
@@ -258,6 +338,8 @@ autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `e
 EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
 busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
 aviso "entre para ver…"). Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`, `people`.
+Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na
+sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`.
 Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
 `src/main/skills-loader.ts` (leitura + IPC `skills:list` / `skills:save` / `skills:open-folder`; relê os
 arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).

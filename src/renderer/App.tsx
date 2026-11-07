@@ -5,7 +5,7 @@ import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
 import { getPerm, setPerm, nextMode, applyAnswer, type PermKind, type PermAnswer } from './agent-permissions';
-import TabBar, { type TabCommand } from './components/TabBar';
+import TabBar, { type TabCommand, type SessionCommand } from './components/TabBar';
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
@@ -14,6 +14,11 @@ import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
+import {
+  promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
+  noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
+  contextWindow as contextWindowNow, setContextWindow,
+} from './threads';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import { namesStore } from './stores';
 import { namedSiteHint } from './known-sites';
@@ -34,8 +39,10 @@ import { keepDownloads, originsVisited, rangeSince, splitHistory, type TimeRange
 import ExtensionsToolbar, { type ExtensionInfo } from './components/ExtensionsToolbar';
 import SearchEngineMenu from './components/SearchEngineMenu';
 import StartupMenu from './components/StartupMenu';
+import ChatHistoryPanel from './components/ChatHistoryPanel';
 import DefaultBrowserMenu from './components/DefaultBrowserMenu';
 import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMain } from './search-engine';
+import { isAboutLastRun, reportsIncompleteRun } from './last-run';
 import { parseRoute, routeToIntent, type RoutedIntent, type RouteContext, type RouterStatus } from '../shared/router-routes';
 import { shouldExpandRequest, understoodNote } from '../shared/request-expansion';
 import BookmarksBar from './components/BookmarksBar';
@@ -80,6 +87,7 @@ import {
   rememberObservedSite,
   type QuickAction,
 } from './site-knowledge';
+import { wantsTabsSummary, wantsWakeTabs, selectTabsForSummary, tabsAccessDecision, buildTabsSummaryPrompt, parseTabsSummary, type TabText } from './tabs-summary';
 import { loadLastMacro, parseRepeatIntent, saveLastMacro, toDurableAction } from './macros';
 import { costOf, fmtUsd } from './pricing';
 import {
@@ -88,6 +96,9 @@ import {
 } from './agent-recovery';
 import {
   detectManualHelpNeed,
+  commandLikelyNeedsAccount,
+  noteAccountState,
+  accountStateLine,
   manualHelpHistoryNote,
   type ManualHelpRequest,
 } from './agent-login-policy';
@@ -139,10 +150,20 @@ declare global {
       setLocalWarmup?: (on: boolean) => Promise<boolean>;
       llmList?: (baseUrl?: string, provider?: string, authKey?: string) => Promise<any>;
       llmStatus?: (baseUrl?: string, authKey?: string) => Promise<{ running: boolean; installed: boolean; backend: string }>;
-      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => Promise<{ response?: string; error?: string }>;
+      aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) => Promise<{ response?: string; error?: string; ctx?: { system: number } }>;
+      contextWindow?: (local?: boolean) => Promise<{ tokens: number; source: string } | null>;
+      // Conversas do assistente (main/chat-store.ts, cifradas no disco).
+      threadsLoadLiveSync?: () => unknown;
+      threadsSaveLive?: (payload: unknown) => void;
+      threadsClearLive?: () => Promise<{ ok: boolean }>;
+      chatHistoryList?: () => Promise<{ rows: import('../shared/chat-history').ChatHistoryRow[]; available: boolean }>;
+      chatHistoryGet?: (id: string) => Promise<import('../shared/chat-history').ChatHistoryEntry | null>;
+      chatHistoryDelete?: (id: string) => Promise<{ ok: boolean }>;
+      chatHistoryClear?: (since: number | null) => Promise<{ ok: boolean }>;
       onChatDelta?: (cb: (p: { streamId: string; delta: string }) => void) => () => void;
       onActionDelta?: (cb: (m: { kind: 'thinking' | 'answer'; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => () => void;
       clearChatHistory?: (tabId?: string) => Promise<any>;
+      moveChatHistory?: (from: string, to: string) => Promise<any>;
       // Continuar de onde parou: o main pede pra gravar as abas antes de fechar a janela; a tela
       // pede pra mandar o localStorage pro disco já quando a sessão muda (renderer/session.ts).
       onSaveSessionNow?: (cb: () => void) => (() => void);
@@ -293,6 +314,17 @@ function localOptsForMain(ls: { contextMode?: 'auto' | 'custom'; contextTokens?:
   };
 }
 
+/** Página do próprio buscador (resultado/ajuda), que nunca serve de fonte de uma resposta. */
+function isSearchEnginePage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.replace(/^www\./, '');
+    if (/^search\.google$|(^|\.)google\.[a-z.]+$/.test(h) && (h === 'search.google' || /^\/(search|url|webhp)\b/.test(u.pathname))) return true;
+    if (/(^|\.)(bing\.com|duckduckgo\.com|search\.yahoo\.com|search\.brave\.com|yandex\.[a-z]+|ecosia\.org|startpage\.com)$/.test(h) && (/\/(search|html)\b/.test(u.pathname) || u.searchParams.has('q'))) return true;
+    return false;
+  } catch { return false; }
+}
+
 export default function App() {
   const store = useTabStore();
   // A aba que a pessoa está vendo é anônima (selo na barra, extensões e "Entrar…" apagados).
@@ -406,9 +438,8 @@ export default function App() {
   // O usuário emenda pedidos ("e com a palavra bom dia?") esperando que o agente
   // lembre do anterior. Guardamos os últimos comandos+desfechos (vai no GOAL do
   // modelo) e a última quick action (pra follow-up determinístico sem IA).
-  // Memória curta de tarefas do agente POR ABA (tabId → últimos comandos+desfecho).
-  // Antes era uma lista global → follow-up de agente vazava entre abas.
-  const recentRunsRef = useRef<Map<string, Array<{ cmd: string; outcome: string }>>>(new Map());
+  // Os pedidos anteriores (e o que o chat respondeu) moram na thread da sessão (renderer/threads.ts):
+  // o agente lê o bloco dela no começo do prompt e grava o resumo da tarefa no fim.
   const lastQuickActionRef = useRef<QuickAction | null>(null);
   // Gravação de macro: ações duráveis executadas com sucesso no run atual.
   // No fim (sucesso), vira a "receita" que o usuário repete sem gastar IA.
@@ -521,7 +552,12 @@ export default function App() {
     // opts.incognito: popup/pesquisa saída de aba anônima ou "Abrir link em aba anônima" (main).
     offs.push(window.electronAPI?.onOpenNewTab?.((url: string, opts) => {
       if (opts?.incognito) void openIncognitoTab(url);
-      else store.addTab(url);
+      else {
+        // Link aberto em aba nova a partir da aba ativa ("Apply on company site"): entra na sessão dela.
+        const opener = activeTabIdRef.current;
+        const id = store.addTab(url);
+        if (opener) store.joinOpenerSession(id, opener);
+      }
     }) as any);
     // Link/arquivo de outro app (Bah como navegador padrão). O main segura o que chegou antes da tela
     // montar (o link que ABRIU o Bah) e só manda depois do aviso — então o ouvinte vem antes dele.
@@ -1018,6 +1054,15 @@ export default function App() {
   // Trocou o mecanismo de pesquisa (⋮) → placeholder da barra e o próprio menu se redesenham.
   // Ao abrir, o main recebe o escolhido (pro "Pesquisar no … por" do clique direito).
   useEffect(() => { syncSearchEngineToMain(); return onSearchEngineChange(() => forceI18n(n => n + 1)); }, []);
+  // Janela de contexto do modelo (a detecção do engine: /props no llama.cpp, ou o tamanho configurado)
+  // → orçamento da thread da sessão e o medidor do painel. Nuvem: desconhecida (orçamento padrão).
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      try { const r = await window.electronAPI?.contextWindow?.(store.localSettings.enabled); if (alive) setContextWindow(r?.tokens); } catch {}
+    }, 1200);
+    return () => { alive = false; clearTimeout(t); };
+  }, [store.localSettings.enabled, store.localSettings.model, store.localSettings.baseUrl, store.localSettings.contextMode, store.localSettings.contextTokens]);
 
   // Login do Google (navegador real → importa sessão por CDP, automático). Reusado pelo
   // botão de vidro do painel e pelo item do menu ⋮.
@@ -1030,6 +1075,7 @@ export default function App() {
   // Histórico e lista de downloads são daqui (renderer); cookies/cache vão pro main, que só
   // mexe na sessão das abas. Os sites do período saem do histórico ANTES de apagá-lo.
   const [clearDataOpen, setClearDataOpen] = useState(false);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);   // ⋮ → 🕘 Histórico de conversas
   const closeClearData = useCallback(() => setClearDataOpen(false), []);
   const sitesInRange = useCallback((range: TimeRange) => originsVisited(historyRef.current, rangeSince(range, Date.now())).length, []);
   const runClearData = useCallback(async (c: ClearChoice): Promise<boolean> => {
@@ -1051,6 +1097,8 @@ export default function App() {
       store.forgetClosedTabs(u => c.range === 'all' || gone.has(u));
     }
     if (c.downloads) setDownloads(prev => keepDownloads(prev, since));
+    // 🕘 Histórico de conversas do assistente (cifrado no main): o mesmo período.
+    if (c.chats) { try { const r = await window.electronAPI?.chatHistoryClear?.(since === -Infinity ? null : since); if (!r?.ok) ok = false; } catch { ok = false; } }
     // Cookies do Google podem ter saído → o menu ⋮ volta a mostrar "Entrar no Google".
     if (c.cookies) checkGoogleLogin();
     return ok;
@@ -1347,7 +1395,7 @@ export default function App() {
   // Retorna null em qualquer falha/timeout → o AgentCommandBar usa o roteador determinístico.
   const classifyIntent = useCallback(async (msg: string, rctx?: { lastRun?: RouteContext['lastRun'] }): Promise<RoutedIntent | null> => {
     // ── Roteador local (Qwen2.5-1.5B no utilityProcess), quando pronto: decide PRIMEIRO, na nuvem e
-    // no local. Entende erro de digitação melhor que as regras.
+    // no local. Entende erro de digitação e follow-up ("só abriu uma janela") melhor que as regras.
     // Só rotula; falhou / "other" / demorou → segue o caminho de antes, abaixo.
     // Saudação/agradecimento curto ("valeu!", "thanks") → chat na hora, antes até do roteador:
     // 0 latência, e um "obrigado" nunca pode virar tarefa do agente.
@@ -1362,6 +1410,11 @@ export default function App() {
       const r = await raceTimeout(window.electronAPI.routerClassify(msg, ctx).catch(() => null), 5000, null);
       const intent = routeToIntent(parseRoute(r?.route), !!ctx.lastRun);
       if (intent) return intent;
+      // O AgentCommandBar pulou as regras de "última tarefa" contando com o roteador → aplica aqui.
+      if (ctx.lastRun) {
+        if (reportsIncompleteRun(msg)) return 'fix';
+        if (isAboutLastRun(msg)) return 'last_run';
+      }
     }
     // ── Pré-classificador determinístico (0 token, 0 latência) ──
     // Padrões de ALTA precisão resolvem na hora os casos óbvios — a resposta começa já,
@@ -1371,7 +1424,7 @@ export default function App() {
       const m = msg.trim().toLowerCase();
       if (isGreeting(m)) return 'chat';
       const hasUrl = /https?:\/\/|www\.[a-z0-9-]+|[a-z0-9-]+\.(com|org|net|gov|edu|io|co|br|app|dev|ai)\b/.test(m);
-      const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
+      const actionVerb = /\b(abra|abre|abrir|acesse|acessa|entre em|v[aá] (pra|para|em|no|na)|baixe|baixa|baixar|toque|toca|tocar|reproduza|clique|clica|clicar|compre|compra|comprar|pesquise|pesquisa|procure|busque|assine|assina|fa[çc]a login|logue|preencha|envie|mande|poste|crie|monte|gere|corte|open|go to|browse|browsing|navigate|visit|apply|download|play|click|buy|search for|subscribe|log ?in|fill|send|post|create|make|generate|cut|abre|descarga|reproduce|compra|busca|crea)\b/.test(m);
       if (!actionVerb && !hasUrl) {
         const questionStart = /^(o ?que|oq\b|qual|quais|quem|como|por ?qu[eê]|pra ?que|para ?que|quando|onde|cad[êe]|what|who|whose|how|why|when|where|which|cu[áa]l(es)?|qu[ée]\b|qui[ée]n|c[óo]mo|por ?qu[ée]|cu[áa]ndo|d[óo]nde)\b/.test(m);
         const questionEnd = /\?\s*$/.test(m);
@@ -1562,7 +1615,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
     const q = (query || '').trim();
     if (!q) return { answer: 'Empty question.', sources: [], isError: true };
     const found = await searchWebResults(q);
-    const { results, blocked, error } = found;
+    const { blocked, error } = found;
+    // Página do PRÓPRIO buscador (search.google, google.com/search, bing.com/search…) não é fonte:
+    // não diz nada sobre o assunto e aparecia como "Sources: search.google" duas vezes.
+    const results = found.results.filter(x => !isSearchEnginePage(x.url));
     if (results.length === 0) {
       return {
         answer: error || (blocked
@@ -1578,8 +1634,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
     const ok = (r?.response || '').trim();
     // Falha da IA na síntese NÃO pode se disfarçar de resposta: vira aviso vermelho com
     // dica (era o caso em que a pessoa via o status ciclando e nunca um resultado claro).
-    const answer = ok || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
-    return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !ok };
+    // O prompt pede pra não propor ação, mas o modelo local às vezes escreve [[ACTION: …]] mesmo assim:
+    // nunca aparece cru na resposta.
+    const clean = ok.replace(/\[\[\s*ACTION\s*:[^\]]*\]\]/ig, '').trim();
+    const answer = clean || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
+    return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !clean };
   }, [store, searchWebResults]);
 
   // ── VITRINE DE NOVIDADES (placeholder dinâmico) ────────────────────────────
@@ -1612,6 +1671,26 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   }, [store]);
 
   // Menu do botão direito numa aba: cada item age na aba CLICADA (que pode não ser a ativa).
+  // Chip / menu das sessões do agente (TabBar) → store.
+  const onSessionCommand = useCallback((cmd: SessionCommand) => {
+    switch (cmd.kind) {
+      case 'rename': store.renameSession(cmd.id, cmd.name); break;
+      case 'color': store.recolorSession(cmd.id, cmd.color); break;
+      case 'join': store.joinTabToSession(cmd.tabId, cmd.sessionId); break;
+      case 'leave': store.leaveTabSession(cmd.tabId); break;
+      case 'new': {
+        const tab = store.tabs.find(x => x.id === cmd.tabId);
+        store.leaveTabSession(cmd.tabId);
+        store.ensureSession(cmd.tabId, { url: tab?.url });
+        break;
+      }
+      case 'new-tab': {
+        const id = store.addTab();
+        store.joinTabToSession(id, cmd.sessionId);
+        break;
+      }
+    }
+  }, [store]);
   const onTabCommand = (cmd: TabCommand, id: string) => {
     const tab = store.tabs.find(x => x.id === id && !x.hidden);
     if (!tab) return;
@@ -1647,6 +1726,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onCommand={onTabCommand}
             isMuted={siteMute.isMuted}
             canReopen={store.hasClosedTabs}
+            sessions={store.sessions}
+            onSession={onSessionCommand}
           />
         </div>
         <HwMonitor />
@@ -1913,6 +1994,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">📄</span>
                   <span className="menu-label">{t('menu.savePdf')}</span>
                 </button>
+                <button className="menu-item" data-testid="menu-chat-history" onClick={() => { setMenuOpen(false); setChatHistoryOpen(true); }} title={t('chats.menuTitle')}>
+                  <span className="menu-ic">🕘</span>
+                  <span className="menu-label">{t('chats.menu')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setClearDataOpen(true); }} title={t('menu.clearDataTitle', { key: CLEAR_DATA_KEY })}>
                   <span className="menu-ic">🧹</span>
                   <span className="menu-label">{t('menu.clearData')}</span>
@@ -2110,7 +2195,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           )}
           <AgentCommandBar
             activeTabId={store.activeTabId}
-            tabIds={store.tabs.map(t => t.id).join(',')}
+            tabIds={store.tabs.map(t => t.sessionId || t.id).join(',')}
+            threadKeyOf={store.threadKeyOf}
+            onEnsureSession={(tabId, text) => { store.ensureSession(tabId, { command: text }); }}
+            viewSession={(() => {
+              const sid = store.activeTab?.sessionId;
+              const s = sid ? store.sessions.find(x => x.id === sid) : undefined;
+              return s ? { id: s.id, name: s.name, color: s.color, tabs: store.tabs.filter(t => t.sessionId === sid && !t.hidden).length } : null;
+            })()}
+            onRenameSession={store.renameSession}
             pageOpen={/^https?:\/\//.test(store.activeTab?.url || '') && !isNewTabPage(store.activeTab?.url)}
             activeTabTitle={store.activeTab?.title}
             activeTabUrl={store.activeTab?.url}
@@ -2210,9 +2303,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const repeatIntent = parseRepeatIntent(command); // "repete N vezes"?
               // Contexto da conversa: o GOAL pode ser um follow-up do pedido anterior
               // ("e com a palavra bom dia?" = repetir a tarefa anterior com outro termo).
-              const convoCtx = (recentRunsRef.current.get(taskTabId) ?? []).slice(-3)
-                .map(r => `- "${r.cmd}" → ${r.outcome}`)
-                .join('\n');
+              // A thread da sessão (pedidos, respostas do chat, tarefas, fatos, 📌), já no orçamento dela.
+              const threadKey = store.threadKeyOf(taskTabId);
+              const convoCtx = threadPromptBlock(threadKey);
+              const threadTok = estimateThreadTokens(convoCtx);
+              let trimNoticeShown = false;
               // Roteador local deixa o pedido PRECISO antes do modelo grande (request-expansion.ts):
               // "clipes de top gun" → "…do filme Top Gun de 1986, não Top Gun: Maverick (2022)". Só pedidos de
               // achar/baixar mídia com uma obra; sem modelo, lento ou saída ruim → vale o texto original.
@@ -2226,7 +2321,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 }
               }
               const understoodLine = () => understoodNote(understood);
-              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X):\n${convoCtx}\n\n` : ''}GOAL: ${command}${understoodLine()}`;
+              let history = `${convoCtx ? `PREVIOUS REQUESTS THIS SESSION (newest last — the GOAL below may be a FOLLOW-UP reusing their intent, e.g. "e com a palavra X?" means: redo the previous task with X; "it", "that", "this one", "the job" in the GOAL = the newest "last thing acted on" unless the GOAL names something else):\n${convoCtx}\n\n` : ''}GOAL: ${command}${understoodLine()}`;
               let previousStateKey = '';
               let noEffectCount = 0;
               // Vision: mode + how many images this run already sent (token/latency budget).
@@ -2332,6 +2427,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
               // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
               let carefulNavs = 0, carefulRefusals = 0;
+              // A última coisa em que o agente agiu (texto do clique + página): o próximo pedido pode dizer "it/that".
+              let lastTarget = '';
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
               let unfinishedBlocks = 0;    // encerrou dizendo que "vai continuar"
               let planNudged = false;      // tarefa em vários sites sem plano
@@ -2413,11 +2510,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   : status === 'max_steps' ? 'Step limit reached.'
                   : "The task stopped before finishing and the model gave no reason. Try rephrasing it."
                 );
-                // Memória curta da conversa: o próximo pedido pode ser um follow-up.
-                const tabRuns = recentRunsRef.current.get(taskTabId) ?? [];
-                tabRuns.push({ cmd: command, outcome: `${status}${reason ? `: ${reason.slice(0, 200)}` : ''}` });
-                if (tabRuns.length > 5) tabRuns.shift();
-                recentRunsRef.current.set(taskTabId, tabRuns);
+                // A thread da sessão guarda o RESUMO da tarefa (o próximo pedido pode ser um follow-up):
+                // objetivo, os últimos passos que deram certo, desfecho e o último alvo — não cada passo.
+                const runsKey = store.threadKeyOf(taskTabId);   // sessão da aba de origem (abas da sessão dividem)
+                const keySteps = allResults.filter(r => r.result?.success !== false && r.action?.type !== 'done' && r.action?.type !== 'report')
+                  .slice(-4).map(r => { try { return formatAction(r.action); } catch { return String(r.action?.type || ''); } });
+                noteThreadTask(runsKey, { goal: command, status, outcome: reason.slice(0, 300), steps: keySteps, target: lastTarget || undefined });
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
@@ -2612,8 +2710,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // EXPLÍCITA do usuário, não palpite de heurística. Sem esta exceção, marcar
                 // "gerar imagem" e escrever "gato" virava uma busca na web — o pedido sumia.
                 // (Mesmo caso do "repete N vezes": ordem explícita nunca é muleta de atalho.)
+                // "Resuma minhas abas" também passa com a IA no comando: o modelo não lê aba por aba sem
+                // trocar de aba (switch_tab, uma pergunta de permissão por aba); o executor lê todas de uma vez.
                 let quickAction = (aiDrive && !opts?.forceImage)
-                  ? null
+                  ? (wantsTabsSummary(command) ? { type: 'summarize_tabs', wake: wantsWakeTabs(command) } as QuickAction : null)
                   : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
@@ -3037,6 +3137,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
                     agentDialogsTab(dlgWcId); }
                   history += drainDialogLog();
+                  { const acct = noteAccountState(observation); const h = paceHostOf(observation.url);
+                    // Fato da sessão: em que site a pessoa está (ou não) logada.
+                    if (acct && h) noteThreadFact(threadKey, `account:${h}`, `${acct === 'signed-in' ? 'signed in' : 'signed out'} on ${h}`); }
                   // Buscador mostrando página de bloqueio/captcha: fica de fora por 1h (web_search e a linha SEARCH ENGINE pulam).
                   { const eng = engineForUrl(observation.url);
                     if (eng && SEARCH_BLOCK_RE.test(`${observation.url} ${observation.title} ${(observation.text_sample || '').slice(0, 1500)}`)) markBlocked(eng); }
@@ -3044,6 +3147,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     buildKnownSitesBlock(observation),
                     '',
                     agentSearchLine(),
+                    accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
                     skillsBlock,
@@ -3299,6 +3403,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const money = c && c.usd > 0 ? ` • ${fmtUsd(c.usd, c.est)}` : '';
                     onProgress({ kind: 'status', message: `📊 ${m.model} • ${inT} in / ${outT} out / ${cached} cached • ${sec}s${money}` });
                   }
+                  // Medidor de contexto do painel: as partes desta chamada (estimadas) + o total que o
+                  // provedor informou, quando informou. A página é a que foi de fato (cortada, se precisou).
+                  {
+                    const m = result?.metrics || {};
+                    const pp = m.promptParts || {};
+                    const skillsTok = estimateThreadTokens(skillsBlock);
+                    const pageTok = Math.max(0, (typeof pp.page === 'number' ? pp.page : estimateThreadTokens(observedPayload)) - skillsTok) + (pp.image || 0);
+                    const reported = Number(m.usage?.prompt_tokens ?? m.usage?.input_tokens ?? 0);
+                    noteContextUsage(threadKey, {
+                      window: m.contextTokens || contextWindowNow(),
+                      parts: { instructions: (pp.system || 0) + Math.max(0, estimateThreadTokens(prompt) - threadTok), skills: skillsTok, thread: threadTok, page: pageTok },
+                      reported: reported > 0 ? reported : undefined,
+                    });
+                    if (m.contextTrimmed && !trimNoticeShown) { trimNoticeShown = true; noteThreadTrimmed(threadKey, `task:${actionId}`); }
+                  }
                   action = result?.action as BrowserAction | undefined;
                   // FAST MODE: enqueue the remaining batched actions (if any), capturing each
                   // ref's stable backendNodeId so it can be remapped to the next observation.
@@ -3505,8 +3624,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'dblclick') {
                     const tgtText = action.type === 'click_text' ? String((action as any).text || '')
                       : String((observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.text || (observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.aria || '');
+                    if (tgtText.trim()) lastTarget = `"${tgtText.replace(/\s+/g, ' ').trim().slice(0, 120)}" on ${paceHostOf(observation.url) || observation.url}`;
                     if (/^\W*(sign ?in|log ?in|sign ?up|register|create (an )?account|join( now)?|continue with (google|apple|facebook|microsoft|email)|sign in with|log in with|entrar|fazer login|cadastr|iniciar sesi[oó]n|reg[ií]strate)\b/i.test(tgtText.trim())
-                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command)) {
+                        && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command) && !commandLikelyNeedsAccount(command)) {
                       history += `\nNOT SIGNING IN: "${tgtText.slice(0, 50)}" starts a sign-in/sign-up, and the user did not ask for anything that needs an account. Close the popup (its close button or press "Escape") and continue without an account — searching does not need one. If the site truly blocks without an account, try another site.`;
                       onProgress({ kind: 'status', message: `🔒 Not signing in ("${tgtText.slice(0, 40)}") — the task doesn't need an account.` });
                       continue;
@@ -4190,7 +4310,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       // (no clique da aba) dá play. Sem isso, as N abas tocavam todas juntas.
                       const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
-                      for (const v of vids) { try { opened.push(store.addTab(v.url, opensIncognito('from-tab', aiOnIncognito()))); } catch {} }
+                      for (const v of vids) { try { const nid = store.addTab(v.url, opensIncognito('from-tab', aiOnIncognito())); store.joinOpenerSession(nid, taskTabId); opened.push(nid); } catch {} }
                       store.setActiveTabId(originTabId);
                       activeTabIdRef.current = originTabId;
                       opened.forEach(id => { pausedCutTabsRef.current.set(id, 0); armCutTab(id); });
@@ -4226,7 +4346,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const originTabId = activeTabIdRef.current;
                       const opened: string[] = [];
                       for (const c of vc.cuts) {
-                        opened.push(store.addTab(`https://www.youtube.com/watch?v=${c.videoId}&t=${c.seconds}s`, opensIncognito('from-tab', aiOnIncognito())));
+                        { const nid = store.addTab(`https://www.youtube.com/watch?v=${c.videoId}&t=${c.seconds}s`, opensIncognito('from-tab', aiOnIncognito())); store.joinOpenerSession(nid, taskTabId); opened.push(nid); }
                       }
                       store.setActiveTabId(originTabId);
                       activeTabIdRef.current = originTabId;
@@ -4294,6 +4414,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         // sem roubar o foco — senão o painel da IA (que segue a aba ATIVA)
                         // ficava em branco, escondendo esta própria resposta.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${sorted.length} offers for "${q}". Cheapest: ${c.title} — R$ ${fmt(c.price)}${c.store ? ` (${c.store})` : ''}. Comparison table opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4312,6 +4433,67 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       history += `\nPRICE COMPARE: auto-extraction from Google Shopping returned nothing for "${q}". The Shopping page IS OPEN — use extract_text to read the visible prices and answer, or report the cheapest you can see.`;
                       toolResult = { success: false, error: 'Could not scrape the prices automatically. The Google Shopping page is open — I will read it.' };
                     }
+                  } else if (action.type === 'summarize_tabs') {
+                    // Resumo das abas abertas da pessoa. Anônimas e páginas internas ficam fora; as
+                    // dormindo (Memory Saver) só aparecem como "dormindo" — acordar todas de uma vez
+                    // custaria RAM/rede que a pessoa não pediu (acorda só se ela pedir). Ler aba que não é
+                    // da tarefa passa pela permissão das abas (perguntar / sempre / nunca). Auto-done.
+                    setAgentVisual('acting');
+                    const sel = selectTabsForSummary(tabsRef.current, { wake: !!action.wake });
+                    let readable = sel.toRead;
+                    let noAccess: typeof readable = [];
+                    const decision = tabsAccessDecision(getPerm('userTabs'), readable.map(x => x.id), grantedTabs);
+                    const mayRead = decision === 'read'
+                      || (decision === 'ask' && await askPermission('userTabs', `Read the text of your ${readable.length} open tab(s) to summarize them.`));
+                    if (mayRead) readable.forEach(x => grantedTabs.add(x.id));
+                    else { noAccess = readable.filter(x => !grantedTabs.has(x.id)); readable = readable.filter(x => grantedTabs.has(x.id)); }
+                    onProgress({ kind: 'status', message: `🗂️ Reading ${readable.length} tab(s)…` });
+                    // Acordar (só quando pedido): tira o "dormindo" e espera a <webview> montar e carregar.
+                    for (const tb of readable) {
+                      if (!(tb.discarded || tb.restored)) continue;
+                      store.updateTab(tb.id, { discarded: false, restored: false, lastActiveAt: Date.now() });
+                    }
+                    const readTab = async (id: string): Promise<string | null> => {
+                      for (let i = 0; i < 30 && !webviewRefs.current.get(id); i++) await sleep(300);
+                      const w = webviewRefs.current.get(id) as any;
+                      if (!w) return null;
+                      for (let i = 0; i < 30; i++) { try { if (!w.isLoading()) break; } catch { break; } await sleep(300); }
+                      try {
+                        // Texto da aba pelo executeJavaScript da <webview> (página que bloqueia script devolve null: "não deu pra ler").
+                        const txt = await withTimeout(w.executeJavaScript(`(document.body ? document.body.innerText : '').slice(0, 6000)`), 8000, null as any);
+                        return typeof txt === 'string' ? txt : null;
+                      } catch { return null; }
+                    };
+                    const texts: Array<TabText & { id: string; ok: boolean }> = [];
+                    for (const tb of readable) {
+                      throwIfCancelled();
+                      const txt = await readTab(tb.id);
+                      const live = tabsRef.current.find(x => x.id === tb.id) ?? tb;
+                      texts.push({ id: tb.id, title: live.title || tb.title, url: live.url || tb.url, text: txt || '', ok: txt != null });
+                    }
+                    const okTexts = texts.filter(x => x.ok);
+                    let parsed = { perTab: okTexts.map(() => ''), overall: '' };
+                    if (okTexts.length) {
+                      onProgress({ kind: 'status', message: `🧠 Summarizing ${okTexts.length} tab(s)…` });
+                      const r = await raceTimeout(window.electronAPI?.aiChat(buildTabsSummaryPrompt(okTexts, uiLangName()), '', true, store.localSettings.enabled) ?? Promise.resolve(undefined), 90000, undefined);
+                      throwIfCancelled();
+                      parsed = parseTabsSummary(String(r?.response || ''), okTexts);
+                      if (!parsed.overall && r?.error) parsed.overall = `(${r.error})`;
+                    }
+                    const summaryOf = new Map(okTexts.map((x, i) => [x.id, parsed.perTab[i]]));
+                    const entries = [
+                      ...texts.map(x => ({ id: x.id, title: x.title, url: x.url, state: x.ok ? 'read' as const : 'unreadable' as const, summary: summaryOf.get(x.id) || '' })),
+                      ...noAccess.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'no_access' as const, summary: '' })),
+                      ...sel.asleep.map(x => ({ id: x.id, title: x.title, url: x.url, state: 'asleep' as const, summary: '' })),
+                    ];
+                    onProgress({ kind: 'tabs_summary', tabs: entries, overall: parsed.overall,
+                      skippedIncognito: sel.skippedIncognito, skippedInternal: sel.skippedInternal,
+                      onOpen: (id: string) => { if (tabsRef.current.some(x => x.id === id)) store.setActiveTabId(id); } });
+                    const doneMsg = parsed.overall
+                      || (entries.length ? `${okTexts.length} tab(s) read${sel.asleep.length ? `, ${sel.asleep.length} asleep` : ''}${noAccess.length ? `, ${noAccess.length} without access` : ''}.` : 'No open web pages to summarize.');
+                    allResults.push({ action, result: { success: true, info: { read: okTexts.length, asleep: sel.asleep.length, noAccess: noAccess.length } } });
+                    finishRun('success', doneMsg);
+                    return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                   } else if (action.type === 'google_news') {
                     // Vertical Notícias do Google (udm=12) — raspa as manchetes do DOM
                     // renderizado e monta um painel clicável. Determinístico → auto-done.
@@ -4339,6 +4521,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         // addBackgroundTab: mesma razão do compare_prices acima.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `${valid.length} news for "${q}". Top: ${valid[0].title}${valid[0].source ? ` (${valid[0].source})` : ''}. Panel opened in a tab.`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4378,6 +4561,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (rv?.success && rv.url) {
                         // addBackgroundTab: mesma razão do compare_prices acima.
                         const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                        store.joinOpenerSession(newId, taskTabId);
                         activeTabIdRef.current = newId;
                         const doneMsg = `Done: "${spec.title}" opened in a new tab (${spec.rows?.length ?? 0} rows, sortable table + chart).`;
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
@@ -4679,6 +4863,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: false, error: `Blocked: the agent only opens http(s) pages, not "${action.url}".` };
                     } else {
                     const newId = store.addTab(action.url, opensIncognito('from-tab', aiOnIncognito()));   // tarefa de aba anônima → aba anônima
+                    store.joinOpenerSession(newId, taskTabId);   // aba do agente entra na sessão da tarefa
                     agentOpenedTabs.add(newId);
                     grantedTabs.add(newId);
                     store.updateTab(newId, { agentTask: true });
@@ -5130,7 +5315,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                             ? 'Solve the human verification manually in this tab. When you are done, click Continue.'
                             : kind === 'paywall'
                             ? 'If you have access, sign in manually. Then click Continue so I can try to take it from here.'
-                            : 'Log in manually on the site itself. Once you are logged in, click Continue so I can resume the task.',
+                            : 'Sign in yourself in this tab: click the username field to pick a login saved in Bah\'s password manager, or type it. Once you are signed in, click Continue and I resume the task. (I never see your password.)',
                         }, afterObservation.url);
                         continue;
                       }
@@ -5183,14 +5368,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 try { await window.electronAPI?.adblockSetAgentBusy?.(false); } catch {}
               }
             }}
-            onSendChat={async (msg, docText, streamId, skipPageContext) => {
-              const chatTabId = store.activeTabId;   // a conversa pertence a ESTA aba
+            onSendChat={async (msg, docText, streamId, skipPageContext, docIsFile) => {
+              const chatTabId = store.threadKeyOf(store.activeTabId);   // a conversa pertence à SESSÃO desta aba (ou a ela, sem sessão)
+              // A thread da sessão (a mesma que o agente lê), já no orçamento. Quem grava a troca nela é o
+              // AgentCommandBar, depois da resposta.
+              const threadText = threadPromptBlock(chatTabId);
+              const threadTok = estimateThreadTokens(threadText);
+              const noteChatUsage = (r: { ctx?: { system: number } } | undefined, pageText: string, cap = 8000) => {
+                // O main corta o contexto da página em 8000 caracteres (o documento em 24000): a página cede, a thread nunca.
+                if (pageText.length > cap) noteThreadTrimmed(chatTabId, `chat:${store.activeTab?.url || ''}`);
+                noteContextUsage(chatTabId, {
+                  window: contextWindowNow(),
+                  parts: { instructions: (r?.ctx?.system || 0) + estimateThreadTokens(msg), thread: threadTok, page: estimateThreadTokens(pageText.slice(0, cap)) },
+                });
+              };
               // Document attached → the question is about the FILE: use its extracted text
               // as context (skip the page/transcript) and answer with the selected model.
               if (docText) {
                 // docText = self-contained doc context (rawContext). Non-stateless so the doc
                 // stays in THIS tab's history → follow-up questions still work after the chip clears.
-                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId);
+                // keepDoc: um ARQUIVO anexado fica lembrado pelo main pras perguntas seguintes (não cabe na thread);
+                // o resumo da última tarefa (pergunta sobre ela) não.
+                const r = await window.electronAPI?.aiChat(msg, '', false, store.localSettings.enabled, chatTabId, docText, streamId, undefined, { text: threadText, keepDoc: !!docIsFile });
+                noteChatUsage(r, docText, 24000);
                 const reply = (r?.response || '').trim() || (r?.error ? `Error: ${r.error}` : 'No response.');
                 return { reply, isError: !!r?.error };
               }
@@ -5225,7 +5425,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 chatShot = fr?.image;
                 if (!chatShot) console.log(`[chat] vision skipped: ${chatShotDec.reason} (capture failed)`);
               }
-              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot);
+              const result = await window.electronAPI?.aiChat(msg, pageContent, undefined, store.localSettings.enabled, chatTabId, undefined, streamId, chatShot, threadText);
+              noteChatUsage(result, pageContent || '');
               const raw = result?.response ?? (result?.error ? `Error: ${result.error}` : 'No response.');
               // Caixa unificada: o modo resposta pode propor uma ação numa linha
               // [[ACTION: ...]]. Extraímos a proposta e a removemos do texto exibido —
@@ -5234,7 +5435,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // um modelo de raciocínio divagando "[[ACTION:…]]" no pensamento não vira botão.
               const answerOnly = raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*?<\/think>/, '');
               const m = answerOnly.match(/\[\[\s*ACTION\s*:\s*([^\]]+?)\s*\]\]/i);
-              const suggestedCommand = m ? m[1].trim() : undefined;
+              // "[[ACTION: none]]" (o modelo dizendo que não há ação) não vira botão "⚡ Fazer isso: none".
+              const proposed = m ? m[1].trim() : '';
+              const suggestedCommand = proposed && !/^(none|n\/?a|null|nothing|nada|ninguna|nenhuma|no action|-+)\.?$/i.test(proposed) ? proposed : undefined;
               const reply = raw.replace(/\[\[\s*ACTION\s*:[^\]]*\]\]/ig, '').trim() || raw.trim();
               return { reply, suggestedCommand, isError: !!result?.error };
             }}
@@ -5303,6 +5506,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           </div>
         </div>
       )}
+      {chatHistoryOpen && <ChatHistoryPanel onClose={() => setChatHistoryOpen(false)} onResume={(e, reopen) => store.resumeSession(e, reopen)} />}
       {clearDataOpen && <ClearDataDialog onClose={closeClearData} sitesInRange={sitesInRange} onClear={runClearData} />}
       {/* ⋮ → Senhas (ou "Gerenciar senhas…" da lista em cima do campo, já filtrado pelo site). */}
       {passwordsOpen && <PasswordsPanel initialQuery={passwordsOpen.query} onClose={() => setPasswordsOpen(null)} />}

@@ -3,6 +3,7 @@ import { googleLocaleParams } from './i18n';
 import { aiMayRecord } from './incognito';
 import { namesStore } from './stores';
 import { userAmazonDomain, namedOfficialSite, officialSitesPromptBlock } from './known-sites';
+import { wantsTabsSummary, wantsWakeTabs } from './tabs-summary';
 
 // Amazon do país da pessoa: mora em known-sites.ts (puro, testável); reexportado aqui.
 export { userAmazonDomain };
@@ -266,7 +267,9 @@ export type QuickAction =
   | { type: 'find_file'; query: string; filetype: string }
   // Playlist determinística: com songs[] (usuário listou) OU artist+count (o executor
   // resolve as top-N faixas no YouTube via resolveManyVideos — sem depender do modelo).
-  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean };
+  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean }
+  // "Resuma minhas abas abertas" (tabs-summary.ts): lê as abas da pessoa com permissão, sem acordar as dormindo.
+  | { type: 'summarize_tabs'; wake?: boolean };
 
 const NUM_WORDS: Record<string, number> = {
   dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, cem: 100,
@@ -488,6 +491,7 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const prompt = stripAgentMeta(command).trim() || command.trim();
     if (prompt) return { type: 'generate_image', prompt, count: 1 };
   }
+  if (wantsTabsSummary(command)) return { type: 'summarize_tabs', wake: wantsWakeTabs(command) };
   // URL/site explícito no comando → cede pro agente NAVEGAR pra lá (não sequestrar pra
   // um atalho de busca tipo google_news). Conserta "vá no site X e busque Y" virar uma
   // query-lixo no Google News. Baixar por URL não passa por aqui (a quick action de
@@ -799,13 +803,21 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const watchVerb = /\b(abr\w+|mostr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|p[oõ]e\b|pon\b|poner\b|pong\w+|ponme\b|ponte\b|bota\w*|reprodu\w+|assist\w+|ouv\w*|escu(?:t|ch)\w*|oye\b|oir\b|open\w*|play\w*|show\w*|watch\w*|listen\w*)\b/.test(sp);
     const mediaWord = /\b(video|videos|clipe|clipes|musica|musicas|music|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|clip|clips)\b/.test(sp);
     const cm = sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+(?:abas?|guias?|tabs?|musicas?|videos?|cancoes|canciones|faixas?|temas?|clipes?|songs?|tracks?|tunes?|clips?)\b/);
-    const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : 0;
+    // "abra 2 janelas / open 2 windows (ou 'windos', com erro de digitação) … um diferente em cada":
+    // número + qualquer substantivo, quando o pedido diz "cada / each / different". A palavra
+    // contada sai da busca.
+    const eachCue = /\b(each|every|cada|different|diferentes?|distintos?|outro em cada)\b/.test(sp);
+    const cm2 = !cm && eachCue ? sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+([a-z]{3,})\b/) : null;
+    const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : cm2 ? (NUM_WORDS[cm2[1]] || parseInt(cm2[1], 10) || 0) : 0;
+    const countedNoun = cm2 ? cm2[2] : '';
     // !IS_STOP_CONTROL_VERB: "fecha as 3 abas que voce abriu"/"pausa os 2 videos que estao
     // tocando" casam watchVerb via 'abriu'/'tocando' (PASSADO), mas o verbo de verdade é
     // FECHAR/PAUSAR — o oposto de abrir N vídeos novos. !REFERS_TO_MY_PLAYLIST: coleção
     // EXISTENTE do usuário, não um tema pra buscar do zero.
     if (!isDl && watchVerb && mediaWord && cnt >= 2 && !IS_STOP_CONTROL_VERB.test(sp) && !REFERS_TO_MY_PLAYLIST.test(sp) && !REFERS_TO_OPEN_ITEM.test(sp)) {
-      const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga ponte bota botar reproduz reproduzir reproducir reproduce assistir assista ouvir ouca ouve escuta escutar escute escucha escuchar oye oir navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch listen tab tabs each one with in on the of a an song songs track tracks tune tunes video videos clip clips musica musicas music cancao cancoes cancion canciones faixa faixas tema temas clipe clipes filme').split(' '));
+      const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga ponte bota botar reproduz reproduzir reproducir reproduce assistir assista ouvir ouca ouve escuta escutar escute escucha escuchar oye oir navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch listen tab tabs each one with in on the of a an song songs track tracks tune tunes video videos clip clips musica musicas music cancao cancoes cancion canciones faixa faixas tema temas clipe clipes filme ' +
+        'and me every for by different diferente diferentes distinto distintos window windows janela janelas ventana ventanas youtube').split(' '));
+      if (countedNoun) STRIP.add(countedNoun);
       const q = stripAgentMeta(command).replace(/([a-z])(\d)/gi, '$1 $2').split(/\s+/)
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^\d{1,2}$/.test(nw) && !(nw in NUM_WORDS); })
         .join(' ').trim();
