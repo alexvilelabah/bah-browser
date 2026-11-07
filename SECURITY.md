@@ -68,6 +68,8 @@ end in a couple of hops.
 | Hardened binary (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignored, `--inspect` ignored |
 | IPC bridge = only entry point | [`preload.ts`](src/preload/preload.ts) | every channel is `ipcRenderer.invoke(...)`; no Node primitives exposed |
 | Safety brake (pay / buy / delete / card) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + the agent loop in `App.tsx` | `riskForAction` classifies the action; click, **fill** (card data) and **press** (Enter on checkout) all ask for confirmation before running |
+| Agent stays out of accounts it wasn't asked to use | the agent loop in `App.tsx` | clicks on Sign in / Sign up / "Continue with Google" are refused unless the request mentions an account or sign-in |
+| Careful sites (terms forbid automation) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + the agent loop in `App.tsx` | LinkedIn by default (plus `localStorage.carefulSites`): one navigation per request, then only `CAREFUL_ALLOWED` (read/report) actions; the second refused action ends the task |
 | Local AI stays offline | `main.ts` (hybrid router, local branch) | on Ollama failure it returns an error — **no** silent cloud fallback |
 | No executable downloads | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` blocked at download time |
 | `openFile` / reveal can't open arbitrary paths | [`download-manager.ts`](src/main/download-manager.ts) (`download:open-file`) + `main.ts` (`shell:reveal`) | both call `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → Downloads / userData / temp only |

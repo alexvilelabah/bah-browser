@@ -1198,6 +1198,10 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 @keyframes dotPulse{0%,100%{opacity:0.5;transform:scale(0.82);}50%{opacity:1;transform:scale(1.1);}}
 
 /* Click ripple — softened to match the aurora palette */
+/* Cursor do agente: a PONTA da seta (canto de cima à esquerda) fica exatamente no ponto do clique. */
+.agent-cursor{position:absolute;width:16px;height:16px;pointer-events:none;z-index:2;
+  background:linear-gradient(135deg,#a5f3fc,#818cf8);clip-path:polygon(0 0,0 100%,30% 72%,52% 100%,66% 92%,45% 64%,85% 64%);
+  filter:drop-shadow(0 0 6px rgba(34,211,238,0.7));}
 .agent-ripple{position:absolute;width:0;height:0;pointer-events:none;transform:translate(-50%,-50%);}
 .agent-ripple .ripple-core{position:absolute;left:0;top:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:radial-gradient(circle,#a5f3fc 0%,#22d3ee 55%,transparent 100%);box-shadow:0 0 18px 4px rgba(34,211,238,0.6);animation:rippleCore 0.9s ease-out forwards;}
 .agent-ripple .ripple-wave{position:absolute;left:0;top:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;border:2px solid rgba(129,140,248,0.8);animation:rippleWave 1s ease-out forwards;}
@@ -2572,3 +2576,12 @@ body {
 .incog-col-title{ font-size:13px; font-weight:600; margin-bottom:6px; }
 .incog-col ul{ padding-left:18px; color:var(--text-secondary); font-size:13px; line-height:1.7; }
 .incog-note{ color:var(--text-muted); font-size:12.5px; line-height:1.55; border-top:1px solid var(--incog-line); padding-top:14px; }
+
+/* alert/confirm das páginas (components/JsDialogHost.tsx) */
+.jsdialog{ z-index:125; }
+.jsdialog-card{ display:flex; flex-direction:column; gap:10px; }
+.jsdialog-hint{ font-size:12px; color:var(--text-secondary); line-height:1.45; }
+.jsdialog-msg{ font-size:13.5px; color:var(--text-primary); white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto; line-height:1.45; }
+.jsdialog-input{ height:32px; padding:0 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg-primary); color:var(--text-primary); font:inherit; font-size:13px; }
+.jsdialog-foot{ gap:8px; }
+.jsdialog .tour-btn:not(.tour-btn-primary){ background:rgba(255,255,255,0.08); color:var(--text-primary); }
