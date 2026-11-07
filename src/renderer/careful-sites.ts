@@ -16,4 +16,4 @@ export function isCarefulHost(host: string, list = carefulHosts()): boolean {
 }
 
 /** Ações permitidas num site cuidadoso (além da 1ª navegação): só ler/relatar/organizar. */
-export const CAREFUL_ALLOWED = new Set(['extract_text', 'look_at', 'report', 'done', 'render_view', 'store', 'plan', 'wait', 'web_search']);
+export const CAREFUL_ALLOWED = new Set(['extract_text', 'look_at', 'report', 'done', 'render_view', 'store', 'plan', 'wait', 'web_search', 'list_downloads']);

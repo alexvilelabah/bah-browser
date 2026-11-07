@@ -222,6 +222,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSaveFile: (id: string, index: number) => ipcRenderer.invoke('torrent:save-file', id, index),
   torrentRemove: (id: string, destroyStore?: boolean) => ipcRenderer.invoke('torrent:remove', id, destroyStore),
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
+  torrentSetBuiltin: (on: boolean) => ipcRenderer.invoke('torrent:set-builtin', on),
+  torrentOpen: (uri: string) => ipcRenderer.invoke('torrent:open', uri),
   // Roteador local (Qwen2.5-1.5B): só rotula o texto da caixa. download só depois do "sim" da pessoa.
   routerStatus: () => ipcRenderer.invoke('router:status'),
   routerClassify: (text: string, ctx?: { url?: string; title?: string; lastRun?: { request: string; outcome: string } | null }) => ipcRenderer.invoke('router:classify', text, ctx),

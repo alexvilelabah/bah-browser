@@ -71,7 +71,8 @@ end in a couple of hops.
 | Agent stays out of accounts it wasn't asked to use | the agent loop in `App.tsx` | clicks on Sign in / Sign up / "Continue with Google" are refused unless the request mentions an account or sign-in |
 | Careful sites (terms forbid automation) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + the agent loop in `App.tsx` | LinkedIn by default (plus `localStorage.carefulSites`): one navigation per request, then only `CAREFUL_ALLOWED` (read/report) actions; the second refused action ends the task |
 | Local AI stays offline | `main.ts` (hybrid router, local branch) | on Ollama failure it returns an error — **no** silent cloud fallback |
-| No executable downloads | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` blocked at download time |
+| Downloads only land in the downloads folder; nothing is auto-run | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | files are written to `getDownloadDir()` only and never opened/executed automatically. **No file-type blocklist** — see tradeoffs below |
+| Torrent engine is opt-in | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | built-in client OFF by default: `.torrent` saved as a file, `magnet:` handed to the OS app, engine `utilityProcess` never started |
 | `openFile` / reveal can't open arbitrary paths | [`download-manager.ts`](src/main/download-manager.ts) (`download:open-file`) + `main.ts` (`shell:reveal`) | both call `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → Downloads / userData / temp only |
 | Image harvesting limits | [`src/main/image-harvester.ts`](src/main/image-harvester.ts) | SVG blocked, byte cap, content-type checked, redirects limited |
 | OCR / screenshots stay local | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract on-device; image never sent to a cloud |
@@ -103,13 +104,17 @@ machine). They are listed here so an auditor does not have to "discover" them:
 1. **API keys are stored in `localStorage`** ([`src/renderer/store.ts`](src/renderer/store.ts)),
    not the OS keychain (`safeStorage`). Acceptable for a single-user local app; moving to
    `safeStorage` is on the roadmap.
-2. **Download TLS-lenient fallback** (`main.ts`): on a certificate-chain error, a download is
-   retried with verification relaxed — **but** the file is still rejected if it is an
-   executable (see `BLOCKED_EXTENSIONS`), which bounds the risk. Added for sites (e.g. some
-   government portals) that ship a broken certificate chain.
+2. **Download TLS-lenient fallback** ([`agent-download-worker.ts`](src/main/agent-download-worker.ts)):
+   on a certificate-chain error, the agent's download is retried with verification relaxed. The
+   file still only lands in the downloads folder and is never opened automatically. Added for
+   sites (e.g. some government portals) that ship a broken certificate chain.
 3. **Binary supply chain:** `yt-dlp` and `ffmpeg` are fetched from their upstream "latest"
    URLs without a pinned checksum ([`src/main/media-downloader.ts`](src/main/media-downloader.ts)).
    Acceptable at this scale; checksum-pinning is planned before wider distribution.
+4. **Any file type can be downloaded** — including installers and scripts (`.exe`, `.dmg`,
+   `.pkg`, `.sh`, ...), by you or by the agent. There is no extension blocklist or content
+   sniffing; the protection is that downloads go only to the downloads folder and are never
+   executed by Bah. Review what the agent downloads before opening it.
 
 ---
 
