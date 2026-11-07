@@ -61,6 +61,8 @@
 
 **👨‍💻 I want to hack on the code:** clone and run it — see [Running it](#running-it) below.
 
+**🤖 An AI agent is installing Bah for you?** Point it at [INSTALL-FOR-AGENTS.md](INSTALL-FOR-AGENTS.md) — step-by-step, with a check after each step.
+
 ---
 
 ## What it does
@@ -140,6 +142,57 @@ npm start        # or: npx electron .
 ```
 
 Windows shortcut: double-click `Abrir-Bah.bat`.
+
+### Linux: build and install
+
+Tested on Ubuntu 24.04 x64; package names and the AppArmor step below are for that release. Other distros need the equivalent packages.
+
+**1. System packages.** Also install **Node.js 22.18 or newer** (older 22.x builds, but `npm run test:unit` needs 22.18).
+
+```bash
+sudo apt-get install -y git libfuse2t64 libnss3 libgtk-3-0t64 libasound2t64 libgbm1 libnotify4 \
+  libxss1 libxtst6 libatspi2.0-0t64 libuuid1 libsecret-1-0 xdg-utils
+```
+
+`xvfb` is optional: only headless smoke tests use it.
+
+**2. Build the AppImage**, from the cloned folder:
+
+```bash
+npm ci
+node node_modules/electron/install.js   # npm does not fetch the Electron binary on its own
+npm run build
+npx electron-builder --linux AppImage --publish never
+```
+
+The result is `release/Bah-<version>.AppImage`. If `npm ci` fails with `Permission denied (publickey)`, you have no GitHub SSH key; run `git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"` and retry.
+
+**3. Allow the browser sandbox.** Ubuntu 24.04 restricts the user namespaces Chromium's sandbox uses, so Bah aborts at launch with a `chrome-sandbox` error. Run this **from the cloned folder** to add an AppArmor profile like the one Chrome ships with:
+
+```bash
+sudo tee /etc/apparmor.d/bah-browser > /dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bah-browser "/{tmp/.mount_Bah-*/bah-browser,${PWD#/}/release/linux-unpacked/bah-browser,${PWD#/}/node_modules/electron/dist/electron}" flags=(unconfined) {
+  userns,
+  include if exists <local/bah-browser>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bah-browser
+```
+
+It covers the AppImage (mounted under `/tmp`; if you set `TMPDIR`, adjust that path), `release/linux-unpacked` and the dev Electron in this folder. Don't use `--no-sandbox` instead: it turns off Chromium's sandbox for every site you visit.
+
+**4. Run it:** `release/Bah-*.AppImage`, or `npx electron .` from the source folder.
+
+**Good to know**
+
+- **`MESA-LOADER: failed to open nvidia-drm` on a machine without NVIDIA:** leftover NVIDIA settings are forcing the wrong graphics driver. If `/etc/environment` sets them, remove them and log out and back in:
+  ```bash
+  sudo sed -i.bak -E '/^(GBM_BACKEND|__GLX_VENDOR_LIBRARY_NAME|LIBVA_DRIVER_NAME)=/d' /etc/environment
+  ```
+- **Netflix and other DRM video** need a package signed through castLabs (see `build/afterSign.js`); a plain local build doesn't play them.
 
 ### Setting up the AI
 

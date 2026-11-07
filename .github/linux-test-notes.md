@@ -11,7 +11,7 @@ chmod +x Bah-*.AppImage
 ./Bah-*.AppImage
 ```
 
-If it refuses to start, try `--no-sandbox`. On some distros you may need `libsecret` and `fuse2`.
+If it aborts with a `chrome-sandbox` error (Ubuntu 24.04), add the AppArmor profile from the README's *Linux: build and install* section rather than using `--no-sandbox`, which turns off Chromium's sandbox for every site. On some distros you may need `libsecret` and `fuse2`.
 
 ### What should work
 
@@ -19,7 +19,7 @@ The whole core is cross-platform: the AI agent, ad/tracker blocking, YouTube ad 
 
 ### What does NOT work on Linux
 
-**Anything that plays or downloads media** — "play a song", "open a video about X", "download this music", "make a playlist". All of it resolves the video through yt-dlp, and the app fetches the Windows build of yt-dlp/ffmpeg, which cannot run here. It degrades with an error — it does not crash. Playing audio inside a page you opened yourself (YouTube in a tab) is normal Chromium and is unaffected.
+**Media downloads need ffmpeg from your distro** — "play a song", "open a video about X", "download this music", "make a playlist" all resolve the video through yt-dlp. The app fetches the Linux build of yt-dlp (`yt-dlp_linux`, or `yt-dlp_linux_aarch64` on ARM) and Deno on its own, but it only downloads ffmpeg on Windows: on Linux it uses the `ffmpeg` on your PATH (`sudo apt-get install ffmpeg`). Without it, videos come as the best single file with audio (no merging of separate video and audio streams), and music is saved as it came (usually M4A) instead of MP3. Playing audio inside a page you opened yourself (YouTube in a tab) is normal Chromium and is unaffected.
 
 **Read-aloud (the 🔊 button and "read this page")** — uses the OS's built-in text-to-speech voices. Windows always ships one; most Linux installs (and the AppImage sandbox) don't have `speech-dispatcher` set up, so there's no voice to speak with. As of this build the button just does nothing instead of pretending to read — if you install `speech-dispatcher` + a voice (e.g. `espeak-ng`) it should start working with no app update needed.
 
