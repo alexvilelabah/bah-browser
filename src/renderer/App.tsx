@@ -5885,7 +5885,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // responde). Numa tarefa de download, um clique espera até 2,5 s por ele — senão o passo seguinte
                   // já roda sem saber do download (e a tarefa nem acaba quando ele começa, nem espera por ele).
                   if (commandWantsDownload && downloadEventsRef.current.length === 0
-                      && (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'click_at' || action.type === 'navigate')) {
+                      && (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'click_at' || action.type === 'click_role' || action.type === 'navigate')) {
                     for (let w = 0; w < 25 && downloadEventsRef.current.length === 0; w++) await new Promise(r => setTimeout(r, 100));
                   }
                   const dlEvents = (() => {
