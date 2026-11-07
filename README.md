@@ -167,6 +167,8 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 - 🎯 **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
 - 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
+- 🔑 **Works with your password-manager extension.** With LastPass, Bitwarden or 1Password installed, Bah steps aside so the two managers don't compete: its own logins list and "Save password?" stay off in normal tabs (there's a switch in Passwords). When the agent stops at a login form, the card tells you to sign in with the extension and which setting to turn on so it's automatic next time: "Auto-login" in LastPass, "Autofill on page load" in Bitwarden. The agent never clicks the extension's menu and never reads a password.
+- 🧩 **Add to Bah.** The Chrome Web Store only shows its install button in Google Chrome. On an extension's store page, Bah shows its own **Add to Bah** button, which downloads the extension's public package and asks before adding it.
 
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 

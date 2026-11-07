@@ -47,6 +47,8 @@ import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
 import { setupChromeExtensions } from './chrome-extensions';
+import { dropExtensionUi, EXTENSION_UI_SELECTOR, isExtensionFrameUrl } from '../shared/extension-ui';
+import { detectPasswordExtensions, parseExtraPasswordIds } from '../shared/password-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
 import { setupPagePrint } from './page-print';
@@ -1783,6 +1785,27 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        let a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        // "ref": "__REF:<text>__" → the [N] of the first listed element whose line contains <text>.
+        if (typeof a.ref === 'string' && a.ref.startsWith('__REF:')) {
+          const want = a.ref.slice(6, -2).toLowerCase();
+          const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
+          a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        }
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',
@@ -2185,13 +2208,36 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Uses the shared ensureDebugger (also enables DOM + Page domains for the hybrid pipeline)
   const ensureDebugger = sharedEnsureDebugger;
 
+  // Raízes de interface injetada por extensão na página: <iframe> chrome-extension:// e os hosts
+  // marcados (EXTENSION_UI_SELECTOR). Sem nada disso na página = conjunto vazio (custa 2 chamadas CDP).
+  const extensionUiRoots = async (wc: Electron.WebContents): Promise<Set<number>> => {
+    const roots = new Set<number>();
+    try {
+      const tree = await wc.debugger.sendCommand('Page.getFrameTree') as any;
+      const walk = (ft: any): any[] => (ft?.childFrames || []).flatMap((c: any) => [c, ...walk(c)]);
+      for (const c of walk(tree?.frameTree)) {
+        if (!isExtensionFrameUrl(c?.frame?.url)) continue;
+        try { const o = await wc.debugger.sendCommand('DOM.getFrameOwner', { frameId: c.frame.id }) as any; if (o?.backendNodeId) roots.add(o.backendNodeId); } catch {}
+      }
+    } catch {}
+    try {
+      const doc = await wc.debugger.sendCommand('DOM.getDocument', { depth: 0 }) as any;
+      const q = await wc.debugger.sendCommand('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector: EXTENSION_UI_SELECTOR }) as any;
+      for (const nodeId of (q?.nodeIds || []).slice(0, 50)) {
+        try { const d = await wc.debugger.sendCommand('DOM.describeNode', { nodeId }) as any; if (d?.node?.backendNodeId) roots.add(d.node.backendNodeId); } catch {}
+      }
+    } catch {}
+    return roots;
+  };
+
   ipcMain.handle('cdp:axtree', async (_e, wcId: number) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { error: 'webContents not found' };
     try {
       await ensureDebugger(wc, wcId);
       const result = await wc.debugger.sendCommand('Accessibility.getFullAXTree') as any;
-      return { ok: true, nodes: result.nodes };
+      // Interface de extensão (menu do gerenciador de senha, ícone no campo) sai: não é da página.
+      return { ok: true, nodes: dropExtensionUi(result.nodes || [], await extensionUiRoots(wc)) };
     } catch (e: any) {
       return { error: String(e?.message ?? e) };
     }
@@ -2621,7 +2667,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       const main = wc.mainFrame;
       if (!main) return { dismissed: '' };
       const subtree = (main.framesInSubtree || [main]);
-      const frames = [main, ...subtree.filter(f => f !== main)].slice(0, 25);
+      // Frame de extensão (menu do gerenciador de senha) fica de fora: o porteiro nunca clica nele.
+      const frames = [main, ...subtree.filter(f => { if (f === main) return false; try { return !isExtensionFrameUrl(f.url); } catch { return false; } })].slice(0, 25);
       for (const frame of frames) {
         try {
           const r = await frame.executeJavaScript(OVERLAY_DISMISS_SCRIPT, false);
@@ -2854,11 +2901,19 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.
+  // Gerenciador de senha em extensão (LastPass, Bitwarden, 1Password) ligado nas abas normais. Em teste
+  // (NODE_ENV=test) uma extensão local pode se passar por um deles (BAH_TEST_PASSWORD_EXTENSIONS).
+  const pwExtTestIds = process.env.NODE_ENV === 'test' ? parseExtraPasswordIds(process.env.BAH_TEST_PASSWORD_EXTENSIONS) : {};
+  const passwordExtensions = () => {
+    try { return detectPasswordExtensions(session.fromPartition(BROWSER_PARTITION).extensions.getAllExtensions(), pwExtTestIds); } catch { return []; }
+  };
+  ipcMain.handle('extensions:password-managers', (e) => (mainWindow && e.sender === mainWindow.webContents ? passwordExtensions() : []));
   passwordManager = setupPasswordManager({
     getMainWindow: () => mainWindow,
     t: mt,
     browserSession: session.fromPartition(BROWSER_PARTITION),
     privateSession: incognitoSession(),
+    passwordExtension: () => passwordExtensions()[0] || null,
   });
   // Botão "Baixar" em cima do vídeo do YouTube: escolhe a resolução e o download entra na
   // mesma lista de Downloads. Baixar exige clique de verdade recente naquela aba.

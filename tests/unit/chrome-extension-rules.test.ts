@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import path from 'node:path';
 import fs from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, generateKeyPairSync } from 'node:crypto';
 import {
   isExtensionId, extensionIdFromUrl, extensionUrl, normalizeExtPath, resolveInsideRoot,
   pickIconPath, actionIconPath, optionsPagePath, localizeMessage, localeCandidates,
@@ -17,6 +17,7 @@ import {
   createAlarm, alarmTimerDelay, MAX_TIMER_MS,
   isInsideDir, sanitizeDisabledEntry, parseDisabledSet, compareVersions, pickLatestVersion,
   mergeExtensionViews, storeInstallStatus, managementInfo, blockedAsDisabled,
+  storeDetailId, parseCrx3, crxDownloadUrl, normalizeVersionDir,
 } from '../../src/main/chrome-extension-rules.ts';
 
 const ID = 'eemaaomlfllldamnpoajaedaemnblgal';   // Dólar Hoje
@@ -566,4 +567,52 @@ test('managementInfo: o formato que a loja recebe (igual ao da biblioteca)', () 
   assert.strictEqual(bare.name, OTHER);
   assert.strictEqual(bare.enabled, true);
   assert.deepStrictEqual(bare.permissions, []);
+});
+
+// ── "Adicionar ao Bah" (a loja esconde o botão dela de quem não é o Chrome) ──────────────
+
+test('store detail page → extension id; only the exact store origin', () => {
+  const id = 'nngceckbapebfimnlniiiahkandclblb';
+  assert.equal(storeDetailId(`https://chromewebstore.google.com/detail/bitwarden-password-manager/${id}`), id);
+  assert.equal(storeDetailId(`https://chromewebstore.google.com/detail/${id}?hl=en`), id);
+  assert.equal(storeDetailId(`https://chromewebstore.google.com/detail/x/${id}/reviews`), id);
+  assert.equal(storeDetailId(`https://chromewebstore.google.com.evil.tld/detail/x/${id}`), '');
+  assert.equal(storeDetailId(`http://chromewebstore.google.com/detail/x/${id}`), '');
+  assert.equal(storeDetailId('https://chromewebstore.google.com/category/extensions'), '');
+  assert.equal(storeDetailId(`https://chromewebstore.google.com/detail/x/${id.toUpperCase()}`), '');
+  assert.equal(storeDetailId(42), '');
+});
+
+test('crx download url is the public update endpoint for that id', () => {
+  const u = new URL(crxDownloadUrl('nngceckbapebfimnlniiiahkandclblb', '148.0.7778.0'));
+  assert.equal(u.origin + u.pathname, 'https://clients2.google.com/service/update2/crx');
+  assert.equal(u.searchParams.get('x'), 'id=nngceckbapebfimnlniiiahkandclblb&uc=');
+  assert.equal(u.searchParams.get('prodversion'), '148.0.7778.0');
+});
+
+test('version folder: dotted numbers only', () => {
+  assert.equal(normalizeVersionDir('2026.10.1'), '2026.10.1');
+  assert.throws(() => normalizeVersionDir('../1'));
+  assert.throws(() => normalizeVersionDir('1.2.3.4.5'));
+  assert.throws(() => normalizeVersionDir(undefined));
+});
+
+test('parseCrx3: the key whose hash is the declared id; anything else is refused', () => {
+  const der = (generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ type: 'spki', format: 'der' })) as Buffer;
+  const other = (generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ type: 'spki', format: 'der' })) as Buffer;
+  const varint = (n: number) => { const o: number[] = []; while (n > 127) { o.push((n & 127) | 128); n >>>= 7; } o.push(n); return Buffer.from(o); };
+  const field = (no: number, b: Buffer) => Buffer.concat([varint(no * 8 + 2), varint(b.length), b]);
+  const idBytes = createHash('sha256').update(der).digest().subarray(0, 16);
+  const build = (keys: Buffer[], declared: Buffer) => {
+    const header = Buffer.concat([...keys.map(k => field(2, Buffer.concat([field(1, k), field(2, Buffer.alloc(8))]))), field(10000, field(1, declared))]);
+    const pre = Buffer.alloc(12); pre.write('Cr24', 0, 'latin1'); pre.writeUInt32LE(3, 4); pre.writeUInt32LE(header.length, 8);
+    return Buffer.concat([pre, header, Buffer.from('PK-zip-bytes')]);
+  };
+  const r = parseCrx3(build([other, der], idBytes));
+  assert.equal(r.id, extensionIdFromKey(der.toString('base64')));
+  assert.ok(r.publicKey.equals(der));
+  assert.equal(r.zip.toString(), 'PK-zip-bytes');
+  assert.throws(() => parseCrx3(build([other], idBytes)), /does not match/);
+  assert.throws(() => parseCrx3(Buffer.from('PK\x03\x04 not a crx')), /not a CRX/);
+  assert.throws(() => parseCrx3(build([der], idBytes).subarray(0, 40)));
 });

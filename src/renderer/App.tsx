@@ -31,7 +31,8 @@ import { searchUrlFor, isNewTabPage, onSearchEngineChange, syncSearchEngineToMai
 import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
-import { canDiscard, isIncognitoBlank, mayRecord, opensIncognito } from '../shared/incognito';
+import { canDiscard, isIncognitoBlank, mayRecord, opensIncognito, partitionFor } from '../shared/incognito';
+import { guidanceKey } from '../shared/password-extensions';
 import { incognitoReady, setAiIncognitoProbe } from './incognito';
 import {
   BrowserAction,
@@ -165,6 +166,8 @@ declare global {
       removeExtension?: (extId: string) => Promise<{ ok: boolean; error?: string }>;
       setExtensionEnabled?: (extId: string, enabled: boolean) => Promise<{ ok: boolean; error?: string; quiet?: boolean }>;
       openExtensionStore?: () => Promise<{ ok: boolean }>;
+      installExtensionFromStore?: (wcId: number) => Promise<{ ok: boolean; name?: string; cancelled?: boolean; error?: string }>;
+      getPasswordExtensions?: () => Promise<Array<{ id: string; name: string; kind: 'lastpass' | 'bitwarden' | '1password' }>>;
       openExtensionOptions?: (extId: string) => Promise<{ ok: boolean }>;
       torrentAdd?: (uri: string) => Promise<{ ok: boolean; id?: string; name?: string; files?: Array<{ index: number; name: string; length: number }>; error?: string }>;
       torrentPlay?: (id: string, index: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
@@ -1594,7 +1597,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           getSuggestions={getSuggestions}
           incognito={activeIncognito}
         />
-        <ExtensionsToolbar incognito={activeIncognito} getActiveWcId={() => {
+        <ExtensionsToolbar incognito={activeIncognito} activeUrl={store.activeTab?.url} getActiveWcId={() => {
           // A aba que a pessoa vê (não a de trabalho do agente). Lança até a webview anexar.
           try { const id = (webviewRefs.current.get(store.activeTabId) as any)?.getWebContentsId?.(); return typeof id === 'number' ? id : null; } catch { return null; }
         }} />
@@ -2332,6 +2335,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 actionQueue = [];
                 skipManualHelpDetectionOnce = true;
               };
+              // Gerenciador de senha em extensão (LastPass/Bitwarden/1Password) no formulário de login:
+              // o cartão de pausa diz como entrar com ELE e qual opção ligar nele. O Bah não preenche nada.
+              const extensionLoginGuidance = async (w: Electron.WebviewTag): Promise<string | null> => {
+                let partition = '';
+                try { partition = w.getAttribute('partition') || ''; } catch {}
+                if (partition && partition !== partitionFor(false)) return null;   // anônima: extensão não roda
+                const exts = await window.electronAPI?.getPasswordExtensions?.().catch(() => []) ?? [];
+                return exts[0] ? t(guidanceKey(exts[0].kind)) : null;
+              };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
@@ -2581,7 +2593,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     skipManualHelpDetectionOnce = false;
                     history += '\nRESUME: User clicked Continue after manual help. Observe the current page and continue the task from here.';
                   } else {
-                    const manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    let manualHelpNeed = detectManualHelpNeed(command, observation, stepsOnSameUrl, noEffectCount);
+                    // Login com gerenciador de senha em extensão ligado: o cartão fala dele (o nome certo da opção).
+                    if (manualHelpNeed?.kind === 'login') {
+                      const instruction = await extensionLoginGuidance(wv);
+                      if (instruction) manualHelpNeed = { ...manualHelpNeed, instruction };
+                    }
                     if (manualHelpNeed) {
                       onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
                       deadline.suspend();   // a human thinking is not the model being slow

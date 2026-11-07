@@ -163,6 +163,8 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 - **Sem falso sucesso.** Depois de um preenchimento, o agente confere se o campo realmente ficou com o valor; se uma ação não surtiu efeito, ele muda de estratégia em vez de relatar sucesso.
 
 - **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
+- **Funciona com a sua extensão de senhas.** Com LastPass, Bitwarden ou 1Password instalado, o Bah sai da frente pra os dois gerenciadores não brigarem: nas abas normais ficam desligados a lista de logins dele e o "Salvar senha?" (tem um interruptor em Senhas). Quando o agente para num formulário de login, o cartão diz pra entrar pela extensão e qual opção ligar pra ser automático da próxima vez: "Auto-login" no LastPass, "Autofill on page load" no Bitwarden. O agente nunca clica no menu da extensão e nunca lê senha.
+- **Adicionar ao Bah.** A Chrome Web Store só mostra o botão de instalar no Google Chrome. Na página de uma extensão na loja, o Bah mostra o próprio botão **Adicionar ao Bah**, que baixa o pacote público da extensão e pergunta antes de adicionar.
 
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
