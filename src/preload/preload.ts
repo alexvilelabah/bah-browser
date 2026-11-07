@@ -326,6 +326,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   adblockActiveHostChanged: (host: string) => ipcRenderer.invoke('adblock:active-host-changed', host),
   adblockSetAgentBusy: (busy: boolean) => ipcRenderer.invoke('adblock:set-agent-busy', busy),
   // Hardware acceleration (GPU) on/off — fixes "white tab" on weak GPUs; applied on restart
+  proxyGet: () => ipcRenderer.invoke('proxy:get'),
+  proxySet: (c: any) => ipcRenderer.invoke('proxy:set', c),
+  proxyTest: (url?: string) => ipcRenderer.invoke('proxy:test', url),
+  proxyForgetPasswords: () => ipcRenderer.invoke('proxy:forget-passwords'),
+  secureDnsGet: () => ipcRenderer.invoke('dns:get'),
+  secureDnsSet: (s: any) => ipcRenderer.invoke('dns:set', s),
+  netGet: () => ipcRenderer.invoke('net:get'),
+  netSet: (p: any) => ipcRenderer.invoke('net:set', p),
+  netOpenOsSettings: () => ipcRenderer.invoke('net:open-os-settings'),
+  proxyAuthResponse: (id: number, r: { user?: string; pass?: string; remember?: boolean } | null) => ipcRenderer.invoke('proxy:auth-response', id, r),
+  onProxyAuthRequest: (cb: (req: { id: number; host: string; port: number; realm?: string; scheme?: string }) => void) => {
+    const listener = (_e: any, req: any) => cb(req);
+    ipcRenderer.on('proxy:auth-request', listener);
+    return () => ipcRenderer.removeListener('proxy:auth-request', listener);
+  },
+  regionGet: (force?: boolean) => ipcRenderer.invoke('region:get', force),
+  regionSet: (r: any) => ipcRenderer.invoke('region:set', r),
+  onRegionChanged: (cb: () => void) => { const l = () => cb(); ipcRenderer.on('region:changed', l); return () => ipcRenderer.removeListener('region:changed', l); },
   getHwAccel: () => ipcRenderer.invoke('app:get-hw-accel'),
   setHwAccel: (on: boolean) => ipcRenderer.invoke('app:set-hw-accel', on),
   // Safe browsing notifications

@@ -72,6 +72,7 @@
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
 - **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -143,6 +144,57 @@ Atalho Windows: clique duplo em `Abrir-Bah.bat`.
 2. Engrenagem → escolha o provedor.
 3. Escolha **DeepSeek**, **Mistral** ou **NVIDIA NIM** e cole a chave dele (a da DeepSeek é baratíssima) → Salvar. Gerar imagem funciona sem chave de qualquer jeito; conversar e o agente precisam de uma dessas (ou do Ollama local, próximo passo).
 4. **Local (opcional, grátis/offline):** instale o [Ollama](https://ollama.com) e **deixe-o rodando** (fica na bandeja e serve os modelos em `127.0.0.1:11434`). Depois baixe um modelo dentro do Bah (☁️/🏠 → 🏠 IA Local → digite o nome → **Baixar**) ou no terminal (ex.: `ollama pull qwen3:14b`). O local roda offline, mas a nuvem (DeepSeek) é mais confiável.
+
+### Redes corporativas (proxy, certificados da empresa)
+
+O Bah segue as **configurações de proxy do sistema operacional** por padrão, como o Chrome — inclusive
+detecção automática (WPAD) e scripts PAC definidos pela TI. Para configurar à mão: menu ⋮ → **🌐 Rede e proxy**:
+**Sistema** (padrão) · **Manual** (`proxy.empresa:8080` para HTTP+HTTPS, ou `socks5://127.0.0.1:1080` para
+proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais uma lista de exceções e o botão
+**Testar conexão**. `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` pré-configuram quando nada foi salvo.
+
+- **Login no proxy (HTTP 407, ex.: Blue Coat):** o Bah pede usuário e senha numa caixa própria;
+  *Lembrar* guarda cifrado com o chaveiro do SO (`safeStorage`). Nunca chegam ao agente nem ao modelo.
+- **Tudo usa a mesma rota:** páginas, janelas de login e requisições do próprio Bah (IA, atualizações,
+  busca, downloads do agente) passam pela pilha de rede do motor do navegador — uma configuração
+  (e um login) vale para tudo.
+- **Certificados-raiz da empresa (inspeção TLS):** o Chromium já confia no repositório do SO. O Node do
+  Electron não, então o Bah lê o repositório do SO na inicialização (chaveiros do macOS, repositórios
+  `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node.
+- **Proteção contra vazamento de IP pelo WebRTC (ligada por padrão):** com proxy, o WebRTC só pode usar o proxy
+  (`disable_non_proxied_udp`); sem proxy, só a conexão de rede principal (`default_public_interface_only`) — nos
+  dois casos a página não lista seus endereços IP por ele. **Melhor qualidade de chamada** desliga a proteção
+  (qualquer página passa a ver seus IPs reais). **WebRTC: só IPv4** tira os candidatos IPv6 (vale depois de
+  reiniciar). O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **DNS seguro (DNS-over-HTTPS):** **Sistema** (padrão — nada muda até você escolher) · predefinições **AdGuard**
+  e **Mullvad** (bloqueiam anúncio, sem cadastro), **Quad9** (bloqueia malware), **Cloudflare** (sem filtro) ·
+  **NextDNS** (cole o ID da sua configuração — conta grátis, você gerencia as listas; plano grátis com 300 mil
+  consultas/mês, depois disso continua resolvendo mas para de filtrar) · endereço `https://` **personalizado**
+  (Pi-hole, AdGuard Home). **Estrito** faz a consulta falhar em vez de cair no DNS comum da sua rede quando o
+  servidor não responde. Uma configuração pra todas as abas, anônimas também. É configuração do navegador, não
+  extensão: extensão do Chrome não tem como trocar o resolvedor.
+- **Versão de IP:** o motor do Bah não consegue forçar só IPv4 ou só IPv6 no tráfego das páginas (testado:
+  `--disable-ipv6` não faz nada no Electron 44), então essas opções aparecem desativadas com o motivo — use as
+  configurações de rede do sistema. Só o WebRTC pode ficar limitado a IPv4 (acima).
+- **Avisos de vazamento:** se o seu proxy ou servidor de DNS seguro só é alcançável por uma versão de IP e este
+  computador também tem endereço real da outra, o painel avisa que o tráfego pode escapar (com botão pras
+  configurações de rede do sistema). Também avisa quando há proxy mas o WebRTC está em Melhor qualidade de
+  chamada, e lembra que o proxy pode fazer as próprias consultas de DNS. O Bah só olha quais versões de IP
+  existem — nunca mostra nem envia os seus endereços.
+- **Extensões de VPN:** uma extensão do Chrome que controla o proxy (`chrome.proxy`) vence enquanto está ligada,
+  como no Chrome; quando solta, as abas voltam pro proxy configurado aqui.
+
+### Região e hora (VPN, viagem)
+
+Menu ⋮ → **🌍 Região e hora**:
+- **Local da rede:** com VPN ou proxy, os sites mostram preços, moeda e estoque do país onde a conexão sai.
+  No **Automático** (padrão) o Bah confere esse país com uma requisição ao `cdn-cgi/trace` da Cloudflare quando
+  o painel abre (cache de 10 min, de novo quando o proxy muda) e avisa quando é diferente da região do
+  computador. **Região do computador** ou **um país específico** nunca consultam a rede.
+- **Fuso dos sites:** o do computador (padrão), um fuso escolhido pra planejar viagem ou voo, ou **UTC** (esconde
+  seu fuso real dos scripts). Aplicado no motor como o override do DevTools; um selo 🕐 na barra mostra; volta pro
+  fuso do computador ao reiniciar, a não ser que marque *Manter*. Agendas com login costumam seguir o fuso da
+  conta, não o do navegador.
 
 ---
 

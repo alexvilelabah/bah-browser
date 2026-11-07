@@ -39,6 +39,19 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   local do roteador híbrido).
 - **OCR e screenshots usados pra OCR** rodam **no aparelho** (Tesseract) — a imagem nunca é
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Proxy:** com um proxy configurado (no SO, no painel 🌐 Rede e proxy ou via `HTTPS_PROXY`), todo o
+  tráfego do Bah passa por ele — é esse o objetivo. Senhas de proxy são digitadas na caixa do próprio Bah,
+  salvas só se você marcar *Lembrar*, cifradas com o chaveiro do SO (`safeStorage`, arquivo
+  `proxy-auth.json`) e nunca mostradas ao agente nem ao modelo. Ver [`src/main/proxy.ts`](src/main/proxy.ts).
+- **Certificados-raiz da empresa:** o Bah soma ao Node os certificados-raiz em que o SO confia, para
+  confiar no mesmo que o motor do navegador já confia. Não adiciona nem confia em nada que o SO não confie.
+  Ver [`src/main/system-ca.ts`](src/main/system-ca.ts).
+- **Consulta do país da rede:** só na região de compras *Automática*, uma requisição a
+  `https://www.cloudflare.com/cdn-cgi/trace` (pelo motor do navegador, mesma rota das abas) quando o painel 🌍
+  abre, com cache de 10 minutos. Só o código do país é usado. Escolha *Região do meu computador* ou um
+  país fixo para desligar. Ver [`src/main/region.ts`](src/main/region.ts).
+- **Fuso horário:** como em todo navegador, os scripts da página leem seu fuso. Escolha **UTC** em 🌍 Região e hora
+  pra esconder dos sites.
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
 
