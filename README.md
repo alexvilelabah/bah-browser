@@ -69,13 +69,21 @@
 - **AGENT panel** on the side: type a command → the AI decides step by step until it's done
 - **Reads the page** (DOM, numbered interactive elements, and OCR) and acts through structured tools — it doesn't rely on "seeing" the screen
 - **AI**: image generation **works free out of the box** (no key). Chat and the full autonomous agent need a key — **DeepSeek** (cheap, recommended) — also **Mistral** / **NVIDIA NIM** — or **Ollama** (local/offline, free)
-- **Chat per tab** — each browser tab keeps its own conversation; the AI remembers each tab separately
+- **Assistant sessions on your tabs** — the first time you use the assistant on a tab it gets a session: a coloured chip with a short name ("Job hunt", "Groceries") on the tab strip, like a Chrome tab group. Tabs in a session share one conversation — tabs the agent opens, and links you open from a session tab, join it; right-click a tab to add it to a session or take it out; click the chip to rename or recolour
+- **One memory per session, sized for small local models** — the agent and the chat share the session's conversation (requests, answers, task summaries, facts, 📌 pinned items) within a fixed token budget, so the page is never crowded out. When it fills up, older turns are summarized **visibly** in the panel (expand to read the summary; `/compact` on demand). A **context meter** next to the model name shows `context 6.1k / 16k · thread 2.3k` and, tapped, what took the room
+- **Conversations survive a restart** with ⋮ → When Bah opens → "Continue where you left off", and **🕘 Chat history** (⋮) lists past sessions — open one read-only or **Resume** it, reopening its tabs. Stored encrypted on this computer, never for incognito tabs, cleared with "Clear browsing data"
+- **Understands follow-ups** — "did you click it?" is answered from a log of what the agent just did (not a web search); "one window was opened, but not the second" sends the agent back to finish; "it" / "that one" in a new request means the last thing the agent acted on
+- **"Summarize my open tabs"** — one line per tab plus an overall summary, each with a link to switch to it. Asks before reading your tabs (or follows your always/never choice), skips incognito tabs and internal pages, and leaves sleeping tabs asleep unless you ask
+- **Memory saver** — like Chrome's: tabs you haven't used for a while (⋮ → 💤: Moderate 2 h, Balanced 30 min, Maximum 10 min) free their memory and reload when clicked. Never tabs playing audio/video, using the camera, mic or screen, downloading, with a half-filled form, pinned, with notifications or a connected device, on your "always keep these sites active" list, or with an AI task running or waiting for you
+- **Natural-language routing** — commands that start with an action ("search for…", "find…", "browse to…", "apply…") go to the agent; questions get an answer. Typos like "open 2 windos … a different video in each" still open 2 videos
+- **Optional local router** — download a small model once (Qwen2.5-1.5B, 1.1 GB, Apache-2.0; asked first) and every message is labelled on your own computer before it reaches the AI: task, page question, web question or chat. Copes with typos ("search for a set of new golf blubs"); your text never leaves the machine; without it the word rules route as before. On integrated graphics (for example Intel Iris Xe) it runs on the CPU. For "find/download" requests about a named work it also makes the request precise before the big AI starts ("music videos from top gun with tom cruise" → "…the 1986 film Top Gun…"), shown as **🔎 Understood as: …**; the big AI gets both texts and yours wins
 - **One-shot skills**: open N videos at once, jump to the exact moment a phrase is spoken across several videos, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
+- **Navigation skills** — short `SKILL.md` recipes (pop-ups, date pickers, autocomplete, EULAs, OS selectors, downloads, shopping, travel, people search, card lists, sign-in) chosen per step; save your own after a task that worked — see [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md)
 - **UI in English by default**, with **Português** and **Español** available in Settings — the AI replies in your chosen language
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
-- **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
+- **Modern-site compatibility** — presents as a current Chrome on your real OS (user agent, client hints and languages set consistently inside the engine; real GPU/CPU/memory; `navigator.webdriver` left to the engine) so sites don't wrongly block the browser
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -125,7 +133,9 @@ USER → "open gmail and delete the spam"
 | `new_tab` / `switch_tab` / `close_tab` | Tab management |
 | `done(reason, success)` | End the loop |
 
-Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
+Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. Before the click, the pointer moves to the target along the same arc as the agent cursor Bah draws on screen (no random jitter), so the page's `mousemove` events match what you see. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
+
+Iframes count too: fields and buttons inside embedded forms (job applications, payment fields, booking widgets) — same-origin or from another site — appear in the element list marked `frame="host"`, and `click_ref` / `fill_ref` work on them the same way.
 
 ---
 
@@ -162,21 +172,27 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
 
+- 💬 **Page pop-ups don't freeze anything.** A site's `alert`/`confirm` opens in Bah's own box instead of the native one that locked the page (and the agent). During a task, alerts are closed and ordinary confirms accepted (the agent can arm the answer first with its `dialog` action); a confirm that looks like a **payment or a deletion goes to you**.
+
 - 🛑 **Stop means stop.** The ■ Stop button cancels immediately, even mid model-call or mid-loop; a late response won't "resurrect" a cancelled task.
 
 - 🎯 **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
 - 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
+- 🔐 **Signs in only with you.** When a task needs your account ("my list", "my saved jobs", orders, inbox) the agent may click the site's **Sign in** button once; at the login form Bah **pauses** — you sign in (click the username field to pick a login saved in Bah's password manager, or type it) and press Continue. The agent never types or sees a password and never guesses a username. Bah tracks whether you're **signed in or out per site** and tells the agent each step, so it doesn't re-click Sign in or assume pages it can't see.
+
+- 🐢 **Per-site pacing.** Actions that touch a page wait a random 1–5 s between them on the same site; after a site shows a bot check, 15–30 s for the next 30 minutes. It only slows the agent down — it does not get around the check.
+
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- 🧩 **Compatibility, not evasion.** We present as standard Chrome (Chrome UA + masking `navigator.webdriver`) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
+- 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms. Sites whose terms forbid automation (LinkedIn by default) get **careful mode**: one page load per request plus reading — no automated clicking, typing or scrolling; a second refused action ends the task and tells you what to do by hand.
 
 - **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
 - 🚫 **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 
-**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running, a per-tab sandbox, and click rate-limiting to avoid aggressive bot-like behavior.
+**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running and a per-tab sandbox.
 
 ---
 

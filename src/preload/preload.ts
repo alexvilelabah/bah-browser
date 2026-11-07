@@ -31,8 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:zoom', listener);
     return () => ipcRenderer.removeListener('app:zoom', listener);
   },
-  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) =>
-    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image),
+  aiChat: (message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage, thread?: string | { text: string; keepDoc?: boolean }) =>
+    ipcRenderer.invoke('ai:chat', message, pageContent, stateless, local, tabId, rawContext, streamId, image, thread),
+  contextWindow: (local?: boolean) => ipcRenderer.invoke('ai:context-window', local),
   // Botão Parar do chat: aborta o fetch da request identificada pelo streamId.
   chatCancel: (streamId: string) => ipcRenderer.invoke('ai:chat-cancel', streamId),
   // Streaming do chat: pedaços da resposta chegam por evento conforme o modelo escreve.
@@ -42,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('ai:chat-delta', listener);
   },
   clearChatHistory: (tabId?: string) => ipcRenderer.invoke('ai:clear-history', tabId),
+  moveChatHistory: (from: string, to: string) => ipcRenderer.invoke('ai:move-history', from, to),
   // Live model progress (tokens/sec) so a slow local step reads as working, not hung.
   onActionDelta: (cb: (m: { kind: string; estTokens: number; tokPerSec: number; elapsedMs: number; exact: boolean }) => void) => {
     const listener = (_e: any, m: any) => cb(m);
@@ -121,6 +123,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   answerSitePermission: (id: string, answer: 'allow' | 'block' | 'dismiss') => ipcRenderer.invoke('site-permission:answer', id, answer),
   listSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:list', url),
+  memSaverSignals: (wcIds: number[]) => ipcRenderer.invoke('memsaver:signals', wcIds),
   setSitePermission: (url: string, kind: string, value: 'allow' | 'block' | null) => ipcRenderer.invoke('site-permission:set', url, kind, value),
   resetSitePermissions: (url: string) => ipcRenderer.invoke('site-permission:reset', url),
   // Senhas salvas (main/password-manager.ts). A tela nunca recebe senha guardada nem cifrada: só o
@@ -184,9 +187,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
     ipcRenderer.invoke('input:click', wcId, x, y, backendNodeId),
+  pointer: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) =>
+    ipcRenderer.invoke('input:pointer', wcId, op),
   realType: (wcId: number, text: string) =>
     ipcRenderer.invoke('input:type', wcId, text),
   abortTyping: () => ipcRenderer.invoke('input:type-abort'),
+  // Iframes (formulários embutidos): árvore/coords por frame, clique e preenchimento no nó do frame.
+  getFramesAx: (wcId: number) => ipcRenderer.invoke('cdp:frames-ax', wcId),
+  getFramesCoords: (wcId: number, key: string, ids: number[]) => ipcRenderer.invoke('cdp:frames-coords', wcId, key, ids),
+  frameClick: (wcId: number, key: string, id: number) => ipcRenderer.invoke('cdp:frame-click', wcId, key, id),
+  frameFill: (wcId: number, key: string, id: number, value: string) => ipcRenderer.invoke('cdp:frame-fill', wcId, key, id, value),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
   // Accessibility tree via CDP
@@ -194,8 +204,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cdp:axtree', wcId),
   getNodeCoords: (wcId: number, backendNodeIds: number[]) =>
     ipcRenderer.invoke('cdp:node-coords', wcId, backendNodeIds),
+  skillsList: () => ipcRenderer.invoke('skills:list'),
+  // Conversas do assistente (main/chat-store.ts): a viva (só volta com "Continuar de onde parou") e o
+  // 🕘 histórico de conversas. Tudo cifrado no disco pelo main.
+  threadsLoadLiveSync: () => { try { return ipcRenderer.sendSync('threads:load-live-sync'); } catch { return null; } },
+  threadsSaveLive: (payload: unknown) => ipcRenderer.send('threads:save-live', payload),
+  threadsClearLive: () => ipcRenderer.invoke('threads:clear-live'),
+  chatHistoryList: () => ipcRenderer.invoke('chat-history:list'),
+  chatHistoryGet: (id: string) => ipcRenderer.invoke('chat-history:get', id),
+  chatHistoryDelete: (id: string) => ipcRenderer.invoke('chat-history:delete', id),
+  chatHistoryClear: (since: number | null) => ipcRenderer.invoke('chat-history:clear', since),
+  skillsSave: (markdown: string) => ipcRenderer.invoke('skills:save', markdown),
+  skillsOpenFolder: () => ipcRenderer.invoke('skills:open-folder'),
   verifyClick: (wcId: number, backendNodeId: number) =>
     ipcRenderer.invoke('cdp:verify-click', wcId, backendNodeId),
+  selectOption: (wcId: number, backendNodeId: number, option: string) =>
+    ipcRenderer.invoke('cdp:select-option', wcId, backendNodeId, option),
   fillNode: (wcId: number, backendNodeId: number, value: string) =>
     ipcRenderer.invoke('cdp:fill-node', wcId, backendNodeId, value),
   downloadUrl: (url: string, filename?: string) =>
@@ -213,6 +237,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSaveFile: (id: string, index: number) => ipcRenderer.invoke('torrent:save-file', id, index),
   torrentRemove: (id: string, destroyStore?: boolean) => ipcRenderer.invoke('torrent:remove', id, destroyStore),
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
+  // Roteador local (Qwen2.5-1.5B): só rotula o texto da caixa. download só depois do "sim" da pessoa.
+  routerStatus: () => ipcRenderer.invoke('router:status'),
+  routerClassify: (text: string, ctx?: { url?: string; title?: string; lastRun?: { request: string; outcome: string } | null }) => ipcRenderer.invoke('router:classify', text, ctx),
+  routerExpand: (text: string) => ipcRenderer.invoke('router:expand', text),
+  routerDownload: () => ipcRenderer.invoke('router:download'),
+  onRouterStatus: (cb: (s: any) => void) => {
+    const listener = (_e: any, s: any) => cb(s);
+    ipcRenderer.on('router:status', listener);
+    return () => ipcRenderer.removeListener('router:status', listener);
+  },
   setYoutubeSkipAds: (on: boolean) => ipcRenderer.invoke('youtube:set-skip-ads', on),
   // Botão "Baixar" em cima do vídeo do YouTube: liga/desliga + os textos no idioma da UI.
   setYoutubeDlButton: (on: boolean, labels?: Record<string, string>) => ipcRenderer.invoke('youtube:set-dl-button', on, labels),
@@ -256,6 +290,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   suggest: (q: string, engine?: unknown) => ipcRenderer.invoke('suggest:query', q, engine),
   // Mecanismo de pesquisa escolhido (⋮) → main, pro "Pesquisar no … por" do clique direito.
   setSearchEngine: (setting: unknown, googleLocale: string) => ipcRenderer.send('search:set-engine', setting, googleLocale),
+  // E2E: resultados fixos pro web_search do agente (só com NODE_ENV=test; senão null).
+  e2eSearchResults: (q: string) => ipcRenderer.invoke('e2e:search-results', q),
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),
@@ -333,6 +369,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_e: any, info: any) => cb(info);
     ipcRenderer.on('safe-browsing-block', listener);
     return () => ipcRenderer.removeListener('safe-browsing-block', listener);
+  },
+  // alert/confirm das páginas (src/main/js-dialogs.ts): caixa do Bah e política do agente
+  jsDialogRespond: (id: number, accept: boolean, text?: string) => ipcRenderer.invoke('jsdialog:respond', id, accept, text),
+  jsDialogAgentTabs: (ids: number[]) => ipcRenderer.invoke('jsdialog:agent-tabs', ids),
+  onJsDialog: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => {
+    const o = (_e: any, d: any) => cb({ type: 'open', data: d }); const c = (_e: any, d: any) => cb({ type: 'closed', data: d }); const l = (_e: any, d: any) => cb({ type: 'left', data: d });
+    ipcRenderer.on('jsdialog:open', o); ipcRenderer.on('jsdialog:closed', c); ipcRenderer.on('jsdialog:left', l);
+    return () => { ipcRenderer.removeListener('jsdialog:open', o); ipcRenderer.removeListener('jsdialog:closed', c); ipcRenderer.removeListener('jsdialog:left', l); };
   },
   // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud).
   // frameDataUrl: optional PNG of a frame already captured, so OCR and the model agree.
