@@ -76,6 +76,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
+- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, WebRTC kept inside the proxy
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -147,6 +148,28 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 2. Gear icon → pick a provider.
 3. Pick **DeepSeek**, **Mistral** or **NVIDIA NIM** and paste that provider's key (DeepSeek's is very cheap) → Save. Image generation works with no key either way; chat and the agent need this (or local Ollama, next step).
 4. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
+
+### Corporate networks (proxy, company certificates)
+
+Bah follows the **operating system's proxy settings** by default, like Chrome — including automatic
+detection (WPAD) and PAC scripts set by IT. To set one by hand: menu ⋮ → **🌐 Network & proxy**:
+**System** (default) · **Manual** (`proxy.corp:8080` for HTTP+HTTPS, or `socks5://127.0.0.1:1080` for a
+SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a bypass list and a
+**Test connection** button. `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` pre-configure it when nothing is saved.
+
+- **Proxy sign-in (HTTP 407, e.g. Blue Coat):** Bah asks for the username and password in its own box;
+  *Remember* stores them encrypted with the OS keychain (`safeStorage`). They never reach the agent or the model.
+- **Everything uses the same route:** pages, sign-in windows and Bah's own requests (AI calls, updates,
+  search, the agent's downloads) go through the browser engine's network stack, so one proxy setting
+  (and one sign-in) covers them.
+- **Company root certificates (TLS inspection):** Chromium already trusts the OS certificate store.
+  Electron's Node does not, so Bah reads the OS store at startup (macOS keychains, Windows `Root`/`CA`
+  stores, Linux CA bundle) and adds those roots to Node's defaults.
+- **WebRTC IP leak:** while a proxy is in use, WebRTC may only use the proxy (`disable_non_proxied_udp`), so a
+  page cannot learn your real IP through it. Without a proxy (or with a VPN app, which is OS-level) Chrome's
+  default applies. Chromium cannot sign in to SOCKS5 proxies (username/password); SOCKS5 without a password works.
+- **VPN extensions:** a Chrome extension that controls the proxy (`chrome.proxy`) wins while it is on, as in
+  Chrome; when it lets go, the tabs return to the proxy set here.
 
 ---
 

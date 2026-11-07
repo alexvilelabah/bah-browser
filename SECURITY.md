@@ -39,6 +39,13 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Proxy:** when a proxy is configured (OS settings, the 🌐 Network & proxy panel or `HTTPS_PROXY`),
+  all of Bah's traffic goes through it — that is the point. Proxy passwords are typed into Bah's own
+  box, stored only if you tick *Remember*, encrypted with the OS keychain (`safeStorage`, file
+  `proxy-auth.json`), and never shown to the agent or the model. See [`src/main/proxy.ts`](src/main/proxy.ts).
+- **Company root certificates:** Bah adds the OS-trusted root certificates to Node so it trusts what the
+  browser engine already trusts. It does not add or trust anything the OS does not. See
+  [`src/main/system-ca.ts`](src/main/system-ca.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 

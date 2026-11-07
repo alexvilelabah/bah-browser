@@ -46,6 +46,8 @@ import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupProxy } from './proxy';
+import { loadSystemCAs, installCAs } from './system-ca';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -3688,6 +3690,15 @@ function setupAutoUpdater(): void {
 
 
 app.whenReady().then(async () => {
+  // Rede corporativa: proxy (System/Manual/PAC/Direct + login 407) em todas as sessões, e as raízes do
+  // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
+  // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
+  setupProxy(() => mainWindow);
+  loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
+  {
+    const browsingSession = session.fromPartition('persist:browser');
+    (globalThis as any).fetch = (input: any, init?: any) => browsingSession.fetch(input, init);
+  }
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
   // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork
   // castLabs (mesma versão, +wvcus). O CDM vem por component updater: baixa na PRIMEIRA
