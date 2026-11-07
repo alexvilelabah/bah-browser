@@ -14,8 +14,10 @@ import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 // Provado por bissecção: mesmo fetch, mesmo endpoint — global passa, cross-fetch falha.
 import fs from 'fs';
 import path from 'path';
+import { Worker } from 'worker_threads';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
+import { arcPath, ARC_MS } from '../shared/agent-cursor-path';
 import { classifyError } from '../shared/error-codes';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
@@ -27,7 +29,7 @@ import {
 import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
-import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, stopAllMediaDownloads, type VideoDownloadProgress } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
 import { fetchTranscript } from './transcript';
 import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
@@ -41,11 +43,14 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
+import { setupFrames } from './frames';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupRouterManager } from './router-manager';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -57,6 +62,7 @@ import { parseHostsList, SAFE_BROWSING_MIN_HOSTS } from '../shared/safe-browsing
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { chromeIdentity, userAgentOverrideParams, sendsClientHints, orderChromeHeaders } from './chrome-identity';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -283,6 +289,7 @@ let aiEngine: AIEngine;
 let pageAgent: PageAgent;
 let localEngine: AIEngine | null = null;
 let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
+let routerManager: ReturnType<typeof setupRouterManager> | null = null;
 let videoButton: ReturnType<typeof setupVideoButton> | null = null;
 let faviconCache: ReturnType<typeof setupFaviconCache> | null = null;
 // Senhas salvas: o main avisa quando a IA digita numa aba (o que ela digita nunca vira "Salvar senha?").
@@ -382,11 +389,15 @@ const lastAuthPopupAt = new Map<number, number>();
 let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
 
-const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
-const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
-// Keep HTTP UA and JS Client Hints aligned with the Chromium embedded in Electron.
-const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
-const CHROME_SEC_CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR}"`;
+// Identidade Chrome (UA, sec-ch-ua, navigator.userAgentData): UMA fonte, chrome-identity.ts.
+// Versão = Chrome estável atual (CURRENT_CHROME_MAJOR) no formato reduzido; SO e arquitetura REAIS.
+const CHROME_ID = chromeIdentity({
+  engineChrome: process.versions.chrome,
+  platform: process.platform,
+  arch: process.arch,
+  arm64Translation: app.runningUnderARM64Translation,
+});
+const CHROME_UA = CHROME_ID.userAgent;
 const BROWSER_PARTITION = 'persist:browser';
 const GOOGLE_LOGIN_PARTITION = 'persist:google-login';
 // Quanto silêncio antes de apagar o ícone de som da aba (pausa de fala não pisca o ícone).
@@ -396,6 +407,8 @@ const AUDIO_OFF_DELAY_MS = 3000;
 // NOTE: only attaches + enables Accessibility — exactly as the original.
 // DOM.enable / Page.enable are enabled on-demand inside page-capture.ts.
 const debuggerAttachedSet = new Set<number>();
+// Onde o ponteiro do agente parou em cada aba (o próximo arco sai daqui).
+const lastPointer = new Map<number, { x: number; y: number }>();
 async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Promise<void> {
   if (!debuggerAttachedSet.has(wcId)) {
     try { wc.debugger.attach('1.3'); } catch (err: any) {
@@ -403,7 +416,24 @@ async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Pro
     }
     debuggerAttachedSet.add(wcId);
     wc.once('destroyed', () => debuggerAttachedSet.delete(wcId));
+    wc.debugger.once('detach', () => debuggerAttachedSet.delete(wcId));   // reanexa (e reaplica a identidade) depois
     await wc.debugger.sendCommand('Accessibility.enable');
+    await applyChromeIdentity(wc);
+  }
+}
+
+// Identidade do navegador DE DENTRO do motor (CDP Emulation.setUserAgentOverride): UA, os headers
+// sec-ch-ua (ordem e formato nativos), navigator.userAgentData (brands, versões, plataforma, arch) e
+// Accept-Language + navigator.languages saem TODOS da mesma fonte, antes de qualquer script da
+// página. Antes: header reescrito à mão + navigator remendado no dom-ready — a página lia o valor
+// real antes do remendo, e a contradição (header × JS) é sinal clássico de adulteração.
+async function applyChromeIdentity(wc: Electron.WebContents): Promise<void> {
+  let platformVersion = '';
+  try { platformVersion = process.getSystemVersion(); } catch {}
+  try {
+    await wc.debugger.sendCommand('Emulation.setUserAgentOverride', userAgentOverrideParams(CHROME_ID, NAV_LANGUAGES, platformVersion));
+  } catch (e: any) {
+    console.warn('[Identity] setUserAgentOverride failed:', e?.message || e);
   }
 }
 
@@ -1176,9 +1206,20 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    // Identidade Chrome nativa (UA + client hints + userAgentData + idiomas) já na criação da aba.
+    sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Identity] attach failed:', e?.message || e));
+    // Diagnóstico (BAH_DEBUG_IDENTITY=1): registra no agent.log o que a página vê da identidade.
+    if (process.env.BAH_DEBUG_IDENTITY === '1') {
+      wc.on('dom-ready', () => {
+        wc.executeJavaScript(`JSON.stringify({ url: location.href, webdriver: navigator.webdriver, ua: navigator.userAgent, brands: navigator.userAgentData && navigator.userAgentData.brands.map(function (b) { return b.brand + ' ' + b.version; }).join(', '), langs: navigator.languages })`)
+          .then((v) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'agent.log'), `${new Date().toISOString()} [Identity] ${v}\n`); } catch {} })
+          .catch(() => {});
+      });
+    }
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
+    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
@@ -1254,8 +1295,9 @@ function createWindow(): void {
     wc.setWindowOpenHandler((details) => {
       const url = details.url;
       if (!url || url === 'about:blank') return { action: 'deny' };
-      // window.open('magnet:…') / link .torrent que abre em nova janela → card, não aba.
-      if (/^magnet:/i.test(url) || /\.torrent(\?|#|$)/i.test(url)) { torrentManager?.handleUri(url); return { action: 'deny' }; }
+      // window.open('magnet:…') → card (ou app do sistema), não aba. Link .torrent só vira card
+      // com o cliente embutido ligado; senão baixa como arquivo normal.
+      if (/^magnet:/i.test(url) || (torrentManager?.builtinEnabled() && /\.torrent(\?|#|$)/i.test(url))) { torrentManager?.handleUri(url); return { action: 'deny' }; }
       // Safe browsing na popup
       try {
         const u = new URL(url);
@@ -1354,10 +1396,11 @@ function createWindow(): void {
     wc.on('will-navigate', (e, url) => {
       try {
         const u = new URL(url);
-        // Magnet / .torrent → abre o card "Salvar ou Tocar" (não navega). O motor de
-        // torrent fica isolado num utilityProcess; aqui só avisamos o renderer.
+        // Magnet → card "Salvar ou Tocar" com o cliente embutido ligado, senão o app de torrent
+        // do sistema (não navega). Link .torrent: card só com o embutido ligado; senão segue
+        // pro will-download e é salvo em Downloads como qualquer arquivo.
         if (u.protocol === 'magnet:') { e.preventDefault(); torrentManager?.handleUri(url); return; }
-        if (/\.torrent(\?|#|$)/i.test(u.pathname)) { e.preventDefault(); torrentManager?.handleUri(url); return; }
+        if (torrentManager?.builtinEnabled() && /\.torrent(\?|#|$)/i.test(u.pathname)) { e.preventDefault(); torrentManager?.handleUri(url); return; }
         if (maliciousHosts.has(u.hostname)) {
           e.preventDefault();
           mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
@@ -1702,6 +1745,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     try { chatAborts.get(streamId)?.abort(); } catch {}
     return true;
   });
+  // E2E: resultados fixos pro web_search do agente (E2E_SEARCH_RESULTS = JSON [{title, snippet, url}]).
+  // Só no teste (NODE_ENV=test + E2E_MOCK_AI); no app de verdade devolve null e a busca é a normal.
+  ipcMain.handle('e2e:search-results', () => {
+    if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_SEARCH_RESULTS) return null;
+    try { const r = JSON.parse(process.env.E2E_SEARCH_RESULTS); return Array.isArray(r) ? r : null; } catch { return null; }
+  });
   ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)
@@ -1783,6 +1832,27 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        let a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        // "ref": "__REF:<text>__" → the [N] of the first listed element whose line contains <text>.
+        if (typeof a.ref === 'string' && a.ref.startsWith('__REF:')) {
+          const want = a.ref.slice(6, -2).toLowerCase();
+          const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
+          a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        }
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',
@@ -2103,27 +2173,93 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         } catch { /* alvo sumiu/erro → cai no x,y recebido */ }
         return null;
       };
-      // Humanizado: leve desvio do centro (±2px) + trajeto curto com easing + jitter.
-      const tx0 = Math.round(x + rnd(-2, 2));
-      const ty0 = Math.round(y + rnd(-2, 2));
-      const sx = Math.max(0, Math.round(tx0 - rnd(40, 90)));
-      const sy = Math.max(0, Math.round(ty0 - rnd(25, 60)));
-      const steps = 4 + Math.floor(rnd(0, 3));
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps; const e = t * t * (3 - 2 * t); // smoothstep
-        wc.sendInputEvent({ type: 'mouseMove', x: Math.round(sx + (tx0 - sx) * e), y: Math.round(sy + (ty0 - sy) * e) } as any);
-        await sleepMs(rnd(8, 22));
+      // O ponteiro de verdade segue o MESMO arco que o cursor desenhado pelo Bah (shared/agent-cursor-path.ts):
+      // sai de onde parou na última ação desta aba e chega no centro do alvo, sem tremor aleatório. Antes a
+      // página recebia uma aproximação curta e reta com desvio aleatório enquanto o overlay desenhava outra
+      // coisa. Quem grava a sessão (HotJar etc.) vê os arcos — reconhecíveis como o agente do Bah.
+      const to0 = { x: Math.round(x), y: Math.round(y) };
+      const from = lastPointer.get(wcId) || { x: Math.max(0, to0.x - 120), y: Math.max(0, to0.y - 80) };
+      const pts = arcPath(from, to0);
+      const stepMs = Math.round(ARC_MS / pts.length);
+      for (const p of pts.slice(0, -1)) {
+        wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y } as any);
+        await sleepMs(stepMs);
       }
       // ÚLTIMO instante: re-resolve a posição (pega resize/scroll ocorrido no trajeto).
       const fresh = await resolveCenter();
-      const tx = fresh ? Math.round(fresh.x + rnd(-2, 2)) : tx0;
-      const ty = fresh ? Math.round(fresh.y + rnd(-2, 2)) : ty0;
+      const tx = fresh ? fresh.x : to0.x;
+      const ty = fresh ? fresh.y : to0.y;
       wc.sendInputEvent({ type: 'mouseMove', x: tx, y: ty } as any);
-      await sleepMs(rnd(30, 70));
+      await sleepMs(40);
       wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
-      await sleepMs(rnd(60, 130));
+      await sleepMs(80);
       wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      lastPointer.set(wcId, { x: tx, y: ty });
       return { success: true, info: { x: tx, y: ty, refreshed: !!fresh } };
+    } catch (e: any) {
+      return { success: false, error: String(e?.message ?? e) };
+    }
+  });
+
+  // Ponteiro além do clique (paridade com agent-browser): hover, dblclick, drag, focus — mesmo
+  // caminho de input REAL do clique (sendInputEvent), em coordenadas do viewport da aba.
+  ipcMain.handle('input:pointer', async (_e, wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      wc.focus();
+      const move = async (x: number, y: number, steps = 5) => {
+        for (let i = 1; i <= steps; i++) { wc.sendInputEvent({ type: 'mouseMove', x: Math.round(x - (steps - i) * 6), y: Math.round(y - (steps - i) * 3) } as any); await sleepMs(rnd(10, 25)); }
+      };
+      if (op.kind === 'focus') {
+        if (op.backendNodeId == null) return { success: false, error: 'focus needs an element' };
+        await sharedEnsureDebugger(wc, wcId);
+        await wc.debugger.sendCommand('DOM.focus', { backendNodeId: op.backendNodeId });
+        return { success: true };
+      }
+      await move(op.x, op.y);
+      // Re-mede o alvo DEPOIS de mover o ponteiro (menu de hover fechando, layout que desliza): o
+      // clique cai onde o elemento ESTÁ agora, como o input:click.
+      if (op.backendNodeId != null) {
+        try {
+          await sharedEnsureDebugger(wc, wcId);
+          const bm = await wc.debugger.sendCommand('DOM.getBoxModel', { backendNodeId: op.backendNodeId }) as any;
+          const q = bm?.model?.border;
+          if (q && q.length === 8) {
+            op.x = Math.round((Math.min(q[0], q[2], q[4], q[6]) + Math.max(q[0], q[2], q[4], q[6])) / 2);
+            op.y = Math.round((Math.min(q[1], q[3], q[5], q[7]) + Math.max(q[1], q[3], q[5], q[7])) / 2);
+            wc.sendInputEvent({ type: 'mouseMove', x: op.x, y: op.y } as any);
+            await sleepMs(rnd(30, 60));
+          }
+        } catch { /* alvo sumiu: usa a posição medida antes */ }
+      }
+      if (op.kind === 'hover') { await sleepMs(rnd(300, 600)); return { success: true, info: { x: op.x, y: op.y } }; }
+      if (op.kind === 'dblclick') {
+        // Pelo CDP: o sendInputEvent do Electron não gera o evento 'dblclick' da página com clickCount 2.
+        await sharedEnsureDebugger(wc, wcId);
+        for (const clickCount of [1, 2]) {
+          await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: op.x, y: op.y, button: 'left', clickCount });
+          await sleepMs(rnd(30, 60));
+          await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: op.x, y: op.y, button: 'left', clickCount });
+          await sleepMs(rnd(50, 90));
+        }
+        return { success: true };
+      }
+      if (op.kind === 'drag') {
+        if (op.x2 == null || op.y2 == null) return { success: false, error: 'drag needs a target' };
+        wc.sendInputEvent({ type: 'mouseDown', x: op.x, y: op.y, button: 'left', clickCount: 1 } as any);
+        await sleepMs(rnd(120, 200));
+        const steps = 12;
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          wc.sendInputEvent({ type: 'mouseMove', x: Math.round(op.x + (op.x2 - op.x) * t), y: Math.round(op.y + (op.y2 - op.y) * t), button: 'left', buttons: 1 } as any);
+          await sleepMs(rnd(15, 35));
+        }
+        await sleepMs(rnd(80, 150));
+        wc.sendInputEvent({ type: 'mouseUp', x: op.x2, y: op.y2, button: 'left', clickCount: 1 } as any);
+        return { success: true };
+      }
+      return { success: false, error: `unknown pointer op ${(op as any).kind}` };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
     }
@@ -2172,9 +2308,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     passwordManager?.noteAgentInput(wcId);
     try {
       wc.focus();
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key } as any);
-      wc.sendInputEvent({ type: 'char', keyCode: key } as any);
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key } as any);
+      // Combinação "Meta+A", "Control+Shift+Tab": modificadores + a tecla final. Com Meta/Control não
+      // manda 'char' (senão digita a letra). Sozinha: igual a antes.
+      const parts = String(key).split('+').map(x => x.trim()).filter(Boolean);
+      const MOD: Record<string, string> = { meta: 'meta', cmd: 'meta', command: 'meta', control: 'control', ctrl: 'control', shift: 'shift', alt: 'alt', option: 'alt' };
+      const mods = parts.length > 1 ? parts.slice(0, -1).map(m => MOD[m.toLowerCase()]).filter(Boolean) : [];
+      const k = parts.length > 1 && mods.length === parts.length - 1 ? parts[parts.length - 1] : key;
+      wc.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: mods } as any);
+      if (!mods.includes('meta') && !mods.includes('control')) wc.sendInputEvent({ type: 'char', keyCode: k, modifiers: mods } as any);
+      wc.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: mods } as any);
       return { success: true };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };
@@ -2244,11 +2386,58 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   //   stale=true   → element no longer exists (caller should re-observe)
   //   covered=true → an unrelated element is on top at the click point
   //   x, y         → fresh center coordinates to click (use instead of cached ones)
+  // <select> nativo: escolhe a opção NO PRÓPRIO nó (pelo texto exato, parcial ou value) e dispara
+  // input/change como a escolha de verdade — combobox de SO/versão em site de driver etc. Erra →
+  // devolve as opções disponíveis pro modelo tentar de novo.
+  ipcMain.handle('cdp:select-option', async (_e, wcId: number, backendNodeId: number, option: string) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { ok: false, error: 'webContents not found' };
+    try {
+      await ensureDebugger(wc, wcId);
+      const obj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+      const objectId = obj?.object?.objectId;
+      if (!objectId) return { ok: false, error: 'element no longer exists — re-observe the page' };
+      const r = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(want) {
+          const sel = this.tagName === 'SELECT' ? this : (this.querySelector && this.querySelector('select'));
+          if (!sel) return { ok: false, error: 'not a <select> drop-down — click it, then click the option' };
+          const opts = Array.from(sel.options);
+          const norm = s => String(s || '').trim().toLowerCase();
+          const w = norm(want);
+          const o = opts.find(x => norm(x.text) === w) || opts.find(x => norm(x.value) === w)
+            || opts.find(x => norm(x.text).includes(w)) || opts.find(x => w.includes(norm(x.text)) && norm(x.text).length > 2);
+          const list = opts.map(x => x.text.trim()).filter(Boolean).slice(0, 40);
+          if (!o) return { ok: false, error: 'no option matching "' + want + '"', options: list };
+          sel.focus();
+          sel.value = o.value;
+          o.selected = true;
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return { ok: true, selected: o.text.trim(), options: list };
+        }`,
+        arguments: [{ value: String(option ?? '') }],
+        returnByValue: true,
+      }) as any;
+      wc.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {});
+      return r?.result?.value ?? { ok: false, error: 'select failed' };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+
   ipcMain.handle('cdp:verify-click', async (_e, wcId: number, backendNodeId: number) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { error: 'webContents not found' };
     try {
       await ensureDebugger(wc, wcId);
+      // 0. Bring THIS node into the viewport first (no-op when already visible). Without it a
+      // target below the fold measured off-screen and the renderer fell back to click_text by
+      // label — ambiguous when many links share it (ubuntu.com: six "Download" buttons).
+      try {
+        await wc.debugger.sendCommand('DOM.scrollIntoViewIfNeeded', { backendNodeId });
+        await new Promise(r => setTimeout(r, 120));
+      } catch { /* detached/stale — the box model below reports it */ }
       // 1. Fresh bounding box of the intended target
       let box: any = null;
       try {
@@ -2303,6 +2492,28 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         }
       } catch { /* hit-test unavailable (e.g. off-screen) — don't block the click */ }
 
+      // 3. "Covered" right after scrollIntoViewIfNeeded moved the page: the CDP hit-test can land on
+      // the spot where the node was BEFORE the scroll (seen on a support form whose Submit sat below the
+      // fold: "covered by input#ln", the field one scroll-length above). Ask the page itself — the
+      // node's own rect and elementFromPoint, in the same layout — before calling it covered.
+      if (covered) {
+        try {
+          const tObj = await wc.debugger.sendCommand('DOM.resolveNode', { backendNodeId }) as any;
+          const tId = tObj?.object?.objectId;
+          if (tId) {
+            const chk = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
+              objectId: tId,
+              functionDeclaration: 'function(){var r=this.getBoundingClientRect();if(r.width<1||r.height<1)return null;var x=r.left+r.width/2,y=r.top+r.height/2;var o=document.elementFromPoint(x,y);if(!o)return null;var l=o.closest&&o.closest("label");var mine=o===this||this.contains(o)||o.contains(this)||!!(l&&(l.contains(this)||l.control===this));return mine?{x:x,y:y,top:window===window.top}:null;}',
+              returnByValue: true,
+            }) as any;
+            wc.debugger.sendCommand('Runtime.releaseObject', { objectId: tId }).catch(() => {});
+            const v = chk?.result?.value;
+            // Só no documento principal as coordenadas do elementFromPoint são as da janela; num iframe fica o veredito do CDP.
+            if (v && v.top === true) { covered = false; covering = undefined; return { ok: true, stale: false, covered: false, x: Math.round(v.x), y: Math.round(v.y) }; }
+          }
+        } catch { /* best effort — keep the CDP verdict */ }
+      }
+
       return { ok: true, stale: false, covered, covering, x: cx, y: cy };
     } catch (e: any) {
       return { error: String(e?.message ?? e) };
@@ -2352,9 +2563,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     }
   });
 
-  // ═══ Agent-driven file download (images, pdfs...) into the user's Downloads ═══
-  // Executables are blocked by extension AND by content sniffing of the first bytes.
-  const BLOCKED_EXTENSIONS = /\.(exe|msi|bat|cmd|scr|com|pif|apk|dmg|pkg|deb|rpm|js|jse|vbs|vbe|wsf|ps1|jar|lnk|hta)(\?|#|$)/i;
+  // ═══ Agent-driven file download into the user's Downloads ═══
+  // Any file type is allowed (no extension blocklist / executable sniffing).
 
   // Attach a DOCUMENT (PDF/Word/Markdown/txt) to ask about it: native dialog → extract
   // the text → the renderer sends it as chat context (works with ANY text model, free).
@@ -2813,10 +3023,25 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   }
   // Gerenciador de download nativo (Fase A): pausar/continuar/cancelar/retomar,
   // velocidade+ETA, fila com limite. Registry por id vive no módulo dedicado.
+  // Downloads da ação `download` do agente em andamento (id → worker), pro ✕ do painel cancelar.
+  const agentDownloads = new Map<string, Worker>();
   const downloadManager = setupDownloadManager({
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
-    blockedExtensions: BLOCKED_EXTENSIONS,
+    blockDuplicates: () => agentBusy,
+    cancelExternal: (id) => {
+      const w = agentDownloads.get(id);
+      if (!w) return false;
+      w.postMessage({ t: 'cancel' });
+      return true;
+    },
+    // Cliente de torrent embutido ligado → .torrent vira card em vez de arquivo, venha de onde vier
+    // (link, barra de endereço, agente). Desligado → baixa como qualquer arquivo.
+    interceptDownload: (url, filename) => {
+      if (!torrentManager?.builtinEnabled() || !/\.torrent$/i.test(filename)) return false;
+      torrentManager.handleUri(url);
+      return true;
+    },
   });
   downloadManager.attach(session.fromPartition('persist:browser'));
   downloadManager.attach(session.defaultSession);
@@ -2843,6 +3068,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     googleLoginSession: session.fromPartition(GOOGLE_LOGIN_PARTITION),
     extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
   });
+  setupJsDialogs();
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({
@@ -2851,6 +3077,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     // Aba anônima: pergunta toda vez e não guarda a resposta (só os "Bloquear" do perfil valem lá).
     privateSessions: [incognitoSession()],
   });
+  // Iframes pro agente: campos/botões de formulários embutidos (mesma origem e cross-origin).
+  setupFrames(sharedEnsureDebugger);
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.
@@ -2870,123 +3098,78 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Estilo IDM: anota os vídeos/streams que as abas carregam (pros sites que o yt-dlp não conhece).
   videoButton.attachSniffer(session.fromPartition('persist:browser'));
   videoButton.attachSniffer(incognitoSession());   // aba anônima também (a lista fica só na memória)
-  // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads + trava de exe.
+  // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads.
   torrentManager = setupTorrentManager({
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
-    blockedExtensions: BLOCKED_EXTENSIONS,
     allowDirect: (uri) => allowDirectDownload(uri, true),
     directRefused: () => mt('dl.noProxy.refused'),
   });
+  // Roteador local (Qwen2.5-1.5B, utilityProcess): rotula cada mensagem da caixa do assistente.
+  // Sobe DEPOIS que a janela aparece, e só se o modelo já estiver baixado (baixar pede um "sim").
+  routerManager = setupRouterManager({ getMainWindow: () => mainWindow, modelsDir: path.join(app.getPath('userData'), 'models') });
+  {
+    // 'show' nem sempre vem no macOS (show() no ready-to-show às vezes não emite): vale o que chegar primeiro.
+    let routerQueued = false;
+    const startRouter = () => { if (routerQueued) return; routerQueued = true; setTimeout(() => routerManager?.start(), 3000); };
+    if (mainWindow?.isVisible()) startRouter();
+    else { mainWindow?.once('show', startRouter); mainWindow?.once('ready-to-show', startRouter); }
+  }
+  // ═══ Ação `download` do agente — roda numa worker thread (agent-download-worker.ts) ═══
+  // Devolve assim que o download COMEÇA (caminho final + tamanho) e segue em background. O
+  // resto chega como 'agent:download-event' (kind 'agent'): progresso a cada 1s pro painel,
+  // `notify` na cadência do ETA pro agente, stall, e completed/failed/cancelled com o caminho.
+  let agentDlSeq = 0;
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
+    if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
+    const id = `agdl_${++agentDlSeq}`;
+    // Empacotado: o worker roda do app.asar.unpacked (ver asarUnpack). Em dev o replace é no-op.
+    const workerPath = path.join(__dirname, 'agent-download-worker.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    let worker: Worker;
     try {
-      if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
-      if (BLOCKED_EXTENSIONS.test(url) || (filename && BLOCKED_EXTENSIONS.test(filename))) {
-        return { success: false, error: 'Blocked: executable/script files cannot be downloaded by the agent.' };
-      }
-      // Full browser-like headers: Wikimedia (and many CDNs) reject generic/partial
-      // User-Agents with 429/403. Referer helps with hotlink protection.
-      const dlHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': ACCEPT_LANGUAGE,
-        'Referer': new URL(url).origin + '/',
-      };
-      // Many .gov.br / older sites have an incomplete TLS cert chain ("unable to verify
-      // the first certificate"). Try strict first; on a cert error retry tolerantly
-      // (the file's MZ/executable checks below still protect the user).
-      const dlCtrl = new AbortController();
-      const dlTimer = setTimeout(() => { try { dlCtrl.abort(); } catch {} }, 60000);   // teto de 60s: servidor lento/infinito nao trava o main
-      // O fetch nativo IGNORA a opção `agent` — ela só existia no node-fetch, que saiu daqui
-      // (ver o comentário do topo). Sem isto, a retentativa "tolerante" refazia a requisição
-      // idêntica e falhava de novo: um no-op silencioso. O caminho tolerante passa a usar o
-      // módulo https direto, que aceita rejectUnauthorized de verdade. A resposta dele já é
-      // async-iterável e tem .headers, então o resto do código abaixo funciona igual.
-      const doFetch = (lenient: boolean): Promise<any> => {
-        if (!(lenient && url.startsWith('https:'))) {
-          return fetch(url, { headers: dlHeaders, signal: dlCtrl.signal } as any);
-        }
-        return new Promise((resolve, reject) => {
-          const req = require('https').get(url, { headers: dlHeaders, rejectUnauthorized: false }, (r: any) => {
-            resolve({
-              ok: r.statusCode >= 200 && r.statusCode < 300,
-              status: r.statusCode,
-              headers: { get: (k: string) => r.headers[String(k).toLowerCase()] ?? null },
-              body: r,
-            });
-          });
-          req.on('error', reject);
-          dlCtrl.signal.addEventListener('abort', () => { try { req.destroy(); } catch {} }, { once: true });
-        });
-      };
-      let res: any;
-      try {
-        res = await doFetch(false);
-      } catch (e: any) {
-        if (/certificate|unable to verify|self.signed|CERT_|altname|ERR_TLS/i.test(String(e?.message))) {
-          console.warn('[Download] TLS cert issue → retrying tolerantly:', url);
-          res = await doFetch(true);
-        } else throw e;
-      }
-      if (res.status === 429 || res.status === 403) {
-        await new Promise(r => setTimeout(r, 2500));
-        res = await doFetch(false).catch(() => doFetch(true));
-      }
-      if (!res.ok) { clearTimeout(dlTimer); return { success: false, error: `HTTP ${res.status}` }; }
-      // Teto de 100MB ANTES de bufferizar: Content-Length corta cedo; sem ele, lê em stream e
-      // aborta ao passar do teto (evita OOM quando o servidor manda/mente um arquivo gigante).
-      const MAX_DL = 100 * 1024 * 1024;
-      if (Number(res.headers.get('content-length') || 0) > MAX_DL) {
-        // `.destroy()` só existia no corpo do node-fetch; o corpo do fetch nativo é um
-        // ReadableStream da web e não tem esse método — a chamada virava no-op silencioso e
-        // a conexão seguia baixando o arquivo gigante que a gente acabou de recusar.
-        // O AbortController já está aqui e derruba de verdade, nos dois caminhos.
-        clearTimeout(dlTimer); try { dlCtrl.abort(); } catch {}
-        return { success: false, error: 'File larger than 100MB — refused.' };
-      }
-      let buf: Buffer;
-      if (res.body && typeof (res.body as any)[Symbol.asyncIterator] === 'function') {
-        const chunks: Buffer[] = []; let total = 0;
-        try {
-          for await (const chunk of res.body as any) {
-            total += chunk.length;
-            if (total > MAX_DL) { try { dlCtrl.abort(); } catch {} return { success: false, error: 'File larger than 100MB — refused.' }; }
-            chunks.push(Buffer.from(chunk));
-          }
-        } finally { clearTimeout(dlTimer); }
-        buf = Buffer.concat(chunks);
-      } else {
-        buf = Buffer.from(await res.arrayBuffer());
-        clearTimeout(dlTimer);
-        if (buf.length > MAX_DL) return { success: false, error: 'File larger than 100MB — refused.' };
-      }
-      if (buf.length === 0) return { success: false, error: 'Empty file.' };
-      // Content sniff: block Windows executables regardless of extension (MZ header)
-      if (buf.length > 2 && buf[0] === 0x4d && buf[1] === 0x5a) {
-        return { success: false, error: 'Blocked: file content is a Windows executable.' };
-      }
-      // Derive a safe filename: explicit > URL basename > content-type guess
-      const ctype = res.headers.get('content-type') || '';
-      const extFromType = ctype.includes('jpeg') ? '.jpg' : ctype.includes('png') ? '.png'
-        : ctype.includes('webp') ? '.webp' : ctype.includes('gif') ? '.gif'
-        : ctype.includes('svg') ? '.svg' : ctype.includes('pdf') ? '.pdf' : '';
-      let base = (filename || decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'download')
-        .replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
-      if (!/\.[a-z0-9]{2,5}$/i.test(base) && extFromType) base += extFromType;
-      if (!/\.[a-z0-9]{2,5}$/i.test(base)) base += '.bin';
-      const dir = getDownloadDir();
-      let target = path.join(dir, base);
-      // Never overwrite: suffix (1), (2)...
-      for (let i = 1; fs.existsSync(target) && i < 100; i++) {
-        const dot = base.lastIndexOf('.');
-        target = path.join(dir, `${base.slice(0, dot)} (${i})${base.slice(dot)}`);
-      }
-      fs.writeFileSync(target, buf);
-      console.log(`[Download] saved ${buf.length} bytes → ${target}`);
-      return { success: true, info: { path: target, bytes: buf.length, contentType: ctype } };
+      worker = new Worker(workerPath, { workerData: { url, filename, dir: getDownloadDir(), acceptLanguage: ACCEPT_LANGUAGE } });
     } catch (e: any) {
-      return { success: false, error: String(e?.message ?? e) };
+      return { success: false, error: 'download worker failed to start: ' + String(e?.message ?? e) };
     }
+    agentDownloads.set(id, worker);
+    let started = false;
+    let fname = filename || 'download';
+    let totalBytes = 0;
+    const send = (state: string, extra: Record<string, unknown>) => {
+      try { mainWindow?.webContents.send('agent:download-event', { id, kind: 'agent', url, filename: fname, totalBytes, ...extra, state }); } catch {}
+    };
+    return new Promise((resolve) => {
+      let answered = false;
+      const answer = (r: any) => { if (!answered) { answered = true; resolve(r); } };
+      worker.on('message', (m: any) => {
+        const { t, ...data } = m || {};
+        if (t === 'started') {
+          started = true;
+          fname = path.basename(data.path);
+          totalBytes = data.totalBytes || 0;
+          send('started', { path: data.path, bytes: 0, notify: true });
+          answer({ success: true, info: { id, path: data.path, totalBytes, contentType: data.contentType, background: true } });
+        } else if (t === 'progress') {
+          send('progress', data);
+        } else if (t === 'completed') {
+          console.log(`[Download] saved ${data.bytes} bytes → ${data.path}`);
+          send('completed', { path: data.path, bytes: data.bytes, notify: true });
+          answer({ success: true, info: { id, path: data.path, bytes: data.bytes, contentType: data.contentType } });
+        } else if (t === 'failed' || t === 'cancelled') {
+          // Antes do 'started' a falha volta só como resultado da ação (sem linha no painel).
+          if (started) send(t, { path: data.path, bytes: data.bytes, reason: data.error, stalled: !!data.stalled, notify: true });
+          answer({ success: false, error: t === 'cancelled' ? 'cancelled' : data.error });
+        }
+      });
+      worker.on('error', (e: any) => {
+        if (started) send('failed', { reason: String(e?.message ?? e), notify: true });
+        answer({ success: false, error: String(e?.message ?? e) });
+      });
+      worker.on('exit', () => {
+        agentDownloads.delete(id);
+        answer({ success: false, error: 'download worker exited' });
+      });
+    });
   });
 
   // (Importação de cookies do Chrome REMOVIDA: dependia do módulo nativo win-dpapi, que não
@@ -3434,8 +3617,8 @@ function stopYtSkipPolling(wcId: number) {
 const STEALTH_SCRIPT = `
 (function(){
   try {
-    // 1. navigator.webdriver — must be undefined (not false)
-    Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => undefined, configurable: true });
+    // 1. navigator.webdriver: NÃO mexer — numa execução normal o motor já diz false, igual ao Chrome.
+    //    (O remendo antigo trocava pra undefined depois do load: valor que nenhum Chrome real tem.)
 
     // 2. navigator.plugins — populate with realistic Chrome plugins
     Object.defineProperty(navigator, 'plugins', {
@@ -3454,22 +3637,7 @@ const STEALTH_SCRIPT = `
       configurable: true,
     });
 
-    // 2.5. navigator.userAgentData (Crucial para login do Google)
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: () => ({
-        brands: [
-          { brand: 'Google Chrome', version: '${CHROME_MAJOR}' },
-          { brand: 'Not;A=Brand', version: '8' },
-          { brand: 'Chromium', version: '${CHROME_MAJOR}' }
-        ],
-        mobile: false,
-        platform: 'Windows'
-      }),
-      configurable: true
-    });
-
-    // 3. languages
-    Object.defineProperty(navigator, 'languages', { get: () => ${JSON.stringify(NAV_LANGUAGES)}, configurable: true });
+    // (userAgentData e languages: nativos via applyChromeIdentity — CDP setUserAgentOverride.)
 
     // 4. window.chrome — populate with realistic structure
     if (!window.chrome) window.chrome = {};
@@ -3501,25 +3669,9 @@ const STEALTH_SCRIPT = `
       };
     }
 
-    // 6. WebGL vendor — pretend to be a real GPU
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-      if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100'; // UNMASKED_RENDERER_WEBGL
-      return getParameter.call(this, p);
-    };
-    if (window.WebGL2RenderingContext) {
-      const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-      WebGL2RenderingContext.prototype.getParameter = function(p) {
-        if (p === 37445) return 'Intel Inc.';
-        if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100';
-        return getParameter2.call(this, p);
-      };
-    }
-
-    // 7. Hardware concurrency / device memory
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+    // 6–7. GPU (WebGL), núcleos e memória: os VALORES REAIS do motor, sem remendo. O antigo
+    //      "Intel Iris 6100 / 8 núcleos / 8 GB" contradizia o resto (o worker da página via o número
+    //      real) — contradição é o sinal clássico de adulteração. A memória o Chromium já arredonda.
 
     // 8. Chromium-detected automation flag
     delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Array;
@@ -3745,10 +3897,17 @@ app.whenReady().then(async () => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = CHROME_UA;
     headers['Accept-Language'] = ACCEPT_LANGUAGE;
-    headers['sec-ch-ua'] = CHROME_SEC_CH_UA;
-    headers['sec-ch-ua-mobile'] = '?0';
-    headers['sec-ch-ua-platform'] = '"Windows"';
-    callback({ requestHeaders: headers });
+    // Brand hints: os mesmos valores de navigator.userAgentData (applyChromeIdentity). Só em https
+    // e localhost (o Chrome não manda client hints em http comum).
+    if (sendsClientHints(details.url || '')) {
+      headers['sec-ch-ua'] = CHROME_ID.secChUa;
+      headers['sec-ch-ua-mobile'] = '?0';
+      headers['sec-ch-ua-platform'] = `"${CHROME_ID.chPlatform}"`;
+    }
+    // sec-ch-ua-arch/bitness NÃO vão em toda requisição: o Chrome de verdade só manda quando o
+    // site pede (Accept-CH). A arquitetura continua disponível via navigator.userAgentData.getHighEntropyValues().
+    // Ordem dos headers igual à do Chrome (os acrescentados aqui iam pro fim).
+    callback({ requestHeaders: orderChromeHeaders(headers) });
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
   persistSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
@@ -3893,7 +4052,10 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;   // libera o close handler (não vai mais esconder na bandeja)
+  // yt-dlp roda destacado do Bah: sem isto ele ficava órfão e deixava o pedaço de vídeo sem som.
+  try { stopAllMediaDownloads(); } catch {}
   try { monitorManager?.disposeAll(); } catch {}
+  try { routerManager?.dispose(); } catch {}
   destroyTray();
   // Free the persistent OCR workers (≈40–80MB) cleanly on exit.
   import('./ocr-engine').then(m => m.terminateOcrWorkers()).catch(() => {});
