@@ -159,7 +159,7 @@ function machineBlock(): string {
   return `USER'S COMPUTER: ${osName}, ${arch}${region ? `. USER'S REGION: ${region}` : ''}.
 - When the user says "my machine", "my computer", "my PC/Mac" or asks for drivers, software or an installer without naming an OS, pick the download for THIS operating system and architecture: ${pickHint(m)} On driver sites choose this OS in the OS selector — if the page shows another OS (e.g. Windows downloads) or an OS/version drop-down, change it FIRST with select_option (e.g. option "macOS 26.x"), then pick the download; do not accept a different OS the site pre-selected.
 - On sites with a country/language choice (vendor support, stores), use the user's region above — not Brazil/Portuguese unless that IS the region.
-- Do not invent deep URLs with ids/product keys you have not seen (they lead to error pages). Start from the site's home or support page and use its search box with the product/model name.`;
+- Do not invent deep URLs with ids/product keys you have not seen (they lead to error pages) — URL patterns given in SKILLS are the exception. Otherwise start from the site's home or support page and use its search box with the product/model name.`;
 }
 
 const BROWSER_AGENT_BASE_PROMPT = `You are an AI browser agent embedded in a web browser. You operate the page by choosing exactly one structured browser tool per step.

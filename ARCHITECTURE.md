@@ -285,8 +285,7 @@ reads the system once (`process.platform`/`arch`, `getSystemVersion()`, Rosetta 
   never types passwords or creates accounts. A "Sign in" link in a site header does not count.
 - **Never runs anything.** Nothing opens a download on its own: `download:open-file` only runs on the user's
   click (Downloads panel, result tile), and the agent has no "open file" action. The `software-download` skill
-  (`skills/software-download/SKILL.md`, read once the skills loader lands) also tells the model never to open or
-  run the installer.
+  (`skills/software-download/SKILL.md`) also tells the model never to open or run the installer.
 
 Tested with `tests/e2e/software-download.spec.ts` (synthetic vendor pages: auto-detect button, OS/CPU list,
 printer model picker with an ARIA-less modal, a Steam-like page whose only download control says "Install Steam", sign-in wall).

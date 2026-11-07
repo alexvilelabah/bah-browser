@@ -284,8 +284,7 @@ sistema uma vez (`process.platform`/`arch`, `getSystemVersion()`, Rosetta via `a
   digita senha nem cria conta. Um link "Sign in" no cabeçalho do site não conta.
 - **Nunca executa nada.** Nada abre um download sozinho: `download:open-file` só roda no clique da pessoa (painel de
   Downloads, bloco do resultado), e o agente não tem ação de "abrir arquivo". A skill `software-download`
-  (`skills/software-download/SKILL.md`, lida quando o carregador de skills entrar) também diz ao modelo pra nunca
-  abrir nem rodar o instalador.
+  (`skills/software-download/SKILL.md`) também diz ao modelo pra nunca abrir nem rodar o instalador.
 
 Testado com `tests/e2e/software-download.spec.ts` (páginas de fabricante sintéticas: botão que detecta o SO, lista
 por SO/CPU, seletor de modelo de impressora com modal sem ARIA, página tipo Steam cujo único botão diz "Install Steam", parede de login).
