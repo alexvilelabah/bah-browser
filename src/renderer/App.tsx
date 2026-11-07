@@ -5779,13 +5779,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
-                  const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
-                    || action.type === 'list_files' || action.type === 'read_file'
+                  const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
+                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
-                    || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
-                    || action.type === 'read_aloud' || action.type === 'history_search';
+                    || action.type === 'read_aloud';
                   let screenshotAfter: string | undefined;
                   let afterObservation: ObservedState;
                   if (pageNeutralAction) {
@@ -5845,13 +5843,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     note: formatAction(action),
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
-                  const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
-                    || action.type === 'list_files' || action.type === 'read_file'
+                  const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
-                    || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
-                    || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
+                    || action.type === 'read_aloud' || action.type === 'wait';
                   if (internalAction) {
                     // keep noEffectCount unchanged
                   } else {
