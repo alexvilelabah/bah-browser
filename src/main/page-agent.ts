@@ -12,6 +12,8 @@ export type AgentAction =
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
   | { type: 'generate_image'; prompt: string; count?: number }
   | { type: 'download'; url: string; filename?: string }
+  | { type: 'list_downloads' }
+  | { type: 'cancel_download' | 'pause_download' | 'resume_download' | 'retry_download'; id: string }
   | { type: 'download_video'; url?: string; query?: string; audio_only?: boolean; count?: number; quality?: 'best' | 'low' }
   | { type: 'open_video_cuts'; phrase: string; count?: number }
   | { type: 'open_video'; query: string }
@@ -28,6 +30,15 @@ export type AgentAction =
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
+  | { type: 'select_option'; ref: number; option: string }
+  | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'find'; text: string }
+  | { type: 'web_search'; query: string }
+  | { type: 'back' }
+  | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
+  | { type: 'drag'; ref: number; to_ref: number }
+  | { type: 'forward' | 'reload' }
+  | { type: 'check' | 'uncheck'; ref: number }
   | { type: 'fill_ref'; ref: number; value: string }
   | { type: 'click_text'; text: string; nth?: number }
   | { type: 'click_at'; x: number; y: number }
@@ -37,6 +48,7 @@ export type AgentAction =
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
   | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'dialog'; accept: boolean; text?: string }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface AgentResult {
@@ -59,6 +71,24 @@ const BATCHABLE_ACTIONS = new Set(['fill_ref', 'fill', 'type', 'press', 'click_r
 
 const VALID_ACTIONS = new Set([
   'plan',
+  'hover',
+  'dblclick',
+  'focus',
+  'drag',
+  'forward',
+  'reload',
+  'web_search',
+  'look_at',
+  'find',
+  'back',
+  'check',
+  'uncheck',
+  'select_option',
+  'list_downloads',
+  'cancel_download',
+  'pause_download',
+  'resume_download',
+  'retry_download',
   'store',
   'extract_text',
   'extract_images',
@@ -91,6 +121,7 @@ const VALID_ACTIONS = new Set([
   'navigate',
   'scroll',
   'wait',
+  'dialog',
   'done',
 ]);
 
@@ -263,6 +294,11 @@ export class PageAgent {
         return { type: 'generate_image', prompt: String(action.prompt ?? action.query ?? action.text ?? ''), count: toOptionalNumber(action.count) };
       case 'download':
         return { type: 'download', url: String(action.url ?? ''), filename: action.filename ? String(action.filename) : undefined };
+      case 'list_downloads':
+        return { type: 'list_downloads' };
+      case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+        // id OU nome do arquivo (modelo pequeno costuma mandar o nome).
+        return { type: action.type, id: String(action.id ?? action.download_id ?? action.filename ?? action.file ?? action.name ?? '').trim() };
       case 'download_video':
         return { type: 'download_video', url: action.url ? String(action.url) : undefined, query: action.query ? String(action.query) : undefined, audio_only: action.audio_only === true, count: action.count != null ? Number(action.count) : undefined, quality: /low|baixa|pior|ruim|480|360/i.test(String(action.quality ?? '')) ? 'low' : (/best|max|alta|hd|4k/i.test(String(action.quality ?? '')) ? 'best' : undefined) };
       case 'open_video_cuts':
@@ -319,9 +355,27 @@ export class PageAgent {
       case 'close_tab':
         return { type: 'close_tab', tab: Number(action.tab) };
       case 'click_ref':
-        return { type: 'click_ref', ref: Number(action.ref) };
+        return { type: 'click_ref', ref: toRef(action.ref) };
+      case 'look_at':
+        return { type: 'look_at', ref: action.ref != null && action.ref !== '' ? toRef(action.ref) : undefined, x: toOptionalNumber(action.x), y: toOptionalNumber(action.y), w: toOptionalNumber(action.w ?? action.width), h: toOptionalNumber(action.h ?? action.height) };
+      case 'web_search':
+        return { type: 'web_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
+      case 'find':
+        return { type: 'find', text: String(action.text ?? action.query ?? action.label ?? '').trim() };
+      case 'back':
+        return { type: 'back' };
+      case 'forward': case 'reload':
+        return { type: action.type };
+      case 'hover': case 'dblclick': case 'focus':
+        return { type: action.type, ref: toRef(action.ref) };
+      case 'drag':
+        return { type: 'drag', ref: toRef(action.ref ?? action.from_ref ?? action.from), to_ref: toRef(action.to_ref ?? action.to ?? action.target_ref) };
+      case 'check': case 'uncheck':
+        return { type: action.type, ref: toRef(action.ref) };
+      case 'select_option':
+        return { type: 'select_option', ref: toRef(action.ref), option: String(action.option ?? action.value ?? action.text ?? action.label ?? '').trim() };
       case 'fill_ref':
-        return { type: 'fill_ref', ref: Number(action.ref), value: String(action.value ?? '') };
+        return { type: 'fill_ref', ref: toRef(action.ref), value: String(action.value ?? '') };
       case 'click_text':
         return { type: 'click_text', text: String(action.text ?? ''), nth: toOptionalNumber(action.nth) };
       case 'click_at':
@@ -352,18 +406,37 @@ export class PageAgent {
           selector: action.selector ? String(action.selector) : undefined,
           timeout: toOptionalNumber(action.timeout),
         };
+      case 'dialog': {
+        const acc = action.accept ?? action.value ?? (typeof action.answer === 'string' ? !/^(dismiss|cancel|no|false)$/i.test(action.answer) : true);
+        const text = action.text ?? action.prompt_text ?? action.promptText;
+        return { type: 'dialog', accept: acc === true || acc === 'true' || acc === 'accept', ...(text != null ? { text: String(text) } : {}) };
+      }
       case 'done':
         return {
           type: 'done',
           // With no reason, the message must match `success`: saying "Task complete."
           // on an unsuccessful done lies to the user about what happened.
-          reason: String(action.reason ?? '') || (action.success === true ? 'Task complete.' : 'The model ended the task without saying why.'),
-          success: action.success === true,
+          // Small local models send "success": "true" (string) — that is a true, not a false.
+          reason: String(action.reason ?? '') || (action.success === true || /^\s*true\s*$/i.test(String(action.success)) ? 'Task complete.' : 'The model ended the task without saying why.'),
+          // Sem "success" nenhum (o modelo local nunca manda): decide pelo que a mensagem diz —
+          // sucesso, a não ser que ela admita falha. "success": false explícito continua valendo.
+          success: action.success == null || action.success === ''
+            ? !!String(action.reason ?? '').trim() && !/\b(unable|could ?n[o']t|cannot|can't|failed|not (?:able|found|possible|available)|no viable|blocked|n[aã]o consegui|no pude)\b/i.test(String(action.reason ?? ''))
+            : action.success === true || /^\s*true\s*$/i.test(String(action.success)),
         };
     }
 
     return { type: 'done', reason: 'Unhandled action type from model.', success: false };
   }
+}
+
+// Element id from the model. Small local models (e.g. Qwen3-VL-8B) often echo the id the way
+// it is displayed — "@20", "[20]", "#20", "ref 20" — instead of the bare number 20. Number()
+// turned those into NaN and every click_ref was rejected. Anything else stays NaN → invalid.
+export function toRef(value: unknown): number {
+  if (typeof value === 'number') return value;
+  const m = /^\s*(?:ref\s*)?[@#\[]?\s*(\d+)\s*\]?\s*$/i.exec(String(value ?? ''));
+  return m ? Number(m[1]) : NaN;
 }
 
 function toOptionalNumber(value: unknown): number | undefined {
@@ -388,6 +461,22 @@ export function validateAction(a: AgentAction): string | null {
     typeof v === 'string' && v.trim().length > 0 && !BAD_SCHEME.test(v)
     && (/^https?:\/\//i.test(v.trim()) || /^[\w.-]+\.[a-z]{2,}(\/|$|\?|#|:)/i.test(v.trim()));
   switch (a.type) {
+    case 'look_at':
+      if (a.ref != null) return finiteInt(a.ref) ? null : `look_at "ref" must be a non-negative integer, got ${JSON.stringify((a as any).ref)}`;
+      return [a.x, a.y, a.w, a.h].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) && (a.w as number) > 0 && (a.h as number) > 0
+        ? null : 'look_at needs "ref", or "x","y","w","h" (viewport pixels) for the area to zoom into';
+    case 'web_search': return nonEmpty(a.query) ? null : 'web_search needs a non-empty "query"';
+    case 'find': return nonEmpty(a.text) ? null : 'find needs the "text" to look for';
+    case 'back': case 'forward': case 'reload': return null;
+    case 'hover': case 'dblclick': case 'focus':
+      return finiteInt(a.ref) ? null : `${a.type} needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'drag':
+      return finiteInt(a.ref) && finiteInt(a.to_ref) ? null : 'drag needs "ref" (what to drag) and "to_ref" (where to drop) as element ids';
+    case 'check': case 'uncheck':
+      return finiteInt(a.ref) ? null : `${a.type} needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'select_option':
+      if (!finiteInt(a.ref)) return `select_option needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+      return nonEmpty(a.option) ? null : 'select_option needs the "option" text to choose';
     case 'click_ref': return finiteInt(a.ref) ? null : `click_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
     case 'fill_ref':
       if (!finiteInt(a.ref)) return `fill_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
@@ -401,6 +490,9 @@ export function validateAction(a: AgentAction): string | null {
     case 'navigate': return httpUrl(a.url) ? null : `navigate needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'new_tab': return httpUrl(a.url) ? null : `new_tab needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'download': return httpUrl(a.url) ? null : `download needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'list_downloads': return null;
+    case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+      return nonEmpty(a.id) ? null : `${a.type} needs "id" (from list_downloads) or the file name`;
     case 'download_video':
       // Sem url nem query = o vídeo da ABA ABERTA — é o que o prompt manda ("omit both to
       // grab the currently open tab") e o que o executor faz (usa a URL da aba). Recusar isso
@@ -436,6 +528,7 @@ export function validateAction(a: AgentAction): string | null {
     // did not say why. Rejecting it here turned a COMPLETED task into "the model kept
     // returning an invalid response" after 3 retries.
     case 'done': return null;
+    case 'dialog': return null;
     case 'extract_text': case 'extract_images': case 'read_aloud':
     case 'stock_movers': case 'scroll':
       return null;

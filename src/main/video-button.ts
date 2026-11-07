@@ -13,11 +13,22 @@
 import { app, ipcMain, shell, webContents, webFrameMain, type BrowserWindow, type Session, type WebContents, type WebFrameMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { downloadVideo, fetchVideoInfo, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, fetchVideoInfo, findFfmpegDir, probeStreams, recoverInterruptedDownloads, INTERRUPTED_ERROR, type VideoDownloadProgress } from './media-downloader';
 import { buildVideoChoices, formatBytes, PartsProgress, youtubeVideoId, youtubeWatchUrl, type VideoChoice } from './video-formats';
 import { buildVideoButtonScript, DEFAULT_VIDEO_BUTTON_LABELS, sanitizeVideoButtonLabels, type VideoButtonLabels } from './video-button-script';
 import { buildGenericVideoButtonScript } from './generic-video-button-script';
 import { classifyMediaResponse, MediaLog, sameSite, siteOf, toNetscapeCookies, type SniffedMedia } from './media-sniff';
+
+// Codecs do arquivo pronto (vai no evento 'completed'): a tela diz "AV1 + Opus — abre no VLC, o QuickTime
+// não lê AV1" (shared/media-codecs.ts). Falha do ffprobe = sem codecs; nunca atrapalha o download.
+async function codecsOf(file: string): Promise<{ vcodec?: string; acodec?: string }> {
+  try {
+    const dir = await findFfmpegDir();
+    if (!dir) return {};
+    const p = await probeStreams(dir, file);
+    return p ? { vcodec: p.video || undefined, acodec: p.audio || undefined } : {};
+  } catch { return {}; }
+}
 
 interface Deps {
   getMainWindow: () => BrowserWindow | null;
@@ -87,6 +98,9 @@ export function setupVideoButton(deps: Deps) {
   const mediaLog = new MediaLog();
   const tracked = new WeakSet<WebContents>();
   let seq = 0;
+  // Id único entre execuções: o download interrompido da sessão anterior volta à lista com o id dele.
+  const bootTag = Date.now().toString(36);
+  const newId = (prefix: string) => `${prefix}_${bootTag}_${++seq}`;
 
   // Arquivos de cookie de uma execução anterior que caiu no meio (nunca deveriam sobrar).
   const tmpDir = path.join(app.getPath('userData'), 'tmp');
@@ -285,6 +299,8 @@ export function setupVideoButton(deps: Deps) {
           // Stream achado na aba não tem título bom ("index.m3u8") → usa o da página.
           titleOverride: choice.src ? job.title : undefined,
           firstOnly: web,
+          jobId: id,
+          journalMeta: { kind: 'button', target, choice, title: job.title, filename },
         }, onProgress);
       } finally { dropFile(cookies); }
     })().then(async (r) => {
@@ -292,7 +308,7 @@ export function setupVideoButton(deps: Deps) {
         job.state = 'done'; job.path = r.path;
         let size = 0;
         try { size = fs.statSync(r.path).size; } catch {}
-        toRenderer({ id, state: 'completed', path: r.path, filename: path.basename(r.path), bytes: size, totalBytes: size, speedBps: 0 });
+        toRenderer({ id, state: 'completed', path: r.path, filename: path.basename(r.path), bytes: size, totalBytes: size, speedBps: 0, ...(await codecsOf(r.path)) });
         jobPage(job, { state: 'done' });
         return;
       }
@@ -303,7 +319,7 @@ export function setupVideoButton(deps: Deps) {
         jobPage(job, { state: 'cancelled' });
       } else {
         job.state = 'failed';
-        toRenderer({ id, state: 'failed', reason: r.error });
+        toRenderer({ id, state: 'failed', reason: r.error, reasonCode: r.reason });
         jobPage(job, { state: 'failed' });
       }
     }).catch((e) => {
@@ -326,7 +342,7 @@ export function setupVideoButton(deps: Deps) {
     // Mesmo vídeo + mesma escolha já baixando: não dispara outro igual (clique duplo).
     for (const j of jobs.values()) if (j.target.key === t.key && j.choice.key === key && j.state === 'running') return;
     const job: Job = {
-      id: `yt_${++seq}`, target: t, choice,
+      id: newId('yt'), target: t, choice,
       title: (c.title || wc.getTitle() || 'video').trim() || 'video',
       wcId: wc.id,
       frame: frame ? { processId: frame.processId, routingId: frame.routingId } : undefined,
@@ -486,7 +502,10 @@ export function setupVideoButton(deps: Deps) {
     let lastRenderer = 0;
     let r: Awaited<ReturnType<typeof downloadVideo>>;
     try {
-      r = await downloadVideo(job.url, { ...job.opts, signal: job.abort.signal }, (p) => {
+      r = await downloadVideo(job.url, {
+        ...job.opts, signal: job.abort.signal,
+        jobId: id, journalMeta: { kind: 'agent', url: job.url, opts: job.opts, label: job.label },
+      }, (p) => {
         onProgress?.(p);
         if (job.abort.signal.aborted) return;
         if (p.state === 'downloading') {
@@ -510,11 +529,12 @@ export function setupVideoButton(deps: Deps) {
       job.state = 'done';
       // Várias músicas de uma vez: a 1ª fica nesta linha, as outras ganham linha própria.
       const files = r.paths?.length ? r.paths : [r.path as string];
-      files.forEach((f, i) => {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
         let size = 0;
         try { size = fs.statSync(f).size; } catch {}
-        toRenderer({ id: i === 0 ? id : `${id}_${i}`, state: 'completed', path: f, filename: path.basename(f), bytes: size, totalBytes: size, speedBps: 0 });
-      });
+        toRenderer({ id: i === 0 ? id : `${id}_${i}`, state: 'completed', path: f, filename: path.basename(f), bytes: size, totalBytes: size, speedBps: 0, ...(await codecsOf(f)) });
+      }
       return r;
     }
     await removePartials(r.partials);
@@ -523,14 +543,14 @@ export function setupVideoButton(deps: Deps) {
       toRenderer({ id, state: 'cancelled' });
     } else {
       job.state = 'failed';
-      toRenderer({ id, state: 'failed', reason: r.error });
+      toRenderer({ id, state: 'failed', reason: r.error, reasonCode: r.reason });
     }
     return r;
   };
 
   /** A IA pediu um vídeo: baixa pelo yt-dlp e mostra na lista de Downloads (barra, ✕, ↻). */
   const agentDownload = (url: string, opts: AgentOpts, onProgress?: (p: VideoDownloadProgress) => void) => {
-    const job: AgentJob = { id: `ag_${++seq}`, url, opts, label: agentLabel(url, opts), abort: new AbortController(), state: 'running' };
+    const job: AgentJob = { id: newId('ag'), url, opts, label: agentLabel(url, opts), abort: new AbortController(), state: 'running' };
     agentJobs.set(job.id, job);
     return runAgent(job, onProgress);
   };
@@ -553,6 +573,34 @@ export function setupVideoButton(deps: Deps) {
     }
     return { ok: !!job };
   });
+  // ── Downloads que o Bah fechou no meio (diário do boot anterior): os restos já foram
+  // apagados; voltam pra lista como "Interrompido", com ↻ quando dá pra refazer. ──
+  const interrupted: Array<{ id: string; filename: string; url?: string }> = [];
+  for (const e of recoverInterruptedDownloads()) {
+    const m = e.meta || {};
+    const abort = new AbortController();
+    if (m.kind === 'agent' && typeof m.url === 'string') {
+      const opts: AgentOpts = { audioOnly: !!m.opts?.audioOnly, count: Number(m.opts?.count) || 1, quality: m.opts?.quality === 'low' ? 'low' : m.opts?.quality === 'best' ? 'best' : undefined };
+      const label = String(m.label || agentLabel(m.url, opts));
+      agentJobs.set(e.id, { id: e.id, url: m.url, opts, label, abort, state: 'failed' });
+      interrupted.push({ id: e.id, filename: label, url: isHttp(m.url) ? m.url : undefined });
+    } else if (m.kind === 'button' && m.target?.url && m.choice?.key) {
+      const title = String(m.title || 'video');
+      // Aba de origem já não existe (ids de aba recomeçam a cada boot): sem aba, sem página pra avisar.
+      jobs.set(e.id, { id: e.id, target: m.target, choice: m.choice, title, wcId: -1, abort, state: 'failed' });
+      interrupted.push({ id: e.id, filename: String(m.filename || title), url: m.target.url });
+    } else {
+      interrupted.push({ id: e.id, filename: path.basename(e.files[0] || 'video') });
+    }
+  }
+  // O renderer pede quando já está ouvindo os eventos (mandar no boot se perderia). Pode pedir
+  // de novo (StrictMode/recarregar): manda só os que ainda não foram refeitos.
+  ipcMain.handle('media:interrupted', () => {
+    const list = interrupted.filter(d => (agentJobs.get(d.id) || jobs.get(d.id))?.state !== 'running' && (agentJobs.get(d.id) || jobs.get(d.id))?.state !== 'done');
+    for (const d of list) toRenderer({ ...d, state: 'failed', reason: INTERRUPTED_ERROR, reasonCode: 'interrupted', bytes: 0 });
+    return list.length;
+  });
+
   ipcMain.handle('media:retry-video', (_e, id: string) => {
     const agent = agentJobs.get(String(id));
     if (agent) {
