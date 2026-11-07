@@ -202,7 +202,8 @@ export default function AddressBar({
               <>
                 <ul className="site-info-list">
                   {siteKinds.map(k => {
-                    const v = siteInfo.perms[k];
+                    // Localização sem escolha guardada = bloqueada (nunca pergunta).
+                    const v = siteInfo.perms[k] || (k === 'geolocation' ? 'block' : undefined);
                     return (
                       <li key={k}>
                         <span>{permKindLabel(k)}</span>
