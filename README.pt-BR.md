@@ -121,7 +121,7 @@ USUÁRIO → "abre o gmail e apaga os spams"
 | `new_tab` / `switch_tab` / `close_tab` | Gerência de abas |
 | `done(reason, success)` | Encerra o loop |
 
-O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
+O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. Antes do clique, o ponteiro vai até o alvo pelo mesmo arco do cursor do agente que o Bah desenha na tela (sem tremor aleatório), então os eventos `mousemove` da página batem com o que você vê. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
 
 ---
 

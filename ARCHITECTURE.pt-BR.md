@@ -52,6 +52,17 @@ uns 100 px abaixo do clique real. `tests/e2e/agent-cursor.spec.ts` compara o cur
 desenhados com o clique que a página recebeu. Ele conduz o loop real do agente com `E2E_MOCK_SCRIPT`
 (lista JSON de ações que o modelo simulado devolve, uma por passo; só pra teste, exige `E2E_MOCK_AI=1`).
 
+### Eventos de mouse reais seguem o arco desenhado (o que a página vê)
+
+O `input:click` no `main.ts` manda eventos `mouseMove` reais (`webContents.sendInputEvent`) ao longo
+do `arcPath()` de `src/shared/agent-cursor-path.ts` — o mesmo arco, lado, easing e ~450 ms do cursor
+desenhado — de onde o ponteiro parou depois do último clique naquela aba (`lastPointer`) até o alvo;
+aí mede o alvo de novo e clica no centro, sem desvio aleatório. Antes a página recebia uma
+aproximação curta e reta com tremor aleatório enquanto o overlay desenhava outra coisa. Isso não
+tenta se passar por pessoa: um gravador de sessão (HotJar e afins) mostra os mesmos arcos suaves
+toda vez, reconhecíveis como o agente do Bah. O e2e do cursor confere que a página recebeu 10+
+movimentos que terminam no clique e se afastam da reta.
+
 ---
 
 ## `src/main/` — processo privilegiado

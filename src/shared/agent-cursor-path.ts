@@ -1,5 +1,5 @@
-// Caminho do cursor do agente que o Bah desenha por cima da página (AgentVisualOverlay): um arco
-// suave da última posição até o próximo clique. Puro (sem DOM), pra ser testado e reaproveitado.
+// Caminho do ponteiro do agente: UM arco, o mesmo no cursor que o Bah desenha (AgentVisualOverlay) e
+// nos eventos de mouse de verdade que a página recebe (main, input:click). Puro (sem DOM/electron).
 
 export interface Pt { x: number; y: number }
 
@@ -15,7 +15,7 @@ export function arcPoint(a: Pt, b: Pt, t: number, side: 1 | -1): Pt {
   return { x: u * u * a.x + 2 * u * t * cx + t * t * b.x, y: u * u * a.y + 2 * u * t * cy + t * t * b.y };
 }
 
-/** Lado da curva pela direção do movimento (determinístico). */
+/** Lado da curva pela direção do movimento — determinístico, então overlay e eventos reais concordam. */
 export function arcSide(a: Pt, b: Pt): 1 | -1 {
   return b.x >= a.x ? 1 : -1;
 }
@@ -27,3 +27,13 @@ export function easeInOut(k: number): number {
 
 /** Duração do deslize do cursor até o alvo. */
 export const ARC_MS = 450;
+
+/** Os pontos (inteiros) do arco de a até b em `steps` passos, já com o easing; o último é b exato. */
+export function arcPath(a: Pt, b: Pt, steps = 18): Pt[] {
+  const side = arcSide(a, b), out: Pt[] = [];
+  for (let i = 1; i <= steps; i++) {
+    const p = i === steps ? b : arcPoint(a, b, easeInOut(i / steps), side);
+    out.push({ x: Math.round(p.x), y: Math.round(p.y) });
+  }
+  return out;
+}

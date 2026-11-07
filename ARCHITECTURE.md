@@ -54,6 +54,17 @@ corner; adding the page's offset in the whole window (as before) drew the cursor
 with the click the page received. It drives the real agent loop with `E2E_MOCK_SCRIPT` (a JSON list
 of actions the mocked model returns, one per step; test-only, needs `E2E_MOCK_AI=1`).
 
+### Real mouse events follow the drawn arc (what the page sees)
+
+`input:click` in `main.ts` sends real `mouseMove` events (`webContents.sendInputEvent`) along
+`arcPath()` from `src/shared/agent-cursor-path.ts` — the same arc, side, easing and ~450 ms as the
+drawn cursor — from where the pointer stopped after the last click in that tab (`lastPointer`) to
+the target, then re-measures the target and clicks its centre, with no random offset. Before, the
+page got a short straight approach with random jitter while the overlay drew something else. This
+does not try to pass as a person: a session recorder (HotJar and the like) shows the same smooth
+arcs every time, recognisable as Bah's agent. The agent-cursor e2e checks the page received 10+
+moves that end on the click and bow away from the straight line.
+
 ---
 
 ## `src/main/` — privileged process

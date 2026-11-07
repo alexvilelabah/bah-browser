@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
+import { arcPath, ARC_MS } from '../shared/agent-cursor-path';
 import { classifyError } from '../shared/error-codes';
 import {
   normalizeBaseUrl as normalizeLocalBaseUrl,
@@ -401,6 +402,8 @@ const AUDIO_OFF_DELAY_MS = 3000;
 // NOTE: only attaches + enables Accessibility — exactly as the original.
 // DOM.enable / Page.enable are enabled on-demand inside page-capture.ts.
 const debuggerAttachedSet = new Set<number>();
+// Onde o ponteiro do agente parou em cada aba (o próximo arco sai daqui).
+const lastPointer = new Map<number, { x: number; y: number }>();
 async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Promise<void> {
   if (!debuggerAttachedSet.has(wcId)) {
     try { wc.debugger.attach('1.3'); } catch (err: any) {
@@ -2156,26 +2159,28 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
         } catch { /* alvo sumiu/erro → cai no x,y recebido */ }
         return null;
       };
-      // Humanizado: leve desvio do centro (±2px) + trajeto curto com easing + jitter.
-      const tx0 = Math.round(x + rnd(-2, 2));
-      const ty0 = Math.round(y + rnd(-2, 2));
-      const sx = Math.max(0, Math.round(tx0 - rnd(40, 90)));
-      const sy = Math.max(0, Math.round(ty0 - rnd(25, 60)));
-      const steps = 4 + Math.floor(rnd(0, 3));
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps; const e = t * t * (3 - 2 * t); // smoothstep
-        wc.sendInputEvent({ type: 'mouseMove', x: Math.round(sx + (tx0 - sx) * e), y: Math.round(sy + (ty0 - sy) * e) } as any);
-        await sleepMs(rnd(8, 22));
+      // O ponteiro de verdade segue o MESMO arco que o cursor desenhado pelo Bah (shared/agent-cursor-path.ts):
+      // sai de onde parou na última ação desta aba e chega no centro do alvo, sem tremor aleatório. Antes a
+      // página recebia uma aproximação curta e reta com desvio aleatório enquanto o overlay desenhava outra
+      // coisa. Quem grava a sessão (HotJar etc.) vê os arcos — reconhecíveis como o agente do Bah.
+      const to0 = { x: Math.round(x), y: Math.round(y) };
+      const from = lastPointer.get(wcId) || { x: Math.max(0, to0.x - 120), y: Math.max(0, to0.y - 80) };
+      const pts = arcPath(from, to0);
+      const stepMs = Math.round(ARC_MS / pts.length);
+      for (const p of pts.slice(0, -1)) {
+        wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y } as any);
+        await sleepMs(stepMs);
       }
       // ÚLTIMO instante: re-resolve a posição (pega resize/scroll ocorrido no trajeto).
       const fresh = await resolveCenter();
-      const tx = fresh ? Math.round(fresh.x + rnd(-2, 2)) : tx0;
-      const ty = fresh ? Math.round(fresh.y + rnd(-2, 2)) : ty0;
+      const tx = fresh ? fresh.x : to0.x;
+      const ty = fresh ? fresh.y : to0.y;
       wc.sendInputEvent({ type: 'mouseMove', x: tx, y: ty } as any);
-      await sleepMs(rnd(30, 70));
+      await sleepMs(40);
       wc.sendInputEvent({ type: 'mouseDown', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
-      await sleepMs(rnd(60, 130));
+      await sleepMs(80);
       wc.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 } as any);
+      lastPointer.set(wcId, { x: tx, y: ty });
       return { success: true, info: { x: tx, y: ty, refreshed: !!fresh } };
     } catch (e: any) {
       return { success: false, error: String(e?.message ?? e) };

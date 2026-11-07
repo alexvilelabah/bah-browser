@@ -125,7 +125,7 @@ USER → "open gmail and delete the spam"
 | `new_tab` / `switch_tab` / `close_tab` | Tab management |
 | `done(reason, success)` | End the loop |
 
-Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
+Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. Before the click, the pointer moves to the target along the same arc as the agent cursor Bah draws on screen (no random jitter), so the page's `mousemove` events match what you see. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
 
 ---
 

@@ -14,7 +14,7 @@ const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/el
   : path.join(ROOT, 'node_modules/electron/dist/electron');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('the overlay cursor and ripple land where the real click landed on the page', async () => {
+test('the overlay cursor and ripple land where the real click landed; the page receives the same arc', async () => {
   test.setTimeout(120_000);
   const PAGE = `<!doctype html><title>cursor</title><style>body{margin:0}#t1{position:absolute;left:600px;top:420px;width:160px;height:60px}</style>
 <button id=t1>Target one</button><script>window.__clicks=[];window.__moves=[];addEventListener('mousemove',e=>__moves.push([e.clientX,e.clientY]));addEventListener('click',e=>__clicks.push([e.clientX,e.clientY,e.isTrusted]));</script>`;
@@ -70,5 +70,16 @@ test('the overlay cursor and ripple land where the real click landed on the page
     expect(cursor).toBeTruthy();
     expect(Math.abs(cursor![0] - wv.x - cx)).toBeLessThanOrEqual(6);
     expect(Math.abs(cursor![1] - wv.y - cy)).toBeLessThanOrEqual(6);
+    // O ponteiro que a PÁGINA recebeu segue um arco (o mesmo do cursor desenhado): vários movimentos, que
+    // se afastam da reta entre o início e o clique — é o que um gravador de sessão (HotJar) mostra.
+    const moves: number[][] = await app.evaluate(async ({ webContents }, url) => {
+      const wc = webContents.getAllWebContents().find(w => w.getType() === 'webview' && w.getURL() === url);
+      return wc ? JSON.parse(await wc.executeJavaScript('JSON.stringify(window.__moves || [])')) : [];
+    }, T);
+    expect(moves.length).toBeGreaterThanOrEqual(10);
+    const [sx, sy] = moves[0], [ex, ey] = moves[moves.length - 1];
+    expect([ex, ey]).toEqual([cx, cy]);
+    const dist = (p: number[]) => Math.abs((ey - sy) * p[0] - (ex - sx) * p[1] + ex * sy - ey * sx) / (Math.hypot(ex - sx, ey - sy) || 1);
+    expect(Math.max(...moves.map(dist))).toBeGreaterThan(15);
   } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

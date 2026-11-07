@@ -35,8 +35,8 @@ const STATE_LABEL: Record<AgentVisualState, string> = {
 // that breathes while the agent works. No grids/reticles — just an elegant
 // perimeter of colored light, tinted by the current state.
 // Cursor do agente desenhado pelo Bah por cima da página: desliza da última posição até o próximo
-// clique num arco (shared/agent-cursor-path.ts), e a ondinha aparece onde ele para — que é onde o
-// clique de verdade cai. Respeita "reduzir movimento" (pula direto pro alvo).
+// clique no MESMO arco que os eventos de mouse reais seguem (shared/agent-cursor-path.ts), e a ondinha
+// aparece onde ele para — que é onde o clique de verdade cai. Respeita "reduzir movimento".
 function AgentCursor({ target }: { target: ClickRipple | undefined }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const posRef = useRef<{ x: number; y: number } | null>(null);
