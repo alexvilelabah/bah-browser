@@ -79,7 +79,7 @@ moves that end on the click and bow away from the straight line.
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
 | `agent-download-worker.ts`, `download-progress.ts` | The agent's `download` action: one `worker_threads` worker per download; progress cadence + stall policy. See [Downloads & torrents](#downloads--torrents) |
 | `torrent-manager.ts`, `torrent/engine.mjs` | **Optional** built-in torrent client (off by default): IPC bridge + the engine, isolated in a `utilityProcess` that only starts when used. See [Downloads & torrents](#downloads--torrents) |
-| `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |
+| `media-downloader.ts`, `media-parts.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download); parts/merge/interrupted-download logic. See [Downloads & torrents](#downloads--torrents) |
 | `video-cuts.ts`, `transcript.ts` | Local video features (locate where a phrase is spoken, transcripts) — native ffmpeg |
 | `image-harvester.ts` | Bulk image download + AI image generation (Pollinations), with limits |
 | `ocr-engine.ts`, `page-capture.ts` | On-device OCR (Tesseract) + screenshots |
@@ -240,6 +240,32 @@ Where it's decided (all in the main process, so every entry point behaves the sa
 - Pasted magnets in the address bar go through `torrent:open` → `handleUri()` (the renderer never decides).
 
 The separate **🌱 Share torrents (seed)** switch (default OFF) only matters when the built-in client is ON.
+
+#### Video / audio (`media-downloader.ts`, `media-parts.ts`)
+
+yt-dlp downloads a high-resolution video as two **component files** — `Title [id].f313.webm` (picture
+only) and `Title [id].f140.m4a` (sound only) — and then ffmpeg joins them into `Title [id].mp4`. With
+`--no-part` the parts carry those names while they are being written, so a part must never be taken
+for the result:
+
+1. yt-dlp runs with `--no-quiet` (the `--print after_move:filepath` alone switches on quiet mode and hides
+   the `Destination:` / `Merging formats into` lines). Those lines are the exact list of files **this**
+   download wrote; nothing else is ever deleted.
+2. After each run, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decides: success only with a
+   final file that exists and is not a `.f<id>.` part. Parts left over (non-zero exit, or exit 0 without a
+   merge) mean **"the audio and video parts were not joined"** — a failure, and the parts are removed. If
+   both parts are complete (100% in the progress, or yt-dlp exited 0), Bah joins them itself with
+   `ffmpeg -c copy` (mp4 when the codecs fit, otherwise mkv) instead of failing.
+3. A normal video request (not mp3) is checked with `ffprobe` from the same ffmpeg folder. No audio
+   stream → one retry with `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; if the source has no audio
+   format at all the file is kept and the agent is told it has no sound; otherwise it is a failure.
+4. Quit / crash: yt-dlp runs in its own process group (`detached`), so it does not die with Bah. On
+   `before-quit`, `stopAllMediaDownloads()` kills every yt-dlp group. Each download is recorded in
+   `userData/media-downloads.json` (folder, start time, files written, pid, what "retry" needs); a
+   finished file leaves the record as soon as it is printed. At the next launch
+   `recoverInterruptedDownloads()` stops a leftover yt-dlp, deletes only the recorded files that are in
+   that download's folder and not older than it, and the Downloads list shows the download as
+   **Interrupted** with ↻.
 
 ---
 
