@@ -2683,3 +2683,12 @@ body {
 .chat-hist-title{display:flex;align-items:center;gap:4px;font-size:14px;}
 .chat-hist-ro{margin:4px 0 8px;font-size:11.5px;color:var(--text-muted);}
 .chat-hist-actions{display:flex;gap:8px;flex-wrap:wrap;}
+
+/* Anel de progresso do botão de downloads (components/DownloadButtonIcon.tsx), igual ao do Chrome. */
+.dl-ring .dl-ring-track{ stroke:currentColor; opacity:0.22; }
+.dl-ring .dl-ring-arc{ stroke:var(--accent, #4c8dff); transition:stroke-dasharray 0.4s var(--ease); }
+.dl-ring.paused .dl-ring-arc{ stroke:var(--text-muted); }
+.dl-ring.spin .dl-ring-arc{ transform-origin:12px 12px; animation:dlRingSpin 1s linear infinite; }
+.dl-ring.done .dl-ring-arc{ stroke:var(--success, #34c759); animation:dlRingDone 1.6s var(--ease); }
+@keyframes dlRingSpin{ from{ transform:rotate(-90deg); } to{ transform:rotate(270deg); } }
+@keyframes dlRingDone{ 0%{ opacity:1; } 60%{ opacity:1; } 100%{ opacity:0; } }

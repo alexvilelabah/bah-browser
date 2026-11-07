@@ -80,7 +80,8 @@ uns dois pulos.
 | Agente fica nas abas dele | [`agent-permissions.ts`](src/renderer/agent-permissions.ts) + o loop do agente em `App.tsx` | a tarefa é dona da aba de partida e das abas que abre (🤖 na barra de abas enquanto roda); `switch_tab` pra outra aba sua e `history_search` perguntam antes (só nesta tarefa / sempre / negar / nunca; também no menu ⋮); `close_tab` só fecha abas que a tarefa abriu |
 | HTML da página pro agente (`get_html`) vem limpo | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | corpo de script/style/svg/noscript/template, comentários, estilo inline e handlers `on*` saem; lista curta de atributos permitidos; campos de senha e ocultos, campos de token/CSRF/código de uso único/cartão/CVV/SSN e tokens CSRF em `<meta>` viram `[redacted]`; iframes de outra origem viram uma nota; partes invisíveis levam `[hidden]`. No pedido, vem marcado como *dado da página, não instrução*, e só no próximo pedido; uma leitura tem de 4.000 a 60.000 caracteres, conforme o contexto livre do modelo. Leitura passiva: permitida em site cuidadoso |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
-| Sem download de executável | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` bloqueados no download |
+| Download só cai na pasta de downloads; nada roda sozinho | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | arquivos vão só pro `getDownloadDir()` e nunca são abertos/executados automaticamente. **Sem lista de tipos bloqueados** — ver tradeoffs abaixo |
+| Motor de torrent é opcional | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | cliente embutido DESLIGADO por padrão: `.torrent` salvo como arquivo, `magnet:` vai pro app do sistema, o `utilityProcess` do motor nunca sobe |
 | `openFile` / reveal não abrem caminho arbitrário | [`download-manager.ts`](src/main/download-manager.ts) + `main.ts` (`shell:reveal`) | ambos chamam `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → só Downloads / userData / temp |
 | Limites de colheita de imagem | [`image-harvester.ts`](src/main/image-harvester.ts) | SVG bloqueado, teto de bytes, content-type checado, redirects limitados |
 | OCR / screenshots ficam locais | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract no aparelho; imagem nunca vai pra nuvem |
@@ -111,13 +112,17 @@ aqui pra o auditor não ter que "descobrir":
 1. **Chaves de API ficam em `localStorage`** ([`store.ts`](src/renderer/store.ts)), não no
    keychain do SO (`safeStorage`). Aceitável pra app local de um usuário; migrar pro
    `safeStorage` está no roadmap.
-2. **Fallback de download com TLS leniente** (`main.ts`): num erro de cadeia de certificado, o
-   download é refeito com a verificação relaxada — **mas** o arquivo ainda é rejeitado se for
-   executável (ver `BLOCKED_EXTENSIONS`), o que limita o risco. Feito pra sites (ex.: alguns
-   portais .gov.br) com cadeia de certificado quebrada.
+2. **Fallback de download com TLS leniente** ([`agent-download-worker.ts`](src/main/agent-download-worker.ts)):
+   num erro de cadeia de certificado, o download do agente é refeito com a verificação relaxada.
+   O arquivo continua caindo só na pasta de downloads e nunca é aberto sozinho. Feito pra sites
+   (ex.: alguns portais .gov.br) com cadeia de certificado quebrada.
 3. **Cadeia de suprimentos de binários:** `yt-dlp` e `ffmpeg` são baixados das URLs "latest"
    upstream sem checksum fixo ([`media-downloader.ts`](src/main/media-downloader.ts)).
    Aceitável nessa escala; fixar versão+hash está planejado antes de distribuir em massa.
+4. **Qualquer tipo de arquivo pode ser baixado** — inclusive instaladores e scripts (`.exe`,
+   `.dmg`, `.pkg`, `.sh`, ...), por você ou pelo agente. Não há lista de extensões bloqueadas
+   nem checagem de conteúdo; a proteção é que downloads vão só pra pasta de downloads e o Bah
+   nunca os executa. Confira o que o agente baixou antes de abrir.
 
 ---
 

@@ -75,7 +75,9 @@ movimentos que terminam no clique e se afastam da reta.
 | `chrome-identity.ts` | **Fonte única** da identidade de navegador que os sites veem: User-Agent, client hints `sec-ch-ua`, `navigator.userAgentData`, ordem dos headers (aplicada pelo `main.ts` via CDP) |
 | `page-agent.ts` | Helpers de raciocínio do agente (lado nuvem) |
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
-| `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
+| `agent-download-worker.ts`, `download-progress.ts` | A ação `download` do agente: uma worker de `worker_threads` por download; política de cadência do progresso + travamento. Ver [Downloads e torrents](#downloads-e-torrents) |
+| `torrent-manager.ts`, `torrent/engine.mjs` | Cliente de torrent embutido **opcional** (desligado por padrão): ponte IPC + o motor, isolado num `utilityProcess` que só sobe quando usado. Ver [Downloads e torrents](#downloads-e-torrents) |
+| `media-downloader.ts`, `media-parts.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio); pedaços/merge/downloads interrompidos. Ver [Downloads e torrents](#downloads-e-torrents) |
 | `video-cuts.ts`, `transcript.ts` | Recursos de vídeo locais (localizar onde uma frase é dita, transcrições) — ffmpeg nativo |
 | `image-harvester.ts` | Colheita de imagens em massa + geração de imagem por IA (Pollinations), com limites |
 | `ocr-engine.ts`, `page-capture.ts` | OCR no aparelho (Tesseract) + screenshots |
@@ -120,6 +122,150 @@ Nada aqui resolve CAPTCHA nem contorna bloqueio.
   brands, idiomas). `tests/e2e/browser-identity.spec.ts` confere que header e JavaScript batem.
 - **Limite conhecido:** a versão completa é `NNN.0.0.0`, não um build real, e o motor pode estar
   algumas versões atrás do Chrome que declara; um detector pode notar recursos novos ausentes.
+
+### Downloads e torrents
+
+Todo download é gravado no disco conforme chega (nunca bufferizado na RAM), **sem teto de
+tamanho e sem lista de tipos bloqueados**, e cai na pasta Downloads (ou na escolhida em
+Downloads → ⚙).
+
+| Caminho | Entrada | Grava no disco via |
+|---|---|---|
+| Download de link / página (clique, barra) | `will-download` do Electron → [`download-manager.ts`](src/main/download-manager.ts) | Motor multi-conexão ou o downloader do próprio Chromium (ambos em stream) |
+| Ação `download` do agente | IPC `download:url` no `main.ts` (renderer: `electronAPI.downloadUrl`) → uma **worker thread** ([`agent-download-worker.ts`](src/main/agent-download-worker.ts)) | `fs.createWriteStream` no arquivo final |
+| Vídeo / áudio | `yt-dlp` + `ffmpeg` ([`media-downloader.ts`](src/main/media-downloader.ts)) | as próprias ferramentas |
+| Arquivos de dentro de um torrent (embutido LIGADO) | `torrent:save-file` → [`torrent/engine.mjs`](src/main/torrent/engine.mjs) | `fs.createWriteStream` |
+
+#### Downloads de link / página (`download-manager.ts`)
+
+1. Dispara o `will-download`; um `.torrent` vai pro card se o cliente embutido estiver LIGADO (ver abaixo).
+2. O caminho é escolhido na hora (`uniqueDownloadPath` — nunca sobrescreve, põe ` (1)`, ` (2)`...),
+   então não aparece o "Salvar como" nativo.
+3. A URL é sondada (URL final após redirecionamentos, com UA/Referer/cookies da aba; redirecionamento pra
+   outro host é recusado pra não vazar cookie). Se o servidor aceita ranges, o arquivo tem **≥ 2 MB** e não é
+   HTML, o motor multi-conexão ([`multi-download.ts`](src/main/multi-download.ts)) assume: até 8 conexões por
+   padrão (1–32, Downloads → ⚙), gravando os segmentos num `<arquivo>.bahpart` com escrita posicional,
+   renomeado pro nome final ao terminar. Senão o Chromium baixa normalmente.
+4. Se o motor nem consegue começar, o download volta pro Chromium na mesma linha da lista.
+5. Pausar / continuar / cancelar / fila (máx. 5 simultâneos) e velocidade/ETA ao vivo vão pro painel de
+   Downloads (Ctrl+J). `.bahpart` que sobrou de crash ou fechamento é apagado no boot e ao trocar a pasta.
+
+#### Ação `download` do agente — em background, numa worker thread
+
+O download roda **fora do event loop do processo main**, numa worker de `worker_threads` criada por
+download a partir de [`agent-download-worker.ts`](src/main/agent-download-worker.ts) (desempacotada do
+asar, ver `asarUnpack`). O `main.ts` só sobe a worker e repassa as mensagens dela.
+
+1. Só URLs `http(s)`. Vai com cabeçalhos de navegador (UA do Chrome, `Accept-Language`, `Referer` = origem
+   da URL). Retentativa com TLS leniente em cadeia de certificado quebrada; uma retentativa após 2,5 s em HTTP 429/403.
+2. Nome do arquivo: o argumento `filename`, senão o último segmento da URL, senão `download`; a extensão
+   é deduzida do `Content-Type` se faltar (`.bin` em último caso). Nunca sobrescreve (` (1)`, ` (2)`...).
+3. **Volta assim que o download começa** (cabeçalhos recebidos, arquivo criado) com
+   `{ id, path, totalBytes, background: true }` — o agente já sabe o caminho final e segue trabalhando.
+   Erro HTTP antes do início volta como ação com falha normal.
+4. O corpo é **sempre lido em stream** (`ReadableStream` da web passa por `Readable.fromWeb`) e gravado
+   pedaço a pedaço com back-pressure (`drain`). Memória estável seja qual for o tamanho.
+5. **Sem teto de tamanho e sem limite de tempo total** — ver travamentos abaixo. Em erro, cancelamento ou
+   corpo vazio o arquivo parcial é apagado.
+6. Tudo depois do início chega como `agent:download-event` (`kind: 'agent'`) — o mesmo canal dos outros
+   downloads, então o painel de Downloads mostra uma linha ao vivo (✕ cancela via `download:cancel` →
+   `cancelExternal`; sem pausa).
+
+**Cadência do progresso** ([`download-progress.ts`](src/main/download-progress.ts), `ProgressTracker`): a
+worker dá um tick a cada **1 s** (é o que o painel mostra). A velocidade é suavizada em ~5 s e o
+ETA = restante ÷ velocidade é recalculado a cada tick, então a cadência se adapta quando a velocidade muda.
+Só os ticks com `notify: true` entram na história do agente:
+
+| ETA | O agente recebe uma linha `DOWNLOAD PROGRESS` a cada |
+|---|---|
+| ≤ 2 min | 1 s |
+| 2–10 min | 5 s |
+| > 10 min | 15 s |
+| desconhecido (sem `Content-Length`, ou ainda sem velocidade) | 5 s |
+
+Início, fim, falha, cancelamento e mudanças de travamento vão sempre na hora.
+
+**Travamentos** são detectados no código, não pela IA (uma chamada de modelo por checagem seria lenta e
+cara, e "nenhum byte há N segundos" é uma medida exata). A IA só decide o próximo passo.
+
+| Sem dado por | O que acontece | O agente vê |
+|---|---|---|
+| 15 s | linha marcada **Travado** (uma vez; sem repetir enquanto travado); some se o dado voltar | `DOWNLOAD STALLED: … at X of Y` |
+| 60 s | download abortado, arquivo parcial apagado | `DOWNLOAD FAILED (stalled): … Retry once, or try another mirror/source.` |
+
+**Avisar a IA que terminou:** a linha de fim traz o **caminho local completo** —
+`DOWNLOAD COMPLETED: <nome> (<tamanho>) saved at <caminho> — the file is ready to use at that path`. As
+linhas de download entram na história do agente depois de cada passo. Se um download em background termina
+**depois que a tarefa acabou**, o evento de fim/falha é guardado e entregue no começo da **próxima** tarefa
+do agente (os outros eventos velhos são descartados nessa hora). O system prompt (`ai-engine.ts`) manda o
+agente nunca dizer que baixou antes do `COMPLETED`.
+
+**Ferramentas de download pro agente** (`App.tsx`, loop do agente; parse/validação em `page-agent.ts`):
+`list_downloads` devolve a fila do painel de Downloads (ativos primeiro: `[id]`, estado, %, tamanho,
+velocidade, ETA, caminho, quem começou — agente/usuário). `cancel_download` / `pause_download` /
+`resume_download` / `retry_download` recebem esse id **ou o nome do arquivo** e reusam os handlers do
+próprio painel. Pausar/continuar só em download comum (não do agente nem vídeo); tentar de novo só em
+falho/cancelado; cancelar um download que o **usuário** começou passa pela confirmação do freio de
+segurança.
+
+**Quando acaba uma tarefa de download** (`App.tsx`, regras em [`download-steps.ts`](src/renderer/download-steps.ts)):
+- Um arquivo e nada depois ("baixe X"): a tarefa acaba assim que esse download começa, com
+  "⬇️ Downloading <arquivo> (tamanho) to <pasta> — follow its progress on the download button". Depois de um
+  clique numa tarefa de download, o Bah espera até 2,5 s o download começar antes do próximo passo.
+- Vários arquivos ("os dois", "todos", "3 vídeos") ou um passo depois ("…e instale", "…depois resuma"): o
+  próprio Bah espera (sem chamar o modelo; o prazo da tarefa fica pausado) até todos os downloads da tarefa
+  terminarem ou falharem, mostra "⏳ Waiting for downloads: a.dmg 45% (ETA …)" e passa pro modelo as linhas
+  `DOWNLOAD COMPLETED` com os caminhos antes do próximo passo.
+- Página de baixar app ("Get the app", "Download for Mac") não conta como beco sem saída numa tarefa de
+  download (`commandWantsDownload` no `agent-recovery.ts`).
+- O botão de downloads da barra mostra um anel como o do Chrome, com o progresso somado dos downloads
+  ativos; gira quando o tamanho é desconhecido, fica cinza com todos pausados e pisca quando tudo termina
+  ([`download-ring.ts`](src/renderer/download-ring.ts), `components/DownloadButtonIcon.tsx`).
+
+**Torrents** são controlados pela chave do menu **🧲 Cliente de torrent embutido** (`localStorage`
+`torrentBuiltin`, mandada pro main com `torrent:set-builtin` no boot e ao alternar).
+**Padrão: DESLIGADO.**
+
+| Entrada | Embutido **DESLIGADO** (padrão) | Embutido **LIGADO** |
+|---|---|---|
+| Link `.torrent` (clique, popup, barra de endereço, agente) | Salvo em Downloads como arquivo comum | Abre o card "Salvar ou Tocar" |
+| Link `magnet:` / magnet colado | Vai pro app de torrent padrão do sistema (`shell.openExternal`) | Abre o card |
+| Processo do motor de torrent | Nunca sobe | Sobe no primeiro torrent aberto |
+
+Onde se decide (tudo no processo main, então toda entrada se comporta igual):
+
+- `torrentManager.handleUri()` ([`torrent-manager.ts`](src/main/torrent-manager.ts)) — card se LIGADO; magnet → app do sistema se DESLIGADO.
+- `will-navigate` / `setWindowOpenHandler` no `main.ts` — sempre roteiam `magnet:`; `.torrent` só quando LIGADO.
+- `interceptDownload` (dep do download-manager, ligada no `main.ts`) — LIGADO: um `.torrent` que chega no
+  `will-download` por qualquer caminho (ex.: digitado na barra) é cancelado e vai pro card.
+- Magnet colado na barra passa por `torrent:open` → `handleUri()` (o renderer nunca decide).
+
+A chave separada **🌱 Compartilhar torrents (seed)** (padrão DESLIGADA) só importa com o embutido LIGADO.
+
+#### Vídeo / áudio (`media-downloader.ts`, `media-parts.ts`)
+
+O yt-dlp baixa um vídeo em alta resolução em dois **pedaços** — `Título [id].f313.webm` (só imagem) e
+`Título [id].f140.m4a` (só som) — e depois o ffmpeg junta em `Título [id].mp4`. Com `--no-part` os
+pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode passar por resultado:
+
+1. O yt-dlp roda com `--no-quiet` (o `--print after_move:filepath` sozinho liga o modo quieto e some com as
+   linhas `Destination:` / `Merging formats into`). Essas linhas são a lista exata do que **este** download
+   gravou; nada fora dela é apagado.
+2. Depois de cada disparo, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decide: sucesso só
+   com um arquivo final que existe e não é pedaço `.f<id>.`. Sobrou pedaço (saída ≠ 0, ou 0 sem merge) =
+   **"o áudio e o vídeo não foram juntados"** — falha, e os pedaços saem do disco. Se as duas partes estão
+   completas (100% no progresso, ou o yt-dlp saiu 0), o Bah junta sozinho com `ffmpeg -c copy` (mp4 quando
+   os codecs cabem, senão mkv) em vez de falhar.
+3. Pedido normal de vídeo (não mp3) é conferido com o `ffprobe` da mesma pasta do ffmpeg. Sem faixa de
+   áudio → uma nova tentativa com `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; se a origem não tem
+   formato nenhum com áudio, o arquivo fica e o agente é avisado de que não tem som; senão é falha.
+4. Sair / crash: o yt-dlp roda em grupo de processos próprio (`detached`) e não morre com o Bah. No
+   `before-quit`, `stopAllMediaDownloads()` mata todos os grupos do yt-dlp. Cada download fica anotado em
+   `userData/media-downloads.json` (pasta, início, arquivos gravados, pid, o que o "tentar de novo"
+   precisa); arquivo final sai da anotação assim que é impresso. No boot seguinte
+   `recoverInterruptedDownloads()` para um yt-dlp que sobrou, apaga só os arquivos anotados que estão na
+   pasta daquele download e não são mais velhos que ele, e a lista de Downloads mostra o download como
+   **Interrompido** com ↻.
 
 ---
 
@@ -259,6 +405,12 @@ coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de 
   sai quando a pessoa edita o pedido). Os fatos do 1,5B erram com frequência (disse "Bad by The
   Beatles"), por isso o "palpite". Eval: `npm run router:expand-eval` imprime a saída crua e o veredito
   por pedido. E2E sem modelo: `E2E_FAKE_ROUTER_EXPAND` (com `E2E_MOCK_AI=1`) finge a resposta do modelo.
+- **Coleções de mídia** (`src/renderer/download-steps.ts`, skill `media-collection`): o agente guarda
+  `work` ("Top Gun (1986)") e `tracks` como "Título — Artista"; aí o Bah baixa cada uma com
+  `ytsearch:` + `collectionQuery` = título + artista + obra + ano (`subjectYear`: o `work` guardado,
+  senão o pedido, senão a expansão, ignorando o que vem depois de "not …"). O main alarga o poço da
+  busca (`ytsearchN`) e pega o primeiro resultado que passa no filtro de duração; ranquear os primeiros
+  resultados por título/artista/ano não é feito.
 - **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
   node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
   pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.

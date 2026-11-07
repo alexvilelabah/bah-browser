@@ -11,6 +11,9 @@ import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/t
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
+import DownloadButtonIcon from './components/DownloadButtonIcon';
+import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear, isTopNCollection, collectionCount, topNListPrompt, parseTopNList } from './download-steps';
+import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
@@ -208,6 +211,8 @@ declare global {
       torrentSaveFile?: (id: string, index: number) => Promise<{ ok: boolean; dest?: string; blocked?: boolean }>;
       torrentRemove?: (id: string, destroyStore?: boolean) => Promise<{ ok: boolean }>;
       torrentSetSeed?: (on: boolean) => Promise<{ ok: boolean; seed: boolean }>;
+      torrentSetBuiltin?: (on: boolean) => Promise<{ ok: boolean; builtin: boolean }>;
+      torrentOpen?: (uri: string) => Promise<{ ok: boolean }>;
       routerStatus?: () => Promise<RouterStatus & { rss?: number }>;
       routerClassify?: (text: string, ctx?: RouteContext) => Promise<{ route: string; ms: number } | null>;
       routerExpand?: (text: string) => Promise<{ expanded: string; ms: number } | null>;
@@ -217,6 +222,7 @@ declare global {
       setYoutubeDlButton?: (on: boolean, labels?: Record<string, string>) => Promise<{ ok: boolean; enabled: boolean }>;
       cancelVideoDownload?: (id: string) => Promise<any>;
       retryVideoDownload?: (id: string) => Promise<any>;
+      takeInterruptedVideoDownloads?: () => Promise<number>;
       onTorrentEvent?: (cb: (info: any) => void) => (() => void);
       realClick?: (wcId: number, x: number, y: number, backendNodeId?: number) => Promise<any>;
       realType?: (wcId: number, text: string) => Promise<any>;
@@ -253,9 +259,9 @@ declare global {
       uploadSet?: (wcId: number, backendNodeId: number | null, token: string, at?: { x: number; y: number }) => Promise<{ ok: boolean; names?: string[]; accept?: string; dropped?: number; error?: string }>;
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       waitNetworkIdle?: (wcId: number, idleMs: number, timeoutMs: number) => Promise<{ ok: boolean; waitedMs?: number; error?: string }>;
-      downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
+      downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { id?: string; path: string; bytes?: number; totalBytes?: number; contentType?: string; background?: boolean }; error?: string }>;
       searchImages?: (query: string, minWidth?: number, count?: number) => Promise<{ success: boolean; count?: number; images: Array<{ url: string; thumbnail?: string; width: number; height: number; title: string; source: string; license: string }>; error?: string }>;
-      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; reason?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][] }) => void) => void;
+      onDownloadEvent?: (cb: (info: { id?: string; state: string; filename: string; path?: string; url?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; paused?: boolean; reason?: string; reasonCode?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; notify?: boolean; stalled?: boolean; stalledForSec?: number; vcodec?: string; acodec?: string }) => void) => void;
       getDownloadEngine?: () => Promise<DlEngineSettings>;
       setDownloadEngine?: (settings: DlEngineSettings) => Promise<DlEngineSettings>;
       setDownloadDir?: (dir: string | null) => Promise<string>;
@@ -266,7 +272,7 @@ declare global {
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
-      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string }>;
+      downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;
       resolveVideos?: (queries: string[]) => Promise<Array<{ query: string; id?: string; title?: string }>>;
       resolveManyVideos?: (query: string, count: number) => Promise<{ ok: boolean; videos: Array<{ id: string; title: string; url: string }>; error?: string }>;
@@ -445,7 +451,21 @@ export default function App() {
   useEffect(() => { setPwSuggest(cur => (cur && cur.tabId !== store.activeTabId ? null : cur)); }, [store.activeTabId]);
   // Site-initiated downloads (will-download no main) — drenados pelo loop do agente
   // para a IA saber que o clique em "baixar" realmente produziu um arquivo.
-  const downloadEventsRef = useRef<Array<{ state: string; filename: string; path?: string; bytes?: number; reason?: string }>>([]);
+  // Eventos de download que vão pra história do agente. O painel recebe todos; aqui só entram
+  // os que importam pro agente: início/fim e os ticks com `notify` (cadência pelo ETA, ver
+  // download-progress.ts) — senão o progresso de 1s viraria spam na história.
+  // Downloads que começaram DURANTE uma tarefa do agente (link clicado ou ação download) e o
+  // último estado de cada um. Servem pra (a) não deixar o agente dizer "baixou" com o arquivo
+  // ainda baixando e (b) entregar o FIM na próxima tarefa, com o caminho, se acabar depois.
+  const agentDlIdsRef = useRef<Set<string>>(new Set());
+  const agentCancelledRef = useRef<Set<string>>(new Set());   // cancelados pelo próprio agente (cancel_download)
+  // Fim da última tarefa: um download que começa logo depois (página "thank you" que dispara o
+  // arquivo uns segundos após carregar) ainda é do agente — o fim dele vai pra próxima tarefa.
+  const taskEndedAtRef = useRef(0);
+  const DL_GRACE_MS = 30_000;
+  const agentDlThreadRef = useRef(new Map<string, string>());   // download do agente → conversa (aba) onde avisar o fim
+  const dlLatestRef = useRef<Map<string, { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; etaSec?: number | null }>>(new Map());
+  const downloadEventsRef = useRef<Array<{ id?: string; kind?: string; state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; reason?: string; stalled?: boolean; stalledForSec?: number }>>([]);
 
   // ── Supercut: abas "armadas" em pausa ───────────────────────────────────────
   // open_video_cuts abre abas do YouTube já na minutagem certa, mas o YouTube dá
@@ -679,6 +699,7 @@ export default function App() {
     window.electronAPI?.adblockGetState?.().then(s => { setAdblockOn(s.enabled); setAdblockActive(s.active); });
     window.electronAPI?.getHwAccel?.().then(s => setHwAccelOn(s.enabled));
     try { window.electronAPI?.torrentSetSeed?.(localStorage.getItem('torrentSeed') === '1'); } catch {}   // aplica a pref de seed salva
+    try { window.electronAPI?.torrentSetBuiltin?.(localStorage.getItem('torrentBuiltin') === '1'); } catch {}   // cliente embutido: padrão desligado
     try { window.electronAPI?.setYoutubeSkipAds?.(localStorage.getItem('ytSkipAds') !== '0'); } catch {}   // aplica a pref de pular anúncio salva
     try { window.electronAPI?.setYoutubeDlButton?.(localStorage.getItem('ytDlButton') !== '0', ytDlLabels()); } catch {}   // botão "Baixar" no YouTube
     // Gerenciador de downloads: preferências salvas + a pasta escolhida (vazia = Downloads).
@@ -688,7 +709,25 @@ export default function App() {
       try { new Notification('Bah', { body: `⚠️ Malicious site blocked: ${info.host}` }); } catch {}
     }) as any);
     offs.push(window.electronAPI?.onDownloadEvent?.((info) => {
-      downloadEventsRef.current.push(info);
+      const dlKey = info.id || info.path || info.filename;
+      // startedAt = quando o download apareceu pela 1ª vez → a qual tarefa ele pertence.
+      dlLatestRef.current.set(dlKey, { ...info, at: Date.now(), startedAt: (dlLatestRef.current.get(dlKey) as any)?.startedAt ?? Date.now() } as any);
+      const agentWindow = taskRunningRef.current || Date.now() - taskEndedAtRef.current < DL_GRACE_MS;
+      if (agentWindow && (info.state === 'started' || info.state === 'queued' || info.kind === 'agent' || info.kind === 'video')) {
+        if (!agentDlIdsRef.current.has(dlKey)) agentDlThreadRef.current.set(dlKey, activeTabIdRef.current);
+        agentDlIdsRef.current.add(dlKey);
+      }
+      // Download que o AGENTE começou terminou (a tarefa já acabou quando ele começou): avisa na mesma conversa,
+      // com os codecs — 4K do YouTube vem em AV1/VP9 e o QuickTime só toca o som (shared/media-codecs.ts).
+      if (info.state === 'completed' && agentDlThreadRef.current.has(dlKey)) {
+        const key = agentDlThreadRef.current.get(dlKey)!;
+        agentDlThreadRef.current.delete(dlKey);
+        const rep = codecReport(info.vcodec, info.acodec);
+        const text = `✅ ${t('dl.agentDone', { file: info.filename })}${rep ? ' — ' + rep.label + '.' : ''}${rep && rep.label && !rep.quicktime ? ' ' + t('dl.useVlc', { codec: rep.blocker }) : ''}`;
+        window.dispatchEvent(new CustomEvent('bah:agent-note', { detail: { key, text } }));
+      }
+      if (info.state !== 'progress' || info.notify) downloadEventsRef.current.push(info);
+      if (info.state === 'duplicate') return;   // só pro agente; o painel já tem a linha do original
       setDownloads(prev => {
         const key = info.id || info.path || info.filename;
         const existing = prev.find(d => (d.id || d.path || d.filename) === key);
@@ -710,11 +749,17 @@ export default function App() {
           state: info.state,
           paused: done ? false : (info.paused ?? existing?.paused),
           speedBps: done ? 0 : (info.speedBps ?? existing?.speedBps),
-          etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec),
+          etaSec: done ? undefined : (info.etaSec ?? existing?.etaSec ?? undefined),
+          stalled: done ? false : (info.stalled ?? existing?.stalled),
+          reasonCode: info.state === 'failed' ? info.reasonCode : undefined,
+          vcodec: info.vcodec ?? existing?.vcodec,
+          acodec: info.acodec ?? existing?.acodec,
         };
         return [merged, ...rest].slice(0, 50);
       });
     }) as any);
+    // Downloads de vídeo que o Bah fechou no meio da última vez: chegam como eventos acima.
+    window.electronAPI?.takeInterruptedVideoDownloads?.()?.catch(() => {});
     return () => { for (const off of offs) { try { off?.(); } catch {} } };
   }, []);
 
@@ -755,6 +800,11 @@ export default function App() {
   const [torrentSeed, setTorrentSeed] = useState<boolean>(() => { try { return localStorage.getItem('torrentSeed') === '1'; } catch { return false; } });
   const toggleTorrentSeed = useCallback(() => {
     setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
+  }, []);
+  // Cliente de torrent embutido — padrão DESLIGADO (.torrent baixa como arquivo; magnet vai pro app do sistema).
+  const [torrentBuiltin, setTorrentBuiltin] = useState<boolean>(() => { try { return localStorage.getItem('torrentBuiltin') === '1'; } catch { return false; } });
+  const toggleTorrentBuiltin = useCallback(() => {
+    setTorrentBuiltin(v => { const n = !v; try { localStorage.setItem('torrentBuiltin', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetBuiltin?.(n); return n; });
   }, []);
   // Pular anúncio do YouTube sozinho, fantasma — clica em "Pular" assim que aparece, sem
   // highlight nem aviso nosso na tela. Padrão LIGADO (mesmo espírito do adblock).
@@ -1000,7 +1050,10 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyView, setHistoryView] = useState<Array<{ url: string; title: string; ts: number }>>([]);
   // ── Downloads (painel Ctrl+J) ──
-  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean }>>([]);
+  const [downloads, setDownloads] = useState<Array<{ at?: number; id?: string; kind?: string; engine?: boolean; connections?: number; map?: number[][]; filename: string; path?: string; url?: string; state: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number; paused?: boolean; stalled?: boolean; reasonCode?: string; vcodec?: string; acodec?: string }>>([]);
+  // Espelho do painel pro loop do agente (o state fica velho dentro do loop async): list_downloads.
+  const downloadsRef = useRef(downloads);
+  downloadsRef.current = downloads;
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   // Gerenciador de downloads (Downloads → ⚙): várias conexões, igual ao IDM Caseiro.
   const [dlSettingsOpen, setDlSettingsOpen] = useState(false);
@@ -1231,16 +1284,10 @@ export default function App() {
 
 
   const navigate = useCallback((url: string) => {
-    // Magnet colado na barra → card "Salvar ou Tocar" (não navega). O will-navigate do main
-    // não cobre loadURL programático, então detectamos aqui e disparamos o mesmo fluxo.
+    // Magnet colado na barra (não navega). O will-navigate do main não cobre loadURL
+    // programático, então mandamos pro mesmo handleUri: card (cliente embutido) ou app do sistema.
     if (/^magnet:/i.test(url.trim())) {
-      const uri = url.trim();
-      setTorrent({ uri, phase: 'fetching', saving: {}, saved: {} });
-      window.electronAPI?.torrentAdd?.(uri).then((r) => {
-        setTorrent(cur => (cur && cur.uri === uri)
-          ? (r?.ok ? { ...cur, id: r.id, name: r.name, files: r.files, phase: 'choosing' } : { ...cur, phase: 'error', error: r?.error })
-          : cur);
-      });
+      window.electronAPI?.torrentOpen?.(url.trim());
       return;
     }
     let finalUrl = url;
@@ -1810,7 +1857,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             onClick={() => { setDownloadsOpen(o => !o); setDlSettingsOpen(false); }}
             title={t('downloads.open')}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+            {/* Seta normal; com download ativo, o anel de progresso do Chrome em volta dela. */}
+            <DownloadButtonIcon downloads={downloads} />
           </button>
           {downloadsOpen && (
             <>
@@ -1872,10 +1920,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const active = d.state === 'started' || d.state === 'progress' || d.state === 'queued';
                       const label = d.state === 'queued' ? t('dl.queued')
                         : d.paused ? t('dl.paused')
+                        : d.stalled && (d.state === 'started' || d.state === 'progress') ? t('dl.stalled')
                         : (d.state === 'started' || d.state === 'progress') ? t('dl.downloading')
                         : d.state === 'completed' ? t('dl.done')
                         : d.state === 'blocked' ? t('dl.blocked')
                         : d.state === 'cancelled' ? t('dl.cancelled')
+                        : d.reasonCode === 'interrupted' ? t('dl.interrupted')
                         : t('dl.failed');
                       return (
                         <li key={d.id || d.path || d.filename || String(i)} className="dl-item" title={d.path || d.filename}>
@@ -1898,11 +1948,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               {active && !d.paused && d.speedBps ? ' · ' + fmtSpeed(d.speedBps) : ''}
                               {active && !d.paused && d.etaSec != null ? ' · ' + fmtEta(d.etaSec) : ''}
                               {active && !d.paused && d.engine && d.connections ? ` · ${d.connections} ${t('dl.conns')}` : ''}
+                              {d.state === 'failed' && d.reasonCode === 'not-merged' ? t('dl.notMerged') : ''}
+                              {d.state === 'failed' && d.reasonCode === 'no-audio' ? t('dl.noAudio') : ''}
+                              {d.state === 'completed' && (d.vcodec || d.acodec) ? (() => { const r = codecReport(d.vcodec, d.acodec); return r ? ` · ${r.label}${r.quicktime ? '' : ' — ' + t('dl.useVlcShort', { codec: r.blocker })}` : ''; })() : ''}
                             </span>
                             <span className="dl-actions">
                               {/* Vídeo do botão "Baixar" do YouTube (yt-dlp): não pausa; cancelar
                                   e tentar de novo vão pro job de vídeo, não pro download comum. */}
-                              {d.id && active && d.kind !== 'video' && (
+                              {d.id && active && d.kind !== 'video' && d.kind !== 'agent' && (
                                 (d.paused || d.state === 'queued')
                                   ? <button title={t('dl.resume')} onClick={() => window.electronAPI?.resumeDownload?.(d.id!)}>▶</button>
                                   : <button title={t('dl.pause')} onClick={() => window.electronAPI?.pauseDownload?.(d.id!)}>⏸</button>
@@ -1990,6 +2043,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     <span className={`menu-switch ${getPerm(k) === 'allow' ? 'on' : ''}`}>{t(`menu.perm.${getPerm(k)}` as any)}</span>
                   </button>
                 ))}
+                <button className="menu-item" onClick={() => toggleTorrentBuiltin()} title={t('menu.torrentBuiltinTitle')}>
+                  <span className="menu-ic">🧲</span>
+                  <span className="menu-label">{t('menu.torrentBuiltin')}</span>
+                  <span className={`menu-switch ${torrentBuiltin ? 'on' : ''}`}>{torrentBuiltin ? 'ON' : 'OFF'}</span>
+                </button>
                 <button className="menu-item" onClick={() => toggleTorrentSeed()} title={t('menu.torrentSeedTitle')}>
                   <span className="menu-ic">🌱</span>
                   <span className="menu-label">{t('menu.torrentSeed')}</span>
@@ -2314,7 +2372,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // Suspende o bypass do adblock enquanto o agente trabalha: senão ele lê os
               // anúncios do YouTube/Google como se fossem conteúdo e age no anúncio errado.
               try { await window.electronAPI?.adblockSetAgentBusy?.(true); } catch {}
-              downloadEventsRef.current = [];  // downloads velhos (manuais/da tarefa anterior) não entram na história DESTA
+              // Downloads velhos (manuais/da tarefa anterior) não entram na história DESTA — exceto o
+              // FIM de um download do agente em background que terminou depois da tarefa anterior:
+              // a IA precisa saber que ele acabou e ONDE o arquivo está.
+              downloadEventsRef.current = downloadEventsRef.current.filter(d =>
+                agentDlIdsRef.current.has(d.id || d.path || d.filename) && (d.state === 'completed' || d.state === 'failed'));
+              for (const d of downloadEventsRef.current) agentDlIdsRef.current.delete(d.id || d.path || d.filename);
               try {
               if (isTrashDestroyerCommand(command)) {
                 const wv = getActiveWebview();
@@ -2483,6 +2546,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const taskUploads: Array<{ token: string; names: string[] }> = [];
               // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
+              // O download é o ÚLTIMO passo do pedido? Sim → a tarefa acaba quando ele começa. Não ("baixe e
+              // instale", "baixe os dois e compare") → o Bah espera TODOS os downloads da tarefa terminarem
+              // antes do próximo passo, senão o modelo acha que o arquivo já está lá.
+              const downloadIsLastStep = commandWantsDownload && !commandWantsSeveralFiles(command) && !commandHasFollowUp(command);
+              // Pedido de download: não deixa encerrar "com sucesso" antes de QUALQUER download
+              // começar (o modelo lê a página "Thank you for downloading" como arquivo baixado).
+              let noDownloadYetBlocks = 0;
               const commandIsShopping = namesStore(command) || /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
               const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
               const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
@@ -2495,6 +2565,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let carefulNavs = 0, carefulRefusals = 0;
               // A última coisa em que o agente agiu (texto do clique + página): o próximo pedido pode dizer "it/that".
               let lastTarget = '';
+              // Download que começou NESTA tarefa (não um que terminou depois, vindo da anterior).
+              const ofThisTask = (d: any) => !!d && (d.startedAt ?? 0) >= taskStartedAt;
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
               let unfinishedBlocks = 0;    // encerrou dizendo que "vai continuar"
               let planNudged = false;      // tarefa em vários sites sem plano
@@ -2847,6 +2919,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (siteHint) history += `\n${siteHint}`;
                 }
 
+                // "Os 3 maiores sucessos do X": a lista é conhecimento do modelo, não uma página. O 8B navegava
+                // rankings por 20 min e nunca guardava a lista; aqui o Bah pergunta UMA vez, direto, e o passo 0
+                // vira o store → cartão de confirmação e downloads pelo próprio Bah (bloco da COLEÇÃO no store).
+                if (isTopNCollection(command)) {
+                  const n = collectionCount(command);
+                  onProgress({ kind: 'status', message: `🎵 Picking the ${n} best-known ones…` });
+                  try {
+                    const r = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(topNListPrompt(command, n), undefined, undefined, store.localSettings.enabled)), 60000, null as any);
+                    const items = parseTopNList(String(r?.response || ''), n);
+                    if (items.length >= 2) {
+                      actionQueue.unshift({ action: { type: 'store', key: 'tracks', value: items } as BrowserAction });
+                      history += `\nCOLLECTION LIST (from the model's own knowledge, asked directly): ${items.join('; ')}`;
+                    }
+                  } catch { /* sem lista: o agente segue pelo caminho normal (skill + aviso COLLECTION) */ }
+                }
+
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
@@ -3137,6 +3225,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const memoryBlock = memory.length
                     ? `MEMORY:\n${memory.map(m => `  • ${m.key} = ${JSON.stringify(m.value)}${m.source ? ` (from ${m.source})` : ''}`).join('\n')}`
                     : 'MEMORY: (empty — use store action to save extracted data)';
+                  // Estado AO VIVO dos downloads desta tarefa, no topo do prompt. Na história as linhas
+                  // ficavam no fim (depois de elementos/texto/OCR, e cortadas primeiro no contexto
+                  // local) — o modelo achava que nada andava.
+                  const taskDls = [...agentDlIdsRef.current].map(k => dlLatestRef.current.get(k)).filter((d): d is NonNullable<typeof d> => !!d);
+                  const downloadsBlock = taskDls.length
+                    ? `DOWNLOADS (live status — the file downloads in the background; the page does not need to change):\n${taskDls.map(d => {
+                        const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
+                        if (d.state === 'completed') return `  • ${d.filename} — COMPLETED (${fmtSize(d.bytes)}), saved at ${d.path || 'the Downloads folder'}${ofThisTask(d) ? '' : ' (from a PREVIOUS task — not this request)'}`;
+                        if (d.state === 'failed' || d.state === 'cancelled') return `  • ${d.filename} — ${d.state.toUpperCase()}`;
+                        if ((d as any).stalled) return `  • ${d.filename} — STALLED at ${of} (no data for ${(d as any).stalledForSec || 15}s)`;
+                        const pct = d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : '';
+                        return `  • ${d.filename} — DOWNLOADING ${pct}${of}${(d as any).speedBps ? ', ' + fmtSpeed((d as any).speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''} — progressing normally in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is downloading (the user follows it on the download button). Do not wait for it' : 'Bah waits for it to finish before your next step'}; do not look for another source.`;
+                      }).join('\n')}`
+                    : commandWantsDownload ? 'DOWNLOADS: none started yet in this task.' : '';
                   // Dica ao vivo de UI que trava modelo pequeno (vale pra qualquer site):
                   //  • diálogo modal aberto → a página de trás fica inerte e SOME da lista de elementos
                   //    (Booking: popup "sign in" e o agente digitava "Los Angeles" no e-mail do popup);
@@ -3251,6 +3353,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
+                    downloadsBlock,
                     skillsBlock,
                     '',
                     planBlock,
@@ -3556,7 +3659,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // download/download_video ficam FORA: baixar de novo é loop de verdade.
                   const internalForDedupe = action.type === 'plan' || action.type === 'store'
                     || action.type === 'extract_text' || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'find_file'
-                    || action.type === 'ask_ai' || action.type === 'read_aloud' || action.type === 'wait'
+                    || action.type === 'ask_ai' || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'list_downloads'
                     || action.type === 'done' || action.type === 'report';
                   const priorRepeats = recentActionHashes.slice(-3).filter(h => h === actionHash).length;
                   recentActionHashes.push(actionHash);
@@ -3645,6 +3748,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     (action as any).success = !!String(action.reason || '').trim()
                       && !/\b(unable|could ?n[o']t|cannot|can't|failed|not (?:able|found|possible|available)|no viable|blocked|n[aã]o consegui|no pude)\b/i.test(String(action.reason || ''));
                   }
+                  // Tarefa de download que JÁ entregou o arquivo: o done é sucesso, mesmo que o
+                  // modelo não mande "success" (o local nunca manda → aparecia "done(failed: …)" num
+                  // download completo). Antes do onProgress, que é quem desenha o rótulo.
+                  if (action.type === 'done' && !action.success && commandWantsDownload) {
+                    const mine = [...dlLatestRef.current.values()].filter(ofThisTask) as Array<{ state: string; filename: string }>;
+                    const completed = mine.some(d => d.state === 'completed');
+                    const running = mine.some(d => d.state === 'started' || d.state === 'progress' || d.state === 'queued');
+                    // ...e a mensagem final NÃO admite falha (meta pode ter mudado no meio — um ISO
+                    // concluído antes não faz o pedido NOVO de drivers dar "success").
+                    const admitsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed|inaccessible|not (?:able|found|possible)|no viable|não consegui|no pude)\b/i.test(action.reason || '');
+                    if (completed && !running && !admitsFailure) action.success = true;
+                  }
                   // Encerrar dizendo que AINDA vai fazer algo ("Will now search other sites…") não é
                   // terminar: devolve pro agente seguir (até 2x por tarefa). Vale pra done e report.
                   if ((action.type === 'done' || action.type === 'report') && unfinishedBlocks < 2) {
@@ -3682,6 +3797,21 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         ? 'The free model struggled with this multi-step task. For the full agent, add a DeepSeek key in settings (cheap) — the free tier is best for chat and image generation.'
                         : 'The model kept returning an invalid response for this task. Try rephrasing it, or run it again.';
                     }
+                    // Vale também com success=false: o modelo local manda done "failed" com o texto
+                    // "download successfully completed". O que conta é o que ele AFIRMA pro usuário.
+                    const claimsDone = action.success === true || (
+                      /\b(success\w*|complete\w*|finished|downloaded|baixad\w*|conclu\w*)\b/i.test(action.reason || '')
+                      && !/\b(unable|could ?n[o']t|cannot|can't|failed to|não consegui|no pude)\b/i.test(action.reason || ''));
+                    if (commandWantsDownload && claimsDone && noDownloadYetBlocks < 2) {
+                      const anyDownload = [...dlLatestRef.current.values()]
+                        .some(d => ofThisTask(d) && d.state !== 'failed');   // cancelado = tratado (agente ou pessoa decidiu)
+                      if (!anyDownload) {
+                        noDownloadYetBlocks++;
+                        history += `\nNOT DONE YET: no download has started in this task (no DOWNLOAD STARTED line). A "thank you for downloading" page is NOT the file — it usually starts the download a few seconds after loading. Use { "action": "wait", "ms": 5000 } and look for DOWNLOAD STARTED; if none appears, use the download action with a direct file URL. Do not claim the file was downloaded.`;
+                        onProgress({ kind: 'status', message: '⏳ No download has started yet — waiting for it before finishing.' });
+                        continue;
+                      }
+                    }
                     // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
                     // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
                     // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
@@ -3693,6 +3823,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         history += `\nSUMMARIZE FIRST: the user wants the actual results, not "they are visible". List what this page shows (people: name, title, company, location; jobs: title, company, location, pay; products/hotels: name, price, rating), mark the best matches and why. Use extract_text on THIS page if you have not — do not load another page. Then finish with done (or render_view for a table).`;
                         onProgress({ kind: 'status', message: '📝 Asking for the actual results before finishing.' });
                         continue;
+                      }
+                    }
+                    // Rede de segurança: a tarefa acaba com um download DELA ainda baixando → a
+                    // resposta final diz isso (o modelo costuma ler "STARTED" como "baixou").
+                    {
+                      const running = [...agentDlIdsRef.current]
+                        .map(k => dlLatestRef.current.get(k))
+                        .filter((d): d is NonNullable<typeof d> => !!d && (d.state === 'started' || d.state === 'progress' || d.state === 'queued'));
+                      if (running.length) {
+                        const lines = running.map(d => `⏳ ${d.filename}: still downloading — ${fmtSize(d.bytes)}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}${d.path ? ' → ' + d.path : ''}`);
+                        action.reason = `${action.reason || ''}\n\nNote: the download is NOT finished yet — it continues in the background (Downloads panel, Cmd/Ctrl+J):\n${lines.join('\n')}`;
                       }
                     }
                     if (commandLooksLikeSendEmail && action.success && !gmailDraftFilled) {
@@ -4039,6 +4180,47 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = { success: true, info: { steps: plan.length } };
                   } else if (action.type === 'store') {
                     memory.push({ key: action.key, value: action.value, source: action.source, ts: Date.now() });
+                    // COLEÇÃO: o modelo achou e guardou a lista de faixas → o Bah baixa uma a uma (download-steps.ts).
+                    // O modelo pequeno não sustenta esse laço sozinho (rodava em círculo e caía em captcha).
+                    const collectionItems = isMediaCollectionRequest(command) ? listItems(action.value) : [];
+                    if (collectionItems.length >= 2) {
+                      const audioOnly = collectionWantsAudioOnly(command);
+                      // Ano da obra: o que o modelo grande conferiu e guardou ("work": "Top Gun (1986)") > o pedido > a
+                      // expansão do roteador local (palpite de um modelo pequeno). "Top Gun" de 1986, não o Maverick.
+                      const work = String(memory.find(m => m.key === 'work')?.value ?? '');
+                      const subject = collectionSubject(command) || collectionSubject(understood);
+                      const year = subjectYear(subject, work, command, understood);
+                      const noun = audioOnly ? 'songs' : 'music videos';
+                      // Cartão simples (Baixar / Cancelar): o cartão com várias escolhas (melhor / menor ≤480p) é de outro PR.
+                      const go = await new Promise<boolean>((resolve) => {
+                        onProgress({ kind: 'confirm', risk: 'choice', label: noun,
+                          message: `🎬 ${collectionItems.length} ${noun} found:\n${collectionItems.map((x, i) => `${i + 1}. ${x}`).join('\n')}\n\nDownload them all? Bah downloads one at a time; follow them on the download button.`,
+                          onConfirm: () => resolve(true), onCancel: () => resolve(false) });
+                      });
+                      throwIfCancelled();
+                      if (!go) {
+                        const msg = `Found ${collectionItems.length} ${noun} (${collectionItems.join(', ')}) — not downloaded, as you asked.`;
+                        finishRun('success', msg);
+                        return { thought: msg, results: allResults, done: { type: 'done', success: true, reason: msg } as BrowserAction };
+                      }
+                      const rows: string[] = [];
+                      deadline.suspend();   // esperar downloads não é o modelo demorando
+                      try {
+                        for (let i = 0; i < collectionItems.length; i++) {
+                          throwIfCancelled();
+                          const item = collectionItems[i];
+                          onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
+                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, 'best');
+                          const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
+                          rows.push(`${r?.success ? '✅' : '❌'} ${i + 1}. ${item}${r?.success ? (file ? ` — ${file}` : '') : ` — ${String(r?.error || 'failed').slice(0, 80)}`}`);
+                        }
+                      } finally { deadline.resume(); }
+                      const ok = rows.filter(r => r.startsWith('✅')).length;
+                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}${year ? ` (${year})` : ''}` : ''}:\n\n${rows.join('\n')}`;
+                      onProgress({ kind: 'status', message: `✅ ${ok}/${collectionItems.length} ${noun} downloaded` });
+                      finishRun(ok ? 'success' : 'failed', report);
+                      return { thought: report, results: allResults, done: { type: 'done', success: ok > 0, reason: report } as BrowserAction };
+                    }
                     // LOCAL: modelo fraco GUARDA a resposta com `store` e depois divaga sem
                     // reportar. Se o pedido é "me diga/qual/explique" e o valor guardado é uma
                     // frase substancial, ENTREGA na hora. Só no local (a nuvem reporta sozinha).
@@ -4055,11 +4237,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = { success: true, info: { stored: action.key, total_keys: memory.length } };
                   } else if (action.type === 'download') {
                     // Agent-driven download (image/pdf/...) → user's Downloads folder via main process
+                    // Roda em background (worker thread no main): volta assim que COMEÇA, com o caminho
+                    // final. Progresso/fim chegam pelos eventos de download (DOWNLOAD PROGRESS/COMPLETED).
                     const dl = await window.electronAPI?.downloadUrl?.(action.url, action.filename);
                     toolResult = dl ?? { success: false, error: 'download API unavailable' };
+                    // O 'started' desse download já entrou nos eventos; a linha abaixo o substitui.
+                    const startedId = dl?.success ? dl.info?.id : undefined;
+                    if (startedId) downloadEventsRef.current = downloadEventsRef.current.filter(d => !(d.id === startedId && d.state === 'started'));
                     if (dl?.success && dl.info) {
-                      history += `\nDOWNLOADED: ${dl.info.path} (${Math.round(dl.info.bytes / 1024)} KB)`;
-                      onProgress({ kind: 'status', message: `💾 Downloaded: ${dl.info.path.split(/[\\/]/).pop()} (${Math.round(dl.info.bytes / 1024)} KB)` });
+                      const size = dl.info.totalBytes ? fmtSize(dl.info.totalBytes) : 'unknown size';
+                      history += `\nDOWNLOAD STARTED in the background: ${dl.info.path} (${size}). Updates will appear as DOWNLOAD PROGRESS / STALLED / COMPLETED / FAILED lines.`;
+                      onProgress({ kind: 'status', message: `💾 Downloading: ${dl.info.path.split(/[\\/]/).pop()} (${size})` });
                     }
                   } else if (action.type === 'ask_ai') {
                     // Responde uma pergunta usando a NOSSA IA (DeepSeek/Ollama) — instantâneo,
@@ -4171,7 +4359,33 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (action.query) {
                         lastQuickActionRef.current = { type: 'download_video', query: action.query, audio_only: action.audio_only, count, quality: qual };
                       }
-                      const vr = await window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      const callAt = Date.now();
+                      const vrP = window.electronAPI?.downloadVideo?.(target, action.audio_only, count, qual);
+                      // UM vídeo e nada mais na fila: a tarefa acaba quando o download COMEÇA (primeiros bytes),
+                      // não quando termina — senão o painel fica "trabalhando" só esperando. O anel do botão de
+                      // downloads mostra o progresso e o fim. Se o yt-dlp falhar antes de começar, segue o
+                      // caminho de sempre (fallbacks abaixo).
+                      if (vrP && count === 1 && actionQueue.length === 0 && downloadIsLastStep) {
+                        const startedDl = await new Promise<any>(resolve => {
+                          let settled = false;
+                          const finish = (v: any) => { if (!settled) { settled = true; clearInterval(iv); resolve(v); } };
+                          vrP.then(() => finish(null), () => finish(null));
+                          const iv = setInterval(() => {
+                            const d = [...dlLatestRef.current.values()].find((x: any) => x.kind === 'video' && (x.startedAt ?? 0) >= callAt
+                              && (x.state === 'progress' || x.state === 'started') && ((x.bytes || 0) > 0));
+                            if (d) finish(d);
+                          }, 500);
+                        });
+                        if (startedDl) {
+                          const size = startedDl.totalBytes ? ` (~${fmtSize(startedDl.totalBytes)})` : '';
+                          const what = startedDl.filename && startedDl.filename !== 'download' ? startedDl.filename : (action.query || (action.audio_only ? 'the song' : 'the video'));
+                          const msg = `⬇️ Downloading ${what}${size} to Downloads — follow its progress on the download button.`;
+                          onProgress({ kind: 'status', message: msg });
+                          finishRun('success', msg);
+                          return { thought: msg, results: [...allResults, { action, result: { success: true, info: { started: true } } }], done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                        }
+                      }
+                      const vr = await vrP;
                       if (vr?.success) {
                         // A finished media download IS the goal — auto-complete the task here.
                         // Don't let a weaker model second-guess success (it was reporting
@@ -4180,11 +4394,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           .map(p => p.split(/[\\/]/).pop());
                         const nFiles = files.length || 1;
                         const list = files.join(', ') || vr.title;
-                        const doneMsg = nFiles > 1
+                        const doneMsg = (nFiles > 1
                           ? (action.audio_only
                               ? `${nFiles} songs downloaded and saved to Downloads: ${list}`
                               : `${nFiles} videos downloaded and saved to Downloads: ${list}`)
-                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`;
+                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`)
+                          + (vr.warning === 'source-has-no-audio' ? ' (note: the original video has no sound track)' : '');
                         // miniaturas clicáveis no feed (clique → abre a pasta Downloads)
                         const fullPaths = (vr.paths && vr.paths.length ? vr.paths : (vr.path ? [vr.path] : []));
                         if (fullPaths.length) {
@@ -4193,13 +4408,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         }
                         onProgress({ kind: 'status', message: `✅ ${doneMsg}` });
                         allResults.push({ action, result: { success: true, info: { paths: vr.paths, title: vr.title } } });
-                        // Auto-finish ONLY when nothing else is queued. A batch of named songs
-                        // (actions:[download_video A, B, C]) must run them all before ending.
-                        if (actionQueue.length === 0) {
+                        // Auto-finish ONLY when nothing else is queued AND this download was the whole
+                        // request. A batch of named songs (actions:[download_video A, B, C]) must run them all;
+                        // "…and then X" goes on to X; a COLLECTION ("all the music videos from the movie…") goes on
+                        // to the next track of the list it stored.
+                        if (actionQueue.length === 0 && (downloadIsLastStep || !commandWantsDownload)) {
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
-                        history += `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`;
+                        history += actionQueue.length
+                          ? `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`
+                          : isMediaCollectionRequest(command)
+                            ? `\nDOWNLOADED: ${list}. The request covers more than this one item: continue with the NEXT item of the list you stored (download_video with its "Artist – Title" query); finish only when every item is downloaded or reported as unavailable.`
+                            : `\nDOWNLOADED: ${list}. The request continues after this download: do the rest of it now.`;
                         toolResult = { success: true, info: { paths: vr.paths } };
                       } else {
                         // ── FALLBACK CHAIN (self-healing, Gemini): yt-dlp falhou →
@@ -5371,6 +5592,67 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (action.write != null) toolResult = await window.electronAPI?.clipboardWriteText?.(action.write);
                     else if (!(await askPermission('clipboard', 'Read the text you last copied (clipboard).'))) toolResult = { success: false, error: 'The user did not allow reading their clipboard.' };
                     else { const txt = await window.electronAPI?.clipboardReadText?.() ?? ''; history += `\nCLIPBOARD (what the user copied): ${txt || '(empty)'}`; toolResult = { success: true, info: { chars: txt.length } }; }
+                  } else if (action.type === 'list_downloads') {
+                    // A fila do painel de Downloads (Cmd/Ctrl+J), como o agente precisa: id pra
+                    // controlar, estado, progresso, caminho e quem começou.
+                    const all = downloadsRef.current;
+                    const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
+                    const rows = [...all.filter(isActive), ...all.filter(d => !isActive(d))].slice(0, 20).map(d => {
+                      const key = d.id || d.path || d.filename;
+                      const st = d.state === 'queued' ? 'QUEUED' : d.paused ? 'PAUSED' : d.stalled && isActive(d) ? 'STALLED' : isActive(d) ? 'DOWNLOADING'
+                        : d.state === 'failed' && d.reasonCode ? `FAILED (${d.reasonCode})` : d.state.toUpperCase();
+                      const pct = d.totalBytes ? ` ${Math.floor(((d.bytes || 0) / d.totalBytes) * 100)}%,` : '';
+                      const size = ` ${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
+                      const live = isActive(d) && !d.paused ? `${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}` : '';
+                      const who = agentDlIdsRef.current.has(key) ? 'agent' : 'user';
+                      return `  [${d.id || '-'}] ${d.filename} — ${st}${pct}${size}${live}${d.path ? ' → ' + d.path : ''} (started by ${who}${d.kind === 'video' ? ', video' : ''})`;
+                    });
+                    const active = all.filter(isActive).length;
+                    history += `\nDOWNLOADS LIST (${active} active, ${all.length} total; use the [id] with cancel_download / pause_download / resume_download / retry_download):\n${rows.length ? rows.join('\n') : '  (no downloads)'}`;
+                    onProgress({ kind: 'status', message: `📥 Downloads: ${active} active, ${all.length} total` });
+                    toolResult = { success: true, info: { active, total: all.length } };
+                  } else if (action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download') {
+                    // Acha por id exato, senão pelo nome do arquivo (preferindo o ativo).
+                    const all = downloadsRef.current;
+                    const q = action.id.toLowerCase();
+                    const isActive = (d: { state: string }) => d.state === 'started' || d.state === 'progress' || d.state === 'queued';
+                    const byName = all.filter(d => (d.filename || '').toLowerCase().includes(q));
+                    const d = all.find(x => (x.id || '').toLowerCase() === q) || byName.find(isActive) || byName[0];
+                    const verb = action.type.replace('_download', '');
+                    if (!d || !d.id) {
+                      toolResult = { success: false, error: `No download matches "${action.id}". Call list_downloads to see the ids.` };
+                    } else if (action.type === 'cancel_download' && !isActive(d)) {
+                      toolResult = { success: false, error: `${d.filename} is not active (${d.state}) — nothing to cancel.` };
+                    } else if ((action.type === 'pause_download' || action.type === 'resume_download') && (d.kind === 'video' || d.kind === 'agent')) {
+                      toolResult = { success: false, error: `${d.filename} cannot be paused/resumed (${d.kind} download) — only cancelled.` };
+                    } else if (action.type === 'retry_download' && d.state !== 'failed' && d.state !== 'cancelled') {
+                      toolResult = { success: false, error: `${d.filename} is ${d.state} — only failed or cancelled downloads can be retried.` };
+                    } else {
+                      // Cancelar um download que a PESSOA começou passa pelo freio de segurança.
+                      const mine = agentDlIdsRef.current.has(d.id);
+                      let allowed = true;
+                      if (action.type === 'cancel_download' && !mine) {
+                        allowed = await confirmRisky({ kind: 'a download you started', label: `cancel ${d.filename}` });
+                        throwIfCancelled();
+                      }
+                      if (!allowed) {
+                        toolResult = { success: false, reason: 'user_cancelled', error: `You declined — ${d.filename} keeps downloading.` };
+                      } else {
+                        const api = window.electronAPI;
+                        if (action.type === 'cancel_download') agentCancelledRef.current.add(d.id);
+                        const r: any = action.type === 'cancel_download'
+                          ? (d.kind === 'video' ? await api?.cancelVideoDownload?.(d.id) : await api?.cancelDownload?.(d.id))
+                          : action.type === 'pause_download' ? await api?.pauseDownload?.(d.id)
+                          : action.type === 'resume_download' ? await api?.resumeDownload?.(d.id)
+                          : (d.kind === 'video' ? await api?.retryVideoDownload?.(d.id) : await api?.retryDownload?.(d.id, d.url));
+                        const ok = r?.ok !== false && r?.success !== false;
+                        toolResult = ok ? { success: true, info: { [verb]: d.filename, id: d.id } } : { success: false, error: `Could not ${verb} ${d.filename}.` };
+                        if (ok) {
+                          history += `\nDOWNLOAD ${verb.toUpperCase()}: ${d.filename} [${d.id}].`;
+                          onProgress({ kind: 'status', message: `📥 ${verb}: ${d.filename}` });
+                        }
+                      }
+                    }
                   } else {
                     // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
@@ -5388,6 +5670,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
                     || action.type === 'list_files' || action.type === 'read_file'
+                    || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'read_aloud' || action.type === 'history_search';
@@ -5453,6 +5736,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
                     || action.type === 'list_files' || action.type === 'read_file'
+                    || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
@@ -5483,20 +5767,86 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Site-initiated downloads triggered by this action (clicking a "baixar"
                   // button fires will-download; the page itself doesn't change). Tell the AI
                   // the click WORKED so it doesn't repeat it, and clear the no-effect penalty.
-                  const dlEvents = downloadEventsRef.current.splice(0);
+                  // Um passo pode juntar vários ticks de progresso: só o ÚLTIMO de cada download entra —
+                  // várias linhas "ainda não terminou" deixavam o modelo achar que nada andava.
+                  // O "download começou" chega DEPOIS do clique voltar (o Chromium só avisa quando o servidor
+                  // responde). Numa tarefa de download, um clique espera até 2,5 s por ele — senão o passo seguinte
+                  // já roda sem saber do download (e a tarefa nem acaba quando ele começa, nem espera por ele).
+                  if (commandWantsDownload && downloadEventsRef.current.length === 0
+                      && (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'click_at' || action.type === 'navigate')) {
+                    for (let w = 0; w < 25 && downloadEventsRef.current.length === 0; w++) await new Promise(r => setTimeout(r, 100));
+                  }
+                  const dlEvents = (() => {
+                    const all = downloadEventsRef.current.splice(0);
+                    const lastProg = new Map<string, number>();
+                    all.forEach((d, i) => { if (d.state === 'progress' && !d.stalled) lastProg.set(d.id || d.path || d.filename, i); });
+                    return all.filter((d, i) => d.state !== 'progress' || d.stalled || lastProg.get(d.id || d.path || d.filename) === i);
+                  })();
                   if (dlEvents.length > 0) {
                     for (const d of dlEvents) {
+                      const latest = dlLatestRef.current.get(d.id || d.path || d.filename) as any;
+                      const prevTask = latest && (latest.startedAt ?? 0) < taskStartedAt ? ' (from a PREVIOUS task — not this request)' : '';
+                      const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const line = d.state === 'completed'
-                        ? `DOWNLOAD COMPLETED: ${d.filename} saved to Downloads (${Math.round((d.bytes || 0) / 1024)} KB). This is SUCCESS — do not click the download button again.`
-                        : d.state === 'blocked'
-                        ? `DOWNLOAD BLOCKED: ${d.filename} — ${d.reason || 'executable files are not allowed'}.`
+                        ? `DOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready to use at that path. This is SUCCESS — do not download it again.`
+                        : d.state === 'progress' && d.stalled
+                        ? `DOWNLOAD STALLED: ${d.filename} — no data for ${d.stalledForSec || 15}s at ${of}. It is aborted after 60s without data; you may wait, or retry/try another source.`
+                        : d.state === 'progress'
+                        ? `DOWNLOAD PROGRESS: ${d.filename} — ${d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : ''}${of}${d.speedBps ? ', ' + fmtSpeed(d.speedBps) : ''}${d.etaSec != null ? ', ETA ' + fmtEta(d.etaSec) : ''}. Downloading normally in the background — ${downloadIsLastStep ? 'if this is what the user asked for, finish with done now (say it is downloading)' : 'Bah waits for it to complete before your next step'}; do NOT start another copy or look for another source.`
+                        : d.state === 'duplicate'
+                        ? `DOWNLOAD NOT STARTED (duplicate): ${d.filename} is ALREADY downloading — the second copy was refused. The first one continues in the background${downloadIsLastStep ? ': finish with done saying it is downloading' : ' and Bah waits for it'}.`
+                        : d.state === 'failed' && d.stalled
+                        ? `DOWNLOAD FAILED (stalled): ${d.filename} — the server stopped sending data after ${of}; the partial file was removed. Retry once, or try another mirror/source.`
                         : d.state === 'failed'
-                        ? `DOWNLOAD FAILED: ${d.filename} — try another link/source.`
-                        : `DOWNLOAD STARTED: ${d.filename} (saving automatically, no dialog).`;
-                      history += `\n${line}`;
+                        ? `DOWNLOAD FAILED: ${d.filename}${d.reason ? ' — ' + d.reason : ''} — try another link/source.`
+                        : d.state === 'cancelled'
+                        ? (d.id && agentCancelledRef.current.has(d.id)
+                          ? `DOWNLOAD CANCELLED (by your cancel_download): ${d.filename}; the partial file was removed.`
+                          : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
+                        : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.' : 'Bah waits for it to COMPLETE before your next step; the rest of the request continues after DOWNLOAD COMPLETED.'}`;
+                      history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}`;
                       onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
+                    // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
+                    // O resto (progresso, fim) aparece no botão de downloads — não segura o painel "trabalhando".
+                    // Fica de fora: pedido de VÁRIOS arquivos e download parado.
+                    if (downloadIsLastStep && actionQueue.length === 0) {
+                      const started = dlEvents.find(d => (d.state === 'started' || (d.state === 'progress' && !d.stalled))
+                        && ((dlLatestRef.current.get(d.id || d.path || d.filename) as any)?.startedAt ?? 0) >= taskStartedAt);
+                      if (started) {
+                        const size = started.totalBytes ? ` (${fmtSize(started.totalBytes)})` : '';
+                        const msg = `⬇️ Downloading ${started.filename}${size} to ${started.path ? started.path.split(/[\\/]/).slice(0, -1).join('/') || 'Downloads' : 'Downloads'} — follow its progress on the download button.`;
+                        onProgress({ kind: 'status', message: msg });
+                        finishRun('success', msg);
+                        return { thought: thoughts.join('\n\n') || msg, results: allResults, done: { type: 'done', reason: msg, success: true } as BrowserAction };
+                      }
+                    } else if (commandWantsDownload && !downloadIsLastStep) {
+                      // Pedido continua depois do download (ou são vários): o BAH espera todos os downloads desta
+                      // tarefa (sem gastar chamada de modelo), mostrando o que espera; o modelo só volta com as
+                      // linhas DOWNLOAD COMPLETED — assim o próximo passo sabe que o arquivo existe e onde está.
+                      const mine = () => [...agentDlIdsRef.current].map(k => dlLatestRef.current.get(k) as any)
+                        .filter(d => !!d && (d.startedAt ?? 0) >= taskStartedAt);
+                      const running = () => mine().filter(d => (d.state === 'started' || d.state === 'progress' || d.state === 'queued') && !d.stalled);
+                      if (running().length) {
+                        deadline.suspend();   // esperar download não é o modelo demorando
+                        try {
+                          while (running().length) {
+                            throwIfCancelled();
+                            const parts = mine().map(d => d.state === 'completed' ? `${d.filename} ✓`
+                              : `${d.filename}${d.totalBytes ? ' ' + Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%' : ''}${d.etaSec != null ? ` (ETA ${fmtEta(d.etaSec)})` : ''}`);
+                            onProgress({ kind: 'status', message: `⏳ Waiting for downloads: ${parts.join(', ')}` });
+                            await new Promise(r => setTimeout(r, 2000));
+                          }
+                        } finally { deadline.resume(); }
+                        for (const d of mine()) {
+                          history += d.state === 'completed'
+                            ? `\nDOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready; continue with the rest of the request.`
+                            : `\nDOWNLOAD ${String(d.state).toUpperCase()}${d.stalled ? ' (stalled)' : ''}: ${d.filename}${d.reason ? ' — ' + d.reason : ''}`;
+                        }
+                        noEffectCount = 0;
+                      }
+                    }
                   }
                   if (toolResult && toolResult.reason === 'element_covered') {
                     history += `\nHINT: The target element is covered by an overlay (${toolResult.covering || 'unknown'}). Close the modal / cookie banner / popup first (look for "Aceitar", "Accept", "Fechar", "X", "OK"), then retry.`;
@@ -5509,6 +5859,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     history += `\nHINT: A última ação (${action.type}) FALHOU: ${(toolResult.error || 'sem efeito visível').slice(0, 160)}. Analise a página ATUAL e tente uma ABORDAGEM DIFERENTE (outro elemento/ref, scroll, navegar a outra fonte, ou outra ferramenta). NÃO repita a mesma ação igual.`;
                   }
                   if (noEffectCount >= 2) history += '\nWARNING: Two consecutive actions had no visible effect. Choose a different strategy now.';
+                  // Coleção sem lista guardada: o modelo pequeno ficava navegando em rankings/Wikipedia (20 min no "top 3 do
+                  // Michael Jackson") e nunca entregava a lista pro Bah baixar. A partir do passo 4, a cada 3, cobra o store.
+                  if (step >= 4 && step % 3 === 1 && isMediaCollectionRequest(command) && !memory.some(m => m.key === 'tracks' || listItems(m.value).length >= 2)) {
+                    history += '\nCOLLECTION: stop browsing. Store the list NOW from what you already know or saw: {"action":"store","key":"tracks","value":["Title — Artist", …]} (as many entries as the user asked for). Bah then downloads each one itself.';
+                  }
 
                   // ── Recovery layer — detect blockers and inject corrective instructions ──
                   const recoveryVerdict = recovery.evaluate({
@@ -5530,6 +5885,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     stepsOnSameUrl,
                     step,
                     commandRequiresThisSite: commandMentionsDomain(afterObservation.url),
+                    commandWantsDownload,
                   });
                   const urlChangedByAction = afterObservation.url !== observation.url;
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);
@@ -5650,6 +6006,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // agente volta a seguir a aba que o usuário está vendo agora.
                 taskRunningRef.current = false;
                 agentDialogsStop();
+                taskEndedAtRef.current = Date.now();
                 for (const t of tabsRef.current) if (t.agentTask) store.updateTab(t.id, { agentTask: false });
                 if (privateTaskRef.current) { privateTaskRef.current = false; window.electronAPI?.setPrivateAi?.(false); }
                 // O que chegou depois do último passo (a IA já tinha decidido terminar) fica na
@@ -5851,7 +6208,7 @@ function loadDlEngine(): DlEngineSettings {
 
 // Textos do botão "Baixar" que o main injeta nas páginas com vídeo — no idioma da UI.
 function ytDlLabels(): Record<string, string> {
-  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'video', 'drm', 'dec'];
+  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'video', 'drm', 'needTool', 'dec'];
   return Object.fromEntries(keys.map(k => [k, t(`ytdl.${k}`)]));
 }
 

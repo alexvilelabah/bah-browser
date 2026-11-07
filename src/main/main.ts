@@ -14,6 +14,7 @@ import { ElectronBlocker, fullLists } from '@ghostery/adblocker-electron';
 // Provado por bissecção: mesmo fetch, mesmo endpoint — global passa, cross-fetch falha.
 import fs from 'fs';
 import path from 'path';
+import { Worker } from 'worker_threads';
 import { AIEngine, AIProvider, setEngineLang, type LocalEndpointOpts } from './ai-engine';
 import { splitDataUrl, type VisionImage } from '../shared/vision';
 import { arcPath, ARC_MS } from '../shared/agent-cursor-path';
@@ -28,7 +29,7 @@ import {
 import { stripTrackingParams } from './tracking-params';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
-import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, stopAllMediaDownloads, type VideoDownloadProgress } from './media-downloader';
 import { searchVideoCuts } from './video-cuts';
 import { fetchTranscript } from './transcript';
 import { fetchStockMovers, openDataView, type DataViewSpec } from './data-view';
@@ -1314,8 +1315,9 @@ function createWindow(): void {
     wc.setWindowOpenHandler((details) => {
       const url = details.url;
       if (!url || url === 'about:blank') return { action: 'deny' };
-      // window.open('magnet:…') / link .torrent que abre em nova janela → card, não aba.
-      if (/^magnet:/i.test(url) || /\.torrent(\?|#|$)/i.test(url)) { torrentManager?.handleUri(url); return { action: 'deny' }; }
+      // window.open('magnet:…') → card (ou app do sistema), não aba. Link .torrent só vira card
+      // com o cliente embutido ligado; senão baixa como arquivo normal.
+      if (/^magnet:/i.test(url) || (torrentManager?.builtinEnabled() && /\.torrent(\?|#|$)/i.test(url))) { torrentManager?.handleUri(url); return { action: 'deny' }; }
       // Safe browsing na popup
       try {
         const u = new URL(url);
@@ -1414,10 +1416,11 @@ function createWindow(): void {
     wc.on('will-navigate', (e, url) => {
       try {
         const u = new URL(url);
-        // Magnet / .torrent → abre o card "Salvar ou Tocar" (não navega). O motor de
-        // torrent fica isolado num utilityProcess; aqui só avisamos o renderer.
+        // Magnet → card "Salvar ou Tocar" com o cliente embutido ligado, senão o app de torrent
+        // do sistema (não navega). Link .torrent: card só com o embutido ligado; senão segue
+        // pro will-download e é salvo em Downloads como qualquer arquivo.
         if (u.protocol === 'magnet:') { e.preventDefault(); torrentManager?.handleUri(url); return; }
-        if (/\.torrent(\?|#|$)/i.test(u.pathname)) { e.preventDefault(); torrentManager?.handleUri(url); return; }
+        if (torrentManager?.builtinEnabled() && /\.torrent(\?|#|$)/i.test(u.pathname)) { e.preventDefault(); torrentManager?.handleUri(url); return; }
         if (maliciousHosts.has(u.hostname)) {
           e.preventDefault();
           mainWindow?.webContents.send('safe-browsing-block', { url, host: u.hostname });
@@ -2661,9 +2664,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     }
   });
 
-  // ═══ Agent-driven file download (images, pdfs...) into the user's Downloads ═══
-  // Executables are blocked by extension AND by content sniffing of the first bytes.
-  const BLOCKED_EXTENSIONS = /\.(exe|msi|bat|cmd|scr|com|pif|apk|dmg|pkg|deb|rpm|js|jse|vbs|vbe|wsf|ps1|jar|lnk|hta)(\?|#|$)/i;
+  // ═══ Agent-driven file download into the user's Downloads ═══
+  // Any file type is allowed (no extension blocklist / executable sniffing).
 
   // Attach a DOCUMENT (PDF/Word/Markdown/txt) to ask about it: native dialog → extract
   // the text → the renderer sends it as chat context (works with ANY text model, free).
@@ -3123,10 +3125,25 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   }
   // Gerenciador de download nativo (Fase A): pausar/continuar/cancelar/retomar,
   // velocidade+ETA, fila com limite. Registry por id vive no módulo dedicado.
+  // Downloads da ação `download` do agente em andamento (id → worker), pro ✕ do painel cancelar.
+  const agentDownloads = new Map<string, Worker>();
   const downloadManager = setupDownloadManager({
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
-    blockedExtensions: BLOCKED_EXTENSIONS,
+    blockDuplicates: () => agentBusy,
+    cancelExternal: (id) => {
+      const w = agentDownloads.get(id);
+      if (!w) return false;
+      w.postMessage({ t: 'cancel' });
+      return true;
+    },
+    // Cliente de torrent embutido ligado → .torrent vira card em vez de arquivo, venha de onde vier
+    // (link, barra de endereço, agente). Desligado → baixa como qualquer arquivo.
+    interceptDownload: (url, filename) => {
+      if (!torrentManager?.builtinEnabled() || !/\.torrent$/i.test(filename)) return false;
+      torrentManager.handleUri(url);
+      return true;
+    },
   });
   downloadManager.attach(session.fromPartition('persist:browser'));
   downloadManager.attach(session.defaultSession);
@@ -3189,11 +3206,10 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // Estilo IDM: anota os vídeos/streams que as abas carregam (pros sites que o yt-dlp não conhece).
   videoButton.attachSniffer(session.fromPartition('persist:browser'));
   videoButton.attachSniffer(incognitoSession());   // aba anônima também (a lista fica só na memória)
-  // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads + trava de exe.
+  // Torrent (magnet/.torrent) — motor isolado num utilityProcess; reusa Downloads.
   torrentManager = setupTorrentManager({
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
-    blockedExtensions: BLOCKED_EXTENSIONS,
     allowDirect: (uri) => allowDirectDownload(uri, true),
     directRefused: () => mt('dl.noProxy.refused'),
   });
@@ -3207,115 +3223,61 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     if (mainWindow?.isVisible()) startRouter();
     else { mainWindow?.once('show', startRouter); mainWindow?.once('ready-to-show', startRouter); }
   }
+  // ═══ Ação `download` do agente — roda numa worker thread (agent-download-worker.ts) ═══
+  // Devolve assim que o download COMEÇA (caminho final + tamanho) e segue em background. O
+  // resto chega como 'agent:download-event' (kind 'agent'): progresso a cada 1s pro painel,
+  // `notify` na cadência do ETA pro agente, stall, e completed/failed/cancelled com o caminho.
+  let agentDlSeq = 0;
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
+    if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
+    const id = `agdl_${++agentDlSeq}`;
+    // Empacotado: o worker roda do app.asar.unpacked (ver asarUnpack). Em dev o replace é no-op.
+    const workerPath = path.join(__dirname, 'agent-download-worker.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    let worker: Worker;
     try {
-      if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
-      if (BLOCKED_EXTENSIONS.test(url) || (filename && BLOCKED_EXTENSIONS.test(filename))) {
-        return { success: false, error: 'Blocked: executable/script files cannot be downloaded by the agent.' };
-      }
-      // Full browser-like headers: Wikimedia (and many CDNs) reject generic/partial
-      // User-Agents with 429/403. Referer helps with hotlink protection.
-      const dlHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': ACCEPT_LANGUAGE,
-        'Referer': new URL(url).origin + '/',
-      };
-      // Many .gov.br / older sites have an incomplete TLS cert chain ("unable to verify
-      // the first certificate"). Try strict first; on a cert error retry tolerantly
-      // (the file's MZ/executable checks below still protect the user).
-      const dlCtrl = new AbortController();
-      const dlTimer = setTimeout(() => { try { dlCtrl.abort(); } catch {} }, 60000);   // teto de 60s: servidor lento/infinito nao trava o main
-      // O fetch nativo IGNORA a opção `agent` — ela só existia no node-fetch, que saiu daqui
-      // (ver o comentário do topo). Sem isto, a retentativa "tolerante" refazia a requisição
-      // idêntica e falhava de novo: um no-op silencioso. O caminho tolerante passa a usar o
-      // módulo https direto, que aceita rejectUnauthorized de verdade. A resposta dele já é
-      // async-iterável e tem .headers, então o resto do código abaixo funciona igual.
-      const doFetch = (lenient: boolean): Promise<any> => {
-        if (!(lenient && url.startsWith('https:'))) {
-          return fetch(url, { headers: dlHeaders, signal: dlCtrl.signal } as any);
-        }
-        return new Promise((resolve, reject) => {
-          const req = require('https').get(url, { headers: dlHeaders, rejectUnauthorized: false }, (r: any) => {
-            resolve({
-              ok: r.statusCode >= 200 && r.statusCode < 300,
-              status: r.statusCode,
-              headers: { get: (k: string) => r.headers[String(k).toLowerCase()] ?? null },
-              body: r,
-            });
-          });
-          req.on('error', reject);
-          dlCtrl.signal.addEventListener('abort', () => { try { req.destroy(); } catch {} }, { once: true });
-        });
-      };
-      let res: any;
-      try {
-        res = await doFetch(false);
-      } catch (e: any) {
-        if (/certificate|unable to verify|self.signed|CERT_|altname|ERR_TLS/i.test(String(e?.message))) {
-          console.warn('[Download] TLS cert issue → retrying tolerantly:', url);
-          res = await doFetch(true);
-        } else throw e;
-      }
-      if (res.status === 429 || res.status === 403) {
-        await new Promise(r => setTimeout(r, 2500));
-        res = await doFetch(false).catch(() => doFetch(true));
-      }
-      if (!res.ok) { clearTimeout(dlTimer); return { success: false, error: `HTTP ${res.status}` }; }
-      // Teto de 100MB ANTES de bufferizar: Content-Length corta cedo; sem ele, lê em stream e
-      // aborta ao passar do teto (evita OOM quando o servidor manda/mente um arquivo gigante).
-      const MAX_DL = 100 * 1024 * 1024;
-      if (Number(res.headers.get('content-length') || 0) > MAX_DL) {
-        // `.destroy()` só existia no corpo do node-fetch; o corpo do fetch nativo é um
-        // ReadableStream da web e não tem esse método — a chamada virava no-op silencioso e
-        // a conexão seguia baixando o arquivo gigante que a gente acabou de recusar.
-        // O AbortController já está aqui e derruba de verdade, nos dois caminhos.
-        clearTimeout(dlTimer); try { dlCtrl.abort(); } catch {}
-        return { success: false, error: 'File larger than 100MB — refused.' };
-      }
-      let buf: Buffer;
-      if (res.body && typeof (res.body as any)[Symbol.asyncIterator] === 'function') {
-        const chunks: Buffer[] = []; let total = 0;
-        try {
-          for await (const chunk of res.body as any) {
-            total += chunk.length;
-            if (total > MAX_DL) { try { dlCtrl.abort(); } catch {} return { success: false, error: 'File larger than 100MB — refused.' }; }
-            chunks.push(Buffer.from(chunk));
-          }
-        } finally { clearTimeout(dlTimer); }
-        buf = Buffer.concat(chunks);
-      } else {
-        buf = Buffer.from(await res.arrayBuffer());
-        clearTimeout(dlTimer);
-        if (buf.length > MAX_DL) return { success: false, error: 'File larger than 100MB — refused.' };
-      }
-      if (buf.length === 0) return { success: false, error: 'Empty file.' };
-      // Content sniff: block Windows executables regardless of extension (MZ header)
-      if (buf.length > 2 && buf[0] === 0x4d && buf[1] === 0x5a) {
-        return { success: false, error: 'Blocked: file content is a Windows executable.' };
-      }
-      // Derive a safe filename: explicit > URL basename > content-type guess
-      const ctype = res.headers.get('content-type') || '';
-      const extFromType = ctype.includes('jpeg') ? '.jpg' : ctype.includes('png') ? '.png'
-        : ctype.includes('webp') ? '.webp' : ctype.includes('gif') ? '.gif'
-        : ctype.includes('svg') ? '.svg' : ctype.includes('pdf') ? '.pdf' : '';
-      let base = (filename || decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'download')
-        .replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
-      if (!/\.[a-z0-9]{2,5}$/i.test(base) && extFromType) base += extFromType;
-      if (!/\.[a-z0-9]{2,5}$/i.test(base)) base += '.bin';
-      const dir = getDownloadDir();
-      let target = path.join(dir, base);
-      // Never overwrite: suffix (1), (2)...
-      for (let i = 1; fs.existsSync(target) && i < 100; i++) {
-        const dot = base.lastIndexOf('.');
-        target = path.join(dir, `${base.slice(0, dot)} (${i})${base.slice(dot)}`);
-      }
-      fs.writeFileSync(target, buf);
-      console.log(`[Download] saved ${buf.length} bytes → ${target}`);
-      return { success: true, info: { path: target, bytes: buf.length, contentType: ctype } };
+      worker = new Worker(workerPath, { workerData: { url, filename, dir: getDownloadDir(), acceptLanguage: ACCEPT_LANGUAGE } });
     } catch (e: any) {
-      return { success: false, error: String(e?.message ?? e) };
+      return { success: false, error: 'download worker failed to start: ' + String(e?.message ?? e) };
     }
+    agentDownloads.set(id, worker);
+    let started = false;
+    let fname = filename || 'download';
+    let totalBytes = 0;
+    const send = (state: string, extra: Record<string, unknown>) => {
+      try { mainWindow?.webContents.send('agent:download-event', { id, kind: 'agent', url, filename: fname, totalBytes, ...extra, state }); } catch {}
+    };
+    return new Promise((resolve) => {
+      let answered = false;
+      const answer = (r: any) => { if (!answered) { answered = true; resolve(r); } };
+      worker.on('message', (m: any) => {
+        const { t, ...data } = m || {};
+        if (t === 'started') {
+          started = true;
+          fname = path.basename(data.path);
+          totalBytes = data.totalBytes || 0;
+          send('started', { path: data.path, bytes: 0, notify: true });
+          answer({ success: true, info: { id, path: data.path, totalBytes, contentType: data.contentType, background: true } });
+        } else if (t === 'progress') {
+          send('progress', data);
+        } else if (t === 'completed') {
+          console.log(`[Download] saved ${data.bytes} bytes → ${data.path}`);
+          send('completed', { path: data.path, bytes: data.bytes, notify: true });
+          answer({ success: true, info: { id, path: data.path, bytes: data.bytes, contentType: data.contentType } });
+        } else if (t === 'failed' || t === 'cancelled') {
+          // Antes do 'started' a falha volta só como resultado da ação (sem linha no painel).
+          if (started) send(t, { path: data.path, bytes: data.bytes, reason: data.error, stalled: !!data.stalled, notify: true });
+          answer({ success: false, error: t === 'cancelled' ? 'cancelled' : data.error });
+        }
+      });
+      worker.on('error', (e: any) => {
+        if (started) send('failed', { reason: String(e?.message ?? e), notify: true });
+        answer({ success: false, error: String(e?.message ?? e) });
+      });
+      worker.on('exit', () => {
+        agentDownloads.delete(id);
+        answer({ success: false, error: 'download worker exited' });
+      });
+    });
   });
 
   // (Importação de cookies do Chrome REMOVIDA: dependia do módulo nativo win-dpapi, que não
@@ -4199,6 +4161,8 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;   // libera o close handler (não vai mais esconder na bandeja)
+  // yt-dlp roda destacado do Bah: sem isto ele ficava órfão e deixava o pedaço de vídeo sem som.
+  try { stopAllMediaDownloads(); } catch {}
   try { monitorManager?.disposeAll(); } catch {}
   try { routerManager?.dispose(); } catch {}
   destroyTray();

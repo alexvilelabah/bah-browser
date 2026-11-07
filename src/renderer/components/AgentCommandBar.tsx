@@ -649,6 +649,16 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       return { ...prevMap, [tabId]: next };
     });
   };
+  // Aviso que chega DEPOIS da tarefa (ex.: o download do agente terminou): entra na conversa da aba dela.
+  useEffect(() => {
+    const onNote = (e: Event) => {
+      const { key, text } = (e as CustomEvent).detail || {};
+      if (!key || !text) return;
+      setFeedsByTab(m => ({ ...m, [key]: [...(m[key] ?? []), { kind: 'chat-assistant', text, id: ++idRef.current } as FeedItem].slice(-FEED_CAP) }));
+    };
+    window.addEventListener('bah:agent-note', onNote);
+    return () => window.removeEventListener('bah:agent-note', onNote);
+  }, []);
 
   const removeFeedItem = (id: number) => setFeedsByTab(prevMap => {
     let changed = false;
