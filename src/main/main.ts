@@ -57,6 +57,7 @@ import { parseHostsList, SAFE_BROWSING_MIN_HOSTS } from '../shared/safe-browsing
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
+import { chromeIdentity, userAgentOverrideParams, sendsClientHints, orderChromeHeaders } from './chrome-identity';
 
 // ── i18n do processo principal: menus nativos (clique-direito, Alt) e diálogos
 // seguem o idioma do SO, como o Chrome. Base pt/es/en; cai pro inglês. ──
@@ -382,11 +383,15 @@ const lastAuthPopupAt = new Map<number, number>();
 let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
 
-const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
-const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
-// Keep HTTP UA and JS Client Hints aligned with the Chromium embedded in Electron.
-const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
-const CHROME_SEC_CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR}"`;
+// Identidade Chrome (UA, sec-ch-ua, navigator.userAgentData): UMA fonte, chrome-identity.ts.
+// Versão = Chrome estável atual (CURRENT_CHROME_MAJOR) no formato reduzido; SO e arquitetura REAIS.
+const CHROME_ID = chromeIdentity({
+  engineChrome: process.versions.chrome,
+  platform: process.platform,
+  arch: process.arch,
+  arm64Translation: app.runningUnderARM64Translation,
+});
+const CHROME_UA = CHROME_ID.userAgent;
 const BROWSER_PARTITION = 'persist:browser';
 const GOOGLE_LOGIN_PARTITION = 'persist:google-login';
 // Quanto silêncio antes de apagar o ícone de som da aba (pausa de fala não pisca o ícone).
@@ -403,7 +408,24 @@ async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Pro
     }
     debuggerAttachedSet.add(wcId);
     wc.once('destroyed', () => debuggerAttachedSet.delete(wcId));
+    wc.debugger.once('detach', () => debuggerAttachedSet.delete(wcId));   // reanexa (e reaplica a identidade) depois
     await wc.debugger.sendCommand('Accessibility.enable');
+    await applyChromeIdentity(wc);
+  }
+}
+
+// Identidade do navegador DE DENTRO do motor (CDP Emulation.setUserAgentOverride): UA, os headers
+// sec-ch-ua (ordem e formato nativos), navigator.userAgentData (brands, versões, plataforma, arch) e
+// Accept-Language + navigator.languages saem TODOS da mesma fonte, antes de qualquer script da
+// página. Antes: header reescrito à mão + navigator remendado no dom-ready — a página lia o valor
+// real antes do remendo, e a contradição (header × JS) é sinal clássico de adulteração.
+async function applyChromeIdentity(wc: Electron.WebContents): Promise<void> {
+  let platformVersion = '';
+  try { platformVersion = process.getSystemVersion(); } catch {}
+  try {
+    await wc.debugger.sendCommand('Emulation.setUserAgentOverride', userAgentOverrideParams(CHROME_ID, NAV_LANGUAGES, platformVersion));
+  } catch (e: any) {
+    console.warn('[Identity] setUserAgentOverride failed:', e?.message || e);
   }
 }
 
@@ -1176,6 +1198,16 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    // Identidade Chrome nativa (UA + client hints + userAgentData + idiomas) já na criação da aba.
+    sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Identity] attach failed:', e?.message || e));
+    // Diagnóstico (BAH_DEBUG_IDENTITY=1): registra no agent.log o que a página vê da identidade.
+    if (process.env.BAH_DEBUG_IDENTITY === '1') {
+      wc.on('dom-ready', () => {
+        wc.executeJavaScript(`JSON.stringify({ url: location.href, webdriver: navigator.webdriver, ua: navigator.userAgent, brands: navigator.userAgentData && navigator.userAgentData.brands.map(function (b) { return b.brand + ' ' + b.version; }).join(', '), langs: navigator.languages })`)
+          .then((v) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'agent.log'), `${new Date().toISOString()} [Identity] ${v}\n`); } catch {} })
+          .catch(() => {});
+      });
+    }
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
@@ -3434,8 +3466,8 @@ function stopYtSkipPolling(wcId: number) {
 const STEALTH_SCRIPT = `
 (function(){
   try {
-    // 1. navigator.webdriver — must be undefined (not false)
-    Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => undefined, configurable: true });
+    // 1. navigator.webdriver: NÃO mexer — numa execução normal o motor já diz false, igual ao Chrome.
+    //    (O remendo antigo trocava pra undefined depois do load: valor que nenhum Chrome real tem.)
 
     // 2. navigator.plugins — populate with realistic Chrome plugins
     Object.defineProperty(navigator, 'plugins', {
@@ -3454,22 +3486,7 @@ const STEALTH_SCRIPT = `
       configurable: true,
     });
 
-    // 2.5. navigator.userAgentData (Crucial para login do Google)
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: () => ({
-        brands: [
-          { brand: 'Google Chrome', version: '${CHROME_MAJOR}' },
-          { brand: 'Not;A=Brand', version: '8' },
-          { brand: 'Chromium', version: '${CHROME_MAJOR}' }
-        ],
-        mobile: false,
-        platform: 'Windows'
-      }),
-      configurable: true
-    });
-
-    // 3. languages
-    Object.defineProperty(navigator, 'languages', { get: () => ${JSON.stringify(NAV_LANGUAGES)}, configurable: true });
+    // (userAgentData e languages: nativos via applyChromeIdentity — CDP setUserAgentOverride.)
 
     // 4. window.chrome — populate with realistic structure
     if (!window.chrome) window.chrome = {};
@@ -3501,25 +3518,9 @@ const STEALTH_SCRIPT = `
       };
     }
 
-    // 6. WebGL vendor — pretend to be a real GPU
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-      if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100'; // UNMASKED_RENDERER_WEBGL
-      return getParameter.call(this, p);
-    };
-    if (window.WebGL2RenderingContext) {
-      const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-      WebGL2RenderingContext.prototype.getParameter = function(p) {
-        if (p === 37445) return 'Intel Inc.';
-        if (p === 37446) return 'Intel(R) Iris(TM) Graphics 6100';
-        return getParameter2.call(this, p);
-      };
-    }
-
-    // 7. Hardware concurrency / device memory
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+    // 6–7. GPU (WebGL), núcleos e memória: os VALORES REAIS do motor, sem remendo. O antigo
+    //      "Intel Iris 6100 / 8 núcleos / 8 GB" contradizia o resto (o worker da página via o número
+    //      real) — contradição é o sinal clássico de adulteração. A memória o Chromium já arredonda.
 
     // 8. Chromium-detected automation flag
     delete (window).cdc_adoQpoasnfa76pfcZLmcfl_Array;
@@ -3745,10 +3746,17 @@ app.whenReady().then(async () => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = CHROME_UA;
     headers['Accept-Language'] = ACCEPT_LANGUAGE;
-    headers['sec-ch-ua'] = CHROME_SEC_CH_UA;
-    headers['sec-ch-ua-mobile'] = '?0';
-    headers['sec-ch-ua-platform'] = '"Windows"';
-    callback({ requestHeaders: headers });
+    // Brand hints: os mesmos valores de navigator.userAgentData (applyChromeIdentity). Só em https
+    // e localhost (o Chrome não manda client hints em http comum).
+    if (sendsClientHints(details.url || '')) {
+      headers['sec-ch-ua'] = CHROME_ID.secChUa;
+      headers['sec-ch-ua-mobile'] = '?0';
+      headers['sec-ch-ua-platform'] = `"${CHROME_ID.chPlatform}"`;
+    }
+    // sec-ch-ua-arch/bitness NÃO vão em toda requisição: o Chrome de verdade só manda quando o
+    // site pede (Accept-CH). A arquitetura continua disponível via navigator.userAgentData.getHighEntropyValues().
+    // Ordem dos headers igual à do Chrome (os acrescentados aqui iam pro fim).
+    callback({ requestHeaders: orderChromeHeaders(headers) });
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);
   persistSession.webRequest.onBeforeSendHeaders(filter, applyHeaders);

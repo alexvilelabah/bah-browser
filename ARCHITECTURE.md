@@ -52,6 +52,7 @@ sites behave exactly as they would for a human.
 | `main.ts` | App bootstrap, window, `<webview>` session, **all IPC handlers**, real input (`sendInputEvent`), adblock, downloads wiring, safe-browsing, hardware-accel toggle |
 | `ai-engine.ts` | Every cloud/local AI call (DeepSeek / Mistral / NVIDIA NIM / Ollama) + the system prompt and tool list |
 | `site-locale.ts` | **Single source** for the language sites receive (Accept-Language / navigator.languages / --lang follow the UI choice) |
+| `chrome-identity.ts` | **Single source** for the browser identity sites see: User-Agent, `sec-ch-ua` client hints, `navigator.userAgentData`, header order (applied by `main.ts` through CDP) |
 | `page-agent.ts` | Cloud-side reasoning helpers for the agent |
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
 | `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |
@@ -62,6 +63,39 @@ sites behave exactly as they would for a human.
 | `validate.ts` | Path-safety helpers (`isInsideAllowedRoot`, etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Popup/overlay handling and dismissal |
 | `job-queue.ts` | Serialises long-running jobs |
+
+### Browser identity (what sites see)
+
+Sites used to flag Bah as a bot often enough that agent tasks failed; part of the reason was an
+identity that contradicted itself. Bah now presents as what it is — a current Chrome-based browser
+on the user's own computer — with every signal agreeing. Nothing here solves a CAPTCHA or gets
+around a block.
+
+- **One source.** `chrome-identity.ts` builds the User-Agent, the `sec-ch-ua` headers and the
+  `navigator.userAgentData` values from the same data. `main.ts` applies them **inside the engine**
+  with CDP `Emulation.setUserAgentOverride` when a tab is created (and again if the debugger
+  re-attaches), together with the languages from `site-locale.ts`. Pages read the final values from
+  the first script on; nothing is patched in JavaScript afterwards. Before, the header said one Chrome
+  version and brand order while the page script said another, and a page could read the real value
+  before the patch ran — a mismatch detectors look for.
+- **Version.** `CURRENT_CHROME_MAJOR` (bump it when stable Chrome moves, about every 4 weeks) in the
+  reduced `NNN.0.0.0` format real Chrome sends; Electron's Chromium is usually a few versions behind.
+  The engine's version is used instead when it is newer.
+- **Real OS and architecture.** The UA platform token and `sec-ch-ua-platform` follow the real OS (it
+  used to say Windows everywhere, so driver/installer sites offered Windows files on a Mac);
+  `getHighEntropyValues()` reports the real CPU architecture.
+- **Headers in Chrome's order;** brand hints only on https and localhost, as Chrome does.
+  `sec-ch-ua-arch`/`bitness` are not added to every request (Chrome sends them only when a site asks).
+- **`navigator.webdriver` is left to the engine.** A normal launch reports `false`, like Chrome. The
+  old patch replaced it with `undefined`, a value no real Chrome has. Launches driven by Playwright
+  (e2e tests, demo recordings) report `true` — judge bot-check rates from a normal launch.
+- **Real GPU, cores and memory.** The page script used to report "Intel Iris 6100", 8 cores and 8 GB
+  on every machine, while the page's own workers saw the real values. Now nothing is overridden
+  (`tests/e2e/hardware-identity.spec.ts`).
+- **Diagnostics:** `BAH_DEBUG_IDENTITY=1` logs what each page sees (webdriver, UA, brands, languages)
+  to `agent.log`. `tests/e2e/browser-identity.spec.ts` checks that header and JavaScript agree.
+- **Known limit:** the full version is `NNN.0.0.0`, not a real build, and the engine may be a few
+  versions older than the Chrome it reports; a detector can notice missing newer features.
 
 ---
 

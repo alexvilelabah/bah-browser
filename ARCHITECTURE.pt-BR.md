@@ -50,6 +50,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `main.ts` | Bootstrap do app, janela, sessão do `<webview>`, **todos os handlers IPC**, input real (`sendInputEvent`), adblock, downloads, safe-browsing, toggle de aceleração |
 | `ai-engine.ts` | Toda chamada de IA nuvem/local (DeepSeek / Mistral / NVIDIA NIM / Ollama) + o system prompt e a lista de ferramentas |
 | `site-locale.ts` | **Fonte única** do idioma que os sites recebem (Accept-Language / navigator.languages / --lang seguem a escolha da UI) |
+| `chrome-identity.ts` | **Fonte única** da identidade de navegador que os sites veem: User-Agent, client hints `sec-ch-ua`, `navigator.userAgentData`, ordem dos headers (aplicada pelo `main.ts` via CDP) |
 | `page-agent.ts` | Helpers de raciocínio do agente (lado nuvem) |
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
 | `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
@@ -60,6 +61,40 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `validate.ts` | Helpers de segurança de caminho (`isInsideAllowedRoot` etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
 | `job-queue.ts` | Serializa tarefas longas |
+
+### Identidade do navegador (o que os sites veem)
+
+Os sites marcavam o Bah como robô com frequência suficiente pra tarefas do agente falharem; parte
+do motivo era uma identidade que se contradizia. Agora o Bah se apresenta como o que ele é — um
+navegador atual baseado no Chrome, no computador da própria pessoa — com todos os sinais batendo.
+Nada aqui resolve CAPTCHA nem contorna bloqueio.
+
+- **Uma fonte.** `chrome-identity.ts` monta o User-Agent, os headers `sec-ch-ua` e os valores de
+  `navigator.userAgentData` dos mesmos dados. O `main.ts` aplica tudo **dentro do motor** com o CDP
+  `Emulation.setUserAgentOverride` quando a aba nasce (e de novo se o debugger reconectar), junto com
+  os idiomas do `site-locale.ts`. A página lê os valores finais desde o primeiro script; nada é
+  remendado em JavaScript depois. Antes, o header dizia uma versão e ordem de brands do Chrome e o
+  script da página dizia outra, e a página conseguia ler o valor real antes do remendo — o tipo de
+  contradição que os detectores procuram.
+- **Versão.** `CURRENT_CHROME_MAJOR` (subir quando o Chrome estável avançar, ~a cada 4 semanas) no
+  formato reduzido `NNN.0.0.0` que o Chrome de verdade manda; o Chromium do Electron costuma ficar
+  algumas versões atrás. Se o motor for mais novo, vale a versão dele.
+- **SO e arquitetura reais.** O token de plataforma do UA e o `sec-ch-ua-platform` seguem o SO real
+  (antes dizia Windows em todo lugar, e site de driver/instalador oferecia arquivo de Windows no Mac);
+  `getHighEntropyValues()` informa a arquitetura real da CPU.
+- **Headers na ordem do Chrome;** brand hints só em https e localhost, como o Chrome.
+  `sec-ch-ua-arch`/`bitness` não vão em toda requisição (o Chrome só manda quando o site pede).
+- **`navigator.webdriver` fica com o motor.** Uma execução normal diz `false`, igual ao Chrome. O
+  remendo antigo trocava por `undefined`, valor que nenhum Chrome real tem. Execuções controladas pelo
+  Playwright (testes e2e, gravação de demo) dizem `true` — avalie a taxa de checagens anti-robô numa
+  execução normal.
+- **GPU, núcleos e memória reais.** O script da página dizia "Intel Iris 6100", 8 núcleos e 8 GB em
+  toda máquina, enquanto os workers da própria página viam os valores reais. Agora nada é sobrescrito
+  (`tests/e2e/hardware-identity.spec.ts`).
+- **Diagnóstico:** `BAH_DEBUG_IDENTITY=1` registra no `agent.log` o que cada página vê (webdriver, UA,
+  brands, idiomas). `tests/e2e/browser-identity.spec.ts` confere que header e JavaScript batem.
+- **Limite conhecido:** a versão completa é `NNN.0.0.0`, não um build real, e o motor pode estar
+  algumas versões atrás do Chrome que declara; um detector pode notar recursos novos ausentes.
 
 ---
 
