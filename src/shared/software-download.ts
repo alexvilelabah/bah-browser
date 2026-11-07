@@ -222,7 +222,7 @@ export function thirdPartyDownloadSite(url: string): string {
 }
 
 export function thirdPartyNote(site: string): string {
-  return site ? `⚠️ THIRD-PARTY DOWNLOAD SITE: ${site} is a download aggregator, not the software's maker — its installers can be outdated or bundle a "download manager"/adware. Do NOT download from here: go to the vendor's OFFICIAL site (search "<product> official download") and get it there.` : '';
+  return site ? `⚠️ THIRD-PARTY DOWNLOAD SITE: ${site} is a download aggregator, not the software's maker — its installers can be outdated or bundle a "download manager"/adware. Do NOT download from here: go to the vendor's OFFICIAL site (web_search "<product> official download") and get it there.` : '';
 }
 
 // ── Parede de login no caminho do download ───────────────────────────────────────────────────
