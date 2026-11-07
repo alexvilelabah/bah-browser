@@ -3,7 +3,8 @@
 // quando ela solta, volta o que a PESSOA configurou no Bah (não o "do sistema" fixo).
 import type { Session } from 'electron';
 
-export type RtcPolicy = 'default' | 'disable_non_proxied_udp';
+export type { RtcPolicy } from '../shared/network-privacy';
+import type { RtcPolicy } from '../shared/network-privacy';
 let baseProxy: Electron.ProxyConfig = { mode: 'system' };
 let baseRtc: RtcPolicy = 'default';
 const listeners = new Set<() => void>();
@@ -12,7 +13,7 @@ let extensionRtcSession: (s: Session) => boolean = () => false;
 
 /** Proxy que vale quando nenhuma extensão controla (config do Bah). */
 export const getBaseProxy = (): Electron.ProxyConfig => baseProxy;
-/** Política de WebRTC do Bah (com proxy em uso: só UDP pelo proxy). */
+/** Política de WebRTC do Bah (com proxy: só UDP pelo proxy; sem: só a interface pública — ver network-privacy). */
 export const getBaseWebRtc = (): RtcPolicy => baseRtc;
 export function setBaseNetwork(p: Electron.ProxyConfig, rtc: RtcPolicy): void {
   baseProxy = p; baseRtc = rtc;

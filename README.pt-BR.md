@@ -72,7 +72,7 @@
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
 - **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
-- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), WebRTC preso ao proxy
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6")
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -161,9 +161,11 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
 - **Certificados-raiz da empresa (inspeção TLS):** o Chromium já confia no repositório do SO. O Node do
   Electron não, então o Bah lê o repositório do SO na inicialização (chaveiros do macOS, repositórios
   `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node.
-- **Vazamento de IP pelo WebRTC:** com proxy em uso, o WebRTC só pode usar o proxy (`disable_non_proxied_udp`),
-  então a página não descobre o seu IP real por ele. Sem proxy (ou com app de VPN, que age no SO) vale o padrão
-  do Chrome. O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **Proteção contra vazamento de IP pelo WebRTC (ligada por padrão):** com proxy, o WebRTC só pode usar o proxy
+  (`disable_non_proxied_udp`); sem proxy, só a conexão de rede principal (`default_public_interface_only`) — nos
+  dois casos a página não lista seus endereços IP por ele. **Melhor qualidade de chamada** desliga a proteção
+  (qualquer página passa a ver seus IPs reais). **WebRTC: só IPv4** tira os candidatos IPv6 (vale depois de
+  reiniciar). O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
 - **DNS seguro (DNS-over-HTTPS):** **Sistema** (padrão — nada muda até você escolher) · predefinições **AdGuard**
   e **Mullvad** (bloqueiam anúncio, sem cadastro), **Quad9** (bloqueia malware), **Cloudflare** (sem filtro) ·
   **NextDNS** (cole o ID da sua configuração — conta grátis, você gerencia as listas; plano grátis com 300 mil
@@ -171,6 +173,14 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
   (Pi-hole, AdGuard Home). **Estrito** faz a consulta falhar em vez de cair no DNS comum da sua rede quando o
   servidor não responde. Uma configuração pra todas as abas, anônimas também. É configuração do navegador, não
   extensão: extensão do Chrome não tem como trocar o resolvedor.
+- **Versão de IP:** o motor do Bah não consegue forçar só IPv4 ou só IPv6 no tráfego das páginas (testado:
+  `--disable-ipv6` não faz nada no Electron 44), então essas opções aparecem desativadas com o motivo — use as
+  configurações de rede do sistema. Só o WebRTC pode ficar limitado a IPv4 (acima).
+- **Avisos de vazamento:** se o seu proxy ou servidor de DNS seguro só é alcançável por uma versão de IP e este
+  computador também tem endereço real da outra, o painel avisa que o tráfego pode escapar (com botão pras
+  configurações de rede do sistema). Também avisa quando há proxy mas o WebRTC está em Melhor qualidade de
+  chamada, e lembra que o proxy pode fazer as próprias consultas de DNS. O Bah só olha quais versões de IP
+  existem — nunca mostra nem envia os seus endereços.
 - **Extensões de VPN:** uma extensão do Chrome que controla o proxy (`chrome.proxy`) vence enquanto está ligada,
   como no Chrome; quando solta, as abas voltam pro proxy configurado aqui.
 

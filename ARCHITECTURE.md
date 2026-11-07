@@ -58,6 +58,7 @@ sites behave exactly as they would for a human.
 | `proxy.ts`, `proxy-config.ts` | Proxy for **every** session (system / manual http·https·socks5 / PAC / direct), 407 sign-in prompt with keychain-encrypted saved credentials, `proxy:*` IPC. Main-process `fetch` is routed through the `persist:browser` session's `session.fetch`, so one setting covers Bah's own requests too |
 | `proxy-base.ts` | Bridge between Bah's proxy settings and Chrome extensions' `chrome.proxy` (VPN extensions): an extension in control wins (as in Chrome); when it lets go, the tabs return to the proxy configured in Bah, not a fixed "system"; Bah's WebRTC leak policy is the extensions' baseline |
 | `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | Secure DNS (DNS-over-HTTPS) chosen by the user: `app.configureHostResolver` for the whole app, `dns:*` IPC. See [Secure DNS](#secure-dns-dns-over-https) |
+| `network-privacy.ts` (+ `src/shared/network-privacy.ts`) | ⋮ → Network: WebRTC IP-leak policy choice, IPv4-only WebRTC (boot switch), leak warnings, `net:*` IPC. See [Secure DNS, IP version, WebRTC](#secure-dns-dns-over-https) |
 | `system-ca.ts` | Reads the OS root certificate store and adds it to Node's default CAs (`tls.setDefaultCACertificates`) for TLS-inspecting corporate proxies |
 | `video-cuts.ts`, `transcript.ts` | Local video features (locate where a phrase is spoken, transcripts) — native ffmpeg |
 | `image-harvester.ts` | Bulk image download + AI image generation (Pollinations), with limits |
@@ -88,6 +89,44 @@ proxied traffic (HTTP CONNECT, SOCKS5) — the panel says so; proxy behaviour is
 
 It is a core setting, not an extension: Chrome extensions have no API to set the resolver, and
 Chrome / Edge / Brave / Firefox all keep Secure DNS in their own settings.
+
+#### IP version, WebRTC and leak warnings
+
+The same panel (⋮ → Network & proxy: warnings, Proxy, Secure DNS, IP version, WebRTC) holds the rest of
+the network privacy settings (`network-privacy.ts`, pure logic in `src/shared/network-privacy.ts`,
+saved in `userData/network.json`).
+
+**IP version — measured on Electron 44, only "automatic" is possible.** The `--disable-ipv6` switch no
+longer exists in this Chromium (the string isn't in the binary; with it, a page on `localhost` still
+connects over `::1`), and neither `configureHostResolver` nor sessions have an address-family option
+(`session.resolveHost` takes `queryType`, but that is only for Bah's own lookups). The panel shows
+"IPv4 only" / "IPv6 only" disabled with that reason and points to the OS network settings.
+
+**WebRTC.** Measured: Electron's default policy (`default`) hands any page the machine's real interface
+addresses — IPv4 and global IPv6 host candidates, no mDNS names. Bah now always sets a policy on every
+web contents (all sessions, incognito included; `proxy.ts` applies it, an extension's
+`chrome.privacy` setting still wins on its session):
+
+| Choice | No proxy | Proxy in use |
+|---|---|---|
+| Protect my IPs (default) | `default_public_interface_only` (no host candidates) | `disable_non_proxied_udp` (no UDP outside the proxy) |
+| Best call quality | `default` | `default` (warned: WebRTC can bypass the proxy) |
+
+"WebRTC: IPv4 only" adds `--force-fieldtrials=WebRTC-IPv6Default/Disabled/` before `ready` (measured:
+IPv6 candidates disappear), so it **applies after a restart** — the panel says so.
+
+**Leak warnings** (top of the panel; the renderer gets families/flags only, never the machine's
+addresses; `os.networkInterfaces()` counts IPv4 that isn't loopback/169.254 and IPv6 only in 2000::/3):
+
+| Warning | When | Fix button |
+|---|---|---|
+| Proxy only over one family | manual proxy whose host is an IP literal (or resolves) to one family, and the machine also has the other; loopback proxies are skipped | Open the OS network settings (macOS / Windows) |
+| Secure DNS only over one family | same, for the DoH server host | Open the OS network settings |
+| WebRTC can bypass the proxy | proxy set + "Best call quality" | Protect WebRTC |
+| Secure DNS behind a proxy (info) | proxy + secure DNS: the proxy may resolve names for proxied traffic | — |
+
+Nothing configured → no warnings. Tests: `tests/unit/network-privacy.test.ts`, `tests/e2e/network-privacy.spec.ts`
+(ICE candidates from a local page; interfaces simulated with `E2E_NET_IFACES` under `NODE_ENV=test` + `E2E_MOCK_AI=1`).
 
 ---
 

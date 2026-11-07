@@ -76,7 +76,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
-- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), WebRTC kept inside the proxy
+- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), **WebRTC IP-leak protection on by default**, IP-version and leak warnings ("your proxy is IPv4-only but this computer also has IPv6")
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -165,9 +165,12 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
 - **Company root certificates (TLS inspection):** Chromium already trusts the OS certificate store.
   Electron's Node does not, so Bah reads the OS store at startup (macOS keychains, Windows `Root`/`CA`
   stores, Linux CA bundle) and adds those roots to Node's defaults.
-- **WebRTC IP leak:** while a proxy is in use, WebRTC may only use the proxy (`disable_non_proxied_udp`), so a
-  page cannot learn your real IP through it. Without a proxy (or with a VPN app, which is OS-level) Chrome's
-  default applies. Chromium cannot sign in to SOCKS5 proxies (username/password); SOCKS5 without a password works.
+- **WebRTC IP leak protection (on by default):** with a proxy, WebRTC may only use the proxy
+  (`disable_non_proxied_udp`); without one, only the main network connection
+  (`default_public_interface_only`) — either way a page cannot list your IP addresses through it. **Best call
+  quality** turns it off (any page can then read your real IPs). **WebRTC: IPv4 only** removes IPv6 candidates
+  (applies after a restart). Chromium cannot sign in to SOCKS5 proxies (username/password); SOCKS5 without a
+  password works.
 - **Secure DNS (DNS-over-HTTPS):** **System** (default — nothing changes until you pick) · presets **AdGuard**
   and **Mullvad** (ad blocking, no sign-up), **Quad9** (malware blocking), **Cloudflare** (no filtering) ·
   **NextDNS** (paste your configuration ID — free account, you manage the lists; free plan 300k queries/month,
@@ -175,6 +178,14 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
   **Strict** makes lookups fail instead of falling back to your network's plain DNS when the server can't be
   reached. One setting for every tab, private ones included. It's a browser setting, not an extension: Chrome
   extensions have no way to change the resolver.
+- **IP version:** Bah's engine cannot force IPv4-only or IPv6-only for page traffic (tested: `--disable-ipv6`
+  does nothing in Electron 44), so those options are shown disabled with the reason — use your system's
+  network settings. Only WebRTC can be limited to IPv4 (above).
+- **Leak warnings:** if your proxy or secure-DNS server is reachable over only one IP version and this computer
+  also has a real address of the other, the panel warns that traffic may bypass it (with a button to the
+  system's network settings). It also warns when a proxy is set but WebRTC is on Best call quality, and notes
+  that a proxy may do its own DNS lookups. Bah only looks at which IP versions exist — never shows or sends
+  your addresses.
 - **VPN extensions:** a Chrome extension that controls the proxy (`chrome.proxy`) wins while it is on, as in
   Chrome; when it lets go, the tabs return to the proxy set here.
 
