@@ -18,6 +18,8 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
   try {
+    // O cliente embutido é opcional (padrão desligado) — liga pro teste.
+    await page.evaluate(() => (window as any).electronAPI.torrentSetBuiltin(true));
     // (1) Colar um magnet na barra de endereço abre o card (estado "fetching") na hora.
     const bar = page.locator('.url-input');
     await bar.fill('magnet:?xt=urn:btih:0000000000000000000000000000000000000000&dn=teste');

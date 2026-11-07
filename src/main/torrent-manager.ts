@@ -3,7 +3,7 @@
 // pro motor e relança os eventos do motor pro renderer. "Salvar" reusa o MESMO payload
 // 'agent:download-event' → o painel Ctrl+J renderiza as linhas de torrent de graça; o
 // card usa o 'agent:torrent-event' (mais rico: peers/seeders/buffer) que o download não tem.
-import { ipcMain, utilityProcess, type UtilityProcess } from 'electron';
+import { ipcMain, shell, utilityProcess, type UtilityProcess } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -14,7 +14,6 @@ import * as fs from 'fs';
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
   uniqueDownloadPath: (base: string) => string;
-  blockedExtensions: RegExp;
   /** Torrent sai DIRETO (não pelo proxy/VPN das abas): com proxy, o Bah avisa antes. false = não baixar. */
   allowDirect?: (uri: string) => Promise<boolean>;
   /** Texto (traduzido) do card quando a pessoa não quis baixar sem o proxy. */
@@ -33,6 +32,9 @@ export function setupTorrentManager(deps: Deps) {
   let ready = false;
   let seq = 0;
   let seedOn = false;   // padrão DESLIGADO (escolha do usuário): baixa/streama sem seedar.
+  // Cliente de torrent embutido é OPCIONAL (padrão DESLIGADO): sem ele, .torrent baixa como
+  // arquivo comum e magnet vai pro app de torrent do sistema — o motor nunca sobe.
+  let builtinOn = false;
   const reg = new Map<string, TorrentRec>();
   const pendingAdd = new Map<string, (v: any) => void>();
   const pendingStream = new Map<string, (v: any) => void>();
@@ -157,11 +159,6 @@ export function setupTorrentManager(deps: Deps) {
     const rec = reg.get(id);
     const file = rec?.files.find((f) => f.index === index);
     const name = file?.name || `torrent-${index}.bin`;
-    // Mesma trava do download-manager: executável/script nunca é salvo.
-    if (deps.blockedExtensions.test(name)) {
-      send('agent:download-event', { state: 'blocked', filename: name, reason: 'executable/script blocked' });
-      return { ok: false, blocked: true };
-    }
     const dest = deps.uniqueDownloadPath(name);
     const dlId = `tor_dl_${++seq}`;
     saveIds.set(`${id}:${index}`, dlId);
@@ -186,11 +183,22 @@ export function setupTorrentManager(deps: Deps) {
     return { ok: true, seed: seedOn };
   });
 
-  return {
+  ipcMain.handle('torrent:set-builtin', (_e, on: boolean) => {
+    builtinOn = !!on;
+    return { ok: true, builtin: builtinOn };
+  });
+
+  // Magnet colado na barra (o renderer não decide sozinho: passa pelo mesmo handleUri).
+  ipcMain.handle('torrent:open', (_e, uri: string) => { api.handleUri(String(uri)); return { ok: true }; });
+
+  const api = {
+    builtinEnabled: () => builtinOn,
     // Chamado pelo main quando intercepta um magnet:/.torrent (navegação/popup/omnibox).
-    // Empurra o card no renderer, que então pede play/save.
+    // Embutido ligado → empurra o card no renderer, que então pede play/save.
+    // Desligado → magnet vai pro app de torrent do sistema (o .torrent nem chega aqui).
     handleUri(uri: string) {
-      send('agent:torrent-event', { kind: 'open', uri });
+      if (builtinOn) { send('agent:torrent-event', { kind: 'open', uri }); return; }
+      if (/^magnet:/i.test(uri)) shell.openExternal(uri).catch((e) => console.warn('[Torrent] no system handler for magnet:', e?.message || e));
     },
-  };
+  };  return api;
 }
