@@ -381,6 +381,8 @@ const lastAuthPopupAt = new Map<number, number>();
 // (did-attach-webview) e quem lê é o evalAdblockForHost, lá dentro do setupIPC.
 let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
+// Mundo isolado do Bah nas abas (renderer/page-eval.ts: o mesmo número).
+const BAH_ISOLATED_WORLD = 1047;
 
 const CHROME_VERSION = process.versions.chrome || '130.0.0.0';
 const CHROME_MAJOR = CHROME_VERSION.split('.')[0] || '130';
@@ -1754,6 +1756,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     localEngine?.clearHistory(tabId);
     return { ok: true };
   });
+  // Script do Bah numa aba cuja página PROÍBE scripts (CSP sandbox): roda no mundo isolado do Bah
+  // (renderer/page-eval.ts). Só abas <webview> desta janela; o código é do próprio Bah (o renderer).
+  ipcMain.handle('page:eval-isolated', async (e, wcId: unknown, code: unknown, userGesture: unknown) => {
+    if (e.sender !== mainWindow?.webContents) throw new Error('not allowed');
+    if (typeof wcId !== 'number' || typeof code !== 'string' || code.length > 2_000_000) throw new Error('bad request');
+    const wc = webContents.fromId(wcId);
+    if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || wc.hostWebContents !== mainWindow?.webContents) throw new Error('no such tab');
+    return wc.executeJavaScriptInIsolatedWorld(BAH_ISOLATED_WORLD, [{ code }], userGesture === true);
+  });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine
   // Agent Stop: the renderer sends an actionId per step and calls ai:action-cancel on
@@ -1783,6 +1794,27 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        let a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        // "ref": "__REF:<text>__" → the [N] of the first listed element whose line contains <text>.
+        if (typeof a.ref === 'string' && a.ref.startsWith('__REF:')) {
+          const want = a.ref.slice(6, -2).toLowerCase();
+          const line = String(pageContent ?? '').split('\n').find(l => /^\s*\*?\[\d+\]/.test(l) && l.toLowerCase().includes(want));
+          a = { ...a, ref: line ? Number((line.match(/\[(\d+)\]/) || [])[1]) : -1 };
+        }
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',

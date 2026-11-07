@@ -67,6 +67,7 @@ uns dois pulos.
 | Binário blindado (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignorado, `--inspect` ignorado |
 | Bridge IPC = único portão | [`preload.ts`](src/preload/preload.ts) | todo canal é `ipcRenderer.invoke(...)`; nenhum primitivo Node exposto |
 | Freio (pagar / comprar / excluir / cartão) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + o loop do agente em `App.tsx` | `riskForAction` classifica; clique, **fill** (cartão) e **press** (Enter no checkout) pedem confirmação antes de rodar |
+| Ler páginas que proíbem scripts | [`src/renderer/page-eval.ts`](src/renderer/page-eval.ts) + `page:eval-isolated` no `main.ts` | só quando o mundo da página recusa um teste trivial, os scripts de leitura do próprio Bah rodam num mundo isolado separado (1047) daquela aba; o IPC só aceita a janela principal como remetente e só abas `<webview>` dela; o JavaScript da página não vê nem chama esse mundo |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
 | Sem download de executável | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` bloqueados no download |
 | `openFile` / reveal não abrem caminho arbitrário | [`download-manager.ts`](src/main/download-manager.ts) + `main.ts` (`shell:reveal`) | ambos chamam `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → só Downloads / userData / temp |

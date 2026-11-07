@@ -81,6 +81,15 @@ sites behave exactly as they would for a human.
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
 
+**Pages that forbid scripts.** Files served with the CSP `default-src 'none'; sandbox` (raw files on
+Hugging Face, GitHub…) turn off the page's JavaScript, and with it every `<webview>.executeJavaScript`
+Bah uses to read pages (text sample, `extract_text`, page state, forms). `src/renderer/page-eval.ts`
+wraps `executeJavaScript` on every tab once (`WebViewContainer`): it tries the page world; if that fails,
+a trivial probe tells a real script error (passed on, never re-run) from a page that blocks scripts
+(→ the same code runs in Bah's **isolated world** 1047 through `page:eval-isolated` in `main.ts`, the
+mechanism extension content scripts use, remembered until the tab's address changes). Tests:
+`tests/unit/page-eval.test.ts`, `tests/e2e/no-js-page.spec.ts`.
+
 ---
 
 ## Build & release
