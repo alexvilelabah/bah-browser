@@ -112,7 +112,7 @@ Want another workflow? Bah can **save what worked as a skill** — see [CONTRIBU
 - **One-shot skills**: open N videos at once, jump to the exact moment a phrase is spoken across several videos, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
 - **UI in English by default**, with **Português** and **Español** available in Settings — the AI replies in your chosen language
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
-- **Safe Browsing** (URLhaus malicious-hosts list, updated daily)
+- **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Honest, consistent browser identity** — current Chrome user agent, client hints and languages set inside the engine (one source, no JavaScript patching), so sites see a normal Chrome and don't wrongly block it. GPU, CPU cores and memory are the **real** values (the same ones Chrome reports on your computer) — nothing faked, so the page and its workers agree. It does not try to evade bot detection; sites that forbid automation get **careful mode**. Why test runs see more bot checks than you will: [ARCHITECTURE.md](ARCHITECTURE.md#browser-identity--bot-checks-what-sites-see)
 - **Navigation skills** — short `SKILL.md` recipes (pop-ups, date pickers, autocomplete, EULAs, OS selectors, downloads, shopping, travel, people search, job applications, card lists, sign-in) chosen per step; save your own after a task that worked

@@ -72,6 +72,7 @@ import { setupPagePrint } from './page-print';
 import { setupClearBrowsingData } from './clear-browsing-data';
 import { setupOutsideOpen, outsideRendererLoading, setupDefaultBrowser } from './default-browser';
 import { incognitoSession, isIncognitoWc, wipeIncognitoSession, setPrivateAi, isPrivateAi } from './incognito-session';
+import { parseHostsList, SAFE_BROWSING_MIN_HOSTS } from '../shared/safe-browsing';
 import { normalizeSearchSetting, buildSearchUrl, buildSuggestUrl, parseSuggestResponse, engineName, selectionLabel, type SearchEngineSetting } from '../shared/search-engines';
 // Idioma que os SITES recebem (Accept-Language, navigator.languages, --lang) — FONTE ÚNICA.
 import { LANG_SWITCH, NAV_LANGUAGES, ACCEPT_LANGUAGE } from './site-locale';
@@ -3467,20 +3468,13 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   // As abas normais e as anônimas: o mesmo bloqueador, ligado/desligado junto (o bypass é pelo
   // site da aba ativa, seja ela qual for).
   const tabSessions = [session.fromPartition('persist:browser'), incognitoSession()];
-  // O @ghostery registra dois ipcMain.handle GLOBAIS a cada enableBlockingInSession: a 2ª sessão lançava
-  // "second handler" e o bloqueador inteiro não subia. Mesmo bloqueador → tira o handler e deixa
-  // a próxima sessão registrar de novo.
-  const enableIn = (ses: Electron.Session) => {
-    for (const ch of ['@ghostery/adblocker/inject-cosmetic-filters', '@ghostery/adblocker/is-mutation-observer-enabled']) { try { ipcMain.removeHandler(ch); } catch {} }
-    blocker!.enableBlockingInSession(ses);
-  };
 
   function applyAdblockState(targetEnabled: boolean) {
     if (!blocker) return;
     if (targetEnabled === actuallyEnabled) return;
     for (const ses of tabSessions) {
       try {
-        if (targetEnabled) enableIn(ses);
+        if (targetEnabled) enableAdblockInSession(blocker, ses);
         else if (blocker.isBlockingEnabled(ses)) blocker.disableBlockingInSession(ses);
       } catch (e) { console.warn('[Adblock] liga/desliga falhou:', e); }
     }
@@ -3633,34 +3627,37 @@ function saveWhitelist() {
 
 // ═══ Safe browsing — phishing/malware host blocklist ═══
 const SAFE_BROWSING_PATH = path.join(app.getPath('userData'), 'safe-browsing-hosts.txt');
-const SAFE_BROWSING_URL = 'https://urlhaus.abuse.ch/downloads/hostfile/';
+// NetAPI compromised domains, hosts format ("0.0.0.0 domain"), keyless, CC BY 4.0.
+// Replaces the URLhaus hostfile, which abuse.ch retired on 2026-10-21 (HTTP 410).
+const SAFE_BROWSING_URL = 'https://netapi.com/api2/?method=compromised&dataset_type=url&format=hosts';
 let maliciousHosts = new Set<string>();
 
 async function refreshSafeBrowsing(): Promise<void> {
   try {
     let raw = '';
+    let stale = true;
     if (fs.existsSync(SAFE_BROWSING_PATH)) {
       raw = fs.readFileSync(SAFE_BROWSING_PATH, 'utf-8');
-      const stat = fs.statSync(SAFE_BROWSING_PATH);
-      const ageDays = (Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24);
-      if (ageDays > 1) raw = ''; // refresh daily
+      const ageDays = (Date.now() - fs.statSync(SAFE_BROWSING_PATH).mtimeMs) / (1000 * 60 * 60 * 24);
+      stale = ageDays > 1; // refresh daily
     }
-    if (!raw) {
-      const res = await fetch(SAFE_BROWSING_URL);
-      if (res.ok) {
-        raw = await res.text();
-        try { fs.writeFileSync(SAFE_BROWSING_PATH, raw); } catch {}
+    if (stale) {
+      // A cópia antiga só sai quando chega uma nova que preste: se o download falhar, seguir com
+      // a lista de ontem é melhor que ficar sem proteção nenhuma.
+      try {
+        const res = await fetch(SAFE_BROWSING_URL, { signal: AbortSignal.timeout(60_000) });
+        const fresh = res.ok ? await res.text() : '';
+        if (parseHostsList(fresh).size >= SAFE_BROWSING_MIN_HOSTS) {
+          raw = fresh;
+          try { fs.writeFileSync(SAFE_BROWSING_PATH, raw); } catch {}
+        } else {
+          console.warn(`[SafeBrowsing] Download rejected (HTTP ${res.status}); keeping the current copy`);
+        }
+      } catch (e) {
+        console.warn('[SafeBrowsing] Download failed; keeping the current copy:', e);
       }
     }
-    const set = new Set<string>();
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const parts = trimmed.split(/\s+/);
-      const host = parts[parts.length - 1];
-      if (host && host !== '0.0.0.0' && host !== '127.0.0.1') set.add(host);
-    }
-    maliciousHosts = set;
+    maliciousHosts = parseHostsList(raw);
     console.log(`[SafeBrowsing] Loaded ${maliciousHosts.size} malicious hosts`);
   } catch (e) {
     console.error('[SafeBrowsing] Failed to load:', e);
@@ -3677,6 +3674,16 @@ function saveAdblockPref(on: boolean): void {
   try { fs.writeFileSync(ADBLOCK_PREF_PATH, JSON.stringify({ enabled: !!on })); } catch {}
 }
 let blocker: ElectronBlocker | null = null;
+
+// O Ghostery registra os mesmos dois canais globais do ipcMain a cada sessão ligada, e o segundo
+// registro dá erro: a sessão anônima ficava sem bloqueio de rede. Os canais só repassam pro mesmo
+// bloqueador, então tirar os da sessão anterior não muda nada pra ela.
+function enableAdblockInSession(b: ElectronBlocker, ses: Electron.Session): void {
+  if (b.isBlockingEnabled(ses)) return;
+  ipcMain.removeHandler('@ghostery/adblocker/inject-cosmetic-filters');
+  ipcMain.removeHandler('@ghostery/adblocker/is-mutation-observer-enabled');
+  b.enableBlockingInSession(ses);
+}
 async function setupAdblock(): Promise<void> {
   try {
     // Cache do motor em disco: boot instantâneo e adblock funcionando MESMO OFFLINE
@@ -3716,10 +3723,8 @@ async function setupAdblock(): Promise<void> {
     // Respeita a preferência salva: só liga se o usuário não tiver desligado. As abas anônimas
     // (sessão só na memória) ganham o mesmo bloqueador.
     if (loadAdblockPref()) {
-      for (const ses of [persistSession, incognitoSession()]) {
-        for (const ch of ['@ghostery/adblocker/inject-cosmetic-filters', '@ghostery/adblocker/is-mutation-observer-enabled']) { try { ipcMain.removeHandler(ch); } catch {} }   // ver enableIn
-        blocker.enableBlockingInSession(ses);
-      }
+      enableAdblockInSession(blocker, persistSession);
+      enableAdblockInSession(blocker, incognitoSession());
     }
 
     console.log('[Adblock] Engine ready (EasyList + EasyPrivacy + cosmetic + cookie/annoyance lists)');
