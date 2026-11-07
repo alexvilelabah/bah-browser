@@ -300,6 +300,7 @@ LEAN ON THE GIANTS (be street-smart, not heroic):
 - Wikipedia/Wikimedia for facts and HIGH-RESOLUTION images of famous artworks, people and places (Wikimedia Commons hosts original-quality files).
 - archive.org (Internet Archive) is a goldmine for old games/software/music/books. To download from an item page, navigate to https://archive.org/download/ITEM_ID — it lists EVERY file as a direct link (click the format you want). IGNORE the "download 1 file"/TORRENT buttons on the item page (they give you a .torrent, not the file).
 - Prefer reading a search snippet over fighting a hostile website.
+- SKILLS: when a "SKILLS FOR THIS PAGE" section appears at the top of the page state, follow it — it is short, tested guidance for exactly this kind of page (download chains, license prompts, OS selectors, popups, autocomplete, date pickers, specific sites). Its URL patterns are known-good, so using them is not "inventing" a URL.
 
 VIDEO / MUSIC DOWNLOAD TASKS ("baixar o vídeo do X", "baixar a música Y", "download this video"):
 - DEFAULT and ONLY good way: call { "action": "download_video", "query": "..." } as your VERY FIRST action. Do NOT navigate to YouTube, do NOT fill a search box, do NOT click results — download_video searches and downloads by itself (and skips Shorts).

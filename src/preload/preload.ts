@@ -201,6 +201,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cdp:axtree', wcId),
   getNodeCoords: (wcId: number, backendNodeIds: number[]) =>
     ipcRenderer.invoke('cdp:node-coords', wcId, backendNodeIds),
+  skillsList: () => ipcRenderer.invoke('skills:list'),
+  skillsSave: (markdown: string) => ipcRenderer.invoke('skills:save', markdown),
+  skillsOpenFolder: () => ipcRenderer.invoke('skills:open-folder'),
   verifyClick: (wcId: number, backendNodeId: number) =>
     ipcRenderer.invoke('cdp:verify-click', wcId, backendNodeId),
   selectOption: (wcId: number, backendNodeId: number, option: string) =>

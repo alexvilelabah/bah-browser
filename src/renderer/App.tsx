@@ -102,6 +102,7 @@ import {
 import { createDeadline } from './task-deadline';
 import { classifySelfEval, nextSelfFailCount } from '../shared/self-eval';
 import { mergeFavorites, MAX_FAVORITES, type FlatBookmark } from '../shared/bookmarks';
+import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TASKS, SKILL_MAX_WORDS, type Skill } from '../shared/skills';
 
 // Quantos favoritos desenhar na barra e no menu ⋮ (a lista inteira continua no autocomplete).
 // Barra: os primeiros 100 (o que não cabe na largura vai pro "»"). ⋮ → Favoritos: os primeiros 150.
@@ -197,6 +198,10 @@ declare global {
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
+      skillsList?: () => Promise<Skill[]>;
+      skillsSave?: (markdown: string) => Promise<{ ok: boolean; name?: string; path?: string; error?: string }>;
+      skillsOpenFolder?: () => Promise<{ ok: boolean; path?: string; error?: string }>;
+      openExternal?: (url: string) => Promise<{ success: boolean; error?: string }>;
       frameClick?: (wcId: number, key: string, id: number) => Promise<any>;
       frameFill?: (wcId: number, key: string, id: number, value: string) => Promise<{ ok: boolean; value?: string; error?: string }>;
       getFramesAx?: (wcId: number) => Promise<{ ok: boolean; frames: Array<{ key: string; label: string; nodes: any[] }> }>;
@@ -1887,6 +1892,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.ytDlButton')}</span>
                   <span className={`menu-switch ${ytDlButton ? 'on' : ''}`}>{ytDlButton ? 'ON' : 'OFF'}</span>
                 </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); window.electronAPI?.skillsOpenFolder?.(); }} title={t('menu.mySkillsTitle')}>
+                  <span className="menu-ic">🧩</span>
+                  <span className="menu-label">{t('menu.mySkills')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setDownloadsOpen(true); setDlSettingsOpen(true); }} title={t('menu.dlManagerTitle')}>
                   <span className="menu-ic">⚙️</span>
                   <span className="menu-label">{t('menu.dlManager')}</span>
@@ -2317,6 +2326,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
               const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
+              // Peça compatível com um modelo (carregador/fonte/bateria pra "Lenovo IdeaPad 3 15ADA05").
+              const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
+              // Skills de navegação: carregadas uma vez por tarefa; escolhidas a cada passo.
+              const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
               // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
               let carefulNavs = 0, carefulRefusals = 0;
               let vagueFinishBlocks = 0;   // pedido de busca encerrado sem listar o que achou
@@ -2407,6 +2420,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 recentRunsRef.current.set(taskTabId, tabRuns);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
+                // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
+                // isso não é receita pra guardar.
+                const reportsFailure = /\b(unable|could ?n[o']t|cannot|can't|failed to|not able to|was ?n[o']t able|gave up|give up|giving up|unfortunately|did ?n[o']t (manage|work|find)|(is|was|are) not allowing|does ?n[o']t allow|no progress|não consegui|não foi possível|no pude)\b/i.test(reason);
+                if (status === 'success' && !reportsFailure && !repeatIntent && (history.match(/\nSTEP \d+:/g) || []).length >= 3) {
+                  void offerSkillSave(command, history, onProgress);
+                }
                 if (status === 'success' && !repeatIntent && macroTraceRef.current.length > 0) {
                   saveLastMacro({ command, steps: [...macroTraceRef.current], savedAt: Date.now() });
                   onProgress({ kind: 'status', message: `🧠 Sequence recorded (${macroTraceRef.current.length} step(s)). Say "repeat" or "repeat 100 times" to re-run it without spending AI.` });
@@ -3002,6 +3021,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const suggestBlock = uiState?.options?.length
                     ? `SUGGESTIONS LIST is open (autocomplete/drop-down) — click the matching one (click_ref) BEFORE searching; typed text alone is often not accepted:\n${uiState.options.map(o => { const e = elFor(o); return `  ${e ? `[${e.id}]` : '-'} "${o}"`; }).join('\n')}`
                     : '';
+                  const pageStates = [
+                    uiState?.dialog ? 'dialog' : '', uiState?.options?.length ? 'suggestions' : '',
+                    uiState?.datepicker ? 'datepicker' : '', uiState?.eula ? 'eula' : '', uiState?.osSelector ? 'os-selector' : '',
+                    uiState?.searchbox ? 'searchbox' : '', uiState?.tabs ? 'tabs' : '', uiState?.cards ? 'cards' : '', uiState?.signin ? 'signin' : '',
+                  ].filter(Boolean);
+                  const stepSkills = selectSkills(allSkills, {
+                    url: observation.url, states: pageStates,
+                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : ''].filter(Boolean),
+                  });
+                  const skillsBlock = formatSkillsBlock(stepSkills);
+                  if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });
                   // Abas que o agente usa seguem a política dele pra alert/confirm; o que aconteceu
                   // com os diálogos desde o último passo entra no histórico como linhas DIALOG:.
                   { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
@@ -3016,6 +3046,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     agentSearchLine(),
                     dialogBlock,
                     suggestBlock,
+                    skillsBlock,
                     '',
                     planBlock,
                     '',
@@ -5524,6 +5555,53 @@ function fallbackThreeBullets(text: string): string[] {
   const picked = sentences.slice(0, 3);
   while (picked.length < 3) picked.push('The main text was isolated for distraction-free reading.');
   return picked.map(s => s.length > 150 ? `${s.slice(0, 147).trim()}...` : s);
+}
+
+// "Salvar como skill": depois de uma tarefa que deu certo, oferece transformar o que funcionou num
+// SKILL.md do usuário. O MODELO só rascunha; salvar e compartilhar são cliques da pessoa (skill é
+// instrução pro modelo — nunca entra sem revisão).
+const SKILLS_REPO_NEW_FILE = 'https://github.com/alexvilelabah/bah-browser/new/main/skills';
+async function offerSkillSave(command: string, history: string, onProgress: (e: AgentProgressEvent) => void): Promise<void> {
+  const ask = (title: string, message: string, yesLabel: string, noLabel: string) => new Promise<boolean>((resolve) => {
+    onProgress({ kind: 'confirm', risk: 'skill', label: title, title, message, yesLabel, noLabel, onConfirm: () => resolve(true), onCancel: () => resolve(false) } as any);
+  });
+  if (!(await ask('💾 Save as skill?', 'This task worked. Turn what worked into a reusable skill? Bah drafts it with your model — you review it before anything is saved.', '✍️ Draft skill', 'Not now'))) return;
+  onProgress({ kind: 'status', message: '✍️ Drafting a skill from this task…' });
+  const prompt = `You write SKILL.md files for a browser agent. From the task below, write ONE skill that captures what WORKED, so the agent does it right next time. Prefer a GENERAL rule (a kind of page or task); only name a site in "sites" if the steps really are specific to it.
+
+Output ONLY the file, exactly this shape:
+---
+name: kebab-case-name
+description: one line
+sites: [example.com]        (optional — omit the line if general)
+states: [${SKILL_STATES.join(', ')}]   (optional — only those that apply)
+tasks: [${SKILL_TASKS.join(', ')}]       (optional — only those that apply)
+priority: 40
+---
+1. numbered steps, written with the agent's actions (navigate, click_ref, fill_ref, select_option, check, find, look_at, extract_text, render_view, download, wait)
+
+Rules: at least one of sites/states/tasks; body under ${SKILL_MAX_WORDS - 40} words; keep URL patterns that worked (e.g. search/results URLs with parameters); leave out dead ends and failed attempts; no personal data.
+
+TASK: ${command}
+
+WHAT HAPPENED (agent history, newest last):
+${history.slice(-6000)}`;
+  const r = await window.electronAPI?.aiChat?.(prompt, '', true, true).catch(() => null);
+  let md = String(r?.response || '').trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+  const start = md.indexOf('---'); if (start > 0) md = md.slice(start);
+  const v = validateSkill(md);
+  if (!v.ok) {
+    onProgress({ kind: 'status', message: `✖️ The drafted skill is not valid (${v.error}). Nothing was saved.` });
+    return;
+  }
+  if (!(await ask('📝 Skill draft — review', md, '💾 Save', 'Discard'))) { onProgress({ kind: 'status', message: 'Skill discarded.' }); return; }
+  const saved = await window.electronAPI?.skillsSave?.(md);
+  if (!saved?.ok) { onProgress({ kind: 'status', message: `✖️ Could not save the skill: ${saved?.error || 'unknown error'}` }); return; }
+  onProgress({ kind: 'status', message: `🧩 Skill "${saved.name}" saved (${saved.path}). It is used from the next task. Edit or delete it any time: menu → 🧩 My skills.` });
+  if (await ask('🌍 Share with the Bah project?', `Propose "${saved.name}" for everyone? This opens GitHub with the file pre-filled; nothing is sent unless you submit it there. General rules are preferred over recipes for one site.`, '🌍 Open on GitHub', 'Keep private')) {
+    const url = `${SKILLS_REPO_NEW_FILE}/${encodeURIComponent(saved.name!)}?filename=SKILL.md&value=${encodeURIComponent(md + '\n')}`;
+    try { await window.electronAPI?.openExternal?.(url); } catch {}
+  }
 }
 
 // Module-level bounded await — for helpers outside the agent-loop closure.

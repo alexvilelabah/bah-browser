@@ -48,6 +48,7 @@ import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupFrames } from './frames';
 import { setupHwMonitor } from './hw-monitor';
+import { setupSkills } from './skills-loader';
 import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
 import { setupChromeExtensions } from './chrome-extensions';
@@ -3028,6 +3029,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   downloadManager.attach(session.fromPartition('persist:browser'));
   downloadManager.attach(session.defaultSession);
+  // Skills de navegação (skills/*/SKILL.md) pro agente.
+  setupSkills();
   // Download de aba anônima também vai pro disco e pro painel (igual ao Chrome).
   downloadManager.attach(incognitoSession());
   // Medidor do computador na barra de cima (CPU, RAM, placa de vídeo) — só mede quando ligado e visível.

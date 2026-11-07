@@ -243,6 +243,34 @@ pula a checagem.
 
 ---
 
+## Skills de navegação (`skills/*/SKILL.md`)
+
+Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que
+só cresce (modelo local pequeno segue muito melhor um prompt curto e relevante). Formato compatível com
+o `SKILL.md` do Browse.sh / agent-browser: front matter + corpo em markdown (≤ 220 palavras).
+Campos: `name` (= nome da pasta), `description`, `states`, `tasks`, `sites` (hosts; subdomínio casa),
+`priority`. A skill entra quando **todas** as listas que ela declara casam; no máximo 3 por passo, mais
+específicas primeiro (site > tarefa > estado da página), numa seção `SKILLS FOR THIS PAGE` no estado da
+página, com uma linha `TODAY` (data ISO e o próximo fim de semana) pro modelo pequeno acertar as datas.
+
+Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggestions` (lista de
+autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
+EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
+busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
+aviso "entre para ver…"). Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`, `people`.
+Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
+`src/main/skills-loader.ts` (leitura + IPC `skills:list` / `skills:save` / `skills:open-folder`; relê os
+arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).
+Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
+skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
+`download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
+`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+Skills do usuário ficam em `<userData>/skills/` (menu → 🧩 Minhas skills); depois de uma tarefa que deu
+certo (3+ passos, e a mensagem final não diz que falhou) o Bah oferece rascunhar uma ("Salvar como skill" →
+revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
+
+---
+
 ## Build e release
 
 - **Build:** Renderer = Vite + typecheck `tsc`; Main = `tsc`. Um gate de paridade de i18n

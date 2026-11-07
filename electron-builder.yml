@@ -22,6 +22,8 @@ directories:
 files:
   - dist/**/*
   - package.json
+  # Skills de navegação do agente (lidas em runtime por src/main/skills-loader.ts).
+  - skills/**/*
   # Roteador local (node-llama-cpp): sem os binários CUDA (centenas de MB; Vulkan cobre a GPU no
   # Windows/Linux, Metal no Mac, e sempre há CPU), sem o código-fonte do llama.cpp (só serve pra
   # compilar, e o app usa build:'never') e sem os templates do CLI.
