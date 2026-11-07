@@ -72,7 +72,7 @@
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
 - **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
-- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, WebRTC preso ao proxy
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), WebRTC preso ao proxy
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -164,6 +164,13 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
 - **Vazamento de IP pelo WebRTC:** com proxy em uso, o WebRTC só pode usar o proxy (`disable_non_proxied_udp`),
   então a página não descobre o seu IP real por ele. Sem proxy (ou com app de VPN, que age no SO) vale o padrão
   do Chrome. O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **DNS seguro (DNS-over-HTTPS):** **Sistema** (padrão — nada muda até você escolher) · predefinições **AdGuard**
+  e **Mullvad** (bloqueiam anúncio, sem cadastro), **Quad9** (bloqueia malware), **Cloudflare** (sem filtro) ·
+  **NextDNS** (cole o ID da sua configuração — conta grátis, você gerencia as listas; plano grátis com 300 mil
+  consultas/mês, depois disso continua resolvendo mas para de filtrar) · endereço `https://` **personalizado**
+  (Pi-hole, AdGuard Home). **Estrito** faz a consulta falhar em vez de cair no DNS comum da sua rede quando o
+  servidor não responde. Uma configuração pra todas as abas, anônimas também. É configuração do navegador, não
+  extensão: extensão do Chrome não tem como trocar o resolvedor.
 - **Extensões de VPN:** uma extensão do Chrome que controla o proxy (`chrome.proxy`) vence enquanto está ligada,
   como no Chrome; quando solta, as abas voltam pro proxy configurado aqui.
 

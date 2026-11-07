@@ -76,7 +76,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
-- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, WebRTC kept inside the proxy
+- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), WebRTC kept inside the proxy
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -168,6 +168,13 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
 - **WebRTC IP leak:** while a proxy is in use, WebRTC may only use the proxy (`disable_non_proxied_udp`), so a
   page cannot learn your real IP through it. Without a proxy (or with a VPN app, which is OS-level) Chrome's
   default applies. Chromium cannot sign in to SOCKS5 proxies (username/password); SOCKS5 without a password works.
+- **Secure DNS (DNS-over-HTTPS):** **System** (default — nothing changes until you pick) · presets **AdGuard**
+  and **Mullvad** (ad blocking, no sign-up), **Quad9** (malware blocking), **Cloudflare** (no filtering) ·
+  **NextDNS** (paste your configuration ID — free account, you manage the lists; free plan 300k queries/month,
+  after that it still resolves but stops filtering) · **Custom** `https://` address (Pi-hole, AdGuard Home).
+  **Strict** makes lookups fail instead of falling back to your network's plain DNS when the server can't be
+  reached. One setting for every tab, private ones included. It's a browser setting, not an extension: Chrome
+  extensions have no way to change the resolver.
 - **VPN extensions:** a Chrome extension that controls the proxy (`chrome.proxy`) wins while it is on, as in
   Chrome; when it lets go, the tabs return to the proxy set here.
 

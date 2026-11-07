@@ -47,6 +47,7 @@ import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
 import { setupProxy } from './proxy';
+import { setupSecureDns } from './secure-dns';
 import { loadSystemCAs, installCAs } from './system-ca';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
@@ -3694,6 +3695,8 @@ app.whenReady().then(async () => {
   // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
   // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
   setupProxy(() => mainWindow);
+  // DNS seguro (DoH) escolhido pela pessoa — app inteiro; padrão "system" não mexe em nada.
+  setupSecureDns();
   loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
   {
     const browsingSession = session.fromPartition('persist:browser');
