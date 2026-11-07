@@ -432,7 +432,14 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       });
     };
     window.addEventListener('bah:move-thread', onMove);
-    return () => window.removeEventListener('bah:move-thread', onMove);
+    // Aviso que chega DEPOIS da tarefa (ex.: o download do agente terminou): entra na conversa dela.
+    const onNote = (e: Event) => {
+      const { key, text } = (e as CustomEvent).detail || {};
+      if (!key || !text) return;
+      setFeedsByTab(m => ({ ...m, [key]: [...(m[key] ?? []), { kind: 'chat-assistant', text, id: ++idRef.current } as FeedItem].slice(-FEED_CAP) }));
+    };
+    window.addEventListener('bah:agent-note', onNote);
+    return () => { window.removeEventListener('bah:move-thread', onMove); window.removeEventListener('bah:agent-note', onNote); };
   }, []);
   // Avisos da thread vão pro feed DA CONVERSA deles (não necessariamente a vista); conversa retomada
   // do 🕘 histórico começa com ela mesma, só leitura.
@@ -649,16 +656,6 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       return { ...prevMap, [tabId]: next };
     });
   };
-  // Aviso que chega DEPOIS da tarefa (ex.: o download do agente terminou): entra na conversa da aba dela.
-  useEffect(() => {
-    const onNote = (e: Event) => {
-      const { key, text } = (e as CustomEvent).detail || {};
-      if (!key || !text) return;
-      setFeedsByTab(m => ({ ...m, [key]: [...(m[key] ?? []), { kind: 'chat-assistant', text, id: ++idRef.current } as FeedItem].slice(-FEED_CAP) }));
-    };
-    window.addEventListener('bah:agent-note', onNote);
-    return () => window.removeEventListener('bah:agent-note', onNote);
-  }, []);
 
   const removeFeedItem = (id: number) => setFeedsByTab(prevMap => {
     let changed = false;

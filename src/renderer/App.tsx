@@ -467,7 +467,7 @@ export default function App() {
   // arquivo uns segundos após carregar) ainda é do agente — o fim dele vai pra próxima tarefa.
   const taskEndedAtRef = useRef(0);
   const DL_GRACE_MS = 30_000;
-  const agentDlThreadRef = useRef(new Map<string, string>());   // download do agente → conversa (aba) onde avisar o fim
+  const agentDlThreadRef = useRef(new Map<string, string>());   // download do agente → conversa onde avisar o fim
   const dlLatestRef = useRef<Map<string, { state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; etaSec?: number | null }>>(new Map());
   const downloadEventsRef = useRef<Array<{ id?: string; kind?: string; state: string; filename: string; path?: string; bytes?: number; totalBytes?: number; speedBps?: number; etaSec?: number | null; reason?: string; stalled?: boolean; stalledForSec?: number }>>([]);
 
@@ -718,7 +718,7 @@ export default function App() {
       dlLatestRef.current.set(dlKey, { ...info, at: Date.now(), startedAt: (dlLatestRef.current.get(dlKey) as any)?.startedAt ?? Date.now() } as any);
       const agentWindow = taskRunningRef.current || Date.now() - taskEndedAtRef.current < DL_GRACE_MS;
       if (agentWindow && (info.state === 'started' || info.state === 'queued' || info.kind === 'agent' || info.kind === 'video')) {
-        if (!agentDlIdsRef.current.has(dlKey)) agentDlThreadRef.current.set(dlKey, activeTabIdRef.current);
+        if (!agentDlIdsRef.current.has(dlKey)) agentDlThreadRef.current.set(dlKey, store.threadKeyOf(activeTabIdRef.current));
         agentDlIdsRef.current.add(dlKey);
       }
       // Download que o AGENTE começou terminou (a tarefa já acabou quando ele começou): avisa na mesma conversa,
