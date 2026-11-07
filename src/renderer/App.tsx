@@ -3404,7 +3404,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
-                    tasks: [commandWantsDownload ? 'download' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : ''].filter(Boolean),
+                    tasks: [commandWantsDownload ? 'download' : '', isMediaCollectionRequest(command) ? 'collection' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : ''].filter(Boolean),
                   });
                   const skillsBlock = formatSkillsBlock(stepSkills);
                   if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });

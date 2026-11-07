@@ -538,7 +538,7 @@ Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggest
 autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
 EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
 busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
-aviso "entre para ver…"). Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`, `people`.
+aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`.
 Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na
 sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`.
 Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),

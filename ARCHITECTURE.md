@@ -560,7 +560,7 @@ line (ISO date and the coming weekend) so small models get dates right.
 | `cards` | ≥3 sibling cards of the same kind, each with a link (job/hotel/product lists) |
 | `signin` | a visible password field, a login page (title/path), or a "sign in to see/continue…" wall |
 
-Task types come from the request: `download` (download words, typos included), `search` (find/search/
+Task types come from the request: `download` (download words, typos included), `collection` (every track of a soundtrack, album or top-N list: `isMediaCollectionRequest`), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
 `parts` (charger/adapter/battery/compatible...), `people`. Per-site **account state** (signed in / signed out, read
 from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an

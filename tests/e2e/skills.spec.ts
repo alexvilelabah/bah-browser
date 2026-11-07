@@ -70,11 +70,12 @@ test('skills: page state + task pick bundled skills; a user skill for this site 
     fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: local-driver-site\ndescription: Test site recipe.\nsites: [127.0.0.1]\ntasks: [download]\n---\nUSER SKILL BODY: pick the package, then Download.\n');
     const block = skillsOnDriverPage(await run(app, page, 'download the printer driver for my computer', /SKILLS FOR THIS PAGE[\s\S]*TITLE: Driver downloads/));
     expect(block).toMatch(/^SKILLS FOR THIS PAGE[^\n]*\nTODAY: \d{4}-\d{2}-\d{2} /);
-    // Site + tarefa (usuário) > estado + tarefa (eula-accept) > só tarefa (download-chain); no máximo 3.
+    // Site + tarefa (usuário) > estado + tarefa (eula-accept) > só tarefa (software-download, a de maior
+    // prioridade entre as de download; media-collection só entra em pedido de coleção); no máximo 3.
     const names = [...block.matchAll(/^### ([a-z0-9-]+)$/gm)].map(m => m[1]);
-    expect(names).toEqual(['local-driver-site', 'eula-accept', 'download-chain']);
+    expect(names).toEqual(['local-driver-site', 'eula-accept', 'software-download']);
     expect(block).toContain('USER SKILL BODY');
-    await expect(page.getByText(/🧩 Skills: local-driver-site, eula-accept, download-chain/).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/🧩 Skills: local-driver-site, eula-accept, software-download/).first()).toBeVisible({ timeout: 30_000 });
   } finally { await close(); }
 });
 

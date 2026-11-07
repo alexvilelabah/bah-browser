@@ -1,7 +1,7 @@
 ---
 name: media-collection
 description: Download every song or music video of a soundtrack, album or artist list — research the official track list first, then download each one.
-tasks: [download]
+tasks: [collection]
 priority: 58
 ---
 The user wants a COLLECTION ("all the music videos from the movie X", "the soundtrack", "every song on the album"), not one item.
