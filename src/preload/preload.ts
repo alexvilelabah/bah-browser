@@ -194,6 +194,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFramesCoords: (wcId: number, key: string, ids: number[]) => ipcRenderer.invoke('cdp:frames-coords', wcId, key, ids),
   frameClick: (wcId: number, key: string, id: number) => ipcRenderer.invoke('cdp:frame-click', wcId, key, id),
   frameFill: (wcId: number, key: string, id: number, value: string) => ipcRenderer.invoke('cdp:frame-fill', wcId, key, id, value),
+  savePdf: (wcId: number, name?: string) => ipcRenderer.invoke('agent:save-pdf', wcId, name),
+  pageScreenshot: (wcId: number, full: boolean, name?: string) => ipcRenderer.invoke('agent:screenshot', wcId, full, name),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
+  clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
   // Accessibility tree via CDP

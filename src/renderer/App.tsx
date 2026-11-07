@@ -191,6 +191,10 @@ declare global {
       getFramesCoords?: (wcId: number, key: string, ids: number[]) => Promise<{ ok: boolean; coords: Record<number, { x: number; y: number; w: number; h: number } | null> }>;
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
+      savePdf?: (wcId: number, name?: string) => Promise<any>;
+      pageScreenshot?: (wcId: number, full: boolean, name?: string) => Promise<any>;
+      clipboardReadText?: () => Promise<string>;
+      clipboardWriteText?: (text: string) => Promise<any>;
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
       pointer?: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => Promise<{ success: boolean; error?: string }>;
       selectOption?: (wcId: number, backendNodeId: number, option: string) => Promise<{ ok: boolean; selected?: string; options?: string[]; error?: string }>;
@@ -1806,10 +1810,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.memSaver')}</span>
                   <span className={`menu-switch ${memSaverOn ? 'on' : ''}`}>{memSaverOn ? 'ON' : 'OFF'}</span>
                 </button>
-                {(['userTabs', 'history'] as PermKind[]).map(k => (
+                {(['userTabs', 'history', 'clipboard'] as PermKind[]).map(k => (
                   <button key={k} className="menu-item" onClick={() => { setPerm(k, nextMode(getPerm(k))); setPermTick(x => x + 1); }} title={t('menu.agentPermTitle')}>
-                    <span className="menu-ic">{k === 'userTabs' ? '🗂️' : '🕘'}</span>
-                    <span className="menu-label">{t(k === 'userTabs' ? 'menu.agentPermTabs' : 'menu.agentPermHistory')}</span>
+                    <span className="menu-ic">{k === 'userTabs' ? '🗂️' : k === 'clipboard' ? '📋' : '🕘'}</span>
+                    <span className="menu-label">{t(k === 'userTabs' ? 'menu.agentPermTabs' : k === 'clipboard' ? 'menu.agentPermClipboard' : 'menu.agentPermHistory')}</span>
                     <span className={`menu-switch ${getPerm(k) === 'allow' ? 'on' : ''}`}>{t(`menu.perm.${getPerm(k)}` as any)}</span>
                   </button>
                 ))}
@@ -2259,7 +2263,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const mode = getPerm(kind);
                 if (mode === 'allow') return true;
                 if (mode === 'deny') return false;
-                const label = kind === 'userTabs' ? 'one of your tabs' : 'your browsing history';
+                const label = kind === 'userTabs' ? 'one of your tabs' : kind === 'clipboard' ? 'what you copied (clipboard)' : 'your browsing history';
                 const answer = await new Promise<PermAnswer>((resolve) => {
                   onProgress({ kind: 'confirm', risk: 'permission', label, title: `🔐 The agent wants to use ${label}`,
                     message: `${what}\nYou can change this later in the menu.`,
@@ -4771,6 +4775,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       armDialog(wcIdDlg, action.accept, action.text);
                       toolResult = { success: true, info: { armed: action.accept ? `accept${action.text != null ? ` with "${action.text}"` : ''}` : 'dismiss', note: 'Now do the action that opens the dialog.' } };
                     } else toolResult = { success: false, error: 'The tab is not ready yet; try again after the page loads.' };
+                  } else if ((action.type === 'save_pdf' || action.type === 'screenshot') && wcId != null) {
+                    const r = action.type === 'save_pdf' ? await window.electronAPI?.savePdf?.(wcId, action.name) : await window.electronAPI?.pageScreenshot?.(wcId, action.full !== false, action.name);
+                    toolResult = r ?? { success: false, error: 'not available' };
+                    if (r?.success) onProgress({ kind: 'status', message: `💾 Saved ${r.info.path}` });
+                  } else if (action.type === 'clipboard') {
+                    // Escrever é livre (o agente entregando um resultado). Ler o que a PESSOA copiou passa pela
+                    // permissão 'clipboard' (perguntar / sempre / nunca — menu ou resposta na pergunta).
+                    if (action.write != null) toolResult = await window.electronAPI?.clipboardWriteText?.(action.write);
+                    else if (!(await askPermission('clipboard', 'Read the text you last copied (clipboard).'))) toolResult = { success: false, error: 'The user did not allow reading their clipboard.' };
+                    else { const txt = await window.electronAPI?.clipboardReadText?.() ?? ''; history += `\nCLIPBOARD (what the user copied): ${txt || '(empty)'}`; toolResult = { success: true, info: { chars: txt.length } }; }
                   } else {
                     // FREIO unificado: QUALQUER ação de risco que chega aqui pede confirmação —
                     // inclui o `fill`/`fill_ref` (dado de cartão), que antes escapava porque o
@@ -4788,6 +4802,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
+                    || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'read_aloud' || action.type === 'history_search';
                   let screenshotAfter: string | undefined;
                   let afterObservation: ObservedState;
@@ -4851,6 +4866,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'find'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
+                    || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
                   if (internalAction) {
                     // keep noEffectCount unchanged

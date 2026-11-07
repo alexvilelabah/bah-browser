@@ -207,6 +207,9 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - select_option: { "action": "select_option", "ref": number, "option": "macOS 26.x" } — chooses an option in a drop-down (<select>/combobox) by its visible text (partial match OK). Use it for OS/version/language/country/size selectors — clicking or typing into a <select> does NOT change it. If the option is not found, the result lists the available options; pick one of those.
 - click_ref: { "action": "click_ref", "ref": number } — PREFERRED. Clicks the element with that id from interactive_elements. Most reliable.
 - fill_ref: { "action": "fill_ref", "ref": number, "value": string } — PREFERRED for inputs. Fills the input element with that id.
+- save_pdf: { "action": "save_pdf", "name"?: "..." } — saves the current page as a PDF in the user's Downloads folder; the result gives the path (receipts, confirmations, job postings).
+- screenshot: { "action": "screenshot", "full"?: true, "name"?: "..." } — saves a PNG of the WHOLE page (full: false = only the visible part) in Downloads; the result gives the path.
+- clipboard: { "action": "clipboard", "write": "text" } copies text for the user (results, an address, a summary). { "action": "clipboard", "read": true } reads what the USER copied — Bah asks their permission first.
 - click_text: { "action": "click_text", "text": string, "nth"?: number } fallback when the right element isn't in the ref list.
 - click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.

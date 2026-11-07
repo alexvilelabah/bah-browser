@@ -1,7 +1,8 @@
-// O que o agente pode usar além das abas da própria tarefa: as ABAS da pessoa e o HISTÓRICO.
+// O que o agente pode usar além das abas da própria tarefa: as ABAS da pessoa, o HISTÓRICO e o que ela
+// copiou (área de transferência).
 // Cada uma: 'ask' (padrão — pergunta na hora), 'allow' (sempre), 'deny' (nunca). A pessoa
 // responde "sempre"/"nunca" na pergunta, ou troca no menu, quando quiser.
-export type PermKind = 'userTabs' | 'history';
+export type PermKind = 'userTabs' | 'history' | 'clipboard';
 export type PermMode = 'ask' | 'allow' | 'deny';
 const KEY = 'agentPerms';
 const MODES: PermMode[] = ['ask', 'allow', 'deny'];
