@@ -17,6 +17,9 @@ import { fmtUsd } from '../pricing';
 import { noteExchange, compactNow, clear as clearThread, getThread, hydratedKeys, type ThreadNotice } from '../threads';
 import { ThreadView, ThreadNoticeRow } from './ThreadView';
 import ContextMeter from './ContextMeter';
+import { nextRuns, parseSchedule, type ScheduleSpec } from '../../shared/schedule';
+import type { ScheduledRunHooks } from '../scheduler';
+import { ambiguityNote, describeSchedule, fmtWhen } from '../schedule-format';
 
 export interface StepRecord {
   step: number;
@@ -206,7 +209,12 @@ function hostOf(url: string): string {
 }
 
 interface Props {
-  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
+  /** unattended: tarefa AGENDADA (a pessoa pode não estar olhando) — o freio fica mais rígido. */
+  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean; unattended?: boolean }) => Promise<ActionResult>;
+  /** "every weekday at 8am …" no assistente: guarda a tarefa agendada (null = não deu: lista cheia). */
+  onCreateSchedule?: (command: string, spec: ScheduleSpec) => { nextAt: number } | null;
+  /** Relógio das tarefas agendadas (o mesmo do agendador; os testes mexem nele). */
+  schedNow?: () => number;
   /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
    *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
   onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean, docIsFile?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
@@ -263,7 +271,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, threadKeyOf = (id: string) => id, onEnsureSession, viewSession, onRenameSession, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, threadKeyOf = (id: string) => id, onEnsureSession, viewSession, onRenameSession, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud, onCreateSchedule, schedNow = Date.now }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -419,6 +427,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const viewTabId = (loading || chatLoading) ? (convoTabRef.current || activeTabId) : activeTabId;
   const viewKey = threadKeyOf(viewTabId);
   const feed = useMemo<FeedItem[]>(() => feedsByTab[viewKey] ?? [], [feedsByTab, viewKey]);
+  // O cartão de pergunta mais recente (só ele responde à pergunta pendente).
+  const lastConfirmId = useMemo(() => [...feed].reverse().find(i => i.kind === 'confirm')?.id ?? -1, [feed]);
   // A conversa de uma aba mudou de chave (a aba ganhou sessão ou entrou em outra): vai junto.
   useEffect(() => {
     const onMove = (e: Event) => {
@@ -705,10 +715,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean }) => {
+  const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean; scheduled?: ScheduledRunHooks }) => {
     // Re-entrada: um agente JÁ rodando nunca pode ser atropelado por outro (o 2º
     // sobrescreveria o abortRef e o 1º ficaria órfão, sem Stop). Duplo-Enter → ignora.
     if (abortRef.current) return;
+    // Tarefa AGENDADA: o agendador (scheduler.ts) fica sabendo quando ela para pra esperar a
+    // pessoa (cartão de confirmação / perguntas / login) e como terminou.
+    const sched = opts?.scheduled;
+    let outcome: { kind: 'success' | 'failed' | 'cancelled' | 'error'; text: string } = { kind: 'success', text: '' };
+    const waitFor = <F extends ((...a: any[]) => void) | undefined>(fn: F): F => (fn && sched
+      ? ((...a: any[]) => { sched.onResumed(); fn(...a); }) as F
+      : fn);
     busyRef.current = true;
     convoTabRef.current = activeTabId;
     onEnsureSession?.(activeTabId, cmd);   // esta tarefa pertence à aba atual
@@ -718,15 +735,19 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     setManualHelp(null);
     manualContinueRef.current = null;
     stickToBottomRef.current = true;
-    if (!opts?.skipPush) push({ kind: 'task', text: cmd });
+    if (!opts?.skipPush) push({ kind: 'task', text: sched ? `⏰ ${cmd}` : cmd });
     try {
       const result = await onExecute(cmd, event => {
         if (event.kind === 'step') {
           push({ kind: 'step', step: event.step });
         } else if (event.kind === 'manual_help') {
-          manualContinueRef.current = event.onContinue;
+          manualContinueRef.current = waitFor(event.onContinue);
           setManualHelp({ message: event.message, instruction: event.instruction });
           push({ kind: 'help', message: event.message, instruction: event.instruction });
+          sched?.onWaiting(event.message);
+        } else if (event.kind === 'plan_preview' && sched) {
+          // A pessoa já aprovou o pedido quando agendou: o plano segue sem esperar.
+          event.onApprove();
         } else if (event.kind === 'plan_preview') {
           planCbRef.current = { approve: event.onApprove, edit: event.onEdit, cancel: event.onCancel, hold: event.onHold };
           setPlanPreview({ goal: event.goal, steps: event.steps });
@@ -735,10 +756,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           setPlanDraft(event.goal);
           setPlanEditing(false);
         } else if (event.kind === 'confirm') {
-          confirmActionsRef.current = { onConfirm: event.onConfirm, onCancel: event.onCancel, onChoose: event.onChoose };
+          confirmActionsRef.current = { onConfirm: waitFor(event.onConfirm), onCancel: waitFor(event.onCancel), onChoose: waitFor(event.onChoose) };
           setPendingConfirm({ message: event.message });
           confirmLabelsRef.current = !!event.yesLabel || !!event.choices;
           push({ kind: 'confirm', message: event.message, title: event.title, yesLabel: event.yesLabel, noLabel: event.noLabel, choices: event.choices });
+          sched?.onWaiting(event.title ? `${event.title} ${event.message}` : event.message);
         } else if (event.kind === 'result') {
           // skip — step cards already carry action+result (avoids duplicate noise)
         } else if (event.kind === 'media') {
@@ -746,17 +768,20 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         } else {
           push({ kind: 'event', event });
         }
-      }, abortController.signal, opts);
+      }, abortController.signal, { forceImage: opts?.forceImage, ...(sched ? { unattended: true } : {}) });
       if (result.error) {
         push({ kind: 'error', text: result.error });
+        outcome = { kind: 'error', text: result.error };
       } else if ((result.done as any)?.reason) {
         push({ kind: 'report', text: (result.done as any).reason });
+        outcome = { kind: abortController.signal.aborted ? 'cancelled' : (result.done as any).success === false ? 'failed' : 'success', text: (result.done as any).reason };
         // Só toca o sino de "pronto" em SUCESSO. Tarefa cancelada/falha mostra o
         // texto, mas sem o chime/notificação de "✅ Bah" (que dava falsa sensação de êxito).
         if ((result.done as any).success !== false) notifyDone((result.done as any).reason);
       } else if (result.thought) {
         push({ kind: 'report', text: result.thought.split('\n').slice(-3).join('\n') });
         notifyDone(result.thought);
+        outcome = { kind: 'success', text: result.thought.split('\n').slice(-1)[0] };
       }
       // Só limpa se a caixa ainda tem o pedido: o que a pessoa começou a digitar durante a
       // tarefa (a caixa fica livre) não some quando ela termina.
@@ -765,9 +790,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       // Erro inesperado do loop NÃO pode sumir mudo: mostra no feed (exceto cancelamento
       // pelo botão Parar, que é intencional e já tem o próprio fluxo).
       if (!abortController.signal.aborted) push({ kind: 'error', text: String(e?.message ?? e) });
+      outcome = abortController.signal.aborted ? { kind: 'cancelled', text: '' } : { kind: 'error', text: String(e?.message ?? e) };
     } finally {
       busyRef.current = false;
       abortRef.current = null;
+      try { sched?.onDone(outcome.kind, outcome.text); } catch {}
       setLoading(false);
       setManualHelp(null);
       manualContinueRef.current = null;
@@ -799,6 +826,64 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     setFollowUp(null);
     void runAgent(cmd, { skipPush: true });
   }, [followUp, loading, chatLoading]);
+
+  // ── TAREFAS AGENDADAS (renderer/scheduler.ts) ──────────────────────────────────
+  // O agendador pergunta se o painel está livre e pede pra rodar a tarefa na aba dela. Só um
+  // agente por vez: com uma tarefa (ou chat) da pessoa rodando, a agendada espera na fila.
+  const runAgentRef = useRef(runAgent);
+  runAgentRef.current = runAgent;
+  const activeTabRef = useRef(activeTabId);
+  activeTabRef.current = activeTabId;
+  useEffect(() => {
+    const onBusy = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d && (abortRef.current || busyRef.current)) d.busy = true;
+    };
+    const onRun = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (!d) return;
+      if (abortRef.current || busyRef.current) { d.accepted = false; d.reason = 'busy'; return; }
+      if (activeTabRef.current !== d.tabId) { d.accepted = false; d.reason = 'tab'; return; }
+      d.accepted = true;
+      void runAgentRef.current(String(d.command), { scheduled: d.hooks });
+    };
+    window.addEventListener('bah:sched-busy', onBusy);
+    window.addEventListener('bah:sched-run', onRun);
+    return () => { window.removeEventListener('bah:sched-busy', onBusy); window.removeEventListener('bah:sched-run', onRun); };
+  }, []);
+
+  // "every weekday at 8am check my Indeed recommendations" → tarefa agendada. Claro = salva e
+  // diz quando é a próxima; ambíguo (sem hora, "at 9" manhã ou noite?, intervalo curto demais)
+  // = cartão com as próximas 3 vezes antes de salvar.
+  const tryScheduleRequest = (msg: string): boolean => {
+    if (!onCreateSchedule) return false;
+    const p = parseSchedule(msg);
+    if (!p) return false;
+    pendingSuggestionRef.current = null;
+    convoTabRef.current = activeTabId;
+    stickToBottomRef.current = true;
+    setInput('');
+    push({ kind: 'chat-user', text: msg });
+    // Aba anônima: nada dela fica guardado — e uma tarefa agendada é justamente algo guardado.
+    if (activeIncognito) { push({ kind: 'chat-assistant', text: t('sched.noIncognito') }); return true; }
+    const save = () => {
+      const r = onCreateSchedule(p.command, p.spec);
+      push(r
+        ? { kind: 'chat-assistant', text: t('sched.created', { what: p.command, when: describeSchedule(p.spec), next: fmtWhen(r.nextAt) }) }
+        : { kind: 'error', text: t('sched.full') });
+    };
+    if (!p.ambiguous.length) { save(); return true; }
+    const runs = nextRuns(p.spec, schedNow(), 3).map(x => `• ${fmtWhen(x)}`).join('\n');
+    confirmActionsRef.current = { onConfirm: save, onCancel: () => push({ kind: 'chat-assistant', text: t('sched.notSaved') }) };
+    confirmLabelsRef.current = true;
+    setPendingConfirm({ message: '' });
+    push({
+      kind: 'confirm', title: t('sched.confirmTitle'),
+      message: t('sched.confirmMsg', { what: p.command, when: describeSchedule(p.spec), note: ambiguityNote(p.ambiguous), runs }),
+      yesLabel: t('sched.confirmYes'), noLabel: t('sched.cancel'),
+    });
+    return true;
+  };
 
   const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
     busyRef.current = true;
@@ -1010,6 +1095,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       compactNow(threadKeyOf(activeTabId));
       return;
     }
+    // ⏰ Checagem CEDO (antes do roteador): pedido de agendamento não é tarefa pra agora.
+    if (tryScheduleRequest(msg)) return;
     // "sim/pode/faça…" logo após uma proposta → roda a proposta (reclassificada).
     if (pendingSuggestionRef.current && isAffirmative(msg)) {
       const cmd = pendingSuggestionRef.current;
@@ -1896,7 +1983,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           </div>
         )}
         {feed.map(item => {
-          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} onChoose={handleChoice} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
+          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} onChoose={handleChoice} confirmActive={!!pendingConfirm && item.id === lastConfirmId} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
           const transient = item.kind === 'event' && item.event.kind === 'status';
           const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
           return <div key={item.id} className={cls}>{row}</div>;

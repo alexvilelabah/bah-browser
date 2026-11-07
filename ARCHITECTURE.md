@@ -324,6 +324,36 @@ opens a past session read-only or **Resumes** it (`store.resumeSession`, optiona
 Tests: `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
 `session-restore.test.ts`; end to end `tests/e2e/sessions-thread.spec.ts`.
 
+## Scheduled tasks (while Bah is open)
+
+The assistant can run a request on a schedule — "every weekday at 8am check my Indeed recommendations",
+"toda segunda às 9h resuma as notícias", "cada 2 horas …" — or from ⋮ → ⏰ **Scheduled tasks** (add, edit,
+pause, delete, run now, history). Pure rules in `src/shared/schedule.ts` (tested in
+`tests/unit/schedule.test.ts`): the en/pt/es parser (daily, weekdays, weekends, weekly on named days, every
+N minutes/hours with a 15-minute minimum, at HH:MM / 8am / 8h / noon), next-run computation in **local
+wall-clock time** (8:00 stays 8:00 across DST; a time skipped by the spring jump runs right after it; the
+repeated fall-back hour runs once), missed-run detection and the storage validation/caps. An ambiguous
+request (no time, "at 9" morning or evening, interval below the minimum) gets a confirm card with the next
+3 run times before saving; a clear one is saved and the reply says when it runs next. The early check is in
+`AgentCommandBar.runUnified` (before the router).
+- **Storage**: `src/main/scheduled-tasks.ts` — `userData/scheduled-tasks.enc`, encrypted with `safeStorage`
+  (no keychain → kept in memory only), ≤50 tasks, ≤1000-char command, ≤20 history entries each.
+- **Runner**: `src/renderer/scheduler.ts` (`useScheduler`). A tick (15 s) finds due tasks and queues them;
+  one runs at a time and only when the assistant panel is idle (a person's task or chat is never
+  interrupted: `bah:sched-busy` / `bah:sched-run` events into `AgentCommandBar`). Each task runs in its own
+  tab and session (chip "⏰ <name>"), reused on later runs while it stays open. The agent loop gets
+  `unattended: true`: the risk brake also stops at a bare Send/Post/Book/Order (`risk.ts`), and the
+  Gmail/YouTube auto-send helpers are off. Outcome + short summary go to the task history.
+- **Waiting for the user**: a confirm card (risk brake, permission) or a sign-in pause
+  stops the run; the scheduler marks it "waiting for you" in the panel/menu and posts a system notification
+  (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
+  waits. Nothing risky happens until the person answers.
+- **Missed runs**: at launch every enabled task whose time already passed is offered (`MissedRunsCard`:
+  Run now / Skip), never run silently. While open, a time missed by more than 10 minutes (the computer
+  slept) is offered the same way. Skip records a "skipped" entry and moves to the next time.
+- **Tests**: `tests/e2e/scheduled-tasks.spec.ts` uses an injectable clock (`E2E_SCHED_NOW` and
+  `window.__bahSched.setNow`, only with `NODE_ENV=test`).
+
 ## Navigation skills (`skills/*/SKILL.md`)
 
 Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt
