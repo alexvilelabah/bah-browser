@@ -61,6 +61,7 @@ sites behave exactly as they would for a human.
 | `data-view.ts` | Renders data tables/charts to a local page (no CDN) |
 | `validate.ts` | Path-safety helpers (`isInsideAllowedRoot`, etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Popup/overlay handling and dismissal |
+| `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | Page `alert`/`confirm` in tabs: replaces Electron's blocking native box (internal `-run-dialog`) with Bah's dialog for the user, and the agent policy on its tabs (armed `dialog` action > alert closes > ordinary confirm accepted > payment/delete confirm asks the user); `beforeunload` on agent tabs leaves when the agent navigates. `prompt()` is not available in Electron (it throws) |
 | `job-queue.ts` | Serialises long-running jobs |
 
 ---

@@ -41,6 +41,7 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
@@ -1176,6 +1177,7 @@ function createWindow(): void {
   // Attach context menu + popup-as-new-tab handler + UA override to webviews when they're created
   mainWindow.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setUserAgent(CHROME_UA);
+    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
@@ -1783,6 +1785,21 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
     if (process.env.E2E_MOCK_AI === '1') {
+      // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
+      // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
+      if (process.env.E2E_MOCK_SCRIPT) {
+        const g = global as any;
+        g.__e2ePrompts = [...(g.__e2ePrompts || []), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`];
+        const script = JSON.parse(process.env.E2E_MOCK_SCRIPT);
+        const a = script[g.__e2ePrompts.length - 1] ?? { type: 'done', reason: 'E2E script finished.', success: true };
+        return {
+          thought: `E2E script step ${g.__e2ePrompts.length}`,
+          evaluation: 'Success - e2e script',
+          action: a,
+          _engine: 'e2e-mock',
+          metrics: { latencyMs: 1, model: 'e2e-mock', usage: { prompt_tokens: 0, completion_tokens: 0 } },
+        };
+      }
       return {
         thought: 'E2E mock: confirming the current browser state.',
         evaluation: 'Success - e2e mock response',
@@ -2843,6 +2860,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     googleLoginSession: session.fromPartition(GOOGLE_LOGIN_PARTITION),
     extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
   });
+  setupJsDialogs();
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({

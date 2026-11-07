@@ -203,6 +203,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - navigate: { "action": "navigate", "url": string } navigates directly to a URL.
 - scroll: { "action": "scroll", "direction": "up"|"down"|"top"|"bottom", "amount"?: number }
 - wait: { "action": "wait", "ms": number } or { "action": "wait", "selector": string, "timeout": number }
+- dialog: { "action": "dialog", "accept": true|false } — sets the answer for the NEXT alert/confirm box on this tab (60 s); then do the action that opens it. Without it Bah closes alerts and accepts confirms (payment/delete confirms go to the user) — DIALOG: lines in the history say what happened.
 - done: { "action": "done", "reason": string, "success": boolean } ends the task.
 
 You receive the current observed state on every step in this compact format:
