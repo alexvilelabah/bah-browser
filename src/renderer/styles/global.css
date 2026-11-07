@@ -2317,6 +2317,15 @@ body {
   background:var(--bg-tertiary);
 }
 .set-active-ai b { color:var(--text-primary); font-weight:700; }
+/* Roteador local: pergunta + botão de baixar (consentimento), progresso, estado. */
+.router-card { display:flex; flex-direction:column; gap:5px; }
+.router-card small { font-size:10.5px; line-height:1.35; color:var(--text-muted); }
+.router-card progress { width:100%; height:6px; accent-color:var(--accent); }
+.router-card .router-dl {
+  align-self:flex-start; height:26px; padding:0 12px; border-radius:var(--radius);
+  border:1px solid var(--accent); background:transparent; color:var(--text-primary); font-size:11.5px; cursor:pointer;
+}
+.router-card .router-dl:disabled { opacity:.5; cursor:default; }
 /* Salvar com mudança pendente: pulso sutil pra ninguém mais "não achar" o botão. */
 .save-settings.dirty {
   box-shadow:0 0 0 1px var(--accent), 0 0 12px 1px var(--accent-glow);

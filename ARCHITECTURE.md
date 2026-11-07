@@ -173,6 +173,61 @@ path opens it directly (`getInitialShortcutAction`). Names that are also common 
 into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
 `tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
+### Local router (Qwen2.5-1.5B, optional)
+
+When the routing model is downloaded, a small local LLM labels **every** message before anything
+reaches the big model — in cloud *and* local mode — and the word rules above become the fallback.
+- **Model:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1,117,320,736 bytes, sha256
+  `6a1a2eb6…9407e`) in `<userData>/models/`. Never bundled: the assistant settings show a card
+  ("Download the 1.1 GB routing model?"); `router:download` runs only after that click, resumes a
+  `.part` with `Range`, and checks size + sha256 before renaming (`src/main/router/model-download.ts`).
+- **Engine:** `src/main/router/engine.mjs` (esbuild bundle, `node-llama-cpp` external) in a
+  `utilityProcess`, started 3 s after the window shows, only if the file is there. `gpu: 'auto'`
+  (Metal / Vulkan / CPU; integrated GPUs on Vulkan stay on CPU: `isIntegratedGpu`, Vulkan whose memory
+  is all shared with system RAM); if it fails to load it retries once on CPU, then `router:status` = `error`
+  and the word rules route. A crash only kills that process. node-llama-cpp tests its native binary in a
+  child process on Windows/Linux; from a utility process that fork would start another Bah (the
+  `RunAsNode` fuse is off), so the engine forwards that fork to `router-manager.ts`, which opens the
+  test file as another utility process.
+- **Prompt** (`src/shared/router-routes.ts`, idea from Arch-Router, none of its weights or text): routes
+  `{name, description}` with descriptive keys the model writes (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), rules and a few
+  examples. That system prompt is the fixed prefix, evaluated once; per message only
+  `Open page / Last task / Message` is processed. Output is held by a JSON-schema grammar to
+  `{"route": "<one key>"}`. LAST_RUN vs FIX is then settled by the sentence's shape (question →
+  LAST_RUN, statement → FIX). The router only labels text; it never acts, and the text never leaves the machine.
+- **Mapping** (`classifyIntent` → `routeCommand`): ACTION → agent, PAGE/CHAT → chat (page attached),
+  WEB → web answer; `other` / timeout (5 s) → the previous path. The box does not send the last task
+  yet (`Last task: none`), so LAST_RUN maps to chat and FIX to the agent. While the router is ready, the
+  "question that points at the open screen" word rule is skipped (the router's PAGE covers it). Still
+  ahead of the router: short greetings, the agent-drive toggle, repeat/macro intents, vague-request
+  hints and the zero-token quick actions.
+- **Eval:** `npm run router:eval` runs the same core (`router-core.mjs`) in plain Node over
+  `tests/fixtures/routing-cases.json` (82 en/pt/es cases, some with a last task) and scores the word
+  rules on the same set. On an Intel i7-9750H (CPU): router 89.0 % (90.2 % with the greeting fast path)
+  vs word rules 84.1 %, p50 ≈ 0.6–0.9 s, p95 ≈ 1.0–1.4 s, load ≈ 9 s, ≈ 0.9 GB RSS in Node (≈ 2 GB
+  reported for the utility process, model file mmapped). Smoke: `tests/e2e/router-local.spec.ts`
+  (skips without the model; `BAH_ROUTER_MODEL` points at the file).
+- **Request expansion** (`src/shared/request-expansion.ts`, IPC `router:expand`): before the agent
+  starts a task, a "find/download" request about a named work (`shouldExpandRequest`: find/download
+  verb + media noun + a work after from/of/do/de…; never URLs or plain commands) is rewritten by the
+  same model in a second, small context (1024 tokens, own JSON grammar `{"understood": "…"}`,
+  ≤ 96 tokens, temperature 0). The prompt only allows disambiguation (year, performer, original vs
+  sequel/remake, full names) and forbids track lists, new steps, composers/directors. The main process
+  checks the output (`checkExpansion`): junk/refusals, > 320 chars, missing key terms of the request
+  (synonyms movie↔film, plurals and one-letter typos tolerated), a new action (buy/send/play/open/…),
+  a new number other than a year, a capitalised name the user never wrote (except after "not …"), or a
+  new site → dropped. Timeout 3.5 s (renderer 4 s); no model, slow or dropped → the original text.
+  Accepted text shows in the feed as "🔎 Understood as: …" and goes to the agent as an
+  `UNDERSTOOD AS (… a GUESS … the GOAL wins …)` line under `GOAL:` (kept when the history is trimmed,
+  cleared when the user edits the goal). The 1.5B model's facts are often wrong (it said "Bad by The
+  Beatles"), hence the "guess" wording. Eval: `npm run router:expand-eval` prints the raw output and the
+  verdict per request. E2E without a model: `E2E_FAKE_ROUTER_EXPAND` (with `E2E_MOCK_AI=1`) fakes the
+  model's answer.
+- **Packaging:** `@node-llama-cpp/*` (and node-llama-cpp `bins/`) are `asarUnpack`ed; node-llama-cpp's JS
+  and the engine stay in the asar, where its ~120 dependencies resolve. CUDA packages, the llama.cpp
+  source bundle and CLI templates are excluded.
+
 ### Per-site pacing
 
 `pacing.ts`, used by the agent loop in `App.tsx`. Before each action that touches a page (navigate,

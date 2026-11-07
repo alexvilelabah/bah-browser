@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { namesStore } from '../stores';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
+import type { RoutedIntent, RouterStatus } from '../../shared/router-routes';
+import RouterModelCard from './RouterModelCard';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
@@ -199,7 +201,12 @@ interface Props {
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
-  onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
+  /** ctx.lastRun: a última tarefa (pedido + como terminou), pro roteador local entender follow-ups.
+   *  Com o roteador: também 'last_run' (pergunta sobre a última tarefa) e 'fix' (ela ficou incompleta). */
+  onClassify?: (msg: string, ctx?: { lastRun?: { request: string; outcome: string } | null }) => Promise<RoutedIntent | null>;
+  /** Roteador local pronto → ele decide antes das regras de palavras (que ficam de reserva). */
+  routerReady?: boolean;
+  routerStatus?: RouterStatus;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
   onOpenUrl: (url: string) => void;
   onGoogleLogin?: () => void;
@@ -236,7 +243,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -823,6 +830,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
     busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
+    // Roteador local pronto: ELE decide "sobre a tela" (entende typo). A regra abaixo fica pra
+    // quando ele não está (e pro modo IA dirige, que não passa por classificação nenhuma).
+    const useRouter = !!routerReady && !!onClassify && !agentDrive;
     // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
     // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
     if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -850,7 +860,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     //    está à vista. Precisa vir ANTES do classificador: ele mandava isso pra busca na web,
     //    que ignora a página aberta, demora e às vezes responde sobre OUTRO produto.
     //    Medido no mesmo clique: 42s (agente indo ao Google Shopping) → 2s (lendo a página).
-    if (pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
+    if (!useRouter && pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
       pendingSuggestionRef.current = null;
       runChat(msg);
       return;
@@ -871,9 +881,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     push({ kind: 'chat-user', text: msg });
     if (onClassify && !classifyingRef.current) {
       classifyingRef.current = true;
-      let cls: 'action' | 'page' | 'web' | 'chat' | null = null;
+      let cls: RoutedIntent | null = null;
       try { cls = await onClassify(msg); } catch { cls = null; }
       classifyingRef.current = false;
+      // 'last_run' / 'fix' só vêm do roteador local quando ele recebe a última tarefa (ctx.lastRun);
+      // esta caixa ainda não manda → não chegam aqui. Se chegarem: chat / agente.
+      if (cls === 'last_run') { runChat(msg, undefined, undefined, true); return; }
+      if (cls === 'fix') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'page' || cls === 'chat') { runChat(msg, undefined, undefined, true); return; }
       if (cls === 'web') { runResearch(msg, true); return; }
@@ -1394,6 +1408,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       {showSettings && (
         <div className="settings-panel">
           <div className="set-active-ai">{t('set.activeAi')}: <b>{activeAiLabel()}</b></div>
+          <RouterModelCard status={routerStatus} />
           <label>
             {t('settings.language')}
             <select value={getLang()} onChange={e => setLang(e.target.value as Lang)}>

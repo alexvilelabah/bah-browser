@@ -173,6 +173,60 @@ de "go to / on / at / abra…". Nome fora da lista nunca vira domínio chutado (
 continua indo pro `web_search`. Testes: `tests/unit/known-sites.test.ts`,
 `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
+### Roteador local (Qwen2.5-1.5B, opcional)
+
+Com o modelo de roteamento baixado, um LLM pequeno local rotula **toda** mensagem antes de qualquer
+coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de palavras acima viram reserva.
+- **Modelo:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1.117.320.736 bytes, sha256
+  `6a1a2eb6…9407e`) em `<userData>/models/`. Nunca vem no instalador: as configurações do assistente
+  mostram um card ("Baixar o modelo de roteamento de 1,1 GB?"); o `router:download` só roda depois
+  desse clique, retoma o `.part` com `Range` e confere tamanho + sha256 antes de renomear
+  (`src/main/router/model-download.ts`).
+- **Motor:** `src/main/router/engine.mjs` (bundle esbuild, `node-llama-cpp` externo) num
+  `utilityProcess`, que sobe 3 s depois que a janela aparece, só se o arquivo existir. `gpu: 'auto'`
+  (Metal / Vulkan / CPU; GPU integrada no Vulkan fica na CPU: `isIntegratedGpu`, Vulkan com toda a
+  memória compartilhada com a RAM); se não carregar, tenta uma vez só CPU, e então `router:status` =
+  `error` e as regras de palavras decidem. Se cair, morre só esse processo. No Windows/Linux o
+  node-llama-cpp testa o binário nativo num processo filho; de dentro de um utilityProcess esse fork
+  abriria outro Bah (fuse `RunAsNode` desligado), então o motor repassa o fork pro `router-manager.ts`,
+  que abre o arquivo de teste como outro utilityProcess.
+- **Prompt** (`src/shared/router-routes.ts`, ideia do Arch-Router, nada dos pesos nem do texto): rotas
+  `{name, description}` com nomes descritivos que o modelo escreve (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), regras e alguns
+  exemplos. Esse system é o prefixo fixo, avaliado uma vez; por mensagem só
+  `Open page / Last task / Message` é processado. A saída é presa por gramática (JSON schema) a
+  `{"route": "<uma key>"}`. LAST_RUN x FIX depois é decidido pela forma da frase (pergunta → LAST_RUN,
+  afirmação → FIX). O roteador só rotula texto; nunca age, e o texto nunca sai do computador.
+- **Mapeamento** (`classifyIntent` → `routeCommand`): ACTION → agente, PAGE/CHAT → chat (com a página),
+  WEB → resposta da web; `other` / demora (5 s) → o caminho de antes. A caixa ainda não manda a última
+  tarefa (`Last task: none`), então LAST_RUN vira chat e FIX vira agente. Com o roteador pronto, a regra
+  de palavras "pergunta que aponta pra tela" fica de lado (o PAGE do roteador cobre). Continuam antes do
+  roteador: saudação curta, o "IA dirige", repetir/macro, a dica de pedido vago e os atalhos de 0 token.
+- **Eval:** `npm run router:eval` roda o mesmo núcleo (`router-core.mjs`) em node puro sobre
+  `tests/fixtures/routing-cases.json` (82 casos en/pt/es, alguns com última tarefa) e pontua as regras
+  de palavras no mesmo conjunto. Num Intel i7-9750H (CPU): roteador 89,0 % (90,2 % com a saudação antes)
+  x regras 84,1 %, p50 ≈ 0,6–0,9 s, p95 ≈ 1,0–1,4 s, carga ≈ 9 s, ≈ 0,9 GB de RSS no Node (≈ 2 GB no
+  utilityProcess, com o arquivo mapeado em memória). Smoke: `tests/e2e/router-local.spec.ts` (pula sem
+  o modelo; `BAH_ROUTER_MODEL` aponta pro arquivo).
+- **Expansão do pedido** (`src/shared/request-expansion.ts`, IPC `router:expand`): antes do agente
+  começar, um pedido de "achar/baixar" sobre uma obra nomeada (`shouldExpandRequest`: verbo de
+  achar/baixar + mídia + uma obra depois de from/of/do/de…; nunca URL nem ordem comum) é reescrito pelo
+  mesmo modelo num segundo contexto pequeno (1024 tokens, gramática própria `{"understood": "…"}`,
+  ≤ 96 tokens, temperatura 0). O prompt só deixa acrescentar desambiguação (ano, intérprete, original x
+  sequência/remake, nome completo) e proíbe lista de faixas, passo novo, compositor/diretor. O main
+  confere a saída (`checkExpansion`): lixo/recusa, > 320 caracteres, sem as palavras-chave do pedido
+  (sinônimos movie↔film, plural e erro de uma letra tolerados), ação nova (comprar/mandar/tocar/abrir…),
+  número novo que não seja ano, nome próprio que a pessoa não escreveu (fora depois de "not …") ou site
+  novo → descarta. Timeout 3,5 s (renderer 4 s); sem modelo, lento ou descartado → o texto original. O
+  aceito aparece no feed como "🔎 Entendido como: …" e vai pro agente numa linha
+  `UNDERSTOOD AS (… a GUESS … the GOAL wins …)` embaixo do `GOAL:` (fica quando o histórico é cortado,
+  sai quando a pessoa edita o pedido). Os fatos do 1,5B erram com frequência (disse "Bad by The
+  Beatles"), por isso o "palpite". Eval: `npm run router:expand-eval` imprime a saída crua e o veredito
+  por pedido. E2E sem modelo: `E2E_FAKE_ROUTER_EXPAND` (com `E2E_MOCK_AI=1`) finge a resposta do modelo.
+- **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
+  node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
+  pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.
+
 ### Ritmo por site
 
 `pacing.ts`, usado pelo loop do agente no `App.tsx`. Antes de cada ação que mexe na página (navegar,

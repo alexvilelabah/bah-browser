@@ -49,6 +49,7 @@ import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupFrames } from './frames';
 import { setupHwMonitor } from './hw-monitor';
 import { setupTorrentManager } from './torrent-manager';
+import { setupRouterManager } from './router-manager';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -287,6 +288,7 @@ let aiEngine: AIEngine;
 let pageAgent: PageAgent;
 let localEngine: AIEngine | null = null;
 let torrentManager: ReturnType<typeof setupTorrentManager> | null = null;
+let routerManager: ReturnType<typeof setupRouterManager> | null = null;
 let videoButton: ReturnType<typeof setupVideoButton> | null = null;
 let faviconCache: ReturnType<typeof setupFaviconCache> | null = null;
 // Senhas salvas: o main avisa quando a IA digita numa aba (o que ela digita nunca vira "Salvar senha?").
@@ -3087,6 +3089,16 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     allowDirect: (uri) => allowDirectDownload(uri, true),
     directRefused: () => mt('dl.noProxy.refused'),
   });
+  // Roteador local (Qwen2.5-1.5B, utilityProcess): rotula cada mensagem da caixa do assistente.
+  // Sobe DEPOIS que a janela aparece, e só se o modelo já estiver baixado (baixar pede um "sim").
+  routerManager = setupRouterManager({ getMainWindow: () => mainWindow, modelsDir: path.join(app.getPath('userData'), 'models') });
+  {
+    // 'show' nem sempre vem no macOS (show() no ready-to-show às vezes não emite): vale o que chegar primeiro.
+    let routerQueued = false;
+    const startRouter = () => { if (routerQueued) return; routerQueued = true; setTimeout(() => routerManager?.start(), 3000); };
+    if (mainWindow?.isVisible()) startRouter();
+    else { mainWindow?.once('show', startRouter); mainWindow?.once('ready-to-show', startRouter); }
+  }
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
     try {
       if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
@@ -4079,6 +4091,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   isQuitting = true;   // libera o close handler (não vai mais esconder na bandeja)
   try { monitorManager?.disposeAll(); } catch {}
+  try { routerManager?.dispose(); } catch {}
   destroyTray();
   // Free the persistent OCR workers (≈40–80MB) cleanly on exit.
   import('./ocr-engine').then(m => m.terminateOcrWorkers()).catch(() => {});
