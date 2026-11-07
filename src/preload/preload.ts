@@ -197,6 +197,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   frameClick: (wcId: number, key: string, id: number) => ipcRenderer.invoke('cdp:frame-click', wcId, key, id),
   frameFill: (wcId: number, key: string, id: number, value: string) => ipcRenderer.invoke('cdp:frame-fill', wcId, key, id, value),
   markRefs: (wcId: number, attr: string, marks: Array<{ ref: number; backendNodeId?: number; x?: number; y?: number }>) => ipcRenderer.invoke('cdp:mark-refs', wcId, attr, marks),
+  savePdf: (wcId: number, name?: string) => ipcRenderer.invoke('agent:save-pdf', wcId, name),
+  pageScreenshot: (wcId: number, full: boolean, name?: string) => ipcRenderer.invoke('agent:screenshot', wcId, full, name),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
+  clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
   inspect: (wcId: number, target: any) => ipcRenderer.invoke('cdp:inspect', wcId, target),

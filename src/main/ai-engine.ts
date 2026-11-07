@@ -217,6 +217,9 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - keydown / keyup: { "action": "keydown", "key": "Shift" } … { "action": "keyup", "key": "Shift" } — hold a key while you click (shift-click, ctrl-click).
 - insert_text: { "action": "insert_text", "text": "..." } — pastes text into the FOCUSED field at once (long cover letters/descriptions); no per-key events. Click/fill_ref the field first.
 - click_role: { "action": "click_role", "role": "button", "name": "Submit", "nth"?: 2 } — clicks the element with that role whose label is (or contains) name; nth picks the 2nd, 3rd… match in page order. Roles: button, link, textbox, checkbox, radio, combobox, tab, menuitem, option, switch. Handy when several elements share a label.
+- save_pdf: { "action": "save_pdf", "name"?: "..." } — saves the current page as a PDF in the user's Downloads folder; the result gives the path (receipts, confirmations, job postings).
+- screenshot: { "action": "screenshot", "full"?: true, "name"?: "..." } — saves a PNG of the WHOLE page (full: false = only the visible part) in Downloads; the result gives the path.
+- clipboard: { "action": "clipboard", "write": "text" } copies text for the user (results, an address, a summary). { "action": "clipboard", "read": true } reads what the USER copied — Bah asks their permission first.
 - click_text: { "action": "click_text", "text": string, "nth"?: number } fallback when the right element isn't in the ref list.
 - click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.

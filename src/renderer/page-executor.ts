@@ -54,6 +54,9 @@ export type BrowserAction =
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
   | { type: 'wait'; ms?: number; selector?: string; timeout?: number; text?: string; gone?: string; url?: string; load?: 'load' | 'networkidle' }
   | { type: 'dialog'; accept: boolean; text?: string }
+  | { type: 'save_pdf'; name?: string }
+  | { type: 'screenshot'; full?: boolean; name?: string }
+  | { type: 'clipboard'; read?: boolean; write?: string }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface InteractiveElement {
@@ -153,6 +156,9 @@ export function formatAction(action: BrowserAction): string {
     case 'scroll': return `scroll("${action.direction}"${action.amount ? `, ${action.amount}` : ''})`;
     case 'wait': return action.text ? `wait(text "${shorten(action.text, 40)}")` : action.gone ? `wait(gone "${shorten(action.gone, 40)}")` : action.url ? `wait(url ${shorten(action.url, 50)})` : action.load ? `wait(${action.load})` : action.selector ? `wait("${action.selector}")` : `wait(${action.ms ?? action.timeout ?? 1000}ms)`;
     case 'dialog': return `dialog(${action.accept ? 'accept' : 'dismiss'}${action.text != null ? ` "${shorten(action.text, 40)}"` : ''})`;
+    case 'save_pdf': return 'save_pdf()';
+    case 'screenshot': return `screenshot(${action.full === false ? 'viewport' : 'full page'})`;
+    case 'clipboard': return action.write != null ? `clipboard(write ${action.write.length} chars)` : 'clipboard(read)';
     case 'done': return `done(${action.success ? 'success' : 'failed'}: "${shorten(action.reason)}")`;
   }
 }

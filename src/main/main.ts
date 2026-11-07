@@ -48,6 +48,7 @@ import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
 import { setupFrames } from './frames';
+import { setupPageSave } from './page-save';
 import { setupHwMonitor } from './hw-monitor';
 import { setupSkills } from './skills-loader';
 import { setupTorrentManager } from './torrent-manager';
@@ -3167,6 +3168,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   });
   // Iframes pro agente: campos/botões de formulários embutidos (mesma origem e cross-origin).
   setupFrames(sharedEnsureDebugger);
+  // save_pdf / screenshot da página inteira / área de transferência do agente.
+  setupPageSave(sharedEnsureDebugger);
   // Senhas salvas (o gerenciador de senhas do Chrome, só neste computador): pergunta "Salvar senha?"
   // depois do login, preenche pela lista desenhada pelo Bah, ⋮ → Senhas. Cifradas pelo cofre do
   // sistema (safeStorage); a aba anônima só preenche. A IA não tem caminho nenhum até aqui.

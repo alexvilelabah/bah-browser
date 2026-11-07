@@ -58,6 +58,9 @@ export type AgentAction =
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
   | { type: 'wait'; ms?: number; selector?: string; timeout?: number; text?: string; gone?: string; url?: string; load?: 'load' | 'networkidle' }
   | { type: 'dialog'; accept: boolean; text?: string }
+  | { type: 'save_pdf'; name?: string }
+  | { type: 'screenshot'; full?: boolean; name?: string }
+  | { type: 'clipboard'; read?: boolean; write?: string }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface AgentResult {
@@ -136,6 +139,9 @@ const VALID_ACTIONS = new Set([
   'scroll',
   'wait',
   'dialog',
+  'save_pdf',
+  'screenshot',
+  'clipboard',
   'done',
 ]);
 
@@ -448,6 +454,12 @@ export class PageAgent {
         const text = action.text ?? action.prompt_text ?? action.promptText;
         return { type: 'dialog', accept: acc === true || acc === 'true' || acc === 'accept', ...(text != null ? { text: String(text) } : {}) };
       }
+      case 'save_pdf':
+        return { type: 'save_pdf', ...(action.name || action.filename ? { name: String(action.name ?? action.filename).slice(0, 80) } : {}) };
+      case 'screenshot':
+        return { type: 'screenshot', full: action.full !== false && action.full_page !== false, ...(action.name || action.filename ? { name: String(action.name ?? action.filename).slice(0, 80) } : {}) };
+      case 'clipboard':
+        return { type: 'clipboard', ...(action.write != null || action.text != null ? { write: String(action.write ?? action.text) } : { read: true }) };
       case 'done':
         return {
           type: 'done',
@@ -574,6 +586,7 @@ export function validateAction(a: AgentAction): string | null {
     case 'dialog': return null;
     case 'get_html':
       return a.selector != null && String(a.selector).length > 300 ? 'get_html "selector" is too long — use a short CSS selector like "#id" or "form"' : null;
+    case 'save_pdf': case 'screenshot': case 'clipboard': return null;
     case 'extract_text': case 'extract_images': case 'read_aloud':
     case 'stock_movers': case 'scroll':
       return null;
