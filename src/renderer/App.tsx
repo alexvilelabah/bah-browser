@@ -11,6 +11,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
+import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
@@ -182,6 +183,10 @@ declare global {
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
+      frameClick?: (wcId: number, key: string, id: number) => Promise<any>;
+      frameFill?: (wcId: number, key: string, id: number, value: string) => Promise<{ ok: boolean; value?: string; error?: string }>;
+      getFramesAx?: (wcId: number) => Promise<{ ok: boolean; frames: Array<{ key: string; label: string; nodes: any[] }> }>;
+      getFramesCoords?: (wcId: number, key: string, ids: number[]) => Promise<{ ok: boolean; coords: Record<number, { x: number; y: number; w: number; h: number } | null> }>;
       getAxTree?: (wcId: number) => Promise<any>;
       getNodeCoords?: (wcId: number, backendNodeIds: number[]) => Promise<any>;
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
@@ -2738,6 +2743,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (e.checked !== undefined) attrs.push(`checked="${e.checked}"`);
                       if (e.placeholder) attrs.push(`placeholder="${e.placeholder.slice(0, 40)}"`);
                       if (e.href) attrs.push(`href="${e.href.slice(0, 60)}"`);
+                      if (e.frame) attrs.push(`frame="${e.frame}"`);
                       const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
                       const text = (e.text || '').slice(0, 80).replace(/\s+/g, ' ').trim();
                       const key = elementKey(e);
@@ -2777,7 +2783,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `URL: ${observation.url}`,
                     `TITLE: ${observation.title}`,
-                    `INTERACTIVE ELEMENTS (use the [N] id with click_ref/fill_ref):`,
+                    `INTERACTIVE ELEMENTS (use the [N] id with click_ref/fill_ref):${observation.interactive_elements.some(e => e.frame) ? ' frame="…" marks elements inside an embedded frame (form, payment, booking widget) — click_ref/fill_ref work on them the same way.' : ''}`,
                     newElementCount > 0 ? `(${newElementCount} element(s) marked with '*' are NEW since your last action — e.g. a popup/modal/result that just appeared)` : '',
                     compactDom || '(none detected)',
                     '',
@@ -2795,6 +2801,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
 
                   if (step >= 20 && !replanRequested) replanRequested = true;
                   const stuckOnUrl = stepsOnSameUrl >= 5;
+                  // Ritmo por site: página com cara de checagem anti-robô → esperas maiores neste host por 30 min.
+                  { const h = paceHostOf(observation.url);
+                    if (h && BOT_CHECK_RE.test(`${observation.title} ${(observation.text_sample || '').slice(0, 600)}`)) backoff(h); }
+                  const pacingLine = isBackedOff(paceHostOf(observation.url))
+                    ? `PACING: ${paceHostOf(observation.url)} flagged automated access — Bah now waits 15–30s between actions here for 30 minutes. Do only what is necessary on this site; prefer another source when the task allows.`
+                    : '';
                   const prompt = [
                     history, '',
                     noEffectCount > 0 ? 'IMPORTANT: Your last action had no visible effect. Try another approach.' : '',
@@ -2857,6 +2869,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ].join(' ') : '',
                     isHungObservation(observation) && ocrText ? 'PAGE UNRESPONSIVE: This page\'s scripts are hung — interactive elements, extract_text and scroll will NOT work here, and RELOADING THIS SAME URL WILL NOT FIX IT. The OCR TEXT below is a reliable snapshot of what is visible. If it contains what you need, answer now with report/done. Otherwise navigate to a DIFFERENT website (e.g. another source for the same information).' : '',
                     stuckOnUrl ? `STUCK: You have spent ${stepsOnSameUrl} steps on ${observation.url} without finishing. ABANDON this source NOW. Either: (a) navigate to a different site (Wikipedia, NotebookCheck, Wccftech), (b) use the data you already have in MEMORY and call report. Do NOT scroll or extract again on this page.` : '',
+                    pacingLine,
                     replanRequested && step >= 20 ? 'REPLAN: You have used 20+ steps. If you have ANY useful data in MEMORY, call report() with what you have. Better partial answer than no answer.' : '',
                     `[STEP ${step + 1}/${MAX_STEPS === Infinity ? '∞' : MAX_STEPS}] Choose exactly one tool action. If the goal is complete, return done or report.`,
                   ].filter(Boolean).join('\n');
@@ -3175,11 +3188,29 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       continue;
                     }
                   }
+                  // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
+                  // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
+                  // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'scroll'].includes(action.type);
+                  const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                  if (touchesPage && paceHost) {
+                    const waitMs = paceDelay(paceHost);
+                    if (waitMs > 0) {
+                      if (waitMs > 3000) onProgress({ kind: 'status', message: `🐢 Pacing ${paceHost}: waiting ${Math.ceil(waitMs / 1000)}s` });
+                      const until = Date.now() + waitMs;
+                      while (Date.now() < until) { await new Promise(r => setTimeout(r, Math.min(500, until - Date.now()))); throwIfCancelled(); }
+                    }
+                    recordHit(paceHost);
+                  }
                   setAgentVisual('acting');
                   const wvEl = (wv as any) as HTMLElement;
                   const wvRect = wvEl?.getBoundingClientRect?.();
-                  const offX = wvRect?.left ?? 0;
-                  const offY = wvRect?.top ?? 0;
+                  // O overlay do agente fica POR CIMA da área da página (position:absolute; inset:0 no mesmo
+                  // contêiner): a origem é o canto do overlay, não o da janela. Somar o deslocamento da janela
+                  // (barra de abas + endereço ≈ 100 px) desenhava o cursor/ondinha ~100 px abaixo do clique real.
+                  const ovRect = (document.querySelector('.agent-overlay') as HTMLElement | null)?.getBoundingClientRect?.();
+                  const offX = (wvRect?.left ?? 0) - (ovRect?.left ?? 0);
+                  const offY = (wvRect?.top ?? 0) - (ovRect?.top ?? 0);
                   if (action.type === 'click_at') addRipple(offX + action.x, offY + action.y);
                   else if (action.type === 'click_ref' || action.type === 'fill_ref') {
                     const target = observation.interactive_elements.find(e => e.id === action.ref);
@@ -3273,9 +3304,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                               executeBrowserAction(wv, { type: 'click_text', text: target.text }),
                               12000,
                               { success: false, error: `click_text timed out — page scripts are unresponsive. Re-observe or navigate elsewhere.` })
-                          : await window.electronAPI?.realClick?.(wcId, clickX, clickY, target.backendNodeId);
+                          : target.frameNode?.key.startsWith('oopif:')
+                            // Iframe de OUTRO processo: sendInputEvent para no <iframe>; clica pela sessão CDP do frame.
+                            ? await window.electronAPI?.frameClick?.(wcId, target.frameNode.key, target.frameNode.id)
+                            : await window.electronAPI?.realClick?.(wcId, clickX, clickY, target.backendNodeId);
                       }
-                      if (action.type === 'fill_ref') {
+                      if (action.type === 'fill_ref' && target.frameNode) {
+                        // Campo dentro de iframe: preenche no nó do documento do iframe (o foco do iframe se perde
+                        // quando a UI do Bah atualiza; tecla real ia pro <iframe>, não pro campo).
+                        const f = await window.electronAPI?.frameFill?.(wcId, target.frameNode.key, target.frameNode.id, action.value);
+                        if (!f?.ok) r = { success: false, error: f?.error || 'could not fill the field inside the frame' };
+                        else if (f.value !== action.value) r = { success: false, error: `The field inside the frame shows "${String(f.value).slice(0, 60)}" instead — it may reformat or reject input.` };
+                        else r = { success: true, info: { ref: action.ref, filledVia: `frame ${target.frame}` } };
+                      } else if (action.type === 'fill_ref') {
                         await new Promise(rr => setTimeout(rr, 200));
                         // Select existing content via JS (works for inputs and contenteditable)
                         await withTimeout(

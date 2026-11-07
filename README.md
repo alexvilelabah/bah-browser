@@ -75,7 +75,7 @@
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
-- **Modern-site compatibility** — presents as standard Chrome (Chrome UA, masks `navigator.webdriver`) so sites don't wrongly block the browser
+- **Modern-site compatibility** — presents as a current Chrome on your real OS (user agent, client hints and languages set consistently inside the engine; real GPU/CPU/memory; `navigator.webdriver` left to the engine) so sites don't wrongly block the browser
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -125,7 +125,9 @@ USER → "open gmail and delete the spam"
 | `new_tab` / `switch_tab` / `close_tab` | Tab management |
 | `done(reason, success)` | End the loop |
 
-Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
+Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. Before the click, the pointer moves to the target along the same arc as the agent cursor Bah draws on screen (no random jitter), so the page's `mousemove` events match what you see. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
+
+Iframes count too: fields and buttons inside embedded forms (job applications, payment fields, booking widgets) — same-origin or from another site — appear in the element list marked `frame="host"`, and `click_ref` / `fill_ref` work on them the same way.
 
 ---
 
@@ -170,15 +172,17 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
 
+- 🐢 **Per-site pacing.** Actions that touch a page wait a random 1–5 s between them on the same site; after a site shows a bot check, 15–30 s for the next 30 minutes. It only slows the agent down — it does not get around the check.
+
 - 🔢 **25-step cap per command.** If a task doesn't finish in 25 actions, the agent stops on its own.
 
-- 🧩 **Compatibility, not evasion.** We present as standard Chrome (Chrome UA + masking `navigator.webdriver`) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
+- 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms.
 
 - **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
 - 🚫 **Adblock pauses on known sites.** YouTube and Twitch get automatic bypass so their player isn't blocked by anti-adblock. Everywhere else adblock stays on.
 
-**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running, a per-tab sandbox, and click rate-limiting to avoid aggressive bot-like behavior.
+**Not implemented yet** (but would be nice): a "preview the plan, then approve" mode before running and a per-tab sandbox.
 
 ---
 
