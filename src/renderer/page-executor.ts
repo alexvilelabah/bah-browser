@@ -21,6 +21,7 @@ export type BrowserAction =
   | { type: 'read_aloud'; text?: string }
   | { type: 'report'; summary: string }
   | { type: 'switch_tab'; tab: number }
+  | { type: 'history_search'; query: string }
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
@@ -106,6 +107,7 @@ export function formatAction(action: BrowserAction): string {
     case 'read_aloud': return `read_aloud(${action.text ? `"${shorten(action.text, 40)}"` : 'current page'})`;
     case 'report': return `report("${shorten(action.summary, 120)}")`;
     case 'switch_tab': return `switch_tab(${action.tab})`;
+    case 'history_search': return `history_search("${shorten(action.query, 60)}")`;
     case 'new_tab': return `new_tab("${action.url}")`;
     case 'close_tab': return `close_tab(${action.tab})`;
     case 'click_ref': return `click_ref(@${action.ref})`;

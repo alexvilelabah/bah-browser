@@ -355,7 +355,7 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
                 : tab.incognito ? <IncognitoIcon className="tab-incog" />
                 : <TabFavicon url={tab.url} title={tab.title}
                     pageIcon={tab.faviconOrigin && tab.favicon && sameOrigin(tab.url, tab.faviconOrigin) ? tab.favicon : ''} />}
-              {!tab.pinned && <span className="tab-title">{name}</span>}
+              {!tab.pinned && <span className="tab-title">{tab.agentTask ? "🤖 " : ""}{name}</span>}
               {tab.audible && (isMuted(tab.url, tab.incognito) ? <TabMutedIcon /> : <TabAudioIcon />)}
               {!tab.pinned && (
                 <button

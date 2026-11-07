@@ -133,6 +133,7 @@ Nada aqui resolve CAPTCHA nem contorna bloqueio.
 | `page-executor.ts` | Executa as ações do navegador dentro da página |
 | `risk.ts` | O classificador do freio de segurança (`riskForAction`) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Recuperação de estado travado + detecção de login/captcha |
+| `agent-permissions.ts` | O que o agente pode usar além das abas da própria tarefa — suas outras abas e seu histórico: Perguntar (padrão) / Sempre / Nunca |
 | `agent-run-logger.ts` | Log de corridas opt-in (coletor de dados de treino, local) |
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
