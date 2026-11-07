@@ -27,11 +27,8 @@ test('read aloud: ⋮ menu reads the page and stops on toggle', async () => {
     });
     await page.waitForTimeout(1800);
 
-    // Open the ⋮ menu. Try nth(1) ([0]=downloads, [1]=menu); fall back to nth(0).
-    await page.locator('.menu-btn').nth(1).click();
-    if (!(await page.locator('.menu-panel').isVisible())) {
-      await page.locator('.menu-btn').nth(0).click();
-    }
+    // Open the ⋮ menu.
+    await page.getByTestId('main-menu-btn').click();
     await expect(page.locator('.menu-panel')).toBeVisible();
 
     // Match the read-page item by its 🔊 icon (language-independent: en/pt/es).
