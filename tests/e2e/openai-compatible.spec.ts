@@ -14,6 +14,8 @@ async function launch() {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // O shell pode recarregar uma vez logo após abrir; um evaluate nesse meio-tempo falha com 'context destroyed'.
+  await page.waitForTimeout(1500);
   // A fresh profile opens the first-run tour, a modal that intercepts every click. This spec
   // is about settings, not the tour: mark it seen and reload.
   await page.evaluate(() => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); });

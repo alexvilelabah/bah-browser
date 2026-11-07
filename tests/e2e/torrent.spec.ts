@@ -17,6 +17,8 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // O shell pode recarregar uma vez logo após abrir; um evaluate nesse meio-tempo falha com 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // (1) Colar um magnet na barra de endereço abre o card (estado "fetching") na hora.
     const bar = page.locator('.url-input');
@@ -65,6 +67,8 @@ test('seed toggle: OFF by default, flips ON and persists', async () => {
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // O shell pode recarregar uma vez logo após abrir; um evaluate nesse meio-tempo falha com 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // Isolamento: o userData dos testes persiste o localStorage entre execuções — garante
     // o estado inicial "sem preferência" (= padrão OFF) independente de rodadas anteriores.
