@@ -12,6 +12,8 @@ export type AgentAction =
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
   | { type: 'generate_image'; prompt: string; count?: number }
   | { type: 'download'; url: string; filename?: string }
+  | { type: 'list_downloads' }
+  | { type: 'cancel_download' | 'pause_download' | 'resume_download' | 'retry_download'; id: string }
   | { type: 'download_video'; url?: string; query?: string; audio_only?: boolean; count?: number; quality?: 'best' | 'low' }
   | { type: 'open_video_cuts'; phrase: string; count?: number }
   | { type: 'open_video'; query: string }
@@ -80,6 +82,11 @@ const VALID_ACTIONS = new Set([
   'check',
   'uncheck',
   'select_option',
+  'list_downloads',
+  'cancel_download',
+  'pause_download',
+  'resume_download',
+  'retry_download',
   'store',
   'extract_text',
   'extract_images',
@@ -285,6 +292,11 @@ export class PageAgent {
         return { type: 'generate_image', prompt: String(action.prompt ?? action.query ?? action.text ?? ''), count: toOptionalNumber(action.count) };
       case 'download':
         return { type: 'download', url: String(action.url ?? ''), filename: action.filename ? String(action.filename) : undefined };
+      case 'list_downloads':
+        return { type: 'list_downloads' };
+      case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+        // id OU nome do arquivo (modelo pequeno costuma mandar o nome).
+        return { type: action.type, id: String(action.id ?? action.download_id ?? action.filename ?? action.file ?? action.name ?? '').trim() };
       case 'download_video':
         return { type: 'download_video', url: action.url ? String(action.url) : undefined, query: action.query ? String(action.query) : undefined, audio_only: action.audio_only === true, count: action.count != null ? Number(action.count) : undefined, quality: /low|baixa|pior|ruim|480|360/i.test(String(action.quality ?? '')) ? 'low' : (/best|max|alta|hd|4k/i.test(String(action.quality ?? '')) ? 'best' : undefined) };
       case 'open_video_cuts':
@@ -473,6 +485,9 @@ export function validateAction(a: AgentAction): string | null {
     case 'navigate': return httpUrl(a.url) ? null : `navigate needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'new_tab': return httpUrl(a.url) ? null : `new_tab needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'download': return httpUrl(a.url) ? null : `download needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'list_downloads': return null;
+    case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+      return nonEmpty(a.id) ? null : `${a.type} needs "id" (from list_downloads) or the file name`;
     case 'download_video':
       // Sem url nem query = o vídeo da ABA ABERTA — é o que o prompt manda ("omit both to
       // grab the currently open tab") e o que o executor faz (usa a URL da aba). Recusar isso

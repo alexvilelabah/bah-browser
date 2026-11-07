@@ -222,6 +222,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torrentSaveFile: (id: string, index: number) => ipcRenderer.invoke('torrent:save-file', id, index),
   torrentRemove: (id: string, destroyStore?: boolean) => ipcRenderer.invoke('torrent:remove', id, destroyStore),
   torrentSetSeed: (on: boolean) => ipcRenderer.invoke('torrent:set-seed', on),
+  torrentSetBuiltin: (on: boolean) => ipcRenderer.invoke('torrent:set-builtin', on),
+  torrentOpen: (uri: string) => ipcRenderer.invoke('torrent:open', uri),
   setYoutubeSkipAds: (on: boolean) => ipcRenderer.invoke('youtube:set-skip-ads', on),
   // Botão "Baixar" em cima do vídeo do YouTube: liga/desliga + os textos no idioma da UI.
   setYoutubeDlButton: (on: boolean, labels?: Record<string, string>) => ipcRenderer.invoke('youtube:set-dl-button', on, labels),

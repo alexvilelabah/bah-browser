@@ -7,6 +7,8 @@ export type BrowserAction =
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
   | { type: 'generate_image'; prompt: string; count?: number }
   | { type: 'download'; url: string; filename?: string }
+  | { type: 'list_downloads' }
+  | { type: 'cancel_download' | 'pause_download' | 'resume_download' | 'retry_download'; id: string }
   | { type: 'download_video'; url?: string; query?: string; audio_only?: boolean; count?: number; quality?: 'best' | 'low' }
   | { type: 'open_video_cuts'; phrase: string; count?: number }
   | { type: 'open_video'; query: string }
@@ -91,6 +93,8 @@ export function formatAction(action: BrowserAction): string {
     case 'search_images': return `search_images("${shorten(action.query, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'harvest_images': return `harvest_images("${shorten(action.query, 50)}", ${action.count || 10}${action.min_width ? `, min ${action.min_width}px` : ''})`;
     case 'download': return `download("${shorten(action.url, 80)}")`;
+    case 'list_downloads': return 'list_downloads()';
+    case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download': return `${action.type}("${shorten(action.id, 60)}")`;
     case 'download_video': return `download_video(${action.count && action.count > 1 ? `${action.count}x, ` : ''}${action.audio_only ? 'audio, ' : ''}${action.quality === 'best' ? 'best quality, ' : ''}${action.query ? `search: "${shorten(action.query, 50)}"` : action.url ? shorten(action.url, 70) : 'current tab'})`;
     case 'open_video_cuts': return `open_video_cuts("${shorten(action.phrase, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'open_video': return `open_video("${shorten(action.query, 50)}")`;

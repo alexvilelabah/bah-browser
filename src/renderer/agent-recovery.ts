@@ -87,6 +87,8 @@ export interface RecoveryInput {
   popupCloseAttempts: number;
   /** Se o comando exige especificamente este site */
   commandRequiresThisSite: boolean;
+  /** Tarefa de BAIXAR algo: página "Get the app / Install X" é o objetivo, não um beco sem saída. */
+  commandWantsDownload?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -331,7 +333,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   // Interstitial only: almost every big site carries an "Install App" / "Get the app" link
   // in its header (Spotify, Reddit, LinkedIn…), and treating that as a dead end made the
   // agent go back from pages that had loaded the content just fine.
-  if (interstitial && (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText))) {
+  if (interstitial && !input.commandWantsDownload && (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText))) {
     // The user named this site: going back silently drops them on the previous page (often
     // Google) with the task unfinished. Ask instead, as captcha and login already do.
     if (input.commandRequiresThisSite) {
