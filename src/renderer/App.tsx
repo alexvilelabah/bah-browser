@@ -239,6 +239,14 @@ declare global {
       verifyClick?: (wcId: number, backendNodeId: number) => Promise<{ ok?: boolean; stale?: boolean; covered?: boolean; covering?: string; x?: number; y?: number; error?: string }>;
       pointer?: (wcId: number, op: { kind: 'hover' | 'dblclick' | 'drag' | 'focus'; x: number; y: number; x2?: number; y2?: number; backendNodeId?: number }) => Promise<{ success: boolean; error?: string }>;
       selectOption?: (wcId: number, backendNodeId: number, option: string) => Promise<{ ok: boolean; selected?: string; options?: string[]; error?: string }>;
+      uploadGrantFolder?: () => Promise<{ ok: boolean; canceled?: boolean; folder?: string }>;
+      uploadGrants?: () => Promise<Array<{ folder: string; path: string }>>;
+      uploadRevokeAll?: () => Promise<any>;
+      uploadListFiles?: () => Promise<{ ok: boolean; files: Array<{ file: string; size: number; modified: string }> }>;
+      uploadReadFile?: (file: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
+      uploadTokenFor?: (files: string[]) => Promise<{ ok: boolean; token?: string; names?: string[]; error?: string }>;
+      uploadPick?: (opts: { multiple?: boolean; title?: string }) => Promise<{ ok: boolean; canceled?: boolean; token?: string; names?: string[]; sizes?: number[] }>;
+      uploadSet?: (wcId: number, backendNodeId: number | null, token: string, at?: { x: number; y: number }) => Promise<{ ok: boolean; names?: string[]; accept?: string; dropped?: number; error?: string }>;
       fillNode?: (wcId: number, backendNodeId: number, value: string) => Promise<{ ok?: boolean; error?: string }>;
       waitNetworkIdle?: (wcId: number, idleMs: number, timeoutMs: number) => Promise<{ ok: boolean; waitedMs?: number; error?: string }>;
       downloadUrl?: (url: string, filename?: string) => Promise<{ success: boolean; info?: { path: string; bytes: number; contentType?: string }; error?: string }>;
@@ -520,6 +528,9 @@ export default function App() {
   const [hwAccelOn, setHwAccelOn] = useState(true);
   // Menu ⋮ (canto superior) + favoritos (estilo Chrome, salvos localmente).
   const [menuOpen, setMenuOpen] = useState(false);
+  // Pastas que a pessoa liberou ao agente nesta sessão (menu → revogar).
+  const [folderGrants, setFolderGrants] = useState<Array<{ folder: string; path: string }>>([]);
+  useEffect(() => { if (menuOpen) window.electronAPI?.uploadGrants?.().then(g => setFolderGrants(g || [])); }, [menuOpen]);
   const [favorites, setFavorites] = useState<Array<{ url: string; title: string }>>(() => {
     try { return JSON.parse(localStorage.getItem('favorites.v1') || '[]'); } catch { return []; }
   });
@@ -2004,6 +2015,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-label">{t('menu.dlManager')}</span>
                   <span className={`menu-switch ${dlEngine.enabled ? 'on' : ''}`}>{dlEngine.enabled ? `${dlEngine.connections}×` : 'OFF'}</span>
                 </button>
+                {folderGrants.length > 0 && (
+                  <button className="menu-item" onClick={async () => { await window.electronAPI?.uploadRevokeAll?.(); setFolderGrants([]); }} title={t('menu.folderAccessTitle', { folders: folderGrants.map(g => g.path).join(', ') })}>
+                    <span className="menu-ic">📂</span>
+                    <span className="menu-label">{t('menu.folderAccess', { n: folderGrants.length })}</span>
+                    <span className="menu-switch">{t('menu.folderRevoke')}</span>
+                  </button>
+                )}
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
                   <span className="menu-label">{pageSpeaking ? t('menu.readPageStop') : t('menu.readPage')}</span>
@@ -2457,6 +2475,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let lastExtractBlock = '';
               // extract_text com offset novo é PAGINAÇÃO, não re-extração: não conta pro freio anti-coleta.
               const extractPagesRead = new Set<string>();
+              // Arquivos que a PESSOA escolheu nesta tarefa (upload): o agente só reusa estes, pelo cartão.
+              const taskUploads: Array<{ token: string; names: string[] }> = [];
               // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
               const commandIsShopping = namesStore(command) || /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
@@ -3761,7 +3781,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Ritmo por site: ações que tocam a página esperam uma pausa ALEATÓRIA de 1–5s no mesmo
                   // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
                   // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
-                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll', 'insert_text', 'keydown', 'keyup'].includes(action.type);
+                  const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll', 'upload', 'insert_text', 'keydown', 'keyup'].includes(action.type);
                   const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
                   if (touchesPage && paceHost) {
                     const waitMs = paceDelay(paceHost);
@@ -5161,6 +5181,72 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           : { success: false, error: `Clicked @${action.ref} but it is still ${after ? 'checked' : 'unchecked'}.` };
                       }
                     }
+                  } else if (action.type === 'list_files' || action.type === 'read_file') {
+                    // Só pastas que a PESSOA liberou nesta sessão (diálogo do SO). Sem nenhuma: pergunta.
+                    let grants = await window.electronAPI?.uploadGrants?.() ?? [];
+                    if (!grants.length) {
+                      const ok = await new Promise<boolean>((resolve) => onProgress({ kind: 'confirm', risk: 'files', label: 'folder access',
+                        title: '📂 The agent wants to look for a file on your computer',
+                        message: 'Allow ONE folder for this session (e.g. where your résumés are). The agent can list and read files only inside it, until you quit Bah or revoke it in the menu.',
+                        yesLabel: '📂 Choose folder…', noLabel: 'Not now', onConfirm: () => resolve(true), onCancel: () => resolve(false) }));
+                      throwIfCancelled();
+                      if (ok) { await window.electronAPI?.uploadGrantFolder?.(); grants = await window.electronAPI?.uploadGrants?.() ?? []; }
+                    }
+                    if (!grants.length) toolResult = { success: false, error: 'The user did not allow a folder. Use upload without "file" so they pick the file themselves.' };
+                    else if (action.type === 'list_files') {
+                      const r = await window.electronAPI?.uploadListFiles?.();
+                      const words = (action.query || '').toLowerCase().split(/\s+/).filter(Boolean);
+                      const files = (r?.files || []).filter(f => !words.length || words.some(w => f.file.toLowerCase().includes(w)));
+                      history += `\nFILES the user allowed (${grants.map(g => g.folder).join(', ')}) — ${files.length} shown:\n${files.slice(0, 150).map(f => `  ${f.file} (${Math.max(1, Math.round(f.size / 1024))} KB, ${f.modified})`).join('\n') || '  (no matching files)'}`;
+                      toolResult = { success: true, info: { files: files.length } };
+                    } else {
+                      const r = await window.electronAPI?.uploadReadFile?.(action.file);
+                      if (r?.ok) { history += `\nFILE ${action.file}:\n${r.text}`; toolResult = { success: true, info: { chars: r.text?.length || 0 } }; }
+                      else toolResult = { success: false, error: r?.error || 'could not read the file' };
+                    }
+                  } else if (action.type === 'upload') {
+                    // Arquivo SÓ do diálogo do SO, escolhido pela pessoa (ou reusado dela nesta tarefa).
+                    const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const wcIdUp = (wv as any).getWebContentsId?.();
+                    if (!target || wcIdUp == null) {
+                      toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
+                    } else {
+                      const site = paceHostOf(wv.getURL()) || 'this site';
+                      const field = (target.text || target.aria || 'upload field').slice(0, 60);
+                      // Arquivo de uma pasta que a pessoa liberou nesta sessão: o agente escolhe, sem cartão.
+                      let direct: { ok: boolean; token?: string; names?: string[]; error?: string } | null = null;
+                      const wanted = ([] as string[]).concat((action.file as any) ?? []).map(String).filter(Boolean);
+                      if (wanted.length) direct = await window.electronAPI?.uploadTokenFor?.(wanted) ?? null;
+                      const choice = direct?.ok && direct.token ? direct.token : direct ? 'bad-file' : await new Promise<string>((resolve) => onProgress({ kind: 'confirm', risk: 'upload', label: 'upload',
+                        title: `📎 The agent wants to upload a file to ${site}`,
+                        message: `Field: "${field}". You choose the file in your own file dialog — the agent never picks files from your computer. Nothing is sent until the site's form is submitted.`,
+                        choices: [
+                          ...taskUploads.map(u => ({ label: `📎 Use ${u.names.join(', ').slice(0, 60)}`, value: u.token })),
+                          { label: '📁 Choose file…', value: 'pick' }, { label: '📂 Allow a folder (this session)', value: 'folder' }, { label: 'Cancel', value: 'no' },
+                        ],
+                        onChoose: (v: string) => resolve(v), onConfirm: () => resolve('pick'), onCancel: () => resolve('no') }));
+                      throwIfCancelled();
+                      let token = !['pick', 'no', 'folder', 'bad-file'].includes(choice) ? choice : '';
+                      let folderNote = '';
+                      if (choice === 'folder') {
+                        const g = await window.electronAPI?.uploadGrantFolder?.();
+                        folderNote = g?.ok ? `The user allowed the folder "${g.folder}" for this session. Call list_files, pick the right file (read_file to compare), then upload again with "file".` : '';
+                      }
+                      if (choice === 'pick') {
+                        const p = await window.electronAPI?.uploadPick?.({ multiple: !!action.multiple, title: `Upload to ${site}: ${field}` });
+                        if (p?.ok && p.token) { token = p.token; taskUploads.push({ token, names: p.names || [] }); }
+                      }
+                      if (folderNote) toolResult = { success: true, info: { note: folderNote } };
+                      else if (choice === 'bad-file') toolResult = { success: false, error: direct?.error || 'file not found' };
+                      else if (!token) toolResult = { success: false, error: 'The user did not choose a file. Ask them (done with a question) or continue without the upload.' };
+                      else {
+                        const r = await window.electronAPI?.uploadSet?.(wcIdUp, target.backendNodeId ?? null, token, target.backendNodeId == null ? { x: target.x, y: target.y } : undefined);
+                        toolResult = r?.ok
+                          ? { success: true, info: { attached: r.names, note: `${(r.names || []).join(', ')} is attached to the field. Check the page shows it, then continue the form.${r.dropped ? ` (field takes one file; ${r.dropped} not attached)` : ''}` } }
+                          : { success: false, error: r?.error || 'upload failed' };
+                        if (r?.ok) onProgress({ kind: 'status', message: `📎 Attached ${(r.names || []).join(', ')}` });
+                      }
+                    }
                   } else if (action.type === 'select_option') {
                     // <select> nativo (ex.: SO/versão no site de driver): escolhe no nó via CDP.
                     const target = observation.interactive_elements.find(e => e.id === action.ref);
@@ -5287,6 +5373,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
+                    || action.type === 'list_files' || action.type === 'read_file'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'history_search';
                   let screenshotAfter: string | undefined;
@@ -5350,6 +5437,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
                     || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'get_html' || action.type === 'get'
+                    || action.type === 'list_files' || action.type === 'read_file'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait' || action.type === 'history_search';
                   if (internalAction) {

@@ -41,6 +41,12 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
+- **Arquivos do seu computador (uploads):** o agente nunca escolhe caminho. No `upload`, o Bah mostra um cartão e
+  *você* escolhe o arquivo no diálogo do SO (o agente só vê o nome). Ou você pode **liberar uma pasta nesta sessão**:
+  o agente então lista, lê PDF/Word/texto dela (ex.: escolher o currículo que combina com a vaga) e anexa arquivos
+  dela — tudo resolvido e conferido no processo principal (sem fuga por `../` ou symlink), até fechar o Bah ou
+  revogar (menu ⋮ → 📂 Pastas liberadas ao agente). Nada é enviado até o formulário do site ser enviado. Ver
+  [`src/main/upload.ts`](src/main/upload.ts).
 
 ---
 

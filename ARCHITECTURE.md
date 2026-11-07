@@ -87,6 +87,7 @@ moves that end on the click and bow away from the straight line.
 | `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | Page `alert`/`confirm` in tabs: replaces Electron's blocking native box (internal `-run-dialog`) with Bah's dialog for the user, and the agent policy on its tabs (armed `dialog` action > alert closes > ordinary confirm accepted > payment/delete confirm asks the user); `beforeunload` on agent tabs leaves when the agent navigates. `prompt()` is not available in Electron (it throws) |
 | `job-queue.ts` | Serialises long-running jobs |
 | `frames.ts` (+ `src/shared/frames.ts`) | Iframe content for the agent (embedded job/payment/booking forms): accessibility trees of same-process frames (by `frameId`) and cross-origin frames (flattened CDP sessions via `Target.setAutoAttach`), coordinates mapped to the page viewport; elements are listed with `frame="host"`. Fills set the value on the node inside its frame (focus-independent); clicks in cross-origin frames use CDP `Input` on the frame's session (`sendInputEvent` stops at the `<iframe>`). Extension-injected `chrome-extension://` frames are left out |
+| `upload.ts` | Agent `upload` (OS file dialog → token; file field by node/label/position, or the OS picker intercepted with `Page.setInterceptFileChooserDialog` during the action; `DOM.setFileInputFiles`) and session folder grants for `list_files` / `read_file` / `upload { file }` (realpath-checked) |
 
 ### Browser identity (what sites see)
 

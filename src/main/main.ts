@@ -43,6 +43,7 @@ import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
+import { setupUpload, setUploadTextExtractor } from './upload';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
@@ -2740,6 +2741,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
       return { ok: false, name, error: 'Could not read this file — it may be corrupted or in an unsupported format.' };
     }
   }
+  setUploadTextExtractor(extractTextFromFile);   // read_file do agente (só pastas liberadas pela pessoa)
   // 43+: sem defaultPath o diálogo abre SEMPRE em Downloads — lembramos a última pasta usada.
   let lastDocDir: string | undefined;
   ipcMain.handle('file:pick-extract', async () => {
@@ -3153,6 +3155,8 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
   });
   setupJsDialogs();
+  // upload do agente (arquivo escolhido pela pessoa) + pastas liberadas na sessão (list_files / read_file).
+  setupUpload(() => mainWindow, sharedEnsureDebugger);
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({

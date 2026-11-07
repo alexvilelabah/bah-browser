@@ -41,6 +41,12 @@ the entire boundary between the web/UI side and the privileged side (see below).
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
+- **Files from your computer (uploads):** the agent never chooses a path. For `upload`, Bah shows a card and
+  *you* pick the file in the OS dialog (the agent sees only its name). Or you can **allow one folder for this
+  session**: the agent may then list it, read PDF/Word/text files in it (e.g. to pick the résumé that fits a
+  job) and attach files from it — resolved and checked in the main process (no `../` or symlink escape), until
+  you quit Bah or revoke it (menu ⋮ → 📂 Agent folder access). Nothing is sent until the site's form is
+  submitted. See [`src/main/upload.ts`](src/main/upload.ts).
 
 ---
 

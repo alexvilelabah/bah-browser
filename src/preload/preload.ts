@@ -223,6 +223,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cdp:verify-click', wcId, backendNodeId),
   selectOption: (wcId: number, backendNodeId: number, option: string) =>
     ipcRenderer.invoke('cdp:select-option', wcId, backendNodeId, option),
+  // upload do agente: arquivo SÓ do diálogo do SO (token) ou de uma pasta que a pessoa liberou na sessão.
+  uploadGrantFolder: () => ipcRenderer.invoke('upload:grant-folder'),
+  uploadGrants: () => ipcRenderer.invoke('upload:grants'),
+  uploadRevokeAll: () => ipcRenderer.invoke('upload:revoke-all'),
+  uploadListFiles: () => ipcRenderer.invoke('upload:list-files'),
+  uploadReadFile: (file: string) => ipcRenderer.invoke('upload:read-file', file),
+  uploadTokenFor: (files: string[]) => ipcRenderer.invoke('upload:token-for', files),
+  uploadPick: (opts: { multiple?: boolean; title?: string }) => ipcRenderer.invoke('upload:pick', opts),
+  uploadSet: (wcId: number, backendNodeId: number | null, token: string, at?: { x: number; y: number }) => ipcRenderer.invoke('upload:set', wcId, backendNodeId, token, at),
   fillNode: (wcId: number, backendNodeId: number, value: string) =>
     ipcRenderer.invoke('cdp:fill-node', wcId, backendNodeId, value),
   waitNetworkIdle: (wcId: number, idleMs: number, timeoutMs: number) => ipcRenderer.invoke('cdp:wait-network-idle', wcId, idleMs, timeoutMs),
