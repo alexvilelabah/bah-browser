@@ -96,7 +96,7 @@ export function buildGenericVideoButtonScript(labels: VideoButtonLabels): string
       var f = cur && formats[cur];
       if (!f || f.state === 'loading') { menu.appendChild(msg(L.loading)); return; }
       if (f.state === 'err') {
-        menu.appendChild(msg(f.drm ? L.drm : (f.live ? L.live : L.listFailed), 'err'));
+        menu.appendChild(msg(f.drm ? L.drm : f.needTool ? L.needTool : (f.live ? L.live : L.listFailed), 'err'));
         if (!f.drm && !f.live) menu.appendChild(item(L.retry, '', '', function(){ formats[cur] = null; ask(); render(); }));
         return;
       }
@@ -259,7 +259,7 @@ export function buildGenericVideoButtonScript(labels: VideoButtonLabels): string
       refresh: refresh,
       onFormats: function(p){
         if (!p || !p.v) return;
-        formats[p.v] = p.ok ? { state: 'ok', list: p.choices || [] } : { state: 'err', live: !!p.live, drm: !!p.drm };
+        formats[p.v] = p.ok ? { state: 'ok', list: p.choices || [] } : { state: 'err', live: !!p.live, drm: !!p.drm, needTool: !!p.needTool };
         if (p.v === cur && open) render();
       },
       onJob: function(p){

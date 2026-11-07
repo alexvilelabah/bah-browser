@@ -21,13 +21,12 @@ import {
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 const EXE = IS_WIN ? '.exe' : '';
-// Binário do yt-dlp certo pra cada SO. No macOS vai o yt-dlp_macos.zip (universal: Apple
-// Silicon + Intel), que é a PASTA já desempacotada: o yt-dlp_macos "onefile" se desempacota
-// a CADA execução e o macOS escaneia os arquivos novos — medido ~16s por chamada num Mac
-// Intel (o teste de 10s achava que estava corrompido), contra ~2,5s da pasta.
+// Binário do yt-dlp certo pra cada SO. O macOS NÃO baixa nada: usa o yt-dlp/deno/ffmpeg do
+// Homebrew (ver ensureYtDlp) — executável baixado e rodado depois por um app sem assinatura
+// é o que o macOS mais desconfia (rodando a partir do Finder, o yt-dlp baixado travava no
+// --version), e o brew já cuida de instalar e atualizar.
 function ytDlpAsset(): string {
   if (IS_WIN) return 'yt-dlp.exe';
-  if (IS_MAC) return 'yt-dlp_macos.zip';
   return process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux';
 }
 const YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytDlpAsset()}`;
@@ -41,7 +40,6 @@ function denoAsset(): string | null {
   if (IS_WIN) return 'deno-x86_64-pc-windows-msvc.zip';
   const arch = process.arch === 'arm64' ? 'aarch64' : process.arch === 'x64' ? 'x86_64' : null;
   if (!arch) return null;
-  if (process.platform === 'darwin') return `deno-${arch}-apple-darwin.zip`;
   if (process.platform === 'linux') return `deno-${arch}-unknown-linux-gnu.zip`;
   return null;
 }
@@ -178,81 +176,14 @@ function ytDlpVersion(bin: string): Promise<string | null> {
 const validateYtDlp = async (bin: string) => (await ytDlpVersion(bin)) !== null;
 const YTDLP_DID_NOT_START = 'The downloaded yt-dlp did not start — try again.';
 
-// ── macOS: yt-dlp em PASTA versionada (bin/yt-dlp-macos-<versão>/yt-dlp_macos) ──
-// A pasta desempacotada não tem `-U` ("Auto-update is not supported for unpackaged
-// executables"): a checagem diária baixa a versão nova numa pasta NOVA, e as antigas só
-// são apagadas no 1º uso da sessão seguinte — aí nenhum yt-dlp nosso está rodando nelas.
-const MAC_YTDLP_PREFIX = 'yt-dlp-macos-';
-const macYtDlpExe = (dir: string) => path.join(binDir(), dir, 'yt-dlp_macos');
-const versionKey = (v: string) => v.split('.').map((n) => n.padStart(4, '0')).join('.');
-function macYtDlpDirs(): string[] {   // da mais nova pra mais velha
-  try {
-    return fs.readdirSync(binDir())
-      .filter((d) => d.startsWith(MAC_YTDLP_PREFIX) && fs.existsSync(macYtDlpExe(d)))
-      .sort((a, b) => versionKey(b.slice(MAC_YTDLP_PREFIX.length)).localeCompare(versionKey(a.slice(MAC_YTDLP_PREFIX.length))));
-  } catch { return []; }
-}
-
-// Versão mais nova publicada: o /releases/latest redireciona pra .../tag/<versão>.
-function latestYtDlpVersion(): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const req = https.request('https://github.com/yt-dlp/yt-dlp/releases/latest',
-        { method: 'HEAD', headers: { 'User-Agent': 'bah-browser' } }, (res) => {
-          res.resume();
-          const m = /\/tag\/([\d.]+)$/.exec(String(res.headers.location || ''));
-          resolve(m ? m[1] : null);
-        });
-      req.on('error', () => resolve(null));
-      req.setTimeout(10_000, () => req.destroy(new Error('timeout')));
-      req.end();
-    } catch { resolve(null); }
-  });
-}
-
-async function installMacYtDlp(): Promise<string> {
-  const zip = path.join(binDir(), 'ytdlp-macos-dl.zip');
-  const extractDir = path.join(binDir(), 'ytdlp-macos-extract');   // nome fora do prefixo: nunca é "instalada"
-  try {
-    await downloadToFile(YTDLP_URL, zip);
-    if (!(await expandZip(zip, extractDir))) throw new Error('failed to unzip yt-dlp');
-    const exe = path.join(extractDir, 'yt-dlp_macos');
-    makeExecutable(exe);
-    const ver = await ytDlpVersion(exe);
-    if (!ver) throw new Error(YTDLP_DID_NOT_START);
-    const dir = MAC_YTDLP_PREFIX + ver;
-    fs.rmSync(path.join(binDir(), dir), { recursive: true, force: true });
-    fs.renameSync(extractDir, path.join(binDir(), dir));
-    return macYtDlpExe(dir);
-  } finally {
-    try { fs.rmSync(zip, { force: true }); } catch {}
-    try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
-  }
-}
-
-let macInstall: Promise<string> | null = null;
-let macCleaned = false;
-async function ensureMacYtDlp(onStatus?: (msg: string) => void): Promise<string> {
-  const dirs = macYtDlpDirs();
-  if (dirs.length) {
-    if (!macCleaned) {
-      macCleaned = true;
-      for (const d of dirs.slice(1)) { try { fs.rmSync(path.join(binDir(), d), { recursive: true, force: true }); } catch {} }
-    }
-    if (macInstall || !updateDueToday()) return macYtDlpExe(dirs[0]);
-    try { fs.writeFileSync(updateStampPath(), String(Date.now())); } catch {} // marca já: falha não re-tenta a cada download
-    const latest = await latestYtDlpVersion();
-    if (!latest || latest === dirs[0].slice(MAC_YTDLP_PREFIX.length)) return macYtDlpExe(dirs[0]);
-    onStatus?.('Updating the download engine…');
-    macInstall = installMacYtDlp().finally(() => { macInstall = null; });
-    try { return await macInstall; } catch { return macYtDlpExe(dirs[0]); }   // falhou: segue com a atual
-  }
-  if (macInstall) return macInstall;
-  onStatus?.('Preparing the video download engine (first time)…');
-  macInstall = installMacYtDlp()
-    .then((exe) => { onStatus?.('Download engine ready.'); return exe; })
-    .finally(() => { macInstall = null; });
-  return macInstall;
+// ── macOS: só o yt-dlp do sistema (Homebrew) ──
+// Faltando, o erro carrega YTDLP_MISSING → o botão "Baixar" mostra o comando do brew.
+export const YTDLP_MISSING = 'yt-dlp is not installed';
+export const looksYtDlpMissing = (err?: string) => !!err && err.includes(YTDLP_MISSING);
+async function ensureMacYtDlp(): Promise<string> {
+  const bin = await whereExe('yt-dlp');
+  if (!bin) throw new Error(`${YTDLP_MISSING} — on macOS, run: brew install yt-dlp deno ffmpeg`);
+  return bin;
 }
 
 let ensurePromise: Promise<string> | null = null;
@@ -260,7 +191,7 @@ export async function ensureYtDlp(onStatus?: (msg: string) => void): Promise<str
   // Testes (só fora do app empacotado): um yt-dlp falso que simula falhas de merge.
   const fake = !app.isPackaged ? process.env.BAH_TEST_YTDLP : undefined;
   if (fake && fs.existsSync(fake)) return fake;
-  if (IS_MAC) return ensureMacYtDlp(onStatus);
+  if (IS_MAC) return ensureMacYtDlp();
   const p = ytDlpPath();
   if (fs.existsSync(p) && fs.statSync(p).size > 1_000_000) {
     await maybeAutoUpdate(p, onStatus); // já instalado → checa atualização (throttled)
@@ -422,8 +353,8 @@ let jsRuntimePromise: Promise<JsRuntime | null> | null = null;
 /** O motor já pronto (sem esperar download) — pra listar formatos sem travar a 1ª vez. */
 export function readyJsRuntime(): JsRuntime | null { return jsRuntimeResolved; }
 /**
- * Garante um motor: o Deno que já baixamos → Deno do sistema → baixa o Deno (Windows,
- * macOS e Linux, ~43 MB, 1ª vez) → último recurso, Node do sistema. FAIL-SAFE: null = segue sem motor
+ * Garante um motor: o Deno que já baixamos → Deno do sistema → baixa o Deno (Windows e
+ * Linux, ~43 MB, 1ª vez; macOS: brew install deno) → último recurso, Node do sistema. FAIL-SAFE: null = segue sem motor
  * (YouTube pode falhar, outros sites seguem normais).
  */
 export function ensureJsRuntime(onStatus?: (msg: string) => void): Promise<JsRuntime | null> {

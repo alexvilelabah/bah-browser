@@ -13,7 +13,7 @@
 import { app, ipcMain, shell, webContents, webFrameMain, type BrowserWindow, type Session, type WebContents, type WebFrameMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { downloadVideo, fetchVideoInfo, findFfmpegDir, probeStreams, recoverInterruptedDownloads, INTERRUPTED_ERROR, type VideoDownloadProgress } from './media-downloader';
+import { downloadVideo, fetchVideoInfo, findFfmpegDir, looksYtDlpMissing, probeStreams, recoverInterruptedDownloads, INTERRUPTED_ERROR, type VideoDownloadProgress } from './media-downloader';
 import { buildVideoChoices, formatBytes, PartsProgress, youtubeVideoId, youtubeWatchUrl, type VideoChoice } from './video-formats';
 import { buildVideoButtonScript, DEFAULT_VIDEO_BUTTON_LABELS, sanitizeVideoButtonLabels, type VideoButtonLabels } from './video-button-script';
 import { buildGenericVideoButtonScript } from './generic-video-button-script';
@@ -56,7 +56,7 @@ interface Choice extends VideoChoice {
   file?: SniffedMedia;     // arquivo direto achado na aba (vai pra lista de Downloads normal)
 }
 
-interface Choices { ok: boolean; title?: string; choices?: Choice[]; live?: boolean; drm?: boolean; error?: string }
+interface Choices { ok: boolean; title?: string; choices?: Choice[]; live?: boolean; drm?: boolean; needTool?: boolean; error?: string }
 
 interface Job {
   id: string;
@@ -137,7 +137,7 @@ export function setupVideoButton(deps: Deps) {
 
   // ── Lista de um vídeo ──
   const listYoutube = (t: Target): Promise<Choices> => fetchVideoInfo(t.url).then((r): Choices => {
-    if (!r.ok) return { ok: false, error: r.error, drm: looksDrm(r.error) };
+    if (!r.ok) { console.warn('[VideoButton] lista falhou:', r.error); return { ok: false, error: r.error, drm: looksDrm(r.error) }; }
     if (r.info?.is_live === true || r.info?.live_status === 'is_live' || r.info?.live_status === 'is_upcoming') return { ok: false, live: true };
     const c = buildVideoChoices(r.info);
     return c.choices.length ? { ok: true, title: c.title, choices: c.choices } : { ok: false, error: 'no formats' };
@@ -216,7 +216,9 @@ export function setupVideoButton(deps: Deps) {
     // "não deu" com "Tentar de novo" em vez de "Procurando…" pra sempre.
     const deadline = new Promise<Choices>(resolve => setTimeout(() => resolve({ ok: false, error: 'timeout listing formats' }), LIST_DEADLINE_MS));
     const p = Promise.race([t.kind === 'youtube' ? listYoutube(t) : listWeb(t, wc), deadline])
-      .catch((e): Choices => ({ ok: false, error: String(e?.message ?? e) }));
+      .catch((e): Choices => ({ ok: false, error: String(e?.message ?? e) }))
+      // macOS sem o yt-dlp do Homebrew: a página mostra o comando do brew, não o erro genérico.
+      .then((r): Choices => (!r.ok && looksYtDlpMissing(r.error) ? { ...r, needTool: true } : r));
     infoCache.set(cacheKey, { at: Date.now(), p });
     // Erro não fica em cache: "Tentar de novo" tem que tentar de verdade.
     p.then((r) => { if (!r.ok && !r.live && !r.drm) infoCache.delete(cacheKey); });
@@ -225,7 +227,7 @@ export function setupVideoButton(deps: Deps) {
 
   const presentable = (c: Choices) => c.ok
     ? { ok: true, choices: (c.choices || []).map(x => ({ key: x.key, kind: x.kind, label: x.label, hint: x.hint, size: formatBytes(x.approxBytes, labels.dec) })) }
-    : { ok: false, live: !!c.live, drm: !!c.drm };
+    : { ok: false, live: !!c.live, drm: !!c.drm, needTool: !!c.needTool };
 
   // Pedaços de um download cancelado/falho. O Windows pode segurar o arquivo por um
   // instante depois que o processo morre — tenta de novo algumas vezes.

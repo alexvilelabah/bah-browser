@@ -5628,7 +5628,7 @@ function loadDlEngine(): DlEngineSettings {
 
 // Textos do botão "Baixar" que o main injeta nas páginas com vídeo — no idioma da UI.
 function ytDlLabels(): Record<string, string> {
-  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'video', 'drm', 'dec'];
+  const keys = ['btn', 'title', 'loading', 'audio', 'started', 'listFailed', 'live', 'retry', 'preparing', 'merging', 'done', 'failed', 'reveal', 'video', 'drm', 'needTool', 'dec'];
   return Object.fromEntries(keys.map(k => [k, t(`ytdl.${k}`)]));
 }
 
