@@ -2,11 +2,13 @@ import { AIEngine } from './ai-engine';
 import type { VisionImage, VisionReport } from '../shared/vision';
 import { classifyError, type AgentErrorCode } from '../shared/error-codes';
 import { isPrivateAi } from './incognito-session';
+import { normalizeGetHtml, normalizeExtractText } from '../shared/read-paging';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
-  | { type: 'extract_text'; max_chars?: number }
+  | { type: 'extract_text'; max_chars?: number; offset?: number }
+  | { type: 'get_html'; selector?: string; max?: number; offset?: number }
   | { type: 'extract_images'; min_width?: number }
   | { type: 'search_images'; query: string; min_width?: number; count?: number }
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
@@ -82,6 +84,7 @@ const VALID_ACTIONS = new Set([
   'select_option',
   'store',
   'extract_text',
+  'get_html',
   'extract_images',
   'search_images',
   'harvest_images',
@@ -127,7 +130,7 @@ export class PageAgent {
     try {
       const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier, signal);
       const parsed = this.parseResponse(r.text);
-      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model }, vision: r.vision };
+      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model, contextTokens: r.contextTokens }, vision: r.vision };
     } catch (err: any) {
       const e = classifyError(err);
       return {
@@ -274,7 +277,9 @@ export class PageAgent {
       case 'store':
         return { type: 'store', key: String(action.key ?? ''), value: action.value, source: action.source ? String(action.source) : undefined };
       case 'extract_text':
-        return { type: 'extract_text', max_chars: toOptionalNumber(action.max_chars) };
+        return normalizeExtractText(action);
+      case 'get_html':
+        return normalizeGetHtml(action);
       case 'extract_images':
         return { type: 'extract_images', min_width: toOptionalNumber(action.min_width) };
       case 'search_images':
@@ -509,6 +514,8 @@ export function validateAction(a: AgentAction): string | null {
     // returning an invalid response" after 3 retries.
     case 'done': return null;
     case 'dialog': return null;
+    case 'get_html':
+      return a.selector != null && String(a.selector).length > 300 ? 'get_html "selector" is too long — use a short CSS selector like "#id" or "form"' : null;
     case 'extract_text': case 'extract_images': case 'read_aloud':
     case 'stock_movers': case 'scroll':
       return null;

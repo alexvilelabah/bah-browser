@@ -123,6 +123,8 @@ USER → "open gmail and delete the spam"
 | `type(text)` / `press(key)` | Type into the focused field / send a key |
 | `navigate(url)` / `scroll(dir)` | Go to a URL / scroll |
 | `new_tab` / `switch_tab` / `close_tab` | Tab management |
+| `extract_text(offset?, max_chars?)` | The page's main content as Markdown; long pages come in pages via `offset`, sized to the model's free context |
+| `get_html(selector?, offset?, max?)` | Cleaned HTML of a selector or the page — `[#N]` refs, `[hidden]` marks, secrets and scripts stripped; for duplicate buttons, unlabeled fields, custom dropdowns; paged like `extract_text` |
 | `done(reason, success)` | End the loop |
 
 Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. Before the click, the pointer moves to the target along the same arc as the agent cursor Bah draws on screen (no random jitter), so the page's `mousemove` events match what you see. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.

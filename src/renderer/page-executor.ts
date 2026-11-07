@@ -1,7 +1,8 @@
 export type BrowserAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
-  | { type: 'extract_text'; max_chars?: number }
+  | { type: 'extract_text'; max_chars?: number; offset?: number }
+  | { type: 'get_html'; selector?: string; max?: number; offset?: number }
   | { type: 'extract_images'; min_width?: number }
   | { type: 'search_images'; query: string; min_width?: number; count?: number }
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
@@ -86,7 +87,8 @@ export function formatAction(action: BrowserAction): string {
   switch (action.type) {
     case 'plan': return `plan(${action.steps?.length ?? 0} steps)`;
     case 'store': return `store(${action.key}=${JSON.stringify(action.value).slice(0, 60)}${action.source ? ` from ${action.source}` : ''})`;
-    case 'extract_text': return `extract_text()`;
+    case 'extract_text': return `extract_text(${action.offset ? `from ${action.offset}` : ''})`;
+    case 'get_html': return `get_html(${action.selector ? `"${shorten(action.selector, 60)}"` : 'body'}${action.offset ? `, from ${action.offset}` : ''})`;
     case 'extract_images': return `extract_images(${action.min_width ? `min ${action.min_width}px` : ''})`;
     case 'search_images': return `search_images("${shorten(action.query, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'harvest_images': return `harvest_images("${shorten(action.query, 50)}", ${action.count || 10}${action.min_width ? `, min ${action.min_width}px` : ''})`;
