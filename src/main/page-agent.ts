@@ -31,6 +31,7 @@ export type AgentAction =
   | { type: 'select_option'; ref: number; option: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
+  | { type: 'web_search'; query: string }
   | { type: 'back' }
   | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
   | { type: 'drag'; ref: number; to_ref: number }
@@ -74,6 +75,7 @@ const VALID_ACTIONS = new Set([
   'drag',
   'forward',
   'reload',
+  'web_search',
   'look_at',
   'find',
   'back',
@@ -344,6 +346,8 @@ export class PageAgent {
         return { type: 'click_ref', ref: toRef(action.ref) };
       case 'look_at':
         return { type: 'look_at', ref: action.ref != null && action.ref !== '' ? toRef(action.ref) : undefined, x: toOptionalNumber(action.x), y: toOptionalNumber(action.y), w: toOptionalNumber(action.w ?? action.width), h: toOptionalNumber(action.h ?? action.height) };
+      case 'web_search':
+        return { type: 'web_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
       case 'find':
         return { type: 'find', text: String(action.text ?? action.query ?? action.label ?? '').trim() };
       case 'back':
@@ -449,6 +453,7 @@ export function validateAction(a: AgentAction): string | null {
       if (a.ref != null) return finiteInt(a.ref) ? null : `look_at "ref" must be a non-negative integer, got ${JSON.stringify((a as any).ref)}`;
       return [a.x, a.y, a.w, a.h].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) && (a.w as number) > 0 && (a.h as number) > 0
         ? null : 'look_at needs "ref", or "x","y","w","h" (viewport pixels) for the area to zoom into';
+    case 'web_search': return nonEmpty(a.query) ? null : 'web_search needs a non-empty "query"';
     case 'find': return nonEmpty(a.text) ? null : 'find needs the "text" to look for';
     case 'back': case 'forward': case 'reload': return null;
     case 'hover': case 'dblclick': case 'focus':

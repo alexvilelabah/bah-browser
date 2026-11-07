@@ -13,9 +13,12 @@ import HwMonitor from './components/HwMonitor';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
+import { ENGINES, engineOrder, engineForUrl, markBlocked, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
+import { namesStore } from './stores';
+import { namedSiteHint } from './known-sites';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
-import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
+import { t, onLangChange, getLang, googleLocaleParams, uiLangName } from './i18n';
 import WebViewContainer from './components/WebViewContainer';
 import PermissionPrompt, { type SitePermAsk } from './components/PermissionPrompt';
 import PasswordSavePrompt from './components/PasswordSavePrompt';
@@ -67,6 +70,7 @@ import {
   buildKnownSitesBlock,
   detectQuickAction,
   getInitialShortcutAction,
+  commandHasExplicitUrl,
   pointsAtOpenScreen,
   isTaskDataAction,
   rememberActionForSite,
@@ -120,6 +124,7 @@ declare global {
       decryptSecretSync?: (t: string) => string;
       setUILanguage?: (lang: string) => Promise<any>;
       setSearchEngine?: (setting: { id: string; custom?: string }, googleLocale: string) => void;
+      e2eSearchResults?: (q: string) => Promise<Array<{ title: string; snippet: string; url: string }> | null>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean; visionMode?: VisionMode }) => Promise<any>;
       localDiscover?: (provider: string, baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; models: Array<{ id: string; loaded?: boolean; vision: string; contextTokens?: number; contextSource?: string; unsuitable?: string }>; error?: string }>;
@@ -659,6 +664,12 @@ export default function App() {
     const r = await window.electronAPI?.setHwAccel?.(next);
     if (r?.ok) { setHwAccelOn(next); window.alert(t('menu.hwAccelRestart')); }
   }, [hwAccelOn]);
+  // Buscador preferido da pesquisa rápida e do agente (o da barra de endereço é o do ⋮ → Mecanismo
+  // de pesquisa). 'auto' = Google primeiro.
+  const [searchEngine, setSearchEngineState] = useState<EngineId | 'auto'>(() => preferredEngine());
+  const cycleSearchEngine = useCallback(() => {
+    setSearchEngineState(v => { const order: Array<EngineId | 'auto'> = ['auto', ...ENGINES.map(e => e.id)]; const n = order[(order.indexOf(v) + 1) % order.length]; setPreferredEngine(n); return n; });
+  }, []);
 
   // ── Economia de memória (Memory Saver, estilo Chrome) ──
   // Aba parada há 30+ min (não ativa, sem áudio) tem o webview DESMONTADO → o Chromium
@@ -1460,14 +1471,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   // aba em SEGUNDO PLANO no Google (Bing de fallback), raspa os snippets dos
   // resultados, manda pro modelo sintetizar e devolve a resposta + fontes pro
   // PAINEL onde o usuário digita. A aba dele não muda; ele não "lê a página".
-  const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
+  // Busca na web por baixo dos panos: tenta os buscadores em ordem (preferido primeiro; Google,
+  // Bing, DuckDuckGo, Yahoo, Perplexity) numa aba OCULTA até um render ≥2 resultados. Quem mostrar
+  // página de bloqueio fica marcado por 1h (pesquisa E agente pulam). Usada pela pesquisa rápida
+  // e pela ação web_search do agente.
+  const searchWebResults = useCallback(async (query: string): Promise<{ results: Array<{ title: string; snippet: string; url: string }>; engine?: string; blocked: boolean; error?: string }> => {
     const q = (query || '').trim();
-    if (!q) return { answer: 'Empty question.', sources: [], isError: true };
-    // Aba OCULTA: carrega e raspa "por baixo dos panos" — nunca aparece na barra de
-    // abas nem rouba o foco do usuário (ele continua exatamente onde estava).
-    // Perguntou numa aba anônima: a busca escondida também é anônima (não cai na conta do Google
-    // do perfil normal nem deixa cookie lá).
-    const bgId = store.addHiddenTab(`https://www.google.com/search?q=${encodeURIComponent(q)}&${googleLocaleParams()}`, opensIncognito('from-tab', aiOnIncognito()));
+    if (!q) return { results: [], blocked: false, error: 'Empty query.' };
+    // Teste E2E: resultados fixos (main só devolve algo com NODE_ENV=test) — nada de buscador de verdade.
+    const fixed = await window.electronAPI?.e2eSearchResults?.(q).catch(() => null);
+    if (Array.isArray(fixed)) return { results: fixed.slice(0, 6), engine: 'E2E', blocked: false };
+    const engines = engineOrder();
+    // Perguntou numa aba anônima: a busca escondida também é anônima.
+    const bgId = store.addHiddenTab(engines[0].url(q), opensIncognito('from-tab', aiOnIncognito()));
     const scrape = async (wv: Electron.WebviewTag) => {
       await waitForWebviewSettled(wv, '');
       await waitForSettle(wv, { maxMs: 4500, minMs: 300 });
@@ -1479,47 +1495,53 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
       let waited = 0;
       let bgWv = webviewRefs.current.get(bgId) as Electron.WebviewTag | undefined;
       while (waited < 6000 && !bgWv) { await new Promise(r => setTimeout(r, 150)); waited += 150; bgWv = webviewRefs.current.get(bgId) as any; }
-      if (!bgWv) return { answer: 'Could not open the search right now.', sources: [], isError: true };
-      // Buscador pediu verificação (anti-robô)? É a causa MAIS comum de zero resultados —
-      // dizer só "não achei nada" esconde isso e a pessoa fica sem saída. Tem que checar a
-      // página ATUAL, ANTES de trocar pro Bing (senão olharíamos a página errada).
+      if (!bgWv) return { results: [], blocked: false, error: 'Could not open the search right now.' };
+      // Buscador pediu verificação (anti-robô)? Checa a página ATUAL antes de trocar de buscador.
       const looksBlocked = async () => {
         try {
-          return await raceTimeout(bgWv!.executeJavaScript(
-            `/sorry\\/|unusual traffic|tr[aá]fego incomum|not a robot|n[aã]o sou um rob[oô]|captcha/i.test(location.href + ' ' + (document.body ? document.body.innerText.slice(0,2000) : ''))`,
-            false,
-          ), 3000, false);
+          const txt = await raceTimeout(bgWv!.executeJavaScript(`location.href + ' ' + document.title + ' ' + (document.body ? document.body.innerText.slice(0,2000) : '')`, false), 3000, '');
+          return SEARCH_BLOCK_RE.test(String(txt || ''));
         } catch { return false; }
       };
       let results = await scrape(bgWv);
+      let engine = engines[0].label;
       let blocked = false;
-      if (results.length < 2) {   // Google não rendeu → checa bloqueio e tenta Bing
-        blocked = await looksBlocked();
-        try { await bgWv.loadURL(`https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=${bingLocale()}`); } catch {}
-        results = await scrape(bgWv);
-        if (results.length === 0 && !blocked) blocked = await looksBlocked();
+      for (let i = 1; results.length < 2 && i <= engines.length; i++) {
+        if (await looksBlocked()) { blocked = true; markBlocked(engines[i - 1].id); }
+        if (i === engines.length) break;
+        try { await bgWv.loadURL(engines[i].url(q)); } catch {}
+        const more = await scrape(bgWv);
+        if (more.length > results.length) { results = more; engine = engines[i].label; }
       }
-      if (results.length === 0) {
-        return {
-          answer: blocked
-            ? 'The search engine asked for a "confirm you are human" check, so I could not read the results. Open a normal search tab, solve it once, and try again.'
-            : 'I did not find useful results for this search right now. Could you rephrase?',
-          sources: [],
-          isError: true,
-        };
-      }
-      const snippetsBlock = results.map((x, i) => `[${i + 1}] ${x.title}\n${x.snippet || ''}\n(${x.url})`).join('\n\n');
-      const prompt = `Pergunta do usuário: "${q}"\n\nResultados de busca da web (de HOJE):\n${snippetsBlock}\n\nResponda à pergunta de forma DIRETA e útil em ${uiLangName()}, usando SOMENTE estes resultados. Cite as fontes pelo nome do site entre parênteses (ex.: (Wikipedia)). Seja conciso: no máximo ~6 linhas ou uma lista curta. Se os resultados não responderem com clareza, diga o que dá pra concluir. NÃO escreva nenhuma linha [[ACTION:]].`;
-      const r = await window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled);   // stateless: não polui o histórico
-      const ok = (r?.response || '').trim();
-      // Falha da IA na síntese NÃO pode se disfarçar de resposta: vira aviso vermelho com
-      // dica (era o caso em que a pessoa via o status ciclando e nunca um resultado claro).
-      const answer = ok || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
-      return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !ok };
+      return { results, engine: results.length ? engine : undefined, blocked };
     } finally {
       try { store.closeTab(bgId); } catch {}   // remove a aba oculta (nunca foi vista)
     }
   }, [store]);
+
+  const runWebResearch = useCallback(async (query: string): Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }> => {
+    const q = (query || '').trim();
+    if (!q) return { answer: 'Empty question.', sources: [], isError: true };
+    const found = await searchWebResults(q);
+    const { results, blocked, error } = found;
+    if (results.length === 0) {
+      return {
+        answer: error || (blocked
+          ? 'Every search engine asked for a "confirm you are human" check, so I could not read the results. Try again later, or pick another engine in the menu (🔎 Search engine).'
+          : 'I did not find useful results for this search right now. Could you rephrase?'),
+        sources: [],
+        isError: true,
+      };
+    }
+    const snippetsBlock = results.map((x, i) => `[${i + 1}] ${x.title}\n${x.snippet || ''}\n(${x.url})`).join('\n\n');
+    const prompt = `Pergunta do usuário: "${q}"\n\nResultados de busca da web (de HOJE):\n${snippetsBlock}\n\nResponda à pergunta de forma DIRETA e útil em ${uiLangName()}, usando SOMENTE estes resultados. Cite as fontes pelo nome do site entre parênteses (ex.: (Wikipedia)). Seja conciso: no máximo ~6 linhas ou uma lista curta. Se os resultados não responderem com clareza, diga o que dá pra concluir. NÃO escreva nenhuma linha [[ACTION:]].`;
+    const r = await window.electronAPI?.aiChat(prompt, '', true, store.localSettings.enabled);   // stateless: não polui o histórico
+    const ok = (r?.response || '').trim();
+    // Falha da IA na síntese NÃO pode se disfarçar de resposta: vira aviso vermelho com
+    // dica (era o caso em que a pessoa via o status ciclando e nunca um resultado claro).
+    const answer = ok || (r?.error ? `Error summarizing: ${r.error}` : 'Could not summarize the results.');
+    return { answer, sources: results.map(x => ({ title: x.title, url: x.url })), isError: !ok };
+  }, [store, searchWebResults]);
 
   // ── VITRINE DE NOVIDADES (placeholder dinâmico) ────────────────────────────
   // Puxa manchetes recentes pra ciclar no placeholder da caixa. Reusa o vertical de
@@ -1787,6 +1809,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 </button>
                 <div className="menu-sep" />
                 <SearchEngineMenu />
+                <button className="menu-item" onClick={() => cycleSearchEngine()} title={t('menu.searchEngineTitle')}>
+                  <span className="menu-ic">🔎</span>
+                  <span className="menu-label">{t('menu.searchEngine')}</span>
+                  <span className="menu-switch on">{searchEngine === 'auto' ? t('menu.searchEngineAuto') : (ENGINES.find(e => e.id === searchEngine)?.label || 'Google')}</span>
+                </button>
                 <StartupMenu />
                 <DefaultBrowserMenu />
                 <button className="menu-item" onClick={() => toggleAdblock()} title={t('menu.adblockTitle')}>
@@ -2230,7 +2257,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
               // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
-              const commandIsShopping = /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
+              const commandIsShopping = namesStore(command) || /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
               const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
               const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
@@ -2551,6 +2578,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   history += `\nFAST PATH: ${initialShortcut.reason}\nRESULT: ${JSON.stringify(shortcutResult).slice(0, 500)}`;
                   usedInitialShortcut = true;
+                } else if (!quickAction && !commandHasExplicitUrl(command)) {
+                  // Sem atalho (nuvem: a IA decide): o site nomeado da lista curada vira dica do 1º passo.
+                  // Medido: "browse to linkedin…" → web_search("LinkedIn") (~25s) antes do navigate.
+                  const siteHint = namedSiteHint(command);
+                  if (siteHint) history += `\n${siteHint}`;
                 }
 
                 for (let step = 0; step < MAX_STEPS; step++) {
@@ -2898,9 +2930,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
                     agentDialogsTab(dlgWcId); }
                   history += drainDialogLog();
+                  // Buscador mostrando página de bloqueio/captcha: fica de fora por 1h (web_search e a linha SEARCH ENGINE pulam).
+                  { const eng = engineForUrl(observation.url);
+                    if (eng && SEARCH_BLOCK_RE.test(`${observation.url} ${observation.title} ${(observation.text_sample || '').slice(0, 1500)}`)) markBlocked(eng); }
                   const observedPayload = [
                     buildKnownSitesBlock(observation),
                     '',
+                    agentSearchLine(),
                     dialogBlock,
                     suggestBlock,
                     '',
@@ -4546,6 +4582,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       }
                       toolResult = { success: true, info: { closed: action.tab } };
                     } else toolResult = { success: false, error: `Tab ${action.tab} not found` };
+                  } else if (action.type === 'web_search') {
+                    // Busca por texto em vários buscadores (pula os bloqueados) — o agente recebe a lista
+                    // e decide qual link abrir, sem cair na página de captcha do buscador.
+                    onProgress({ kind: 'status', message: `🔎 Searching: "${action.query.slice(0, 80)}"` });
+                    const sr = await searchWebResults(action.query);
+                    throwIfCancelled();
+                    if (sr.results.length) {
+                      history += `\nWEB RESULTS for "${action.query}" (via ${sr.engine}) — open the best one with navigate:\n${sr.results.map((x, i) => `  ${i + 1}. ${x.title} — ${x.url}${x.snippet ? `\n     ${x.snippet.slice(0, 160)}` : ''}`).join('\n')}`;
+                      toolResult = { success: true, info: { engine: sr.engine, results: sr.results.length } };
+                    } else {
+                      toolResult = { success: false, error: sr.error || (sr.blocked ? 'All search engines are blocking this connection right now — go directly to a site you know (e.g. the vendor or booking site).' : 'No results — try other words.') };
+                    }
                   } else if (action.type === 'look_at') {
                     // Só marca a área; o recorte vai na próxima captura (decideAgentShot força a imagem).
                     if (action.ref != null) {
@@ -4734,7 +4782,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at'
+                    || action.type === 'look_at' || action.type === 'web_search'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
                   let screenshotAfter: string | undefined;
@@ -4797,7 +4845,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text' || action.type === 'dialog'
-                    || action.type === 'look_at' || action.type === 'find'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';
                   if (internalAction) {
@@ -5644,8 +5692,13 @@ const SEARCH_EXTRACTOR_JS = `(function(){
       var link = (h.querySelector && h.querySelector('a[href]')) || (h.closest && h.closest('a[href]'));
       if (!link || !link.href || !/^https?:/.test(link.href)) continue;
       var href = link.href, host='';
+      // Redirecionadores do DuckDuckGo (uddg=) e do Yahoo (/RU=…/RK=) → o link real do site.
+      try { var u0 = new URL(href); if (/duckduckgo\\.com$/.test(u0.hostname) && u0.searchParams.get('uddg')) href = u0.searchParams.get('uddg'); } catch(e){}
+      var ru = /\\/RU=([^/]+)\\/RK=/.exec(href); if (ru) { try { href = decodeURIComponent(ru[1]); } catch(e){} }
+      // Bing: bing.com/ck/a?...&u=a1<base64url do link real>.
+      try { var ub = new URL(href); var bu = ub.searchParams.get('u'); if (/(^|\\.)bing\\.com$/.test(ub.hostname) && bu && bu.indexOf('a1') === 0) { var b64 = bu.slice(2).replace(/-/g, '+').replace(/_/g, '/'); while (b64.length % 4) b64 += '='; var dec = atob(b64); if (/^https?:/.test(dec)) href = dec; } } catch(e){}
       try { host = new URL(href).hostname; } catch(e){ continue; }
-      if (/(^|\\.)google\\.|gstatic|googleusercontent|(^|\\.)bing\\.com|go\\.microsoft|microsofttranslator/.test(host)) continue;
+      if (/(^|\\.)google\\.|gstatic|googleusercontent|(^|\\.)bing\\.com|go\\.microsoft|microsofttranslator|duckduckgo\\.com|(^|\\.)yahoo\\.com$|yimg\\.com/.test(host)) continue;
       var key = href.split('#')[0];
       if (seen[key]) continue;
       // container do resultado: sobe alguns níveis e pega o maior bloco de texto != título

@@ -139,6 +139,39 @@ around a block.
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
 | `pacing.ts` | Per-site pacing between agent actions (random 1–5 s; 15–30 s for 30 min after a bot check) |
+| `search-engines.ts` | Search engine order for quick research and the agent's `web_search`, and which engines are blocked right now |
+| `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
+| `stores.ts` | "Did the request name a place to buy?" (`namesStore`), by the shape of the request, no store list |
+| `command-history.ts` | ↑/↓ in the command box recall earlier commands |
+
+### Search engines, request routing and named sites
+
+**Search engines.** Quick research and the agent's `web_search` action open the search in a hidden
+tab and read the results (title, URL, snippet). `search-engines.ts` gives the order: Google → Bing →
+DuckDuckGo → Yahoo → Perplexity, or the engine picked in ⋮ → 🔎 "Search engine for AI" first. An engine
+that shows a block page ("unusual traffic", captcha, "verify you are human"…) is skipped for an hour;
+that is noticed both by the hidden search and when the agent itself lands on such a page. The agent
+prompt gets a `SEARCH ENGINE:` line with the current order. DuckDuckGo, Yahoo and Bing redirect links
+are decoded to the real site address. The address bar keeps its own engine (⋮ → Search engine); the
+AI choice is stored under its own key (`agentSearchEngine`) and, while unset, follows the address-bar
+engine when the agent knows it. `web_search` is allowed on careful sites (`CAREFUL_ALLOWED`).
+
+**Routing.** Before the word rules send a message to the web answer, `AgentCommandBar.tsx` sends these
+to the agent: downloads (common typos included), bookings with a date (hotel, flight, rental car…),
+a named place to buy plus a shopping verb (`namesStore`: "… at/on/from <name>" or a domain, not
+times or "from the movie …"), and part lookups ("compatible charger for <model>"). The Google
+Shopping shortcut stands aside when a store is named; the Amazon and Wikipedia shortcuts follow the
+system locale instead of Brazil.
+
+**Named sites go straight to their official address.** `src/renderer/known-sites.ts` is a short,
+hand-checked map of well-known sites (LinkedIn, Indeed, GitHub, Amazon for your country, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → official URL. When a command names one ("browse to linkedin, find a
+job…"), the agent's first prompt gets a `NAMED SITE:` line with the address and the rule "navigate,
+don't web_search the name"; every prompt lists the map under `OFFICIAL SITES`; with a local AI the fast
+path opens it directly (`getInitialShortcutAction`). Names that are also common words ("indeed",
+"target") only count after "go to / on / at / abra…". A name that is not on the list is never turned
+into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
+`tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
 ### Per-site pacing
 

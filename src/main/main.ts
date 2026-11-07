@@ -1740,6 +1740,12 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     try { chatAborts.get(streamId)?.abort(); } catch {}
     return true;
   });
+  // E2E: resultados fixos pro web_search do agente (E2E_SEARCH_RESULTS = JSON [{title, snippet, url}]).
+  // Só no teste (NODE_ENV=test + E2E_MOCK_AI); no app de verdade devolve null e a busca é a normal.
+  ipcMain.handle('e2e:search-results', () => {
+    if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_SEARCH_RESULTS) return null;
+    try { const r = JSON.parse(process.env.E2E_SEARCH_RESULTS); return Array.isArray(r) ? r : null; } catch { return null; }
+  });
   ipcMain.handle('ai:chat', async (_event, message: string, pageContent?: string, stateless?: boolean, local?: boolean, tabId?: string, rawContext?: string, streamId?: string, image?: VisionImage) => {
     // Em modo IA Local, chat e pesquisa usam o MODELO LOCAL (offline, sem chave).
     // Só cai na nuvem quando o modo local está desligado. (rawContext = doc anexado.)

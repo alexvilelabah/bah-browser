@@ -138,6 +138,40 @@ Nada aqui resolve CAPTCHA nem contorna bloqueio.
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
 | `pacing.ts` | Ritmo por site entre ações do agente (aleatório 1–5 s; 15–30 s por 30 min depois de uma checagem anti-robô) |
+| `search-engines.ts` | Ordem dos buscadores da pesquisa rápida e do `web_search` do agente, e quais estão bloqueados agora |
+| `known-sites.ts` | Lista curada nome do site → endereço oficial (sem domínio chutado) |
+| `stores.ts` | "O pedido citou um lugar pra comprar?" (`namesStore`), pelo formato do pedido, sem lista de lojas |
+| `command-history.ts` | ↑/↓ na caixa de comando trazem os comandos anteriores |
+
+### Buscadores, roteamento de pedidos e sites nomeados
+
+**Buscadores.** A pesquisa rápida e a ação `web_search` do agente abrem a busca numa aba oculta e leem
+os resultados (título, endereço, trecho). `search-engines.ts` dá a ordem: Google → Bing → DuckDuckGo →
+Yahoo → Perplexity, ou primeiro o escolhido em ⋮ → 🔎 "Buscador da IA". Buscador que mostra página de
+bloqueio ("tráfego incomum", captcha, "verify you are human"…) fica de fora por uma hora; isso é
+notado tanto na busca oculta quanto quando o próprio agente cai numa página dessas. O prompt do agente
+ganha a linha `SEARCH ENGINE:` com a ordem atual. Links de redirecionamento do DuckDuckGo, do Yahoo e do
+Bing viram o endereço real do site. A barra de endereço continua com o mecanismo dela (⋮ → Mecanismo de
+pesquisa); a escolha da IA fica numa chave própria (`agentSearchEngine`) e, sem escolha, segue o
+mecanismo da barra quando o agente conhece ele. `web_search` é permitido em sites cuidadosos
+(`CAREFUL_ALLOWED`).
+
+**Roteamento.** Antes das regras de palavras mandarem a mensagem pra resposta da web, o
+`AgentCommandBar.tsx` manda estes pro agente: downloads (com os erros de digitação comuns), reservas com
+data (hotel, voo, carro…), lugar de compra citado mais verbo de compra (`namesStore`: "… at/on/from
+<nome>" ou um domínio, fora horários e "from the movie …") e busca de peça ("compatible charger for
+<modelo>"). O atalho do Google Shopping cede quando uma loja é citada; os atalhos de Amazon e Wikipedia
+seguem o locale do sistema em vez do Brasil.
+
+**Site nomeado vai direto pro endereço oficial.** `src/renderer/known-sites.ts` é uma lista curta,
+conferida à mão, de sites conhecidos (LinkedIn, Indeed, GitHub, a Amazon do seu país, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → endereço oficial. Quando o pedido cita um deles ("browse to linkedin,
+find a job…"), o primeiro prompt do agente ganha a linha `NAMED SITE:` com o endereço e a regra "navegue,
+não faça web_search do nome"; todo prompt traz a lista em `OFFICIAL SITES`; com IA local o atalho abre
+direto (`getInitialShortcutAction`). Nome que também é palavra comum ("indeed", "target") só conta depois
+de "go to / on / at / abra…". Nome fora da lista nunca vira domínio chutado (golpe de domínio parecido):
+continua indo pro `web_search`. Testes: `tests/unit/known-sites.test.ts`,
+`tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
 
 ### Ritmo por site
 

@@ -27,6 +27,7 @@ export type BrowserAction =
   | { type: 'select_option'; ref: number; option: string }
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
+  | { type: 'web_search'; query: string }
   | { type: 'back' }
   | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
   | { type: 'drag'; ref: number; to_ref: number }
@@ -111,6 +112,7 @@ export function formatAction(action: BrowserAction): string {
     case 'click_ref': return `click_ref(@${action.ref})`;
     case 'look_at': return action.ref != null ? `look_at(@${action.ref})` : `look_at(${action.x},${action.y} ${action.w}x${action.h})`;
     case 'find': return `find("${shorten(action.text, 50)}")`;
+    case 'web_search': return `web_search("${shorten(action.query, 60)}")`;
     case 'back': return 'back()';
     case 'forward': return 'forward()';
     case 'reload': return 'reload()';
