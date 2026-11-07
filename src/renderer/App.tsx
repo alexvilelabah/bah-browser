@@ -20,8 +20,9 @@ import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
 import {
   promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
   noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
-  contextWindow as contextWindowNow, setContextWindow,
+  contextWindow as contextWindowNow, setContextWindow, usageOf as contextUsageOf,
 } from './threads';
+import { meterState } from '../shared/context-meter';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import { namesStore } from './stores';
 import { namedSiteHint } from './known-sites';
@@ -2531,16 +2532,16 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               // contexto local cortar texto da página e histórico antes dela). O RECENT HISTORY só leva os
               // últimos 2500 caracteres e cortaria o começo; no histórico fica só uma linha. Vale 1 passo.
               let pendingReads: string[] = [];
-              // Tokens dos blocos de leitura do último pedido: o pedido seguinte conta com eles, mas eles saem
-              // no passo seguinte — descontados no orçamento da próxima leitura (senão a página 2 encolhe).
+              // Tokens dos blocos de leitura do último pedido: o medidor conta com eles, mas eles saem no
+              // passo seguinte — descontados no orçamento da próxima leitura (senão a página 2 encolhe).
               let shownReadTokens = 0;
-              // Janela do modelo e tokens do último pedido, das métricas da resposta (prompt_tokens /
-              // contextTokens do engine). Sem medidor de contexto ainda: janela desconhecida = 128k na
-              // nuvem, 16k no local (shared/read-paging.ts).
-              let lastPromptTokens = 0;
-              let lastContextWindow = 0;
               // Orçamento de UMA leitura (shared/read-paging.ts): cresce com o contexto livre do modelo.
-              const readBudgetNow = () => readBudget({ window: lastContextWindow, used: Math.max(0, lastPromptTokens - shownReadTokens), local: store.localSettings.enabled });
+              const readBudgetNow = () => {
+                const u = contextUsageOf(threadKey);
+                const window = u?.window || contextWindowNow();
+                const used = u ? meterState({ ...u, window }).used : 0;
+                return readBudget({ window, used: Math.max(0, used - shownReadTokens), local: store.localSettings.enabled });
+              };
               // Último bloco do extract_text: o freio anti-coleta o mostra de novo em vez de re-extrair.
               let lastExtractBlock = '';
               // extract_text com offset novo é PAGINAÇÃO, não re-extração: não conta pro freio anti-coleta.
@@ -3454,7 +3455,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     '',
                     `RECENT HISTORY:\n${history.slice(-2500)}`,
                   ].filter(s => s !== '').join('\n');
-                  shownReadTokens = pendingReads.length ? Math.ceil(pendingReads.join('\n\n').length / 4) : 0;
+                  shownReadTokens = pendingReads.length ? estimateThreadTokens(pendingReads.join('\n\n')) : 0;
                   pendingReads = [];
                   // Anti-loop: track time on same URL
                   if (observation.url === lastSeenUrl) stepsOnSameUrl++;
@@ -3678,9 +3679,6 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const inT = u.prompt_tokens ?? u.input_tokens ?? '?';
                     const outT = u.completion_tokens ?? u.output_tokens ?? '?';
                     const cached = u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
-                    // Pro orçamento de leitura (get_html / extract_text): tokens deste pedido e a janela do modelo.
-                    lastPromptTokens = Number(u.prompt_tokens ?? u.input_tokens) || 0;
-                    if (Number(m.contextTokens) > 0) lastContextWindow = Number(m.contextTokens);
                     const sec = (m.latencyMs / 1000).toFixed(1);
                     // Os tokens já estavam nesta linha; só nunca viravam dinheiro. O chip 📊 é
                     // efêmero (some em ~2s), então o acumulado vai pro cabeçalho do painel —
