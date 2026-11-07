@@ -41,6 +41,28 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 > comparar preço, notícias) são tratados no `detectQuickAction` com **zero tokens de IA**; o
 > modelo só é chamado quando precisa raciocinar de verdade.
 
+### Cursor do agente (o que a pessoa vê)
+
+O `components/AgentVisualOverlay.tsx` desenha por cima da página um cursor do agente que desliza num
+arco (`src/shared/agent-cursor-path.ts`, ~450 ms, ease-in-out; com "reduzir movimento" pula direto)
+da última posição até cada clique, e a ondinha aparece onde ele para. O overlay é
+`position:absolute; inset:0` sobre a área da página, então as posições contam do canto do próprio
+overlay; somar o deslocamento da página na janela inteira (como antes) desenhava cursor e ondinha
+uns 100 px abaixo do clique real. `tests/e2e/agent-cursor.spec.ts` compara o cursor e a ondinha
+desenhados com o clique que a página recebeu. Ele conduz o loop real do agente com `E2E_MOCK_SCRIPT`
+(lista JSON de ações que o modelo simulado devolve, uma por passo; só pra teste, exige `E2E_MOCK_AI=1`).
+
+### Eventos de mouse reais seguem o arco desenhado (o que a página vê)
+
+O `input:click` no `main.ts` manda eventos `mouseMove` reais (`webContents.sendInputEvent`) ao longo
+do `arcPath()` de `src/shared/agent-cursor-path.ts` — o mesmo arco, lado, easing e ~450 ms do cursor
+desenhado — de onde o ponteiro parou depois do último clique naquela aba (`lastPointer`) até o alvo;
+aí mede o alvo de novo e clica no centro, sem desvio aleatório. Antes a página recebia uma
+aproximação curta e reta com tremor aleatório enquanto o overlay desenhava outra coisa. Isso não
+tenta se passar por pessoa: um gravador de sessão (HotJar e afins) mostra os mesmos arcos suaves
+toda vez, reconhecíveis como o agente do Bah. O e2e do cursor confere que a página recebeu 10+
+movimentos que terminam no clique e se afastam da reta.
+
 ---
 
 ## `src/main/` — processo privilegiado
@@ -50,6 +72,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `main.ts` | Bootstrap do app, janela, sessão do `<webview>`, **todos os handlers IPC**, input real (`sendInputEvent`), adblock, downloads, safe-browsing, toggle de aceleração |
 | `ai-engine.ts` | Toda chamada de IA nuvem/local (DeepSeek / Mistral / NVIDIA NIM / Ollama) + o system prompt e a lista de ferramentas |
 | `site-locale.ts` | **Fonte única** do idioma que os sites recebem (Accept-Language / navigator.languages / --lang seguem a escolha da UI) |
+| `chrome-identity.ts` | **Fonte única** da identidade de navegador que os sites veem: User-Agent, client hints `sec-ch-ua`, `navigator.userAgentData`, ordem dos headers (aplicada pelo `main.ts` via CDP) |
 | `page-agent.ts` | Helpers de raciocínio do agente (lado nuvem) |
 | `download-manager.ts` | Gerenciador de download nativo: pausar/continuar/cancelar/fila/ETA, `open-file` guardado |
 | `media-downloader.ts` | Wrapper de `yt-dlp` / `ffmpeg` (baixar vídeo/áudio) |
@@ -59,7 +82,43 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `data-view.ts` | Renderiza tabelas/gráficos numa página local (sem CDN) |
 | `validate.ts` | Helpers de segurança de caminho (`isInsideAllowedRoot` etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
+| `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | `alert`/`confirm` das páginas: troca a caixa nativa do Electron (que trava a página; evento interno `-run-dialog`) pela caixa do Bah pra pessoa, e pela política do agente nas abas dele (`dialog` armado > alert fecha > confirm comum aceito > confirm de pagamento/exclusão pergunta à pessoa); `beforeunload` nas abas do agente sai quando ele navega. `prompt()` não existe no Electron (lança erro) |
 | `job-queue.ts` | Serializa tarefas longas |
+| `frames.ts` (+ `src/shared/frames.ts`) | Conteúdo de iframes pro agente (formulário de vaga/pagamento/reserva embutido): árvores de acessibilidade dos frames do mesmo processo (por `frameId`) e dos cross-origin (sessões CDP achatadas via `Target.setAutoAttach`), coordenadas na viewport da página; elementos aparecem com `frame="host"`. Preencher grava no nó dentro do frame (sem depender de foco); clique em frame cross-origin usa CDP `Input` na sessão do frame (`sendInputEvent` para no `<iframe>`). Frames `chrome-extension://` injetados por extensões ficam de fora |
+
+### Identidade do navegador (o que os sites veem)
+
+Os sites marcavam o Bah como robô com frequência suficiente pra tarefas do agente falharem; parte
+do motivo era uma identidade que se contradizia. Agora o Bah se apresenta como o que ele é — um
+navegador atual baseado no Chrome, no computador da própria pessoa — com todos os sinais batendo.
+Nada aqui resolve CAPTCHA nem contorna bloqueio.
+
+- **Uma fonte.** `chrome-identity.ts` monta o User-Agent, os headers `sec-ch-ua` e os valores de
+  `navigator.userAgentData` dos mesmos dados. O `main.ts` aplica tudo **dentro do motor** com o CDP
+  `Emulation.setUserAgentOverride` quando a aba nasce (e de novo se o debugger reconectar), junto com
+  os idiomas do `site-locale.ts`. A página lê os valores finais desde o primeiro script; nada é
+  remendado em JavaScript depois. Antes, o header dizia uma versão e ordem de brands do Chrome e o
+  script da página dizia outra, e a página conseguia ler o valor real antes do remendo — o tipo de
+  contradição que os detectores procuram.
+- **Versão.** `CURRENT_CHROME_MAJOR` (subir quando o Chrome estável avançar, ~a cada 4 semanas) no
+  formato reduzido `NNN.0.0.0` que o Chrome de verdade manda; o Chromium do Electron costuma ficar
+  algumas versões atrás. Se o motor for mais novo, vale a versão dele.
+- **SO e arquitetura reais.** O token de plataforma do UA e o `sec-ch-ua-platform` seguem o SO real
+  (antes dizia Windows em todo lugar, e site de driver/instalador oferecia arquivo de Windows no Mac);
+  `getHighEntropyValues()` informa a arquitetura real da CPU.
+- **Headers na ordem do Chrome;** brand hints só em https e localhost, como o Chrome.
+  `sec-ch-ua-arch`/`bitness` não vão em toda requisição (o Chrome só manda quando o site pede).
+- **`navigator.webdriver` fica com o motor.** Uma execução normal diz `false`, igual ao Chrome. O
+  remendo antigo trocava por `undefined`, valor que nenhum Chrome real tem. Execuções controladas pelo
+  Playwright (testes e2e, gravação de demo) dizem `true` — avalie a taxa de checagens anti-robô numa
+  execução normal.
+- **GPU, núcleos e memória reais.** O script da página dizia "Intel Iris 6100", 8 núcleos e 8 GB em
+  toda máquina, enquanto os workers da própria página viam os valores reais. Agora nada é sobrescrito
+  (`tests/e2e/hardware-identity.spec.ts`).
+- **Diagnóstico:** `BAH_DEBUG_IDENTITY=1` registra no `agent.log` o que cada página vê (webdriver, UA,
+  brands, idiomas). `tests/e2e/browser-identity.spec.ts` confere que header e JavaScript batem.
+- **Limite conhecido:** a versão completa é `NNN.0.0.0`, não um build real, e o motor pode estar
+  algumas versões atrás do Chrome que declara; um detector pode notar recursos novos ausentes.
 
 ---
 
@@ -78,6 +137,48 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
+| `pacing.ts` | Ritmo por site entre ações do agente (aleatório 1–5 s; 15–30 s por 30 min depois de uma checagem anti-robô) |
+
+### Ritmo por site
+
+`pacing.ts`, usado pelo loop do agente no `App.tsx`. Antes de cada ação que mexe na página (navegar,
+cliques, preencher/digitar, tecla, rolar), o agente espera até o próximo horário permitido pra aquele
+host; depois da ação o próximo intervalo é sorteado entre **1 e 5 s**, então nenhuma sequência sai
+com ritmo regular (um clique certinho a cada 2–4 s foi o que fez sites de compra tratarem o agente
+como robô). Quando uma página observada parece checagem anti-robô (`BOT_CHECK_RE`: "robot check",
+"unusual traffic", "verify you are human", "just a moment", captcha…), aquele host passa a ter
+intervalos de **15–30 s** por **30 minutos**, e o prompt avisa o modelo pra fazer só o necessário ali
+e preferir outra fonte. Outros hosts e ações internas (extrair, guardar, relatar…) não esperam; o
+Parar continua cancelando durante a espera. O ritmo só deixa o agente mais lento; não resolve nem
+pula a checagem.
+
+---
+
+## Skills de navegação (`skills/*/SKILL.md`)
+
+Receitas curtas e testadas que o agente recebe **só quando se aplicam**, em vez de um system prompt que
+só cresce (modelo local pequeno segue muito melhor um prompt curto e relevante). Formato compatível com
+o `SKILL.md` do Browse.sh / agent-browser: front matter + corpo em markdown (≤ 220 palavras).
+Campos: `name` (= nome da pasta), `description`, `states`, `tasks`, `sites` (hosts; subdomínio casa),
+`priority`. A skill entra quando **todas** as listas que ela declara casam; no máximo 3 por passo, mais
+específicas primeiro (site > tarefa > estado da página), numa seção `SKILLS FOR THIS PAGE` no estado da
+página, com uma linha `TODAY` (data ISO e o próximo fim de semana) pro modelo pequeno acertar as datas.
+
+Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggestions` (lista de
+autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
+EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
+busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
+aviso "entre para ver…"). Tipos de tarefa: `download`, `search`, `travel`, `shopping`, `parts`, `people`.
+Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
+`src/main/skills-loader.ts` (leitura + IPC `skills:list` / `skills:save` / `skills:open-folder`; relê os
+arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).
+Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
+skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
+`download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
+`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+Skills do usuário ficam em `<userData>/skills/` (menu → 🧩 Minhas skills); depois de uma tarefa que deu
+certo (3+ passos, e a mensagem final não diz que falhou) o Bah oferece rascunhar uma ("Salvar como skill" →
+revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
 
 ---
 
