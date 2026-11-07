@@ -154,6 +154,56 @@ Pacing only slows the agent down; it does not solve or skip the check.
 
 ---
 
+## Navigation skills (`skills/*/SKILL.md`)
+
+Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt
+(a small local model follows a short, relevant prompt far better). Format is compatible with the
+`SKILL.md` used by Browse.sh / agent-browser: YAML-ish front matter + a markdown body (≤ 220 words).
+
+```markdown
+---
+name: eula-accept            # must equal the folder name
+description: Accept a standard software license as part of a requested download.
+states: [eula]               # page states Bah detects (see below)
+tasks: [download]            # task types (see below)
+sites: [booking.com]         # optional: hosts (subdomains match)
+priority: 35                 # tie-breaker, higher first
+---
+1. ...steps written in terms of Bah's actions (click_ref, check, select_option, find, look_at...)
+```
+
+A skill is used when **every** list it declares matches; each step injects at most 3, most specific
+first (site > task > page state), as a `SKILLS FOR THIS PAGE` section in the page state, with a `TODAY`
+line (ISO date and the coming weekend) so small models get dates right.
+
+| Page state | Detected when (`App.tsx`, per step) |
+|---|---|
+| `dialog` | a visible modal (`role=dialog`, `aria-modal`, `<dialog open>`) covers ≥4% of the viewport |
+| `suggestions` | a visible autocomplete/listbox with options |
+| `datepicker` | `input[type=date]`, `role=grid`, calendar/datepicker widgets |
+| `eula` | controls mention EULA / license agreement / accept the terms |
+| `os-selector` | controls offer Windows **and** macOS/Linux |
+| `searchbox` | a visible search / destination / city field |
+| `tabs` | a tab strip (`role=tablist`, or ≥2 controls named like Overview / Specifications / Reviews / Accessories…) |
+| `cards` | ≥3 sibling cards of the same kind, each with a link (job/hotel/product lists) |
+| `signin` | a visible password field, a login page (title/path), or a "sign in to see/continue…" wall |
+
+Task types come from the request: `download` (download words, typos included), `search` (find/search/
+compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
+`parts` (charger/adapter/battery/compatible...), `people`. **Bundled skills are general rules, not recipes
+for named sites** — site-specific recipes belong in user/contributed skills.
+User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a successful task (3+ steps, and a
+final message that does not say it failed) Bah offers to draft one ("Save as skill" → review → Save →
+optional GitHub proposal). See [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md). Code: parser + selection
+`src/shared/skills.ts` (unit-tested in `tests/unit/skills.test.ts`, which also checks every bundled skill
+parses, has triggers and stays short), loader + `skills:list` / `skills:save` / `skills:open-folder` IPC
+`src/main/skills-loader.ts` (re-reads the files for every task; packaged via `electron-builder.yml`
+`files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
+`download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
+`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+
+---
+
 ## Build & release
 
 - **Build:** Renderer = Vite + `tsc` typecheck; Main = `tsc`. An i18n parity gate

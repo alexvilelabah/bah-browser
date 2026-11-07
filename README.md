@@ -71,6 +71,7 @@
 - **AI**: image generation **works free out of the box** (no key). Chat and the full autonomous agent need a key — **DeepSeek** (cheap, recommended) — also **Mistral** / **NVIDIA NIM** — or **Ollama** (local/offline, free)
 - **Chat per tab** — each browser tab keeps its own conversation; the AI remembers each tab separately
 - **One-shot skills**: open N videos at once, jump to the exact moment a phrase is spoken across several videos, **chat about a YouTube video using its transcript**, compare prices, fetch news — deterministic shortcuts that cost zero tokens
+- **Navigation skills** — short `SKILL.md` recipes (pop-ups, date pickers, autocomplete, EULAs, OS selectors, downloads, shopping, travel, people search, card lists, sign-in) chosen per step; save your own after a task that worked — see [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md)
 - **UI in English by default**, with **Português** and **Español** available in Settings — the AI replies in your chosen language
 - **Full adblock** (EasyList + EasyPrivacy) with automatic bypass for sites that break (YouTube, Twitch)
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
