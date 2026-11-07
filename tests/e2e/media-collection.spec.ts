@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 
-// Coleção ("todos os clipes do filme X"): o modelo acha e GUARDA a lista; o Bah pede uma confirmação,
+// Coleção ("todos os clipes do filme X"): o modelo acha e GUARDA a lista; o Bah pergunta a qualidade uma vez,
 // baixa faixa por faixa (yt-dlp falso, sem rede) e termina com o resultado de cada uma. Cada busca leva título + artista
 // (+ ano da obra quando se sabe). Com o roteador local (aqui, falso: E2E_FAKE_ROUTER_EXPAND), o pedido
 // ambíguo vira um texto preciso ("Understood as: …") que vai pro modelo grande junto do original.
@@ -45,10 +45,10 @@ async function runCollection(opts: { fakeExpand?: string }) {
     if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
     await page.getByTestId('agent-command-input').fill(COMMAND);
     await page.getByTestId('agent-command-input').press('Enter');
-    // One confirmation card with the list.
+    // One quality question with the list.
     await expect(page.getByText(/3 music videos found/).first()).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText(/Take My Breath Away/).first()).toBeVisible();
-    await page.locator('.confirm-yes').last().click();
+    await page.getByRole('button', { name: /Smaller files/ }).last().click();
     // Bah downloads all three and reports each one; the model's own "done" never runs.
     await expect(page.getByText(/Downloaded 3 of 3 music videos from top gun/).first()).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText('MODEL SHOULD NOT GET HERE')).toHaveCount(0);
@@ -61,7 +61,7 @@ async function runCollection(opts: { fakeExpand?: string }) {
   } catch (e) { await cleanup(); throw e; }
 }
 
-test('collection: the stored track list is downloaded by Bah, one by one, after one confirmation (no routing model)', async () => {
+test('collection: the stored track list is downloaded by Bah, one by one, after one quality question (no routing model)', async () => {
   test.skip(process.platform === 'win32' || !FFMPEG_DIR, 'needs ffmpeg + ffprobe and a POSIX shell');
   test.setTimeout(180_000);
   const r = await runCollection({});

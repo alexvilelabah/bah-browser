@@ -4274,14 +4274,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const subject = collectionSubject(command) || collectionSubject(understood);
                       const year = subjectYear(subject, work, command, understood);
                       const noun = audioOnly ? 'songs' : 'music videos';
-                      // Cartão simples (Baixar / Cancelar): o cartão com várias escolhas (melhor / menor ≤480p) é de outro PR.
-                      const go = await new Promise<boolean>((resolve) => {
+                      const choice = await new Promise<string>((resolve) => {
                         onProgress({ kind: 'confirm', risk: 'choice', label: noun,
-                          message: `🎬 ${collectionItems.length} ${noun} found:\n${collectionItems.map((x, i) => `${i + 1}. ${x}`).join('\n')}\n\nDownload them all? Bah downloads one at a time; follow them on the download button.`,
-                          onConfirm: () => resolve(true), onCancel: () => resolve(false) });
+                          title: `🎬 ${collectionItems.length} ${noun} found`,
+                          message: `${collectionItems.map((x, i) => `${i + 1}. ${x}`).join('\n')}\n\nDownload them all? Bah downloads one at a time; follow them on the download button.`,
+                          choices: [
+                            { label: audioOnly ? '🎵 Download all' : '🎬 Best quality (large files)', value: 'best' },
+                            ...(audioOnly ? [] : [{ label: '📼 Smaller files (≤480p)', value: 'low' }]),
+                            { label: 'Cancel', value: 'cancel' },
+                          ],
+                          onChoose: (v: string) => resolve(v), onConfirm: () => resolve('best'), onCancel: () => resolve('cancel') } as any);
                       });
                       throwIfCancelled();
-                      if (!go) {
+                      if (choice === 'cancel') {
                         const msg = `Found ${collectionItems.length} ${noun} (${collectionItems.join(', ')}) — not downloaded, as you asked.`;
                         finishRun('success', msg);
                         return { thought: msg, results: allResults, done: { type: 'done', success: true, reason: msg } as BrowserAction };
@@ -4293,7 +4298,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           throwIfCancelled();
                           const item = collectionItems[i];
                           onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
-                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, 'best');
+                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, choice === 'low' ? 'low' : 'best');
                           const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
                           rows.push(`${r?.success ? '✅' : '❌'} ${i + 1}. ${item}${r?.success ? (file ? ` — ${file}` : '') : ` — ${String(r?.error || 'failed').slice(0, 80)}`}`);
                         }
