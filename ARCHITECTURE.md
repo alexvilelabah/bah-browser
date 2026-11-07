@@ -370,6 +370,12 @@ reaches the big model — in cloud *and* local mode — and the word rules above
   Beatles"), hence the "guess" wording. Eval: `npm run router:expand-eval` prints the raw output and the
   verdict per request. E2E without a model: `E2E_FAKE_ROUTER_EXPAND` (with `E2E_MOCK_AI=1`) fakes the
   model's answer.
+- **Media collections** (`src/renderer/download-steps.ts`, skill `media-collection`): the agent stores
+  `work` ("Top Gun (1986)") and `tracks` as "Title — Artist"; Bah then downloads each one with
+  `ytsearch:` + `collectionQuery` = title + artist + work + year (`subjectYear`: the stored `work`, else
+  the request, else the expansion, ignoring what follows "not …"). The main process widens the search
+  pool (`ytsearchN`) and takes the first hit that passes the duration filter; ranking the top hits by
+  title/artist/year is not done.
 - **Packaging:** `@node-llama-cpp/*` (and node-llama-cpp `bins/`) are `asarUnpack`ed; node-llama-cpp's JS
   and the engine stay in the asar, where its ~120 dependencies resolve. CUDA packages, the llama.cpp
   source bundle and CLI templates are excluded.

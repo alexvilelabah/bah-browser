@@ -369,6 +369,12 @@ coisa chegar no modelo grande — no modo nuvem *e* no local — e as regras de 
   sai quando a pessoa edita o pedido). Os fatos do 1,5B erram com frequência (disse "Bad by The
   Beatles"), por isso o "palpite". Eval: `npm run router:expand-eval` imprime a saída crua e o veredito
   por pedido. E2E sem modelo: `E2E_FAKE_ROUTER_EXPAND` (com `E2E_MOCK_AI=1`) finge a resposta do modelo.
+- **Coleções de mídia** (`src/renderer/download-steps.ts`, skill `media-collection`): o agente guarda
+  `work` ("Top Gun (1986)") e `tracks` como "Título — Artista"; aí o Bah baixa cada uma com
+  `ytsearch:` + `collectionQuery` = título + artista + obra + ano (`subjectYear`: o `work` guardado,
+  senão o pedido, senão a expansão, ignorando o que vem depois de "not …"). O main alarga o poço da
+  busca (`ytsearchN`) e pega o primeiro resultado que passa no filtro de duração; ranquear os primeiros
+  resultados por título/artista/ano não é feito.
 - **Empacotamento:** `@node-llama-cpp/*` (e o `bins/` do node-llama-cpp) vão pro `asarUnpack`; o JS do
   node-llama-cpp e o motor ficam no asar, onde as ~120 dependências dele resolvem. Ficam de fora os
   pacotes CUDA, o código-fonte do llama.cpp e os templates do CLI.

@@ -11,7 +11,7 @@ import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
-import { commandHasFollowUp, commandWantsSeveralFiles } from './download-steps';
+import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear, isTopNCollection, collectionCount, topNListPrompt, parseTopNList } from './download-steps';
 import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
@@ -2704,6 +2704,22 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (siteHint) history += `\n${siteHint}`;
                 }
 
+                // "Os 3 maiores sucessos do X": a lista é conhecimento do modelo, não uma página. O 8B navegava
+                // rankings por 20 min e nunca guardava a lista; aqui o Bah pergunta UMA vez, direto, e o passo 0
+                // vira o store → cartão de confirmação e downloads pelo próprio Bah (bloco da COLEÇÃO no store).
+                if (isTopNCollection(command)) {
+                  const n = collectionCount(command);
+                  onProgress({ kind: 'status', message: `🎵 Picking the ${n} best-known ones…` });
+                  try {
+                    const r = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(topNListPrompt(command, n), undefined, undefined, store.localSettings.enabled)), 60000, null as any);
+                    const items = parseTopNList(String(r?.response || ''), n);
+                    if (items.length >= 2) {
+                      actionQueue.unshift({ action: { type: 'store', key: 'tracks', value: items } as BrowserAction });
+                      history += `\nCOLLECTION LIST (from the model's own knowledge, asked directly): ${items.join('; ')}`;
+                    }
+                  } catch { /* sem lista: o agente segue pelo caminho normal (skill + aviso COLLECTION) */ }
+                }
+
                 for (let step = 0; step < MAX_STEPS; step++) {
                   const stepStartedAt = Date.now();
                   throwIfCancelled();
@@ -3863,6 +3879,47 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     toolResult = { success: true, info: { steps: plan.length } };
                   } else if (action.type === 'store') {
                     memory.push({ key: action.key, value: action.value, source: action.source, ts: Date.now() });
+                    // COLEÇÃO: o modelo achou e guardou a lista de faixas → o Bah baixa uma a uma (download-steps.ts).
+                    // O modelo pequeno não sustenta esse laço sozinho (rodava em círculo e caía em captcha).
+                    const collectionItems = isMediaCollectionRequest(command) ? listItems(action.value) : [];
+                    if (collectionItems.length >= 2) {
+                      const audioOnly = collectionWantsAudioOnly(command);
+                      // Ano da obra: o que o modelo grande conferiu e guardou ("work": "Top Gun (1986)") > o pedido > a
+                      // expansão do roteador local (palpite de um modelo pequeno). "Top Gun" de 1986, não o Maverick.
+                      const work = String(memory.find(m => m.key === 'work')?.value ?? '');
+                      const subject = collectionSubject(command) || collectionSubject(understood);
+                      const year = subjectYear(subject, work, command, understood);
+                      const noun = audioOnly ? 'songs' : 'music videos';
+                      // Cartão simples (Baixar / Cancelar): o cartão com várias escolhas (melhor / menor ≤480p) é de outro PR.
+                      const go = await new Promise<boolean>((resolve) => {
+                        onProgress({ kind: 'confirm', risk: 'choice', label: noun,
+                          message: `🎬 ${collectionItems.length} ${noun} found:\n${collectionItems.map((x, i) => `${i + 1}. ${x}`).join('\n')}\n\nDownload them all? Bah downloads one at a time; follow them on the download button.`,
+                          onConfirm: () => resolve(true), onCancel: () => resolve(false) });
+                      });
+                      throwIfCancelled();
+                      if (!go) {
+                        const msg = `Found ${collectionItems.length} ${noun} (${collectionItems.join(', ')}) — not downloaded, as you asked.`;
+                        finishRun('success', msg);
+                        return { thought: msg, results: allResults, done: { type: 'done', success: true, reason: msg } as BrowserAction };
+                      }
+                      const rows: string[] = [];
+                      deadline.suspend();   // esperar downloads não é o modelo demorando
+                      try {
+                        for (let i = 0; i < collectionItems.length; i++) {
+                          throwIfCancelled();
+                          const item = collectionItems[i];
+                          onProgress({ kind: 'status', message: `⬇️ ${i + 1}/${collectionItems.length} ${item}…` });
+                          const r = await window.electronAPI?.downloadVideo?.(`ytsearch1:${collectionQuery(item, subject, audioOnly, year)}`, audioOnly, 1, 'best');
+                          const file = r?.success ? ((r.paths && r.paths[0]) || r.path || '').split(/[\\/]/).pop() : '';
+                          rows.push(`${r?.success ? '✅' : '❌'} ${i + 1}. ${item}${r?.success ? (file ? ` — ${file}` : '') : ` — ${String(r?.error || 'failed').slice(0, 80)}`}`);
+                        }
+                      } finally { deadline.resume(); }
+                      const ok = rows.filter(r => r.startsWith('✅')).length;
+                      const report = `Downloaded ${ok} of ${collectionItems.length} ${noun}${subject ? ` from ${subject}${year ? ` (${year})` : ''}` : ''}:\n\n${rows.join('\n')}`;
+                      onProgress({ kind: 'status', message: `✅ ${ok}/${collectionItems.length} ${noun} downloaded` });
+                      finishRun(ok ? 'success' : 'failed', report);
+                      return { thought: report, results: allResults, done: { type: 'done', success: ok > 0, reason: report } as BrowserAction };
+                    }
                     // LOCAL: modelo fraco GUARDA a resposta com `store` e depois divaga sem
                     // reportar. Se o pedido é "me diga/qual/explique" e o valor guardado é uma
                     // frase substancial, ENTREGA na hora. Só no local (a nuvem reporta sozinha).
@@ -4036,11 +4093,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           .map(p => p.split(/[\\/]/).pop());
                         const nFiles = files.length || 1;
                         const list = files.join(', ') || vr.title;
-                        const doneMsg = nFiles > 1
+                        const doneMsg = (nFiles > 1
                           ? (action.audio_only
                               ? `${nFiles} songs downloaded and saved to Downloads: ${list}`
                               : `${nFiles} videos downloaded and saved to Downloads: ${list}`)
-                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`;
+                          : `${action.audio_only ? 'Song downloaded and saved' : 'Video downloaded and saved'} to Downloads: ${list}`)
+                          + (vr.warning === 'source-has-no-audio' ? ' (note: the original video has no sound track)' : '');
                         // miniaturas clicáveis no feed (clique → abre a pasta Downloads)
                         const fullPaths = (vr.paths && vr.paths.length ? vr.paths : (vr.path ? [vr.path] : []));
                         if (fullPaths.length) {
@@ -4051,14 +4109,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         allResults.push({ action, result: { success: true, info: { paths: vr.paths, title: vr.title } } });
                         // Auto-finish ONLY when nothing else is queued AND this download was the whole
                         // request. A batch of named songs (actions:[download_video A, B, C]) must run them all;
-                        // "…and then X" goes on to X.
+                        // "…and then X" goes on to X; a COLLECTION ("all the music videos from the movie…") goes on
+                        // to the next track of the list it stored.
                         if (actionQueue.length === 0 && (downloadIsLastStep || !commandWantsDownload)) {
                           finishRun('success', doneMsg);
                           return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: true } as BrowserAction };
                         }
                         history += actionQueue.length
                           ? `\nDOWNLOADED: ${list}. Continue with the remaining queued downloads.`
-                          : `\nDOWNLOADED: ${list}. The request continues after this download: do the rest of it now.`;
+                          : isMediaCollectionRequest(command)
+                            ? `\nDOWNLOADED: ${list}. The request covers more than this one item: continue with the NEXT item of the list you stored (download_video with its "Artist – Title" query); finish only when every item is downloaded or reported as unavailable.`
+                            : `\nDOWNLOADED: ${list}. The request continues after this download: do the rest of it now.`;
                         toolResult = { success: true, info: { paths: vr.paths } };
                       } else {
                         // ── FALLBACK CHAIN (self-healing, Gemini): yt-dlp falhou →
@@ -5238,6 +5299,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     history += `\nHINT: A última ação (${action.type}) FALHOU: ${(toolResult.error || 'sem efeito visível').slice(0, 160)}. Analise a página ATUAL e tente uma ABORDAGEM DIFERENTE (outro elemento/ref, scroll, navegar a outra fonte, ou outra ferramenta). NÃO repita a mesma ação igual.`;
                   }
                   if (noEffectCount >= 2) history += '\nWARNING: Two consecutive actions had no visible effect. Choose a different strategy now.';
+                  // Coleção sem lista guardada: o modelo pequeno ficava navegando em rankings/Wikipedia (20 min no "top 3 do
+                  // Michael Jackson") e nunca entregava a lista pro Bah baixar. A partir do passo 4, a cada 3, cobra o store.
+                  if (step >= 4 && step % 3 === 1 && isMediaCollectionRequest(command) && !memory.some(m => m.key === 'tracks' || listItems(m.value).length >= 2)) {
+                    history += '\nCOLLECTION: stop browsing. Store the list NOW from what you already know or saw: {"action":"store","key":"tracks","value":["Title — Artist", …]} (as many entries as the user asked for). Bah then downloads each one itself.';
+                  }
 
                   // ── Recovery layer — detect blockers and inject corrective instructions ──
                   const recoveryVerdict = recovery.evaluate({
