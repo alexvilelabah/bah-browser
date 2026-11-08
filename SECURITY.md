@@ -118,7 +118,7 @@ end in a couple of hops.
 
 - **No telemetry / analytics / phone-home.**
 - **No key exfiltration.** Your API key is sent only to the provider you selected, over HTTPS.
-- **No CAPTCHA-breaking (only an opt-in, off-by-default checkbox click — see item 4 below), no rate-limit dodging, no automating what a site forbids in its
+- **No CAPTCHA-breaking (only an opt-in, off-by-default checkbox click — see item 5 below), no rate-limit dodging, no automating what a site forbids in its
   terms.** Presenting as standard Chrome is for *compatibility* (avoiding false blocks), not
   evasion — see "Safety & limits" in the README.
 - **No remote code execution.** The app never `eval`s content fetched from the web. The AI
@@ -157,7 +157,7 @@ machine). They are listed here so an auditor does not have to "discover" them:
    site), Bah hands the tab to you and resumes on its own when the page is normal again
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
    human check — a code-level guard refuses every page action on a tab classified as one — and never
-   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check".
+   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check". The opt-in switch from item 5 (OFF by default) still clicks a simple checkbox once before handing off.
 
 ---
 

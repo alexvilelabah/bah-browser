@@ -117,7 +117,7 @@ uns dois pulos.
 
 - **Sem telemetria / analytics / phone-home.**
 - **Sem exfiltração de chave.** Sua chave de API vai só pro provedor que você escolheu, por HTTPS.
-- **Não quebra CAPTCHA (só um clique opcional na caixinha, desligado por padrão — ver item 4 abaixo), não burla rate-limit, não automatiza o que o site proíbe nos termos.**
+- **Não quebra CAPTCHA (só um clique opcional na caixinha, desligado por padrão — ver item 5 abaixo), não burla rate-limit, não automatiza o que o site proíbe nos termos.**
   Se apresentar como Chrome padrão é por *compatibilidade* (evitar bloqueio falso), não evasão —
   veja "Safety & limits" no README.
 - **Sem execução de código remoto.** O app nunca dá `eval` em conteúdo da web. A IA retorna um
@@ -155,7 +155,7 @@ aqui pra o auditor não ter que "descobrir":
    nunca por site), o Bah passa a aba pra você e retoma sozinho quando a página volta ao normal
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). O agente nunca clica, segura, digita ou rola numa
    verificação humana — uma trava no código recusa toda ação na aba classificada assim — e nunca tenta parecer
-   gente. Tarefa agendada (ninguém olhando) não espera: o site fica "couldn't read — human check".
+   gente. Tarefa agendada (ninguém olhando) não espera: o site fica "couldn't read — human check". A chave opcional do item 5 (DESLIGADA por padrão) ainda clica uma vez numa caixinha simples antes de passar a aba pra você.
 
 ---
 

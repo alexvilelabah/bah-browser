@@ -8,9 +8,9 @@ import type { AddressInfo } from 'net';
 // Opt-in "Agent may click captcha checkboxes" (menu ☑️, localStorage agentCaptchaCheckbox, OFF by default).
 // Local fixture: a simple "I'm not a robot" checkbox gate (no live captcha service). Every click on the
 // checkbox is counted by the server (/cb-click).
-//  - OFF: Bah asks the person for manual help (Continue button) and never clicks the checkbox.
-//  - ON, the click passes: the checkbox gets exactly ONE click (tryCaptchaCheckbox) and the task goes on — no manual help.
-//  - ON, still blocked after the click: exactly ONE click, then the usual manual help; the person clears it.
+//  - OFF: Bah hands the page to the person (Watch/Takeover) and never clicks the checkbox.
+//  - ON, the click passes: the checkbox gets exactly ONE click (tryCaptchaCheckbox) and the task goes on — no hand-off.
+//  - ON, still blocked after the click: exactly ONE click, then the usual hand-off; the person clears it.
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
   : process.platform === 'darwin' ? path.join(ROOT, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
@@ -92,7 +92,7 @@ async function run(mode: 'pass' | 'stay', switchOn: boolean, body: (ctx: { app: 
     { type: 'navigate', url: `${T}item` },
     { type: 'done', reason: 'Read the product page: $179.00.', success: true },
   ];
-  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script) }, switchOn, ['--host-resolver-rules=MAP www.checkstore.com 127.0.0.1']);
+  const { app, page, tmp } = await launch({ E2E_MOCK_SCRIPT: JSON.stringify(script), E2E_TAKEOVER_TIMEOUT_MS: '90000' }, switchOn, ['--host-resolver-rules=MAP www.checkstore.com 127.0.0.1']);
   const prompts = () => app.evaluate(() => ((global as any).__e2ePrompts || []) as string[]);
   try {
     await page.getByTestId('agent-command-input').fill(`open ${T}item and tell me the price`);
@@ -101,48 +101,44 @@ async function run(mode: 'pass' | 'stay', switchOn: boolean, body: (ctx: { app: 
   } finally { await app.close(); s.server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
-// The person clears the gate in the tab, then presses Continue in the agent panel.
-async function personClears(app: ElectronApplication, page: Page) {
-  expect(await userClick(app, 'checkstore.com', '#solved')).toBe(true);
-  await sleep(1500);
-  await page.getByTestId('agent-manual-continue').click();
-}
-
-test('captcha checkbox switch OFF (default): asks the person, the checkbox is never clicked', async () => {
+test('captcha checkbox switch OFF (default): hand-off, the checkbox is never clicked', async () => {
   test.setTimeout(240_000);
   await run('pass', false, async ({ app, page, st }) => {
-    const cont = page.getByTestId('agent-manual-continue');
-    await expect(cont).toBeVisible({ timeout: 90_000 });
+    const card = page.getByTestId('takeover-card').last();
+    await waitFor(page, /wants to confirm a person is here/);
+    await expect(card).toHaveAttribute('data-phase', 'handoff', { timeout: 30_000 });
     await sleep(6000);   // longer than tryCaptchaCheckbox's wait: nothing clicks it
     expect(st.clicks).toBe(0);
-    await personClears(app, page);
+    expect(await userClick(app, 'checkstore.com', '#solved')).toBe(true);
     await waitFor(page, /Read the product page: \$179\.00/);
+    await expect(card).toHaveAttribute('data-outcome', 'cleared');
     expect(st.clicks).toBe(0);
   });
 });
 
-test('captcha checkbox switch ON, click passes: exactly one click, no manual help, task continues', async () => {
+test('captcha checkbox switch ON, click passes: exactly one click, no hand-off, task continues', async () => {
   test.setTimeout(240_000);
   await run('pass', true, async ({ page, st, prompts }) => {
     await waitFor(page, /Read the product page: \$179\.00/);
     expect(st.clicks).toBe(1);
-    await expect(page.getByTestId('agent-manual-continue')).toHaveCount(0);
+    await expect(page.getByTestId('takeover-card')).toHaveCount(0);
     expect((await prompts()).some(p => /CAPTCHA CHECKBOX: clicked the "I am not a robot"\/verify checkbox and the verification PASSED/.test(p))).toBe(true);
   });
 });
 
-test('captcha checkbox switch ON, still blocked: exactly one click, then the usual manual help', async () => {
+test('captcha checkbox switch ON, still blocked: exactly one click, then the usual hand-off', async () => {
   test.setTimeout(240_000);
   await run('stay', true, async ({ app, page, st }) => {
-    const cont = page.getByTestId('agent-manual-continue');
-    await expect(cont).toBeVisible({ timeout: 90_000 });
-    const feed = await page.locator('body').innerText();
+    const card = page.getByTestId('takeover-card').last();
+    const feed = await waitFor(page, /wants to confirm a person is here/);
     expect(feed).toContain('Verification checkbox did not pass on its own — asking you.');
+    await expect(card).toHaveAttribute('data-phase', 'handoff', { timeout: 30_000 });
     expect(st.clicks).toBe(1);
     await sleep(5000);
-    expect(st.clicks).toBe(1);   // once per URL: not retried while waiting for the person
-    await personClears(app, page);
+    expect(st.clicks).toBe(1);   // once per URL: not retried while handed off
+    expect(await userClick(app, 'checkstore.com', '#solved')).toBe(true);
     await waitFor(page, /Read the product page: \$179\.00/);
+    await expect(card).toHaveAttribute('data-outcome', 'cleared');
     expect(st.clicks).toBe(1);
   });
 });

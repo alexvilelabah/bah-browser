@@ -3646,6 +3646,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   setHumanCheckFlag(wv, hcVerdict);
                   if (hcVerdict) {
                     const host = paceHostOf(observation.url) || 'this site';
+                    // OPCIONAL (menu, padrão DESLIGADO): o agente clica UMA vez a caixinha "não sou
+                    // um robô" (reCAPTCHA / hCaptcha / Turnstile) com input real. Quem decide é o
+                    // serviço de captcha; desafio de imagem ou falha → pede ajuda como sempre.
+                    if (captchaCheckboxAllowed() && !captchaTriedUrls.has(observation.url)) {
+                      captchaTriedUrls.add(observation.url);
+                      const passed = await tryCaptchaCheckbox(wv, observation.interactive_elements);
+                      throwIfCancelled();
+                      if (passed) {
+                        history += '\nCAPTCHA CHECKBOX: clicked the "I am not a robot"/verify checkbox and the verification PASSED. Continue the task on this page.';
+                        onProgress({ kind: 'status', message: '☑️ Clicked the verification checkbox — passed.' });
+                        continue;
+                      }
+                      onProgress({ kind: 'status', message: '☑️ Verification checkbox did not pass on its own — asking you.' });
+                    }
                     if (!handedOffSites.has(`captcha:${host}`) && humanHandoffs < 6) {
                       humanHandoffs++;
                       onProgress({ kind: 'status', message: `🙋 ${t('takeover.statusPaused', { site: host })}` });
@@ -7339,8 +7353,7 @@ async function tryCaptchaCheckbox(wv: any, elements: Array<{ tag?: string; role?
   if (wcId == null) return false;
   const urlBefore = wv.getURL?.() || '';
   // 1) Caixinha exposta na árvore de acessibilidade (Turnstile/hCaptcha costumam aparecer assim).
-  //    A leitura pelo DOM não diz o role de um <input type=checkbox> nativo: vale o <input> com o rótulo.
-  const ax = elements.find(e => (e.role === 'checkbox' || e.tag === 'input') && /not a robot|n[aã]o sou um rob|human|verify|captcha/i.test(`${e.text || ''} ${e.aria || ''}`));
+  const ax = elements.find(e => e.role === 'checkbox' && /not a robot|n[aã]o sou um rob|human|verify|captcha/i.test(`${e.text || ''} ${e.aria || ''}`));
   let pt: { x: number; y: number } | null = ax ? { x: ax.x, y: ax.y } : null;
   // 2) Senão, o iframe do widget no DOM: a caixinha fica ~30px da borda esquerda, no meio da altura.
   if (!pt) {
