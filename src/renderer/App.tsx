@@ -5800,7 +5800,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (!w) return null;
                       for (let i = 0; i < 30; i++) { try { if (!w.isLoading()) break; } catch { break; } await sleep(300); }
                       try {
-                        // Texto da aba pelo executeJavaScript da <webview> (página que bloqueia script devolve null: "não deu pra ler").
+                        // executeJavaScript da aba: já recua pro mundo isolado em página que bloqueia script (page-eval.ts).
                         const txt = await withTimeout(w.executeJavaScript(`(document.body ? document.body.innerText : '').slice(0, 6000)`), 8000, null as any);
                         return typeof txt === 'string' ? txt : null;
                       } catch { return null; }

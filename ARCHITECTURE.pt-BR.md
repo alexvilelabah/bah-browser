@@ -544,9 +544,9 @@ pedido na ação `summarize_tabs`, mesmo com a IA no comando (senão o modelo vi
 páginas internas como `about:`, `file:` ou o player do Bah; aba dormindo aparece como dormindo e só é
 acordada se a pessoa pedir, ex.: "inclusive as dormindo"), confere a permissão **suas abas** uma vez pro
 conjunto (`tabsAccessDecision`: perguntar / sempre / nunca do menu; a aba da própria tarefa não precisa),
-lê o texto de cada aba com `<webview>.executeJavaScript` e faz uma chamada sem histórico ao modelo pra uma
-linha por aba e um resumo geral. Aba cuja página bloqueia script aparece como "não deu pra ler". O painel
-mostra um cartão com um link por aba que troca pra ela. Testes: `tests/unit/tabs-summary.test.ts`,
+lê o texto de cada aba com `<webview>.executeJavaScript` (que recua pro mundo isolado em página que proíbe
+script) e faz uma chamada sem histórico ao modelo pra uma linha por aba e um resumo geral. O painel mostra
+um cartão com um link por aba que troca pra ela. Testes: `tests/unit/tabs-summary.test.ts`,
 `tests/e2e/tabs-summary.spec.ts`.
 
 **Arquivos de texto puro no tema escuro.** O visualizador de texto do Chromium clareia o texto no tema
@@ -776,7 +776,8 @@ puras em `src/shared/memory-saver.ts` (testadas em `tests/unit/memory-saver.test
   a pessoa (cartão de confirmação/perguntas, pausa de login — o `onExecute` inteiro) e — colhido só pras abas que passam nessas regras baratas — aba tocando áudio ou vídeo (mesmo
   `<video>` mudo), com câmera/microfone/tela liberados na página atual, com notificações permitidas pro
   site, com download em andamento que saiu dela, com formulário preenchido pela metade, ou com dispositivo
-  USB/HID/serial/Bluetooth aberto. A parte da página é um script só (`PAGE_SIGNALS_SCRIPT`; formulário compara `value`/`checked`/`selected` com os padrões do HTML,
+  USB/HID/serial/Bluetooth aberto. A parte da página é um script só (`PAGE_SIGNALS_SCRIPT`, pelo recuo pro
+  mundo isolado de `page-eval.ts`; formulário compara `value`/`checked`/`selected` com os padrões do HTML,
   ignorando campos hidden e de busca); a parte do main é o `memsaver:signals`
   (`src/main/memory-saver-signals.ts`, alimentado por `site-permissions.ts` e `download-manager.ts`).
   Câmera/tela contam da liberação até a página navegar (o Electron não avisa quando a captura para).

@@ -541,9 +541,9 @@ with `switch_tab`). The executor in `App.tsx` picks the tabs (`selectTabsForSumm
 no internal pages such as `about:`, `file:` or Bah's own player; sleeping tabs are listed as asleep and
 only woken when the user asks, e.g. "including the sleeping ones"), checks the **your tabs** permission
 once for the set (`tabsAccessDecision`: ask / always / never from the menu; the task's own tab needs
-none), reads each tab's text with `<webview>.executeJavaScript` and makes one stateless model call for a
-per-tab line plus an overall summary. A tab whose page blocks scripts is listed as "could not read". The
-panel shows a card with one link per tab that switches to it. Tests: `tests/unit/tabs-summary.test.ts`,
+none), reads each tab's text with `<webview>.executeJavaScript` (which falls back to the isolated
+world on pages that forbid scripts) and makes one stateless model call for a per-tab line plus an
+overall summary. The panel shows a card with one link per tab that switches to it. Tests: `tests/unit/tabs-summary.test.ts`,
 `tests/e2e/tabs-summary.spec.ts`.
 
 **Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
@@ -794,7 +794,8 @@ in `src/shared/memory-saver.ts` (tested in `tests/unit/memory-saver.test.ts`); U
   waiting for the user (confirm/questions card, sign-in pause — the whole `onExecute`), and — gathered only for tabs that pass those cheap checks — tabs playing audio or video
   (even a muted `<video>`), with camera/microphone/screen granted on the current page, with notifications
   allowed for the site, with a download in progress that started there, with a half-filled form, or with an
-  open USB/HID/serial/Bluetooth device. The page part is one script (`PAGE_SIGNALS_SCRIPT`; forms compare `value`/`checked`/`selected` with their HTML
+  open USB/HID/serial/Bluetooth device. The page part is one script (`PAGE_SIGNALS_SCRIPT`, run through the
+  isolated-world fallback of `page-eval.ts`; forms compare `value`/`checked`/`selected` with their HTML
   defaults, ignoring hidden and search inputs); the main part is `memsaver:signals`
   (`src/main/memory-saver-signals.ts`, fed by `site-permissions.ts` and `download-manager.ts`).
   Camera/screen counts from the grant until the page navigates (Electron has no "capture stopped" event).
