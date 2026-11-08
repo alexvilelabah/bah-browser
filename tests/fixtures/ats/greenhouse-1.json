@@ -1,0 +1,249 @@
+{
+ "ats": "greenhouse",
+ "source": "https://job-boards.greenhouse.io/discord/jobs/8840756002",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "job-boards.greenhouse.io (React form). Company questions are question_<n>; demographic questions have numeric-only ids. Unnamed text inputs are react-select / intl-tel internals.",
+ "fields": [
+  {
+   "label": "First Name",
+   "type": "text",
+   "id": "first_name",
+   "autocomplete": "given-name",
+   "required": true,
+   "expect": "firstName"
+  },
+  {
+   "label": "Last Name",
+   "type": "text",
+   "id": "last_name",
+   "autocomplete": "family-name",
+   "required": true,
+   "expect": "lastName"
+  },
+  {
+   "label": "Preferred First Name",
+   "type": "text",
+   "id": "preferred_name",
+   "expect": "preferredName"
+  },
+  {
+   "label": "Email",
+   "type": "text",
+   "id": "email",
+   "autocomplete": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Country",
+   "type": "combobox",
+   "id": "country",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "country"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Phone",
+   "type": "tel",
+   "id": "phone",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Location (City)",
+   "type": "combobox",
+   "id": "candidate-location",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "resume",
+   "expect": null
+  },
+  {
+   "label": "Attach",
+   "type": "file",
+   "id": "cover_letter",
+   "expect": null
+  },
+  {
+   "label": "Why do you want to work at Discord?",
+   "type": "textarea",
+   "id": "question_38503738002",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "LinkedIn Profile",
+   "type": "text",
+   "id": "question_38503739002",
+   "expect": "linkedin"
+  },
+  {
+   "label": "Website",
+   "type": "text",
+   "id": "question_38503740002",
+   "expect": "website"
+  },
+  {
+   "label": "How did you hear about this job?",
+   "type": "text",
+   "id": "question_38503741002",
+   "expect": "howHeard"
+  },
+  {
+   "label": "Are you legally authorized to work in the United States for our Company?",
+   "type": "combobox",
+   "id": "question_38503742002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "workAuthorized"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Are you currently located in the US?",
+   "type": "combobox",
+   "id": "question_38503743002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Are you currently based in or willing to relocate to the Bay Area for this position?",
+   "type": "combobox",
+   "id": "question_38503744002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "willingToRelocate"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Tell us about a time a metric or result moved in a way you didn't expect - in a job, internship, research project, or pe",
+   "type": "textarea",
+   "id": "question_38521719002",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Gender",
+   "type": "combobox",
+   "id": "4033064002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "voluntary"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Race and Ethnicity",
+   "type": "combobox",
+   "id": "4033065002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "voluntary"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Veteran Status",
+   "type": "combobox",
+   "id": "4033066002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "voluntary"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Disability Status",
+   "type": "combobox",
+   "id": "4033067002",
+   "autocomplete": "off",
+   "required": true,
+   "expect": "voluntary"
+  },
+  {
+   "label": "Select...",
+   "type": "text",
+   "required": true,
+   "expect": "skip"
+  },
+  {
+   "label": "Gender Identity (optional)",
+   "type": "combobox",
+   "id": "4033068002",
+   "autocomplete": "off",
+   "expect": "voluntary"
+  },
+  {
+   "label": "Race or Ethnicity (optional)",
+   "type": "combobox",
+   "id": "4033069002",
+   "autocomplete": "off",
+   "expect": "voluntary"
+  },
+  {
+   "label": "I consider myself a member of the LGBTQ+ community. (optional)",
+   "type": "combobox",
+   "id": "4033070002",
+   "autocomplete": "off",
+   "expect": null
+  },
+  {
+   "label": "By checking this box, I consent to Discord collecting, storing, and processing my responses to the demographic data surv",
+   "type": "checkbox",
+   "name": "gdpr_demographic_data_consent_given",
+   "id": "gdpr_demographic_data_consent_given_1",
+   "required": true,
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  }
+ ]
+}

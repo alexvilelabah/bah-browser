@@ -18,6 +18,7 @@
 // Google numa janela à parte etc.) NÃO passam pelo proxy da extensão. O motor de downloads de
 // várias conexões devolve o download pro Chromium quando a aba usa proxy; o botão de baixar
 // vídeo (yt-dlp) e o torrent avisam antes de sair direto (main.ts).
+import { getBaseProxy, getBaseWebRtc, setExtensionControl, onBaseNetworkChange } from './proxy-base';
 import { app, nativeImage, Notification, webContents, type Session, type WebContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
@@ -70,9 +71,8 @@ export interface ExtensionApis {
 
 export const NOT_MINE = Symbol('not-mine');
 
-// O Electron não tem "getProxy": não dá pra LER o proxy de antes. O Bah nunca chama setProxy na
-// sessão das abas fora daqui, então o "de antes" é o padrão da sessão — o proxy do sistema.
-const BASE_PROXY: Electron.ProxyConfig = { mode: 'system' };
+// O Electron não tem "getProxy": não dá pra LER o proxy de antes. O "de antes" é o que a pessoa
+// configurou no Bah (⋮ → Rede e proxy; padrão: o do sistema) — vem de proxy-base.ts.
 const AUTH_TIMEOUT_MS = 15000;
 const AUTH_RETRY_WINDOW_MS = 60000;
 const AUTH_MAX_ATTEMPTS = 5;
@@ -169,8 +169,8 @@ export function setupExtensionApis(deps: ApiDeps): ExtensionApis {
   let appliedProxy = '';
   const applyProxy = (): Promise<boolean> => {
     const c = controllers[R.PROXY_SETTING];
-    let cfg: Electron.ProxyConfig = BASE_PROXY;
-    if (c) { try { cfg = R.translateProxyConfig(c.value).electron; } catch { cfg = BASE_PROXY; } }
+    let cfg: Electron.ProxyConfig = getBaseProxy();
+    if (c) { try { cfg = R.translateProxyConfig(c.value).electron; } catch { cfg = getBaseProxy(); } }
     const want = JSON.stringify(cfg);
     const who = c ? (deps.getExt(c.extId)?.name || c.extId) : '';
     proxyChain = proxyChain.then(async () => {
@@ -196,7 +196,7 @@ export function setupExtensionApis(deps: ApiDeps): ExtensionApis {
   // WebRTC: vale por webContents (não por sessão) — toda aba e página da sessão, agora e as novas.
   let webrtcPolicy: R.WebRtcPolicy = 'default';
   const webrtcTo = (wc: WebContents) => {
-    try { if (!wc.isDestroyed() && wc.session === ses) wc.setWebRTCIPHandlingPolicy(webrtcPolicy); } catch {}
+    try { if (!wc.isDestroyed() && wc.session === ses) wc.setWebRTCIPHandlingPolicy(webrtcPolicy === 'default' ? getBaseWebRtc() : webrtcPolicy); } catch {}
   };
   const applyWebRtc = () => {
     const c = controllers[R.WEBRTC_SETTING];
@@ -278,6 +278,10 @@ export function setupExtensionApis(deps: ApiDeps): ExtensionApis {
   // deixa a primeira aba sair sem ela. Se a extensão não carregar, startupLoaded() pausa.
   if (controllers[R.PROXY_SETTING]) void applyProxy();
   applyWebRtc();
+  // Proxy do Bah: a ponte sabe quando uma extensão está no controle desta sessão, e a mudança no Bah
+  // reaplica (sem extensão no controle, o proxy das abas passa a ser o novo do Bah).
+  setExtensionControl(s => s === ses && !!controllers[R.PROXY_SETTING], s => s === ses && !!controllers[R.WEBRTC_SETTING]);
+  onBaseNetworkChange(() => { if (!controllers[R.PROXY_SETTING]) void applyProxy(); });
 
   const settingKey = (ext: ApiExt, raw: unknown): string => {
     const info = R.settingInfo(raw);

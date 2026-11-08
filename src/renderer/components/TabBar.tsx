@@ -19,6 +19,17 @@ import { closeOthersIds, closeRightIds, dragShift, dragTarget, siteKey, stripTab
 import { isIncognitoBlank } from '../../shared/incognito';
 import { letterTile } from '../../shared/favicons';
 import IncognitoIcon from './IncognitoIcon';
+import { chipStarts, SESSION_COLORS, SESSION_COLOR_HEX, type AgentSession, type SessionColor } from '../../shared/agent-sessions';
+import { IS_MAC } from '../platform';
+
+// Sessões do agente (chip colorido + nome antes das abas da sessão). Quem executa é o App (store).
+export type SessionCommand =
+  | { kind: 'rename'; id: string; name: string }
+  | { kind: 'color'; id: string; color: SessionColor }
+  | { kind: 'join'; tabId: string; sessionId: string }
+  | { kind: 'leave'; tabId: string }
+  | { kind: 'new'; tabId: string }
+  | { kind: 'new-tab'; sessionId: string };
 
 // Itens do menu do botão direito (quem executa é o App: webview, som do site, store).
 export type TabCommand =
@@ -35,9 +46,12 @@ interface Props {
   onCommand: (cmd: TabCommand, id: string) => void;   // item do menu do botão direito
   isMuted: (url: string, incognito?: boolean) => boolean;   // site com "Desativar som do site"
   canReopen: () => boolean;                           // tem aba fechada pro Ctrl+Shift+T?
+  sessions?: AgentSession[];                          // sessões do agente abertas (chips)
+  onSession?: (cmd: SessionCommand) => void;
+  keptReason?: (id: string) => string | undefined;    // Economia de memória: "Mantida ativa: …" no balão
 }
 
-const MAC = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '');
+const MAC = IS_MAC;
 const KEY_RELOAD = MAC ? '⌘R' : 'Ctrl+R';
 const KEY_CLOSE = MAC ? '⌘W' : 'Ctrl+W';
 const KEY_REOPEN = MAC ? '⇧⌘T' : 'Ctrl+Shift+T';
@@ -59,7 +73,7 @@ interface Press {
 // O que o React desenha durante o arrasto.
 interface DragView { id: string; from: number; to: number; dx: number; width: number; key: string }
 
-export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onMove, onCommand, isMuted, canReopen }: Props) {
+export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onMove, onCommand, isMuted, canReopen, sessions = [], onSession, keptReason }: Props) {
   const visible = stripTabs(tabs);
   const stripKey = visible.map(x => x.id).join(',');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -278,6 +292,55 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
     el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8))}px`;
   }, [menu]);
 
+  // ── Chip da sessão: clique abre nome, cor, aba nova na sessão, tirar a aba ativa dela ──
+  const sessionById = new Map(sessions.map(x => [x.id, x]));
+  const starts = chipStarts(visible);
+  const [chipMenu, setChipMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [chipName, setChipName] = useState('');
+  const chipSession = chipMenu ? sessionById.get(chipMenu.id) : undefined;
+  useEffect(() => { if (chipMenu && !chipSession) setChipMenu(null); }, [chipMenu, chipSession]);
+  useEffect(() => {
+    if (!chipMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setChipMenu(null); } };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', () => setChipMenu(null), { once: true });
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [chipMenu]);
+  const commitName = () => {
+    if (chipMenu && chipName.trim() && chipName.trim() !== chipSession?.name) onSession?.({ kind: 'rename', id: chipMenu.id, name: chipName });
+  };
+  const renderChipMenu = (s: AgentSession) => {
+    const active = visible.find(x => x.id === activeTabId);
+    const members = visible.filter(x => x.sessionId === s.id).length;
+    return (
+      <>
+        <div className="menu-overlay tab-menu-overlay" onMouseDown={() => { commitName(); setChipMenu(null); }} onContextMenu={e => { e.preventDefault(); setChipMenu(null); }} />
+        <div className="bm-pop bm-ctx tab-ctx session-menu" role="menu" style={{ left: Math.min(chipMenu!.x, window.innerWidth - 248), top: chipMenu!.y }}>
+          <input className="session-name-input" value={chipName} maxLength={24} autoFocus aria-label={t('session.name')}
+            onChange={e => setChipName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { commitName(); setChipMenu(null); } }} />
+          <div className="session-swatches" role="radiogroup" aria-label={t('session.color')}>
+            {SESSION_COLORS.map(c => (
+              <button key={c} role="radio" aria-checked={s.color === c} aria-label={c} title={c}
+                className={`session-swatch${s.color === c ? ' on' : ''}`} style={{ background: SESSION_COLOR_HEX[c] }}
+                onClick={() => onSession?.({ kind: 'color', id: s.id, color: c })} />
+            ))}
+          </div>
+          <div className="menu-sep" />
+          <button className="bm-pop-item" role="menuitem" onClick={() => { commitName(); setChipMenu(null); onSession?.({ kind: 'new-tab', sessionId: s.id }); }}>
+            <span className="bm-pop-label">{t('session.newTab')}</span>
+          </button>
+          {active?.sessionId === s.id && members > 1 && (
+            <button className="bm-pop-item" role="menuitem" onClick={() => { commitName(); setChipMenu(null); onSession?.({ kind: 'leave', tabId: active.id }); }}>
+              <span className="bm-pop-label">{t('session.removeTab')}</span>
+            </button>
+          )}
+          <div className="session-menu-hint">{t('session.hint')}</div>
+        </div>
+      </>
+    );
+  };
+
   const run = (cmd: TabCommand) => {
     if (!menu) return;
     const id = menu.id;
@@ -310,6 +373,25 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
           {item(t('tab.ctx.close'), 'close', { kbd: tab.id === activeTabId ? KEY_CLOSE : undefined })}
           {item(t('tab.ctx.closeOthers'), 'close-others', { disabled: !closeOthersIds(tabs, tab.id).length })}
           {item(t('tab.ctx.closeRight'), 'close-right', { disabled: !closeRightIds(tabs, tab.id).length })}
+          {onSession && !tab.incognito && (
+            <>
+              <div className="menu-sep" />
+              {sessions.filter(x => x.id !== tab.sessionId).map(x => (
+                <button key={x.id} className="bm-pop-item" role="menuitem" onClick={() => { setMenu(null); onSession({ kind: 'join', tabId: tab.id, sessionId: x.id }); }}>
+                  <span className="session-dot" style={{ background: SESSION_COLOR_HEX[x.color] }} />
+                  <span className="bm-pop-label">{t('session.addTo').replace('{name}', x.name)}</span>
+                </button>
+              ))}
+              <button className="bm-pop-item" role="menuitem" onClick={() => { setMenu(null); onSession({ kind: 'new', tabId: tab.id }); }}>
+                <span className="bm-pop-label">{t('session.new')}</span>
+              </button>
+              {tab.sessionId && (
+                <button className="bm-pop-item" role="menuitem" onClick={() => { setMenu(null); onSession({ kind: 'leave', tabId: tab.id }); }}>
+                  <span className="bm-pop-label">{t('session.leave')}</span>
+                </button>
+              )}
+            </>
+          )}
           <div className="menu-sep" />
           {item(t('tab.ctx.reopen'), 'reopen', { kbd: KEY_REOPEN, disabled: !canReopen() })}
         </div>
@@ -334,13 +416,28 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
           // Fixada não mostra o nome: vai no balão do mouse.
           const tip0 = tab.pinned ? name : undefined;
           // Anônima: o balão diz isso (a em branco já se chama "Nova aba anônima").
-          const tip = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
+          const tip1 = tab.incognito && !isIncognitoBlank(tab.url) ? `${tip0 || name}\n${t('incog.tabTip')}` : tab.incognito ? (tip0 || name) : tip0;
+          const kept = keptReason?.(tab.id);
+          const tip = kept ? `${tip1 || name}\n${kept}` : tip1;
+          const ses = tab.sessionId ? sessionById.get(tab.sessionId) : undefined;
+          const chip = ses && starts.has(tab.id) ? (
+            <button
+              key={`chip-${tab.id}`}
+              className="session-chip"
+              style={{ background: SESSION_COLOR_HEX[ses.color] }}
+              title={t('session.chipTip').replace('{name}', ses.name)}
+              onPointerDown={e => e.stopPropagation()}
+              onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setChipName(ses.name); setChipMenu({ id: ses.id, x: r.left, y: r.bottom + 4 }); }}
+            >{ses.name}</button>
+          ) : null;
           return (
+            <React.Fragment key={tab.id}>
+            {chip}
             <div
               key={tab.id}
               ref={el => { if (el) tabEls.current.set(tab.id, el); else tabEls.current.delete(tab.id); }}
-              className={`tab ${tab.id === activeTabId ? 'active' : ''}${asleep ? ' discarded' : ''}${tab.pinned ? ' pinned' : ''}${tab.incognito ? ' incognito' : ''}${drag?.id === tab.id ? ' dragging' : ''}`}
-              style={style}
+              className={`tab ${tab.id === activeTabId ? 'active' : ''}${asleep ? ' discarded' : ''}${tab.pinned ? ' pinned' : ''}${tab.incognito ? ' incognito' : ''}${drag?.id === tab.id ? ' dragging' : ''}${ses ? ' in-session' : ''}`}
+              style={ses ? { ...(style || {}), ['--session-color' as any]: SESSION_COLOR_HEX[ses.color] } : style}
               title={tip}
               onPointerDown={e => onTabPointerDown(e, tab)}
               onLostPointerCapture={() => { if (press.current?.id === tab.id && press.current.started) finishRef.current(false); }}
@@ -355,7 +452,7 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
                 : tab.incognito ? <IncognitoIcon className="tab-incog" />
                 : <TabFavicon url={tab.url} title={tab.title}
                     pageIcon={tab.faviconOrigin && tab.favicon && sameOrigin(tab.url, tab.faviconOrigin) ? tab.favicon : ''} />}
-              {!tab.pinned && <span className="tab-title">{name}</span>}
+              {!tab.pinned && <span className="tab-title">{tab.agentTask ? "🤖 " : ""}{name}</span>}
               {tab.audible && (isMuted(tab.url, tab.incognito) ? <TabMutedIcon /> : <TabAudioIcon />)}
               {!tab.pinned && (
                 <button
@@ -369,6 +466,7 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
                 </button>
               )}
             </div>
+            </React.Fragment>
           );
         })}
         {/* "+" logo depois da última aba (não no canto direito) */}
@@ -377,6 +475,7 @@ export default function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, on
       {/* Durante o arrasto: cobre a janela pra página (webview) não engolir o movimento do mouse. */}
       {drag && createPortal(<div className="tab-drag-overlay" />, document.body)}
       {menu && menuTab && createPortal(renderMenu(menuTab), document.body)}
+      {chipMenu && chipSession && createPortal(renderChipMenu(chipSession), document.body)}
     </div>
   );
 }

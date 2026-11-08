@@ -6,13 +6,15 @@ import type { AddressInfo } from 'net';
 async function launch() {
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     // E2E_MOCK_AI only intercepts the AGENT (ai:action); chat + local IPCs run for real.
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // O shell pode recarregar uma vez logo após abrir; um evaluate nesse meio-tempo falha com 'context destroyed'.
+  await page.waitForTimeout(1500);
   return { app, page };
 }
 

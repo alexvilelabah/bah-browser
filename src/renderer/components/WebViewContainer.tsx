@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { installIsolatedFallback } from '../page-eval';
 import { Tab } from '../store';
 import { webviewOrder } from '../../shared/tab-strip';
 import { partitionFor } from '../../shared/incognito';
@@ -26,6 +27,8 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
       const tabId = wv.dataset.tabId;
       if (!tabId || boundIds.current.has(tabId)) return;
 
+      // Página que proíbe scripts (CSP sandbox): os leitores do Bah caem pro mundo isolado.
+      installIsolatedFallback(wv);
       webviewRefs.current.set(tabId, wv);
       boundIds.current.add(tabId);
 
@@ -52,6 +55,11 @@ export default function WebViewContainer({ tabs, activeTabId, webviewRefs, onUpd
         }],
         ['did-navigate', (e: any) => onUpdateTab(tabId, { url: e.url, canGoBack: wv.canGoBack(), canGoForward: wv.canGoForward() })],
         ['did-navigate-in-page', (e: any) => onUpdateTab(tabId, { url: e.url })],
+        // A página do <webview> é TRANSPARENTE onde ela não pinta fundo: aparece o fundo deste
+        // elemento. Escuro só até a 1ª página ficar pronta (sem flash branco); depois BRANCO, o
+        // padrão de todo navegador — senão seção sem fundo (ex.: home do LinkedIn) ficava escura
+        // com texto escuro por cima.
+        ['dom-ready', () => { wv.style.background = '#ffffff'; }],
         // NÃO existe listener de 'new-window' aqui: o evento foi removido da <webview> no
         // Electron 22 e este projeto roda o 42 (a interface WebviewTag em electron.d.ts
         // não o declara). Quem decide popup é o setWindowOpenHandler no main, em
