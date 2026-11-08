@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { ROUTER_MODEL, type RouterStatus, type RouteContext } from '../shared/router-routes';
 import { checkExpansion, shouldExpandRequest } from '../shared/request-expansion';
 import { downloadModel } from './router/model-download';
+import { bindingTestFileToFork } from './router/binding-test-path';
 
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
@@ -18,7 +19,6 @@ interface Deps {
 const CLASSIFY_TIMEOUT_MS = 4000;
 // Expansão do pedido: gera ~40 tokens (Metal ≈ 1 s, CPU mais). Passou disso → vale o texto original.
 const EXPAND_TIMEOUT_MS = 3500;
-const BINDING_TEST_FILE = path.join('node_modules', 'node-llama-cpp', 'dist', 'bindings', 'utils', 'testBindingBinary.js');
 
 export function setupRouterManager(deps: Deps) {
   const modelPath = path.join(deps.modelsDir, ROUTER_MODEL.file);
@@ -103,8 +103,9 @@ export function setupRouterManager(deps: Deps) {
         // um utilityProcess não há como criar um (o fuse RunAsNode está desligado). O motor pede
         // aqui e o main abre o utilityProcess do teste — só o arquivo de teste do próprio pacote.
         case 'bt-fork': {
-          const file = path.resolve(String(m.file || ''));
-          if (!file.endsWith(path.sep + BINDING_TEST_FILE) || !file.startsWith(path.resolve(app.getAppPath()))) {
+          // Caminho real dos dois lados (node_modules pode ser link simbólico): binding-test-path.ts.
+          const file = bindingTestFileToFork(String(m.file || ''), app.getAppPath());
+          if (!file) {
             c.postMessage({ t: 'bt-exit', tid: m.tid, code: -1 });
             break;
           }
