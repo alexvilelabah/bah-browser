@@ -103,7 +103,12 @@ export interface ToolResult {
 export function formatAction(action: BrowserAction): string {
   switch (action.type) {
     case 'plan': return `plan(${action.steps?.length ?? 0} steps)`;
-    case 'store': return `store(${action.key}=${JSON.stringify(action.value).slice(0, 60)}${action.source ? ` from ${action.source}` : ''})`;
+    case 'store': {
+      // Lista: "tracks: 3 — Thriller — Michael Jackson; Beat It — …" (antes o JSON cortado no meio de uma string).
+      const v = action.value;
+      const shown = Array.isArray(v) ? `${v.length} — ${v.map(String).join('; ')}` : (typeof v === 'string' ? v : JSON.stringify(v));
+      return `store(${action.key}: ${shown.length > 90 ? shown.slice(0, 89) + '…' : shown}${action.source ? ` from ${action.source}` : ''})`;
+    }
     case 'extract_text': return `extract_text(${action.offset ? `from ${action.offset}` : ''})`;
     case 'get_html': return `get_html(${action.selector ? `"${shorten(action.selector, 60)}"` : 'body'}${action.offset ? `, from ${action.offset}` : ''})`;
     case 'extract_images': return `extract_images(${action.min_width ? `min ${action.min_width}px` : ''})`;
