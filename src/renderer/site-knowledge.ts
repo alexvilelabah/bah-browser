@@ -1,6 +1,18 @@
 import type { ObservedState } from './page-executor';
 import { googleLocaleParams } from './i18n';
 import { aiMayRecord } from './incognito';
+import { namesStore } from './stores';
+import { userAmazonDomain, namedOfficialSite, officialSitesPromptBlock } from './known-sites';
+import { wantsTabsSummary, wantsWakeTabs } from './tabs-summary';
+
+// Amazon do país da pessoa: mora em known-sites.ts (puro, testável); reexportado aqui.
+export { userAmazonDomain };
+function userLocale(): string {
+  try { return (typeof navigator !== 'undefined' && (navigator.languages?.[0] || navigator.language)) || 'en-US'; } catch { return 'en-US'; }
+}
+export function userWikiLang(locale = userLocale()): string {
+  return (locale.split(/[-_]/)[0] || 'en').toLowerCase();
+}
 
 export interface SiteShortcut {
   id: string;
@@ -103,9 +115,9 @@ export const SITE_SHORTCUTS: SiteShortcut[] = [
   },
   { id: 'instagram', names: ['instagram'], url: 'https://www.instagram.com', notes: ['May require login.'] },
   { id: 'x', names: ['x', 'twitter'], url: 'https://x.com', searchUrl: 'https://x.com/search?q={query}', notes: ['Use search URL for public searches.'] },
-  { id: 'wikipedia', names: ['wikipedia'], url: 'https://www.wikipedia.org', searchUrl: 'https://pt.wikipedia.org/w/index.php?search={query}', notes: ['Good fallback for factual research.'] },
+  { id: 'wikipedia', names: ['wikipedia'], url: 'https://www.wikipedia.org', searchUrl: `https://${userWikiLang()}.wikipedia.org/w/index.php?search={query}`, notes: ['Good fallback for factual research.'] },
   { id: 'github', names: ['github'], url: 'https://github.com', searchUrl: 'https://github.com/search?q={query}', notes: ['Use for code, repos and issues.'] },
-  { id: 'amazon', names: ['amazon'], url: 'https://www.amazon.com.br', searchUrl: 'https://www.amazon.com.br/s?k={query}', notes: ['Use for product searches.'] },
+  { id: 'amazon', names: ['amazon'], url: `https://www.${userAmazonDomain()}`, searchUrl: `https://www.${userAmazonDomain()}/s?k={query}`, notes: ['Use for product searches.'] },
   { id: 'mercadolivre', names: ['mercado livre', 'mercadolivre'], url: 'https://www.mercadolivre.com.br', searchUrl: 'https://lista.mercadolivre.com.br/{query}', notes: ['Use for Brazilian product searches.'] },
   { id: 'reddit', names: ['reddit'], url: 'https://www.reddit.com', searchUrl: 'https://www.reddit.com/search/?q={query}', notes: ['The home page may show a challenge. Prefer direct search URLs for safe exploration.'] },
   { id: 'gmail', names: ['gmail'], url: 'https://mail.google.com', notes: ['Requires Google login/cookies.'] },
@@ -156,8 +168,10 @@ export function buildKnownSitesBlock(observation?: ObservedState): string {
     'KNOWN SITE SHORTCUTS:',
     shortcuts,
     '',
+    officialSitesPromptBlock(),
+    '',
     'FAST PATH RULES:',
-    '- If the user names a known site, prefer navigate/new_tab directly to that site or its searchUrl.',
+    '- If the user names a known site (shortcuts or OFFICIAL SITES above), navigate/new_tab directly to that site or its searchUrl — do not web_search its name. Only a site that is NOT listed and whose address you do not know needs web_search; never guess a domain.',
     '- For safe exploration/search tasks, prefer each known site searchUrl over manually filling search fields.',
     '- For YouTube video tasks, search YouTube directly, open a likely result, then use the Like/Gostei toggle once.',
     '- For YouTube comment tasks, after opening a video, scroll to the comments area, click/fill the comment box, then click the visible "Comentar"/"Comment" submit button. Do not navigate away after typing a comment.',
@@ -205,7 +219,12 @@ export function getInitialShortcutAction(command: string): { action: { type: 'na
   if (commandHasExplicitUrl(command)) return null;
 
   const site = findShortcutForCommand(command) ?? inferShortcutFromIntent(command);
-  if (!site) return null;
+  if (!site) {
+    // Site da lista curada (LinkedIn, Indeed, Walmart…) sem atalho de busca: abre a home oficial
+    // em vez de deixar o agente procurar o nome. Nome fora da lista segue pro agente (busca).
+    const named = namedOfficialSite(command);
+    return named ? { action: { type: 'navigate', url: named.url }, reason: `fast path: open ${named.id}` } : null;
+  }
 
   const query = extractSearchQuery(command, site);
   if (site.id === 'google' && query && wantsGoogleImages(command)) {
@@ -248,7 +267,9 @@ export type QuickAction =
   | { type: 'find_file'; query: string; filetype: string }
   // Playlist determinística: com songs[] (usuário listou) OU artist+count (o executor
   // resolve as top-N faixas no YouTube via resolveManyVideos — sem depender do modelo).
-  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean };
+  | { type: 'create_playlist'; songs: string[]; artist?: string; count?: number; name?: string; private?: boolean }
+  // "Resuma minhas abas abertas" (tabs-summary.ts): lê as abas da pessoa com permissão, sem acordar as dormindo.
+  | { type: 'summarize_tabs'; wake?: boolean };
 
 const NUM_WORDS: Record<string, number> = {
   dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, doze: 12, quinze: 15, vinte: 20, trinta: 30, cinquenta: 50, cem: 100,
@@ -470,6 +491,7 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const prompt = stripAgentMeta(command).trim() || command.trim();
     if (prompt) return { type: 'generate_image', prompt, count: 1 };
   }
+  if (wantsTabsSummary(command)) return { type: 'summarize_tabs', wake: wantsWakeTabs(command) };
   // URL/site explícito no comando → cede pro agente NAVEGAR pra lá (não sequestrar pra
   // um atalho de busca tipo google_news). Conserta "vá no site X e busque Y" virar uma
   // query-lixo no Google News. Baixar por URL não passa por aqui (a quick action de
@@ -657,12 +679,14 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     // video" têm palavra de mídia própria (música/vídeo) sem NENHUMA palavra de notícia —
     // aí 'latest' descreve a MÍDIA, não pede manchete, e o pedido de verdade é das famílias
     // de download/vídeo mais abaixo. "latest version"/"meu download" (status, não notícia)
-    // também cedem.
+    // também cedem. Idem pra pedido de ARQUIVO ("find the latest ubuntu iso and download
+    // it"): 'latest' descreve o arquivo; quem resolve é o agente, não as manchetes.
     const hasNewsWord = /\b(noticias?|not[ií]cia|manchetes?|headlines?|news)\b/.test(n);
     const stealsFromMediaFamily = !hasNewsWord && /\b(song|songs|video|videos|music|musica|musicas|track|tracks|mp3|mp4|clipe|clip)\b/.test(n);
     const isStatusOrVersionQ = !hasNewsWord && /\b(version|meu\s+download|my\s+download|esse\s+download|this\s+download)\b/.test(n);
+    const wantsAFile = !hasNewsWord && /\b(download\w*|baix\w+|descarg\w+|iso|installer|instalador|release|file|files|arquivo|arquivos|archivo|archivos|pdf|zip)\b/.test(n);
     if (/\b(noticias?|not[ií]cia|manchetes?|ultimas?\s+not|o\s+que\s+(?:est[aá]|ta)\s+acontecendo|aconteceu\s+(?:hoje|com)|novidades?\s+(?:sobre|de|do|da)|news|headlines?|latest|what'?s\s+happening|what\s+happened)\b/.test(n)
-        && !REFERS_TO_OPEN_ITEM.test(n) && !stealsFromMediaFamily && !isStatusOrVersionQ) {
+        && !REFERS_TO_OPEN_ITEM.test(n) && !stealsFromMediaFamily && !isStatusOrVersionQ && !wantsAFile) {
       const STRIP = new Set(('noticia noticias notícia notícias manchete manchetes ultima ultimas última últimas ' +
         'me da de do da dos das sobre acerca o a os as um uma sobre quero ver mostra mostrar lista quais qual ' +
         'que esta ta acontecendo aconteceu hoje agora novidade novidades por favor recentes recente do dia ' +
@@ -691,7 +715,11 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     // preço de produto. E "essa página"/"this"/"aberto" → o preço já está NA TELA; buscar
     // de novo no Shopping é o oposto do pedido — cede pro agente, que lê o preço exibido.
     const isDocOrOpenRef = /\b(pdf|documento|anexad\w*|attach\w*|adjunt\w*)\b/.test(n) || REFERS_TO_OPEN_ITEM.test(n);
-    if (isPrice && !isQuote && !isDocOrOpenRef) {
+    // Loja NOMEADA ("na amazon", "on ebay") → a pessoa quer aquela loja: cede pro agente (que
+    // tem a skill da loja), em vez do atalho de Google Shopping — que nem é a loja pedida.
+    // Viagem (hotel/hospedagem/voo) não é produto do Shopping: o agente faz a busca no site de reserva.
+    const isTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|inn|ski trip|flights?|airfare|rental cars?|car rentals?|hot[eé]is|hospedage\w*|pousadas?|voos?|passage\w*|hoteles|vuelos|alojamiento)\b/.test(n);
+    if (isPrice && !isQuote && !isDocOrOpenRef && !namesStore(command) && !isTravel) {
       const STRIP = new Set(('procur\\w preco precos preço preços quanto custa ta esta é mais barato barata baratos baratas ' +
         'onde comprar compro acho compare comparar comparacao de do da dos das o a os as um uma menor valor por favor me ' +
         'quero queria achar encontrar ver mostra mostrar lista qual quais melhor ' +
@@ -775,13 +803,21 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     const watchVerb = /\b(abr\w+|mostr\w+|toc\w+|toqu\w+|coloc\w+|coloqu\w+|p[oõ]e\b|pon\b|poner\b|pong\w+|ponme\b|ponte\b|bota\w*|reprodu\w+|assist\w+|ouv\w*|escu(?:t|ch)\w*|oye\b|oir\b|open\w*|play\w*|show\w*|watch\w*|listen\w*)\b/.test(sp);
     const mediaWord = /\b(video|videos|clipe|clipes|musica|musicas|music|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|clip|clips)\b/.test(sp);
     const cm = sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+(?:abas?|guias?|tabs?|musicas?|videos?|cancoes|canciones|faixas?|temas?|clipes?|songs?|tracks?|tunes?|clips?)\b/);
-    const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : 0;
+    // "abra 2 janelas / open 2 windows (ou 'windos', com erro de digitação) … um diferente em cada":
+    // número + qualquer substantivo, quando o pedido diz "cada / each / different". A palavra
+    // contada sai da busca.
+    const eachCue = /\b(each|every|cada|different|diferentes?|distintos?|outro em cada)\b/.test(sp);
+    const cm2 = !cm && eachCue ? sp.match(/\b(\d{1,2}|duas|dois|dos|tres|quatro|cuatro|cinco|seis|sete|siete|oito|ocho|nove|nueve|dez|diez|two|three|four|five|six|seven|eight|nine|ten)\s+([a-z]{3,})\b/) : null;
+    const cnt = cm ? (NUM_WORDS[cm[1]] || parseInt(cm[1], 10) || 0) : cm2 ? (NUM_WORDS[cm2[1]] || parseInt(cm2[1], 10) || 0) : 0;
+    const countedNoun = cm2 ? cm2[2] : '';
     // !IS_STOP_CONTROL_VERB: "fecha as 3 abas que voce abriu"/"pausa os 2 videos que estao
     // tocando" casam watchVerb via 'abriu'/'tocando' (PASSADO), mas o verbo de verdade é
     // FECHAR/PAUSAR — o oposto de abrir N vídeos novos. !REFERS_TO_MY_PLAYLIST: coleção
     // EXISTENTE do usuário, não um tema pra buscar do zero.
     if (!isDl && watchVerb && mediaWord && cnt >= 2 && !IS_STOP_CONTROL_VERB.test(sp) && !REFERS_TO_MY_PLAYLIST.test(sp) && !REFERS_TO_OPEN_ITEM.test(sp)) {
-      const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga ponte bota botar reproduz reproduzir reproducir reproduce assistir assista ouvir ouca ouve escuta escutar escute escucha escuchar oye oir navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch listen tab tabs each one with in on the of a an song songs track tracks tune tunes video videos clip clips musica musicas music cancao cancoes cancion canciones faixa faixas tema temas clipe clipes filme').split(' '));
+      const STRIP = new Set(('abre abra abrir mostra mostre mostrar toca tocar toque coloca colocar coloque poe poem pon poner ponme ponga ponte bota botar reproduz reproduzir reproducir reproduce assistir assista ouvir ouca ouve escuta escutar escute escucha escuchar oye oir navegador aba abas guia guias cada uma com no na do da de dos das o a os as e em uns umas un una open play show watch listen tab tabs each one with in on the of a an song songs track tracks tune tunes video videos clip clips musica musicas music cancao cancoes cancion canciones faixa faixas tema temas clipe clipes filme ' +
+        'and me every for by different diferente diferentes distinto distintos window windows janela janelas ventana ventanas youtube').split(' '));
+      if (countedNoun) STRIP.add(countedNoun);
       const q = stripAgentMeta(command).replace(/([a-z])(\d)/gi, '$1 $2').split(/\s+/)
         .filter(w => { const nw = normalize(w); return w && !STRIP.has(nw) && !/^\d{1,2}$/.test(nw) && !(nw in NUM_WORDS); })
         .join(' ').trim();
@@ -904,6 +940,16 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
     if (q.length >= 3) return { type: 'find_file', query: q, filetype };
   }
 
+  // COLEÇÃO ("todas as músicas/clipes do filme X", "a trilha sonora", "o álbum", "a discografia"): precisa
+  // PESQUISAR a lista antes (faixas oficiais) e baixar uma a uma — não é um atalho de uma busca só. Antes
+  // "find all the music videos from the movie top gun" virava UM download de áudio de "all from top gun
+  // with tom cruise and them" (um clipe do filme). Cede pro agente (skill media-collection).
+  if (wantsDownload && (/\b(all|every|each|whole|entire|complete|full)\b.*\b(songs?|tracks?|music\s+videos?|videos?|clips?|episodes?)\b/.test(n)
+      || /\b(soundtrack|soundtracks|tracklist|track\s+list|album|discography|trilha\s+sonora|banda\s+sonora|discografia)\b/.test(n)
+      || /\b(todas|todos|cada)\b.*\b(musicas?|videos?|clipes?|faixas?|canciones|episodios?)\b/.test(n))) {
+    return null;
+  }
+
   // MÚSICA (mp3 / música / áudio) — dispara com mp3 OU com intenção de download.
   // 'tema(s)' = faixa em ES; o guard de tema-UI lá em cima já barrou "mudar o tema".
   // !REFERS_TO_MY_PLAYLIST: "baixe as músicas da minha playlist" — coleção EXISTENTE do
@@ -911,7 +957,9 @@ export function detectQuickAction(command: string, opts?: { forceImage?: boolean
   // playlist salva; viraria download de query-lixo. O `|| /\bmp3\b/` é o MESMO padrão do
   // bug do PDF (menção crua = gatilho, sem checar intenção) — "esse mp3 é bom?" disparava
   // só por citar 'mp3'; agora exige que não seja pergunta/opinião sobre o que já toca.
+  // "music video" / "videoclipe" é VÍDEO (com som), não só áudio — vai pro bloco de vídeo abaixo.
   if (/\b(mp3|musica|musicas|music|audio|audios|som|sons|cancao|cancoes|cancion|canciones|faixas?|temas?|song|songs|track|tracks|tunes?|sound)\b/.test(n)
+      && !/\b(music\s+videos?|videoclipes?|video\s*clipes?|clipes?\s+musicais?|video\s+musical)\b/.test(n)
       && !REFERS_TO_MY_PLAYLIST.test(n)
       && (wantsDownload || (/\bmp3\b/.test(n) && !REFERS_TO_OPEN_ITEM.test(n) && !IS_WHO_QUESTION.test(n) && !IS_CANNOT.test(n) && !IS_NEGATING_PRIOR_ACTION.test(n)))) {
     const q = cleanQuery();
@@ -1170,7 +1218,7 @@ function extractSearchQuery(command: string, site: SiteShortcut): string {
   let q = command;
   for (const name of site.names) q = q.replace(new RegExp(escapeRegExp(name), 'ig'), ' ');
   q = q
-    .replace(/\b(abrir|abre|abr[aã]|entrar|ir|vai|va|no|na|em|de|do|da|dos|das|um|uma|uns|umas|o|a|os|as|me|diga|dizer|fale|qual|titulo|t[ií]tulo|nome|aberto|aberta|pesquisar|pesquise|buscar|busque|procure|clicar|clique|clip|clipe|video|v[ií]deo|videos|v[ií]deos|musica|m[uú]sica|musicas|m[uú]sicas|can[cç][aã]o|show|ao vivo|dar|like|curtir|gostei|assistir|tocar|play|deixar|deixe|fazer|postar|publicar|coment[aá]rio|comentar|comment|comments|legal|bom|boa|top|massa|ingles|ingl[eê]s|portugues|portugu[eê]s|open|watch|search|find|look|show|listen|download|save|get|grab|the|of|for|to|on|song|songs|track|movie)\b/ig, ' ')
+    .replace(/\b(abrir|abre|abr[aã]|entrar|ir|vai|va|no|na|em|de|do|da|dos|das|um|uma|uns|umas|o|a|os|as|me|diga|dizer|fale|qual|titulo|t[ií]tulo|nome|aberto|aberta|pesquisar|pesquise|buscar|busque|procure|clicar|clique|clip|clipe|video|v[ií]deo|videos|v[ií]deos|musica|m[uú]sica|musicas|m[uú]sicas|can[cç][aã]o|show|ao vivo|dar|like|curtir|gostei|assistir|tocar|play|deixar|deixe|fazer|postar|publicar|coment[aá]rio|comentar|comment|comments|legal|bom|boa|top|massa|ingles|ingl[eê]s|portugues|portugu[eê]s|open|watch|search|find|look|show|listen|download|save|get|grab|the|of|for|to|on|song|songs|track|movie|browse|shop|compare|comparar|compare prices|prices?|pre[cç]os?|cheapest|cheap|best|deals?|buy|comprar|and|e)\b/ig, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^(e|and|com)\s+/i, '')
     .replace(/\s+(e|and|com|do|da|de|no|na|o|a)[\s.,;:!?]*$/i, '')
