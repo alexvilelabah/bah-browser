@@ -2953,7 +2953,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 if (status === 'success' && !reportsFailure && !supportUnsent && !repeatIntent && (history.match(/\nSTEP \d+:/g) || []).length >= 3) {
                   void offerSkillSave(command, history, onProgress);
                 }
-                if (status === 'success' && !repeatIntent && macroTraceRef.current.length > 0) {
+                if (status === 'success' && !reportsFailure && !repeatIntent && macroTraceRef.current.length > 0) {
                   saveLastMacro({ command, steps: [...macroTraceRef.current], savedAt: Date.now() });
                   onProgress({ kind: 'status', message: `🧠 Sequence recorded (${macroTraceRef.current.length} step(s)). Say "repeat" or "repeat 100 times" to re-run it without spending AI.` });
                 }
