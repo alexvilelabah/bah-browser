@@ -25,7 +25,7 @@ export function ApplicantPanel(props: { onClose: () => void }) {
       <div className="tour-card proxy-card applicant-panel" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
         <div className="tour-head">
           <span className="tour-title">📝 {t('applicant.title')}</span>
-          <button className="tour-x" onClick={props.onClose} aria-label={t('win.close')}>✕</button>
+          <button className="tour-x" onClick={props.onClose} aria-label={t('proxy.close')}>✕</button>
         </div>
         <div className="proxy-hint">{available ? t('applicant.hint') : t('applicant.unavailable')}</div>
 
@@ -67,7 +67,7 @@ export function ApplicantPanel(props: { onClose: () => void }) {
         {status && <div className="proxy-status">{status}</div>}
         <div className="tour-foot proxy-foot">
           <button className="tour-btn" onClick={async () => { await api?.applicantClear?.(); await load(); setStatus(''); }}>{t('applicant.clear')}</button>
-          <button className="tour-btn tour-btn-primary applicant-save" onClick={save} disabled={!available}>{t('settings.save')}</button>
+          <button className="tour-btn tour-btn-primary applicant-save" onClick={save} disabled={!available}>{t('proxy.save')}</button>
         </div>
       </div>
     </div>
