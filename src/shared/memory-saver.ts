@@ -8,7 +8,7 @@
 //    formulário preenchido pela metade, dispositivo USB/HID/serial/Bluetooth conectado, e os sites
 //    da lista "Manter estes sites sempre ativos".
 //  • Do Bah: aba anônima/escondida e aba cuja SESSÃO tem tarefa do agente rodando ou esperando a
-//    pessoa (cartão de confirmação, perguntas, login).
+//    pessoa (cartão de confirmação, perguntas, login, tarefa agendada esperando aprovação).
 import { canDiscard } from './incognito.ts';
 
 export type MemSaverLevel = 'moderate' | 'balanced' | 'maximum';

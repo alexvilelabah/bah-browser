@@ -875,6 +875,7 @@ export default function App() {
   // Abas de onde partiu uma tarefa do agente que ainda não acabou (rodando ou parada num cartão
   // esperando a pessoa). A varredura protege a SESSÃO inteira delas (store.threadKeyOf).
   const agentBusyTabsRef = useRef(new Set<string>());
+  const schedRunTabRef = useRef<string | null>(null);
   const [, setPermTick] = useState(0);   // re-render ao trocar uma permissão do agente no menu
   // Agente pode clicar a caixinha de captcha — padrão DESLIGADO (ver captchaCheckboxAllowed).
   const [captchaCheckbox, setCaptchaCheckbox] = useState<boolean>(() => captchaCheckboxAllowed());
@@ -1011,6 +1012,7 @@ export default function App() {
     const ctxFor = (now: number): ((tabId: string) => SweepCtx) => {
       const busy = new Set<string>();
       for (const id of agentBusyTabsRef.current) busy.add(store.threadKeyOf(id));
+      if (schedRunTabRef.current) busy.add(store.threadKeyOf(schedRunTabRef.current));
       return (tabId) => ({ now, idleMs, activeId: sweepActiveIdRef.current, agentBusy: busy.has(store.threadKeyOf(tabId)), keepList: memSaverKeepRef.current });
     };
     const sweep = async () => {
@@ -1237,6 +1239,8 @@ export default function App() {
     focusTab: (id) => { if (tabsRef.current.some(x => x.id === id && !x.hidden)) store.setActiveTabId(id); },
     openPanel: () => store.setSidebarOpen(true),
   });
+  // Tarefa agendada em andamento (ou esperando aprovação): a sessão dela não dorme.
+  schedRunTabRef.current = sched.run?.tabId ?? null;
   // Badge de zoom flutuante (estilo Chrome: "120%" aparece e some), pra teclado e roda.
   const [zoomBadge, setZoomBadge] = useState<number | null>(null);
   const zoomBadgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

@@ -791,7 +791,8 @@ in `src/shared/memory-saver.ts` (tested in `tests/unit/memory-saver.test.ts`); U
   behaviour), Maximum 10 min idle. Stored in `localStorage` `memSaver` / `memSaverLevel` / `memSaverKeep`.
 - **Never discarded**: the active tab, incognito/hidden tabs (`incognito.ts` `canDiscard`), pinned tabs,
   sites on the keep-active list, tabs whose **session** (`store.threadKeyOf`) has an agent task running or
-  waiting for the user (confirm/questions card, sign-in pause — the whole `onExecute`), and — gathered only for tabs that pass those cheap checks — tabs playing audio or video
+  waiting for the user (confirm/questions card, sign-in pause — the whole `onExecute`; plus the scheduler's
+  current run), and — gathered only for tabs that pass those cheap checks — tabs playing audio or video
   (even a muted `<video>`), with camera/microphone/screen granted on the current page, with notifications
   allowed for the site, with a download in progress that started there, with a half-filled form, or with an
   open USB/HID/serial/Bluetooth device. The page part is one script (`PAGE_SIGNALS_SCRIPT`, run through the

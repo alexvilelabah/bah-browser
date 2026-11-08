@@ -773,7 +773,8 @@ puras em `src/shared/memory-saver.ts` (testadas em `tests/unit/memory-saver.test
   `memSaverKeep`.
 - **Nunca dorme**: a aba ativa, aba anônima/escondida (`incognito.ts` `canDiscard`), aba fixada, site da
   lista "sempre ativos", aba cuja **sessão** (`store.threadKeyOf`) tem tarefa do agente rodando ou esperando
-  a pessoa (cartão de confirmação/perguntas, pausa de login — o `onExecute` inteiro) e — colhido só pras abas que passam nessas regras baratas — aba tocando áudio ou vídeo (mesmo
+  a pessoa (cartão de confirmação/perguntas, pausa de login — o `onExecute` inteiro; e a vez agendada em
+  andamento) e — colhido só pras abas que passam nessas regras baratas — aba tocando áudio ou vídeo (mesmo
   `<video>` mudo), com câmera/microfone/tela liberados na página atual, com notificações permitidas pro
   site, com download em andamento que saiu dela, com formulário preenchido pela metade, ou com dispositivo
   USB/HID/serial/Bluetooth aberto. A parte da página é um script só (`PAGE_SIGNALS_SCRIPT`, pelo recuo pro
