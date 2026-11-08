@@ -65,6 +65,9 @@ body {
 }
 .top-bar::after{content:none;}
 .top-bar-tabs{flex:1 1 0;display:flex;-webkit-app-region:drag;min-width:0;}
+/* macOS: espaço pro semáforo nativo à esquerda; os botões − ☐ ✕ do app são só Windows/Linux. */
+.platform-mac .top-bar-tabs{padding-left:76px;}
+.platform-mac .window-controls{display:none;}
 .top-bar-tabs .tab-bar{flex:1 1 0;height:40px;padding:0 4px;-webkit-app-region:drag;min-width:0;}
 
 /* CONTROLES DE JANELA — largura FIXA (flex:none): as abas nunca os atropelam */

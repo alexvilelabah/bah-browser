@@ -13,7 +13,7 @@ import TabBar, { type TabCommand, type SessionCommand } from './components/TabBa
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
-import { shortcut } from './platform';
+import { PLATFORM, ARCH, IS_MAC, shortcut } from './platform';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
@@ -1952,7 +1952,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
   };
 
   return (
-    <div className="app-container">
+    <div className={`app-container${IS_MAC ? ' platform-mac' : ''}`}>
       <div className="top-bar">
         <div className="top-bar-tabs">
           <TabBar
@@ -7328,9 +7328,8 @@ function youtubeWatchId(u: string): string | null {
 
 // Arquivo de OUTRO sistema (o agente baixou o .exe de Windows num Mac), CPU errada (arm64 num Mac
 // Intel não roda) ou tipo de pacote errado no Linux: vale pra qualquer site de driver/instalador.
-// O perfil de verdade vem do main (machine:info); até ele chegar, o palpite pelo navigator (só o SO).
-const NAV_PLATFORM = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
-let MACHINE: MachineProfile = machineProfile({ platform: /^Win/i.test(NAV_PLATFORM) ? 'win32' : /Mac/i.test(NAV_PLATFORM) ? 'darwin' : /Linux/i.test(NAV_PLATFORM) ? 'linux' : 'other', arch: 'other' });
+// O perfil de verdade vem do main (machine:info); até ele chegar, SO e CPU do preload (platform.ts).
+let MACHINE: MachineProfile = machineProfile({ platform: PLATFORM, arch: ARCH });
 try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
 /** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
 function wrongOsNote(filename: string): string {

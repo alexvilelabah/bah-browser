@@ -1140,6 +1140,9 @@ function createWindow(): void {
     minHeight: 600,
     frame: false,
     titleBarStyle: 'hidden',
+    // macOS: os botões nativos (semáforo) ficam; centraliza na barra de abas de 40px. Os botões
+    // desenhados pelo app (− ☐ ✕) somem no Mac (CSS .platform-mac) — senão ficavam 2 conjuntos.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 } } : {}),
     autoHideMenuBar: true,
     show: false,   // só mostra no ready-to-show → abre já pintada, sem flash/janela vazia
     backgroundColor: '#1f1e1d',
