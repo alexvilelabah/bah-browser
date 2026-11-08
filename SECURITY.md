@@ -117,7 +117,7 @@ end in a couple of hops.
 
 - **No telemetry / analytics / phone-home.**
 - **No key exfiltration.** Your API key is sent only to the provider you selected, over HTTPS.
-- **No CAPTCHA-breaking, no rate-limit dodging, no automating what a site forbids in its
+- **No CAPTCHA-breaking (only an opt-in, off-by-default checkbox click — see item 4 below), no rate-limit dodging, no automating what a site forbids in its
   terms.** Presenting as standard Chrome is for *compatibility* (avoiding false blocks), not
   evasion — see "Safety & limits" in the README.
 - **No remote code execution.** The app never `eval`s content fetched from the web. The AI
@@ -146,7 +146,12 @@ machine). They are listed here so an auditor does not have to "discover" them:
    `.pkg`, `.sh`, ...), by you or by the agent. There is no extension blocklist or content
    sniffing; the protection is that downloads go only to the downloads folder and are never
    executed by Bah. Review what the agent downloads before opening it.
-5. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
+5. **Optional captcha checkbox click** (menu ☑️, OFF by default; `tryCaptchaCheckbox` in `App.tsx`):
+   when ON, on a real human-verification gate the agent clicks a reCAPTCHA / hCaptcha / Turnstile
+   checkbox **once** with real input and checks whether it passed (response token / widget gone);
+   otherwise it asks the user as before. It never attempts image challenges. Some sites forbid
+   automated access in their terms — this is the user's choice to make.
+6. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
    style or a sign-in wall ([`src/shared/human-check.ts`](src/shared/human-check.ts), generic signals, never per
    site), Bah hands the tab to you and resumes on its own when the page is normal again
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
