@@ -457,6 +457,7 @@ break on every update. So Bah only *guides*, and names the setting.
 | File | Responsibility |
 |---|---|
 | `App.tsx` | Top-level app; **the live agent ReAct loop** (`onExecute`); toolbar (extensions, downloads, the round **profile icon** — optional Google sign-in / switch account — and ⋮) |
+| `platform.ts` | The real OS and CPU for the UI (`PLATFORM`, `ARCH`, `IS_MAC`, `shortcut()`), from the preload's `process.platform` / `process.arch` — never sniffed from the user agent (that is Bah's own Chrome identity) |
 | `components/AgentCommandBar.tsx` | The unified command box, the activity feed, and settings |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |

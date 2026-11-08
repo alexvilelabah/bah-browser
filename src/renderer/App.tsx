@@ -13,6 +13,7 @@ import TabBar, { type TabCommand, type SessionCommand } from './components/TabBa
 import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
+import { shortcut } from './platform';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
 import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
@@ -155,12 +156,12 @@ import { selectSkills, formatSkillsBlock, validateSkill, SKILL_STATES, SKILL_TAS
 const FAV_BAR_MAX = 100;
 const FAV_MENU_MAX = 150;
 // Atalho do "Imprimir…" como o sistema escreve (dica do item no menu ⋮).
-const BOOKMARK_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘D' : 'Ctrl+D';
-const PRINT_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⌘P' : 'Ctrl+P';
+const BOOKMARK_KEY = shortcut('⌘D', 'Ctrl+D');
+const PRINT_KEY = shortcut('⌘P', 'Ctrl+P');
 // Atalho da "Nova aba anônima" (o da janela anônima do Chrome).
-const INCOGNITO_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⇧⌘N' : 'Ctrl+Shift+N';
+const INCOGNITO_KEY = shortcut('⇧⌘N', 'Ctrl+Shift+N');
 // Atalho do Limpar dados de navegação, como no Chrome (no Mac a tecla "delete" é o Backspace).
-const CLEAR_DATA_KEY = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '') ? '⇧⌘⌫' : 'Ctrl+Shift+Delete';
+const CLEAR_DATA_KEY = shortcut('⇧⌘⌫', 'Ctrl+Shift+Delete');
 
 declare global {
   interface Window {
@@ -308,6 +309,8 @@ declare global {
       retryDownload?: (id: string, url?: string) => Promise<any>;
       openFile?: (target: string) => Promise<any>;
       machineInfo?: () => Promise<MachineInput>;
+      platform?: string;
+      arch?: string;
       getTranscript?: (url: string) => Promise<{ ok: boolean; text?: string; error?: string }>;
       downloadVideo?: (url: string, audioOnly?: boolean, count?: number, quality?: 'best' | 'low') => Promise<{ success: boolean; path?: string; paths?: string[]; title?: string; error?: string; reason?: string; warning?: string }>;
       resolveVideo?: (query: string) => Promise<{ ok: boolean; url?: string; id?: string; title?: string; error?: string }>;

@@ -20,6 +20,7 @@ import { isIncognitoBlank } from '../../shared/incognito';
 import { letterTile } from '../../shared/favicons';
 import IncognitoIcon from './IncognitoIcon';
 import { chipStarts, SESSION_COLORS, SESSION_COLOR_HEX, type AgentSession, type SessionColor } from '../../shared/agent-sessions';
+import { IS_MAC } from '../platform';
 
 // Sessões do agente (chip colorido + nome antes das abas da sessão). Quem executa é o App (store).
 export type SessionCommand =
@@ -50,7 +51,7 @@ interface Props {
   keptReason?: (id: string) => string | undefined;    // Economia de memória: "Mantida ativa: …" no balão
 }
 
-const MAC = /Mac/i.test(typeof navigator !== 'undefined' ? navigator.platform || '' : '');
+const MAC = IS_MAC;
 const KEY_RELOAD = MAC ? '⌘R' : 'Ctrl+R';
 const KEY_CLOSE = MAC ? '⌘W' : 'Ctrl+W';
 const KEY_REOPEN = MAC ? '⇧⌘T' : 'Ctrl+Shift+T';
