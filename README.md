@@ -87,6 +87,7 @@
 - **Safe Browsing** ([NetAPI](https://netapi.com/compromised-urls/) compromised-domains list, updated daily)
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as a current Chrome on your real OS (user agent, client hints and languages set consistently inside the engine; real GPU/CPU/memory; `navigator.webdriver` left to the engine) so sites don't wrongly block the browser
+- **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), **WebRTC IP-leak protection on by default**, IP-version and leak warnings ("your proxy is IPv4-only but this computer also has IPv6"), VPN-aware region and a "time zone for sites" setting
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -162,6 +163,58 @@ Windows shortcut: double-click `Abrir-Bah.bat`.
 2. Gear icon → pick a provider.
 3. Pick **DeepSeek**, **Mistral** or **NVIDIA NIM** and paste that provider's key (DeepSeek's is very cheap) → Save. Image generation works with no key either way; chat and the agent need this (or local Ollama, next step).
 4. **Local (optional, free/offline):** install [Ollama](https://ollama.com) and **keep it running** (it lives in the tray and serves models at `127.0.0.1:11434`). Then download a model from inside Bah (☁️/🏠 → 🏠 Local AI → type a name → **Download**) or in a terminal (e.g. `ollama pull qwen3:14b`). Local works offline, but the cloud (DeepSeek) is more reliable.
+
+### Corporate networks (proxy, company certificates)
+
+Bah follows the **operating system's proxy settings** by default, like Chrome — including automatic
+detection (WPAD) and PAC scripts set by IT. To set one by hand: menu ⋮ → **🌐 Network & proxy**:
+**System** (default) · **Manual** (`proxy.corp:8080` for HTTP+HTTPS, or `socks5://127.0.0.1:1080` for a
+SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a bypass list and a
+**Test connection** button. `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` pre-configure it when nothing is saved.
+
+- **Proxy sign-in (HTTP 407, e.g. Blue Coat):** Bah asks for the username and password in its own box;
+  *Remember* stores them encrypted with the OS keychain (`safeStorage`). They never reach the agent or the model.
+- **Everything uses the same route:** pages, sign-in windows and Bah's own requests (AI calls, updates,
+  search, the agent's downloads) go through the browser engine's network stack, so one proxy setting
+  (and one sign-in) covers them.
+- **Company root certificates (TLS inspection):** Chromium already trusts the OS certificate store.
+  Electron's Node does not, so Bah reads the OS store at startup (macOS keychains, Windows `Root`/`CA`
+  stores, Linux CA bundle) and adds those roots to Node's defaults.
+- **WebRTC IP leak protection (on by default):** with a proxy, WebRTC may only use the proxy
+  (`disable_non_proxied_udp`); without one, only the main network connection
+  (`default_public_interface_only`) — either way a page cannot list your IP addresses through it. **Best call
+  quality** turns it off (any page can then read your real IPs). **WebRTC: IPv4 only** removes IPv6 candidates
+  (applies after a restart). Chromium cannot sign in to SOCKS5 proxies (username/password); SOCKS5 without a
+  password works.
+- **Secure DNS (DNS-over-HTTPS):** **System** (default — nothing changes until you pick) · presets **AdGuard**
+  and **Mullvad** (ad blocking, no sign-up), **Quad9** (malware blocking), **Cloudflare** (no filtering) ·
+  **NextDNS** (paste your configuration ID — free account, you manage the lists; free plan 300k queries/month,
+  after that it still resolves but stops filtering) · **Custom** `https://` address (Pi-hole, AdGuard Home).
+  **Strict** makes lookups fail instead of falling back to your network's plain DNS when the server can't be
+  reached. One setting for every tab, private ones included. It's a browser setting, not an extension: Chrome
+  extensions have no way to change the resolver.
+- **IP version:** Bah's engine cannot force IPv4-only or IPv6-only for page traffic (tested: `--disable-ipv6`
+  does nothing in Electron 44), so those options are shown disabled with the reason — use your system's
+  network settings. Only WebRTC can be limited to IPv4 (above).
+- **Leak warnings:** if your proxy or secure-DNS server is reachable over only one IP version and this computer
+  also has a real address of the other, the panel warns that traffic may bypass it (with a button to the
+  system's network settings). It also warns when a proxy is set but WebRTC is on Best call quality, and notes
+  that a proxy may do its own DNS lookups. Bah only looks at which IP versions exist — never shows or sends
+  your addresses.
+- **VPN extensions:** a Chrome extension that controls the proxy (`chrome.proxy`) wins while it is on, as in
+  Chrome; when it lets go, the tabs return to the proxy set here.
+
+### Region & time (VPN, travel)
+
+Menu ⋮ → **🌍 Region & time**:
+- **Network location:** with a VPN or proxy, sites show the prices, currency and stock of the country your
+  connection exits in. In **Auto** (default) Bah checks that country with one request to Cloudflare's
+  `cdn-cgi/trace` when the panel opens (cached 10 min, rechecked when the proxy changes) and says when it
+  differs from your computer's region. **My computer's region** or **a specific country** never checks the network.
+- **Time zone for sites:** your computer's (default), a chosen zone for planning a trip or a flight, or
+  **UTC** (hides your real zone from page scripts). Set in the engine like DevTools' override; a 🕐 chip in
+  the address bar shows it; it goes back to your computer's zone on restart unless you tick *Keep*.
+  Signed-in calendars usually follow the time zone in your account settings, not the browser's.
 
 ---
 

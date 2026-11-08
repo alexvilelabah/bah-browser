@@ -1,6 +1,9 @@
 import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
+import { ProxySettings, ProxyAuthPrompt } from './components/ProxyPanel';
+import { RegionPanel } from './components/RegionPanel';
+import { refreshRegion, onRegionState, regionState } from './region-state';
 import { ApplicantPanel } from './components/ApplicantPanel';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
@@ -361,6 +364,15 @@ declare global {
       jsDialogRespond?: (id: number, accept: boolean, text?: string) => Promise<any>;
       jsDialogAgentTabs?: (ids: number[]) => Promise<any>;
       onJsDialog?: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => () => void;
+      proxyGet?: () => Promise<any>;
+      regionGet?: (mode?: boolean | 'peek') => Promise<any>;
+      regionSet?: (r: any) => Promise<any>;
+      onRegionChanged?: (cb: () => void) => () => void;
+      proxySet?: (c: any) => Promise<any>;
+      proxyTest?: (url?: string) => Promise<any>;
+      proxyForgetPasswords?: () => Promise<any>;
+      proxyAuthResponse?: (id: number, r: { user?: string; pass?: string; remember?: boolean } | null) => Promise<any>;
+      onProxyAuthRequest?: (cb: (r: any) => void) => () => void;
       takeOcr?: (wcId: number, domText: string, force?: boolean, frameDataUrl?: string) => Promise<{
         ocrText: string; ocrUsed: boolean; skipped: boolean;
         confidence?: number; screenshotPath?: string; durationMs?: number; error?: string;
@@ -945,6 +957,15 @@ export default function App() {
   // Parar exige alguém na frente da tela). 0 = desligada, que é o padrão — coerente com
   // o resto: nada limita por precaução, só por escolha explícita.
   // First-run guide: the bar is a hint until dismissed, the tour is a reopenable dialog.
+  const [proxyOpen, setProxyOpen] = useState(false);
+  const [regionOpen, setRegionOpen] = useState(false);
+  const [tzChip, setTzChip] = useState('');   // fuso escolhido pros sites ('' = o do computador)
+  useEffect(() => {
+    const off = onRegionState(() => setTzChip(regionState()?.tzOverride || ''));
+    void refreshRegion('peek');
+    const offMain = window.electronAPI?.onRegionChanged?.(() => { void refreshRegion('peek'); });
+    return () => { off(); offMain?.(); };
+  }, []);
   const [showGuide, setShowGuide] = useState<boolean>(() => { try { return localStorage.getItem('guideSeen') !== '1'; } catch { return true; } });
   const [showTour, setShowTour] = useState<boolean>(() => { try { return localStorage.getItem('tourSeen') !== '1'; } catch { return true; } });
   const [agentTimeLimitMin, setAgentTimeLimitMin] = useState<number>(() => {
@@ -1968,6 +1989,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           isBookmarked={favorites.some(f => f.url === store.activeTab.url)}
           onToggleBookmark={() => { const u = store.activeTab.url; if (favorites.some(f => f.url === u)) removeFavorite(u); else saveFavorite(); }}
           getSuggestions={getSuggestions}
+          extra={tzChip ? (
+            <button className="tz-chip" onClick={() => setRegionOpen(true)} title={t('region.chipTitle', { zone: tzChip })}>
+              🕐 {tzChip === 'UTC' ? 'UTC' : tzChip.split('/').pop()!.replace(/_/g, ' ')}
+            </button>
+          ) : null}
           incognito={activeIncognito}
         />
         <ExtensionsToolbar incognito={activeIncognito} getActiveWcId={() => {
@@ -2204,9 +2230,17 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     <span className="menu-switch">{t('menu.folderRevoke')}</span>
                   </button>
                 )}
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setRegionOpen(true); }} title={t('menu.regionTitle')}>
+                  <span className="menu-ic">🌍</span>
+                  <span className="menu-label">{t('menu.region')}</span>
+                </button>
                 <button className="menu-item" onClick={() => { setMenuOpen(false); setApplicantOpen(true); }} title={t('menu.applicantTitle')}>
                   <span className="menu-ic">📝</span>
                   <span className="menu-label">{t('menu.applicant')}</span>
+                </button>
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setProxyOpen(true); }} title={t('menu.proxyTitle')}>
+                  <span className="menu-ic">🌐</span>
+                  <span className="menu-label">{t('menu.proxy')}</span>
                 </button>
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
@@ -2399,6 +2433,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               <button className="find-btn" onClick={closeFind} title={t('find.close')}>✕</button>
             </div>
           )}
+          {proxyOpen && <ProxySettings onClose={() => setProxyOpen(false)} />}
+          {regionOpen && <RegionPanel onClose={() => setRegionOpen(false)} />}
+          <ProxyAuthPrompt />
           {showGuide && (
             <AppGuideBar
               onStartTour={() => setShowTour(true)}

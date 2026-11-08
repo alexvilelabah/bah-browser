@@ -58,6 +58,11 @@ import { setupSkills } from './skills-loader';
 import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
 import { setupChatStore } from './chat-store';
+import { setupProxy, getProxyConfig, refreshWebRtcPolicy } from './proxy';
+import { setupSecureDns, getSecureDns } from './secure-dns';
+import { setupNetworkPrivacy, applyNetworkStartupSwitches } from './network-privacy';
+import { setupRegion, getTimezoneOverride } from './region';
+import { loadSystemCAs, installCAs } from './system-ca';
 import { setupChromeExtensions } from './chrome-extensions';
 import { setupBookmarksIO } from './bookmarks-io';
 import { setupFaviconCache } from './favicon-cache';
@@ -436,6 +441,24 @@ async function sharedEnsureDebugger(wc: Electron.WebContents, wcId: number): Pro
     wc.debugger.once('detach', () => debuggerAttachedSet.delete(wcId));   // reanexa (e reaplica a identidade) depois
     await wc.debugger.sendCommand('Accessibility.enable');
     await applyChromeIdentity(wc);
+    await applyTimezone(wc);
+  }
+}
+
+// Fuso que os sites veem: o do computador, ou o que a PESSOA escolheu (🌍 Região e hora → viagem/voo).
+// Emulation.setTimezoneOverride é o mesmo do DevTools; '' volta pro do sistema.
+async function applyTimezone(wc: Electron.WebContents): Promise<void> {
+  try { await wc.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: getTimezoneOverride() }); }
+  catch (e: any) { console.warn('[Region] setTimezoneOverride failed:', e?.message || e); }
+}
+// Com fuso escolhido, toda aba recebe o override (o debugger é anexado só pra isso); sem fuso escolhido
+// nada é anexado a mais — as abas onde o agente já anexou voltam pro do sistema.
+function applyTimezoneEverywhere(): void {
+  const override = !!getTimezoneOverride();
+  for (const wc of webContents.getAllWebContents()) {
+    if (wc.isDestroyed()) continue;
+    if (debuggerAttachedSet.has(wc.id)) void applyTimezone(wc);
+    else if (override && wc.getType() === 'webview') sharedEnsureDebugger(wc, wc.id).catch((e) => console.warn('[Region] attach failed:', e?.message || e));
   }
 }
 
@@ -3909,6 +3932,8 @@ app.commandLine.appendSwitch('lang', LANG_SWITCH);
 // Libera áudio sem "gesto do usuário" — necessário pra TTS (read_aloud) e autoplay
 // soarem dentro do webview; sem isso o Chromium bloqueia o speechSynthesis em silêncio.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// ⋮ → Rede: WebRTC sem IPv6 (field trial do WebRTC; só vale no boot).
+applyNetworkStartupSwitches();
 
 // Aceleração de hardware (GPU): em alguns PCs com vídeo integrado/driver velho, abrir uma aba
 // nova dá "tela branca" (o compositor da GPU não pinta o 1º frame; só carrega com F5). O usuário
@@ -3999,6 +4024,20 @@ function setupAutoUpdater(): void {
 
 
 app.whenReady().then(async () => {
+  // Rede corporativa: proxy (System/Manual/PAC/Direct + login 407) em todas as sessões, e as raízes do
+  // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
+  // (session.fetch): mesmo proxy, PAC, login e repositório de certificados das abas.
+  setupProxy(() => mainWindow);
+  // DNS seguro (DoH) escolhido pela pessoa — app inteiro; padrão "system" não mexe em nada.
+  setupSecureDns();
+  // ⋮ → Rede: WebRTC (vazamento de IP) + avisos de vazamento (proxy/DNS/IPv4×IPv6).
+  setupNetworkPrivacy({ getProxy: getProxyConfig, getSecureDns, refreshWebRtc: refreshWebRtcPolicy });
+  setupRegion(applyTimezoneEverywhere, () => mainWindow);
+  loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
+  {
+    const browsingSession = session.fromPartition('persist:browser');
+    (globalThis as any).fetch = (input: any, init?: any) => browsingSession.fetch(input, init);
+  }
   setupChatStore(() => mainWindow);
   setupApplicantProfile();
   setupScheduledTasks({ getMainWindow: () => mainWindow, showMainWindow });

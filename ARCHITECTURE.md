@@ -80,6 +80,12 @@ moves that end on the click and bow away from the straight line.
 | `agent-download-worker.ts`, `download-progress.ts` | The agent's `download` action: one `worker_threads` worker per download; progress cadence + stall policy. See [Downloads & torrents](#downloads--torrents) |
 | `torrent-manager.ts`, `torrent/engine.mjs` | **Optional** built-in torrent client (off by default): IPC bridge + the engine, isolated in a `utilityProcess` that only starts when used. See [Downloads & torrents](#downloads--torrents) |
 | `media-downloader.ts`, `media-parts.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download); parts/merge/interrupted-download logic. See [Downloads & torrents](#downloads--torrents) |
+| `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Region & time: network exit country (Cloudflare trace, Auto mode only, 10-min cache), shopping region, time zone for sites via CDP `Emulation.setTimezoneOverride` (resets on restart unless kept; with a zone chosen, every tab gets the debugger attached for it) |
+| `proxy.ts`, `proxy-config.ts` | Proxy for **every** session (system / manual http·https·socks5 / PAC / direct), 407 sign-in prompt with keychain-encrypted saved credentials, `proxy:*` IPC. Main-process `fetch` is routed through the `persist:browser` session's `session.fetch`, so one setting covers Bah's own requests too |
+| `proxy-base.ts` | Bridge between Bah's proxy settings and Chrome extensions' `chrome.proxy` (VPN extensions): an extension in control wins (as in Chrome); when it lets go, the tabs return to the proxy configured in Bah, not a fixed "system"; Bah's WebRTC leak policy is the extensions' baseline |
+| `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | Secure DNS (DNS-over-HTTPS) chosen by the user: `app.configureHostResolver` for the whole app, `dns:*` IPC. See [Secure DNS](#secure-dns-dns-over-https) |
+| `network-privacy.ts` (+ `src/shared/network-privacy.ts`) | ⋮ → Network: WebRTC IP-leak policy choice, IPv4-only WebRTC (boot switch), leak warnings, `net:*` IPC. See [Secure DNS, IP version, WebRTC](#secure-dns-dns-over-https) |
+| `system-ca.ts` | Reads the OS root certificate store and adds it to Node's default CAs (`tls.setDefaultCACertificates`) for TLS-inspecting corporate proxies |
 | `video-cuts.ts`, `transcript.ts` | Local video features (locate where a phrase is spoken, transcripts) — native ffmpeg |
 | `image-harvester.ts` | Bulk image download + AI image generation (Pollinations), with limits |
 | `ocr-engine.ts`, `page-capture.ts` | On-device OCR (Tesseract) + screenshots |
@@ -314,6 +320,66 @@ for the result:
    `recoverInterruptedDownloads()` stops a leftover yt-dlp, deletes only the recorded files that are in
    that download's folder and not older than it, and the Downloads list shows the download as
    **Interrupted** with ↻.
+
+### Secure DNS (DNS over HTTPS)
+
+⋮ → Network & proxy → **Secure DNS**. Saved in `userData/secure-dns.json`; `src/shared/secure-dns.ts`
+turns the setting into `app.configureHostResolver({ secureDnsMode, secureDnsServers })` (validated,
+unit-tested; bad input falls back to System). The host resolver belongs to Chromium's single network
+service, so one setting covers **every** session: tabs, incognito, Google sign-in windows and Bah's own
+requests. It is applied after `ready` and re-applied live when the user saves (open connections are closed).
+
+| Mode | Resolver |
+|---|---|
+| **System** (default) | Bah does not call `configureHostResolver` at all: Chromium's default (`automatic`, no servers: plain network DNS, upgraded to DoH only if the system's DNS provider supports it). Nothing changes until the user picks something; switching back re-applies exactly that default |
+| Provider (no account) | AdGuard DNS `https://dns.adguard-dns.com/dns-query` (ads + malware), Mullvad adblock `https://adblock.dns.mullvad.net/dns-query` (ads), Quad9 `https://dns.quad9.net/dns-query` (malware), Cloudflare `https://cloudflare-dns.com/dns-query` (no filtering). Lists are the provider's |
+| NextDNS | `https://dns.nextdns.io/<id>` — the user's own configuration (free account; they manage the lists). Never a default because it needs an account |
+| Custom | Any `https://` DoH template (`{?dns}` allowed), e.g. a Pi-hole / AdGuard Home on the LAN; `http://` rejected |
+
+**Strict** (off by default) maps to `secure` (lookups fail if the DoH server is unreachable) instead of
+`automatic` (falls back to the network's plain DNS). With a proxy set, the proxy may resolve names for
+proxied traffic (HTTP CONNECT, SOCKS5) — the panel says so; proxy behaviour is unchanged.
+
+It is a core setting, not an extension: Chrome extensions have no API to set the resolver, and
+Chrome / Edge / Brave / Firefox all keep Secure DNS in their own settings.
+
+#### IP version, WebRTC and leak warnings
+
+The same panel (⋮ → Network & proxy: warnings, Proxy, Secure DNS, IP version, WebRTC) holds the rest of
+the network privacy settings (`network-privacy.ts`, pure logic in `src/shared/network-privacy.ts`,
+saved in `userData/network.json`).
+
+**IP version — measured on Electron 44, only "automatic" is possible.** The `--disable-ipv6` switch no
+longer exists in this Chromium (the string isn't in the binary; with it, a page on `localhost` still
+connects over `::1`), and neither `configureHostResolver` nor sessions have an address-family option
+(`session.resolveHost` takes `queryType`, but that is only for Bah's own lookups). The panel shows
+"IPv4 only" / "IPv6 only" disabled with that reason and points to the OS network settings.
+
+**WebRTC.** Measured: Electron's default policy (`default`) hands any page the machine's real interface
+addresses — IPv4 and global IPv6 host candidates, no mDNS names. Bah now always sets a policy on every
+web contents (all sessions, incognito included; `proxy.ts` applies it, an extension's
+`chrome.privacy` setting still wins on its session):
+
+| Choice | No proxy | Proxy in use |
+|---|---|---|
+| Protect my IPs (default) | `default_public_interface_only` (no host candidates) | `disable_non_proxied_udp` (no UDP outside the proxy) |
+| Best call quality | `default` | `default` (warned: WebRTC can bypass the proxy) |
+
+"WebRTC: IPv4 only" adds `--force-fieldtrials=WebRTC-IPv6Default/Disabled/` before `ready` (measured:
+IPv6 candidates disappear), so it **applies after a restart** — the panel says so.
+
+**Leak warnings** (top of the panel; the renderer gets families/flags only, never the machine's
+addresses; `os.networkInterfaces()` counts IPv4 that isn't loopback/169.254 and IPv6 only in 2000::/3):
+
+| Warning | When | Fix button |
+|---|---|---|
+| Proxy only over one family | manual proxy whose host is an IP literal (or resolves) to one family, and the machine also has the other; loopback proxies are skipped | Open the OS network settings (macOS / Windows) |
+| Secure DNS only over one family | same, for the DoH server host | Open the OS network settings |
+| WebRTC can bypass the proxy | proxy set + "Best call quality" | Protect WebRTC |
+| Secure DNS behind a proxy (info) | proxy + secure DNS: the proxy may resolve names for proxied traffic | — |
+
+Nothing configured → no warnings. Tests: `tests/unit/network-privacy.test.ts`, `tests/e2e/network-privacy.spec.ts`
+(ICE candidates from a local page; interfaces simulated with `E2E_NET_IFACES` under `NODE_ENV=test` + `E2E_MOCK_AI=1`).
 
 ---
 

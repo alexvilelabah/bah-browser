@@ -17,13 +17,15 @@ interface Props {
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   getSuggestions?: (q: string) => Array<{ url: string; title: string; display: string; prefix: boolean }>;
+  /** Selo do fuso escolhido pra viagem (🕐 Tokyo) — some quando é o do computador. */
+  extra?: React.ReactNode;
   incognito?: boolean;   // a aba ativa é anônima: selo "Anônima", cadeado sem respostas guardadas
 }
 
 export default function AddressBar({
   url, isLoading, canGoBack, canGoForward,
   onNavigate, onBack, onForward, onReload,
-  isBookmarked, onToggleBookmark, getSuggestions, incognito,
+  isBookmarked, onToggleBookmark, getSuggestions, extra, incognito,
 }: Props) {
   const [input, setInput] = useState(url);
   const [sugg, setSugg] = useState<Array<{ url: string; title: string; display: string; prefix: boolean; search?: boolean }>>([]);
@@ -238,6 +240,7 @@ export default function AddressBar({
           spellCheck={false}
           autoComplete="off"
         />
+        {extra}
         <button
           className={`bookmark-star ${isBookmarked ? 'on' : ''}`}
           onClick={onToggleBookmark}

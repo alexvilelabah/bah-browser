@@ -39,6 +39,19 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Proxy:** when a proxy is configured (OS settings, the 🌐 Network & proxy panel or `HTTPS_PROXY`),
+  all of Bah's traffic goes through it — that is the point. Proxy passwords are typed into Bah's own
+  box, stored only if you tick *Remember*, encrypted with the OS keychain (`safeStorage`, file
+  `proxy-auth.json`), and never shown to the agent or the model. See [`src/main/proxy.ts`](src/main/proxy.ts).
+- **Company root certificates:** Bah adds the OS-trusted root certificates to Node so it trusts what the
+  browser engine already trusts. It does not add or trust anything the OS does not. See
+  [`src/main/system-ca.ts`](src/main/system-ca.ts).
+- **Network country check:** in *Auto* shopping region only, one request to `https://www.cloudflare.com/cdn-cgi/trace`
+  (through the browser engine, same route as your tabs) when the 🌍 panel opens, cached 10 minutes.
+  Only the country code is used. Choose *My computer's region* or a fixed country to turn it off. See
+  [`src/main/region.ts`](src/main/region.ts).
+- **Time zone:** like every browser, page scripts can read your time zone. Choose **UTC** in 🌍
+  Region & time to hide it from pages.
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 - **Files from your computer (uploads):** the agent never chooses a path. For `upload`, Bah shows a card and
