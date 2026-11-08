@@ -2714,6 +2714,11 @@ body {
 .sched-missed-btns{ display:flex; gap:6px; flex:none; }
 .sched-missed-btns .tour-btn{ height:28px; padding:0 10px; font-size:12px; }
 .sched-missed-btns .tour-btn:not(.tour-btn-primary){ background:rgba(255,255,255,0.08); color:var(--text-primary); }
+.sched-missed-row{ flex-direction:column; align-items:flex-start; }
+.sched-missed-btns{ flex-wrap:wrap; }
+.sched-missed-choice{ display:flex; flex-direction:column; gap:6px; flex-basis:100%; font-size:12px; color:var(--text-secondary); }
+.sched-missed-btns .sched-missed-del:hover{ color:var(--danger); }
+.sched-missed-btns .sched-missed-del-yes:not(.tour-btn-primary){ background:var(--danger); color:#fff; }
 /* ── Conversa da sessão (renderer/threads.ts): medidor de contexto, avisos da thread, histórico de conversas ── */
 .ctx-meter-wrap{position:relative;display:block;min-width:0;max-width:100%;}
 .ctx-meter{display:flex;align-items:center;gap:5px;max-width:100%;padding:0;border:0;background:none;cursor:pointer;font-size:10px;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

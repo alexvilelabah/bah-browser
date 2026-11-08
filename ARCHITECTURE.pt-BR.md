@@ -500,8 +500,15 @@ de salvar; o claro é salvo e a resposta diz a próxima vez. A checagem cedo fic
   (`sched:notify`; clique → a aba da tarefa). O relógio da tarefa (`task-deadline.ts`) dorme enquanto o
   cartão espera. Nada arriscado acontece até a pessoa responder.
 - **Vezes perdidas**: na abertura, toda tarefa ligada cuja hora já passou é oferecida (`MissedRunsCard`:
-  Rodar agora / Pular), nunca roda escondida. Com o Bah aberto, uma hora perdida por mais de 10 minutos
-  (o computador dormiu) é oferecida do mesmo jeito. Pular grava "pulado" e vai pra próxima vez.
+  Rodar agora / Pular / Adiar / Apagar), nunca roda escondida. Com o Bah aberto, uma hora perdida por mais
+  de 10 minutos (o computador dormiu) é oferecida do mesmo jeito. Pular grava "pulado" e vai pra próxima vez.
+  **Adiar** (1, 3 ou 7 dias) dispensa a vez perdida e grava `snoozedUntil` = a mesma hora do relógio N dias
+  depois (`snoozeUntil` em `schedule.ts`, com horário de verão); `nextAt` vira a primeira vez da regra nessa
+  hora ou depois (semanal: o dia/hora de sempre; intervalo: na grade), então nada roda antes e a regra normal
+  volta depois. Os dois campos são gravados: o adiamento sobrevive a reiniciar; editar a regra ou religar
+  uma tarefa pausada no meio do adiamento o mantém (`nextRunRespectingSnooze`). **Apagar** pede confirmação
+  no cartão e depois tira a tarefa da lista. A oferta é só dentro do app: não há notificação do sistema
+  para vezes perdidas, e a notificação de "esperando você" não tem botões de ação.
 - **Testes**: `tests/e2e/scheduled-tasks.spec.ts` usa um relógio injetável (`E2E_SCHED_NOW` e
   `window.__bahSched.setNow`, só com `NODE_ENV=test`).
 

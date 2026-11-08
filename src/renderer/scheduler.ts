@@ -5,7 +5,8 @@
 //    só tem um agente por vez — a fila espera ele ficar livre);
 //  • cada tarefa roda numa aba com sessão própria ("⏰ News"): a mesma aba é reaproveitada nas
 //    próximas vezes enquanto estiver aberta (nada de uma aba nova a cada 15 minutos);
-//  • o que venceu com o Bah fechado (ou dormindo) vira OFERTA "Rodar agora / Pular";
+//  • o que venceu com o Bah fechado (ou dormindo) vira OFERTA "Rodar agora / Pular / Adiar N dias /
+//    Apagar" — quem escolhe é sempre a pessoa;
 //  • parou numa confirmação (freio de risco, perguntas, login) → espera a pessoa, com aviso do
 //    sistema. Nada arriscado acontece sozinho: quem decide é o cartão, como sempre.
 // A ponte com o painel do assistente é por eventos de janela (AgentCommandBar escuta):
@@ -13,11 +14,12 @@
 //   'bah:sched-run'   → { tabId, command, hooks } → detail.accepted / detail.reason.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  advance, dueState, missedCount, nextRunAfter, withRun, MAX_TASKS, MAX_NAME,
+  advance, dueState, missedCount, nextRunAfter, nextRunRespectingSnooze, snoozeUntil, withRun, MAX_TASKS, MAX_NAME,
   type RunOutcome, type ScheduleSpec, type ScheduledTask,
 } from '../shared/schedule';
 import { sessionNameFor } from '../shared/agent-sessions';
 import { t } from './i18n';
+import { fmtWhen } from './schedule-format';
 
 export interface SchedRun { taskId: string; tabId: string; status: 'starting' | 'running' | 'waiting'; waitMessage?: string; startedAt: number }
 export interface MissedOffer { taskId: string; count: number; dueAt: number }
@@ -149,7 +151,8 @@ export function useScheduler(deps: SchedulerDeps) {
       if (st !== 'due') return task;
       enqueue(task.id);
       changed = true;
-      return { ...task, nextAt: advance(task.spec, task.nextAt, at) };
+      const { snoozedUntil: _s, ...rest } = task;   // venceu = o adiamento (se havia) já acabou
+      return { ...rest, nextAt: advance(task.spec, task.nextAt, at) };
     });
     if (offers.length !== missedRef.current.length) setM(offers);
     if (changed) commit(next);
@@ -212,7 +215,7 @@ export function useScheduler(deps: SchedulerDeps) {
       const enabled = patch.enabled ?? x.enabled;
       const command = patch.command?.trim() || x.command;
       const reschedule = !!patch.spec || (enabled && !x.enabled);
-      return { ...x, command, name: command !== x.command ? taskNameFor(command) : x.name, spec, enabled, nextAt: reschedule ? nextRunAfter(spec, at) : x.nextAt };
+      return { ...x, command, name: command !== x.command ? taskNameFor(command) : x.name, spec, enabled, nextAt: reschedule ? nextRunRespectingSnooze(spec, at, x.snoozedUntil) : x.nextAt };
     });
     if (patch.enabled === false || patch.spec) setM(missedRef.current.filter(o => o.taskId !== id));
     if (patch.enabled === false) setQ(queueRef.current.filter(x => x !== id));
@@ -227,18 +230,30 @@ export function useScheduler(deps: SchedulerDeps) {
 
   const runNow = useCallback((id: string) => { enqueue(id); pump(); }, []);
 
-  const resolveMissed = useCallback((id: string, choice: 'run' | 'skip') => {
+  /**
+   * A escolha da pessoa no cartão das perdidas. 'snooze' = a vez perdida é dispensada e nada roda
+   * por `days` dias (fica gravado em snoozedUntil/nextAt, sobrevive a reiniciar); 'delete' sai da
+   * lista (o cartão já pediu confirmação).
+   */
+  const resolveMissed = useCallback((id: string, choice: 'run' | 'skip' | 'snooze' | 'delete', days?: number) => {
+    if (choice === 'delete') { remove(id); return; }
     const offer = missedRef.current.find(o => o.taskId === id);
     setM(missedRef.current.filter(o => o.taskId !== id));
     const at = now();
+    const n = offer?.count ?? 1;
     patchTask(id, x => {
-      const moved = { ...x, nextAt: advance(x.spec, x.nextAt, at) };
+      if (choice === 'snooze') {
+        const s = snoozeUntil(x.spec, x.nextAt, at, days ?? 1);
+        return withRun({ ...x, nextAt: s.nextAt, snoozedUntil: s.until }, { at, outcome: 'skipped', summary: t('sched.snoozedMissed', { n, when: fmtWhen(s.nextAt) }), missed: true });
+      }
+      const { snoozedUntil: _s, ...rest } = x;
+      const moved = { ...rest, nextAt: advance(x.spec, x.nextAt, at) };
       return choice === 'skip'
-        ? withRun(moved, { at, outcome: 'skipped', summary: t('sched.skippedMissed', { n: offer?.count ?? 1 }), missed: true })
+        ? withRun(moved, { at, outcome: 'skipped', summary: t('sched.skippedMissed', { n }), missed: true })
         : moved;
     });
     if (choice === 'run') { enqueue(id); pump(); }
-  }, []);
+  }, [remove]);
 
   const focusRun = useCallback(() => {
     const r = runRef.current;

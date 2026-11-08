@@ -502,8 +502,15 @@ request (no time, "at 9" morning or evening, interval below the minimum) gets a 
   (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
   waits. Nothing risky happens until the person answers.
 - **Missed runs**: at launch every enabled task whose time already passed is offered (`MissedRunsCard`:
-  Run now / Skip), never run silently. While open, a time missed by more than 10 minutes (the computer
-  slept) is offered the same way. Skip records a "skipped" entry and moves to the next time.
+  Run now / Skip / Snooze / Delete), never run silently. While open, a time missed by more than 10 minutes
+  (the computer slept) is offered the same way. Skip records a "skipped" entry and moves to the next time.
+  **Snooze** (1, 3 or 7 days) dismisses the missed run and stores `snoozedUntil` = the same wall-clock time
+  N days later (`snoozeUntil` in `schedule.ts`, DST-aware); `nextAt` becomes the first regular time at or
+  after it (weekly: the usual day/time; interval: on its grid), so nothing runs before then and the normal
+  rule resumes after. Both fields are saved, so a snooze survives a restart; editing the rule or resuming a
+  paused task during the snooze keeps it (`nextRunRespectingSnooze`). **Delete** asks for confirmation in
+  the card, then removes the task. The offer is in-app only: there is no system notification for missed
+  runs, and the "waiting for you" notification has no action buttons.
 - **Tests**: `tests/e2e/scheduled-tasks.spec.ts` uses an injectable clock (`E2E_SCHED_NOW` and
   `window.__bahSched.setNow`, only with `NODE_ENV=test`).
 

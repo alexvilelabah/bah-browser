@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { t } from '../i18n';
-import { nextRuns, parseWhen, type ScheduledTask, type RunOutcome } from '../../shared/schedule';
+import { nextRuns, parseWhen, SNOOZE_DAYS, type ScheduledTask, type RunOutcome } from '../../shared/schedule';
 import { ambiguityNote, describeSchedule, fmtWhen } from '../schedule-format';
 import type { Scheduler } from '../scheduler';
 
@@ -38,6 +38,7 @@ export function ScheduledTasksPanel({ sched, onClose }: { sched: Scheduler; onCl
     if (sched.missed.some(o => o.taskId === task.id)) return <span className="mon-chip err">{t('sched.missedChip')}</span>;
     if (sched.queue.includes(task.id)) return <span className="mon-chip watching">{t('sched.queued')}</span>;
     if (!task.enabled) return <span className="mon-chip off">{t('mon.paused')}</span>;
+    if (task.snoozedUntil && task.snoozedUntil > sched.now()) return <span className="mon-chip off" data-testid="sched-snoozed">{t('sched.snoozedChip', { when: fmtWhen(task.nextAt) })}</span>;
     return <span className="mon-chip watching">{t('sched.next', { when: fmtWhen(task.nextAt) })}</span>;
   };
 
@@ -139,19 +140,51 @@ export function MissedRunsCard({ sched }: { sched: Scheduler }) {
       {sched.missed.map(o => {
         const task = sched.tasks.find(x => x.id === o.taskId);
         if (!task) return null;
-        return (
-          <div key={o.taskId} className="sched-missed-row" data-testid="sched-missed-row">
-            <div className="sched-missed-text">
-              <b>{task.name}</b> — {task.command}
-              <div className="mon-item-meta">{o.count > 1 ? t('sched.missedMany', { n: o.count, when: fmtWhen(o.dueAt) }) : t('sched.missedOne', { when: fmtWhen(o.dueAt) })}</div>
-            </div>
-            <div className="sched-missed-btns">
-              <button className="tour-btn tour-btn-primary" data-testid="sched-missed-run" onClick={() => sched.resolveMissed(o.taskId, 'run')}>{t('sched.runNow')}</button>
-              <button className="tour-btn" data-testid="sched-missed-skip" onClick={() => sched.resolveMissed(o.taskId, 'skip')}>{t('sched.skip')}</button>
-            </div>
-          </div>
-        );
+        return <MissedRow key={o.taskId} sched={sched} task={task} count={o.count} dueAt={o.dueAt} />;
       })}
+    </div>
+  );
+}
+
+/** Uma perdida: Rodar agora / Pular / Adiar (1, 3 ou 7 dias) / Apagar (pede confirmação: não tem volta). */
+function MissedRow({ sched, task, count, dueAt }: { sched: Scheduler; task: ScheduledTask; count: number; dueAt: number }) {
+  const [mode, setMode] = useState<'snooze' | 'delete' | null>(null);
+  return (
+    <div className="sched-missed-row" data-testid="sched-missed-row">
+      <div className="sched-missed-text">
+        <b>{task.name}</b> — {task.command}
+        <div className="mon-item-meta">{count > 1 ? t('sched.missedMany', { n: count, when: fmtWhen(dueAt) }) : t('sched.missedOne', { when: fmtWhen(dueAt) })}</div>
+      </div>
+      {mode === null && (
+        <div className="sched-missed-btns">
+          <button className="tour-btn tour-btn-primary" data-testid="sched-missed-run" onClick={() => sched.resolveMissed(task.id, 'run')}>{t('sched.runNow')}</button>
+          <button className="tour-btn" data-testid="sched-missed-skip" onClick={() => sched.resolveMissed(task.id, 'skip')}>{t('sched.skip')}</button>
+          <button className="tour-btn" data-testid="sched-missed-snooze" onClick={() => setMode('snooze')}>{t('sched.snooze')}</button>
+          <button className="tour-btn sched-missed-del" data-testid="sched-missed-delete" onClick={() => setMode('delete')}>{t('sched.deleteTask')}</button>
+        </div>
+      )}
+      {mode === 'snooze' && (
+        <div className="sched-missed-choice" data-testid="sched-missed-snooze-choices">
+          <span>{t('sched.snoozeFor')}</span>
+          <div className="sched-missed-btns">
+            {SNOOZE_DAYS.map(d => (
+              <button key={d} className="tour-btn" data-testid={`sched-snooze-${d}`} onClick={() => sched.resolveMissed(task.id, 'snooze', d)}>
+                {d === 1 ? t('sched.snooze1') : t('sched.snoozeN', { n: d })}
+              </button>
+            ))}
+            <button className="tour-btn" onClick={() => setMode(null)}>{t('sched.cancel')}</button>
+          </div>
+        </div>
+      )}
+      {mode === 'delete' && (
+        <div className="sched-missed-choice" data-testid="sched-missed-delete-confirm">
+          <span>{t('sched.deleteConfirm', { name: task.name })}</span>
+          <div className="sched-missed-btns">
+            <button className="tour-btn sched-missed-del-yes" data-testid="sched-missed-delete-yes" onClick={() => sched.resolveMissed(task.id, 'delete')}>{t('sched.deleteYes')}</button>
+            <button className="tour-btn" data-testid="sched-missed-delete-no" onClick={() => setMode(null)}>{t('sched.keep')}</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
