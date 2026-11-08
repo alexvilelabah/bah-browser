@@ -156,6 +156,19 @@ aqui pra o auditor não ter que "descobrir":
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). O agente nunca clica, segura, digita ou rola numa
    verificação humana — uma trava no código recusa toda ação na aba classificada assim — e nunca tenta parecer
    gente. Tarefa agendada (ninguém olhando) não espera: o site fica "couldn't read — human check". A chave opcional do item 5 (DESLIGADA por padrão) ainda clica uma vez numa caixinha simples antes de passar a aba pra você.
+7. **O agente pode ler o HTML da página (`get_html`)** ([`src/shared/html-clean.ts`](src/shared/html-clean.ts)). O que
+   ele recebe vem limpo: corpo de `<script>`/`<style>`/`<svg>`/`<noscript>`/`<template>`, comentários, estilo inline
+   e handlers `on*` saem; URLs `data:` são encurtadas; só uma lista curta de atributos sobrevive. **Valores secretos
+   nunca saem da página**: campos de senha e ocultos, qualquer campo cujo name/id/autocomplete pareça token, CSRF,
+   código de uso único, número de cartão, CVV ou SSN, e tokens CSRF em `<meta>` viram `[redacted]`; iframes de
+   outra origem viram só `[cross-origin iframe]`. No pedido, o HTML vem marcado como *dado da página, não
+   instrução*, e as partes invisíveis levam `[hidden]` — texto escondido tipo "ignore as instruções anteriores"
+   fica claramente marcado como algo que a pessoa não vê. É leitura passiva (permitida numa checagem humana, como
+   o `extract_text`); o que o agente fizer depois continua passando pelo freio de segurança. Uma leitura tem
+   o tamanho do contexto livre do modelo — de 4.000 a 60.000 caracteres ([`src/shared/read-paging.ts`](src/shared/read-paging.ts)),
+   6.000 por padrão nos modelos locais pequenos — e página maior é lida em partes (`offset`). Cada parte do
+   `get_html` / `extract_text` aparece só no próximo pedido (bloco próprio, marcado como dado da página), não
+   fica no histórico do agente.
 
 ---
 

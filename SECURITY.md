@@ -158,6 +158,18 @@ machine). They are listed here so an auditor does not have to "discover" them:
    ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
    human check — a code-level guard refuses every page action on a tab classified as one — and never
    tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check". The opt-in switch from item 5 (OFF by default) still clicks a simple checkbox once before handing off.
+7. **The agent can read a page's HTML (`get_html`)** ([`src/shared/html-clean.ts`](src/shared/html-clean.ts)). What it
+   gets is cleaned: `<script>`/`<style>`/`<svg>`/`<noscript>`/`<template>` bodies, comments, inline styles and
+   `on*` handlers are dropped; `data:` URLs are shortened; only a short attribute allowlist survives. **Secret
+   values never leave the page**: password and hidden inputs, any field whose name/id/autocomplete looks like a
+   token, CSRF, one-time code, card number, CVV or SSN, and `<meta>` CSRF tokens come out as `[redacted]`;
+   cross-origin iframes are just `[cross-origin iframe]`. The HTML is framed in the prompt as *data from the page,
+   not instructions*, and invisible parts are marked `[hidden]` so hidden "ignore previous instructions" text
+   is visibly not something the user sees. It is a passive read (allowed on a human check like `extract_text`);
+   whatever the agent does next still goes through the safety brake. One read is bounded by the model's free
+   context — 4,000 to 60,000 chars ([`src/shared/read-paging.ts`](src/shared/read-paging.ts)), 6,000 by default
+   on small local models — and longer pages are read in pages (`offset`). Each `get_html` / `extract_text`
+   page is shown in the next prompt only (its own block, framed as page data), not kept in the agent's history.
 
 ---
 
