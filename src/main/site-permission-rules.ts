@@ -21,6 +21,9 @@ const ALWAYS_ALLOW = new Set([
   'speaker-selection', 'storage-access', 'top-level-storage-access',
 ]);
 // Perguntam pra pessoa. O resto (nome desconhecido) é negado.
+// Localização é a exceção: negada em todo site sem perguntar (privacidade) — só vale um
+// "Permitir" que a pessoa escolheu no cadeado da barra de endereço.
+export const DENY_UNLESS_ALLOWED = new Set<PermKind>(['geolocation']);
 const ASK_KIND: Record<string, PermKind> = {
   geolocation: 'geolocation', notifications: 'notifications', 'clipboard-read': 'clipboardRead',
   midi: 'midi', midiSysex: 'midi', openExternal: 'openExternal', fileSystem: 'fileSystem',
@@ -104,6 +107,7 @@ export function resolveRequest(store: PermStore, permission: string, d: RequestI
   // Só pergunta o que ainda não foi respondido (microfone já liberado + câmera nova = pergunta só a câmera).
   const undecided = kinds.filter(k => site[k] !== 'allow');
   if (undecided.length === 0) return { action: 'allow' };
+  if (undecided.some(k => DENY_UNLESS_ALLOWED.has(k))) return { action: 'deny' };
   return { action: 'ask', origin, kinds: undecided };
 }
 

@@ -37,6 +37,31 @@
   <a href="https://ollama.com"><img src="https://img.shields.io/badge/Ollama-101010?style=flat-square&logo=ollama&logoColor=white" alt="Ollama" /></a>
 </p>
 
+## 💡 Pra que as pessoas usam o Bah
+
+Um **agente de navegador com IA**, open source, pras partes chatas da web: lê a página, clica, digita,
+envia arquivos e espera como uma pessoa faria, e **pergunta antes de qualquer coisa arriscada** (pagar,
+excluir, enviar formulário, ler seus arquivos ou a área de transferência). Funciona com modelo na nuvem
+ou **100% local** (Ollama ou llama.cpp — testado com `Qwen3-VL-8B` numa GPU de 16 GB).
+
+| Peça… | O que o Bah faz | Status |
+|---|---|---|
+| *"Baixe a ISO mais recente do Ubuntu"* · *"o driver da impressora pro meu Mac"* | Acha o arquivo certo pro **seu** SO e CPU, passa por EULA e seletor de SO, baixa em segundo plano (qualquer tamanho) e informa o caminho; confere checksum | ✅ testado de ponta a ponta |
+| *"Baixe a última versão do Steam / software da impressora HP / Office / SolidWorks / Altium / Photoshop pra este computador"* | Vai à página **oficial** do fabricante (marca agregadores de "free download"), pega a versão do seu SO **e CPU** (Intel × Apple Silicon, x64 × ARM64), avisa se o arquivo é do SO/CPU errado e **para na parede de login** pra você decidir (nunca digita senha nem cria conta). Nunca abre o instalador | 🧪 páginas de teste (detecção automática, lista SO/CPU, modelo de impressora, modal, login). Ao vivo, Qwen3-VL-8B local, Mac Intel: ✅ Steam (`steam.dmg`) · ✅ Altium (parou no login) · ❌ HP 9015e, Office, SolidWorks, Photoshop (chegou à página oficial, não escolheu versão) |
+| *"Hotel em Nova York até US$ 450 a diária no próximo fim de semana"* | Busca em sites de reserva, escolhe datas no calendário, fecha popups (guarda cupons) e compara preços | ✅ testado (Booking.com) |
+| *"Compare preços do AirPods Pro na Amazon e em outras lojas"* · *"carregador compatível com meu notebook"* | **Visita o site de cada loja** (as que você citar, completando com as grandes varejistas da sua região), busca lá, lê o preço naquela página e monta a tabela só com essas leituras — artigo de ofertas ou comparador de preços nunca é fonte. Loja com checagem de robô vai pra você (Watch/Takeover) ou fica como "não deu pra ler"; cada linha tem o link da página lida | ✅ ao vivo, modelo local 8B: Amazon, Best Buy, Walmart lidas · Target mostrou checagem "segure o botão" (entregue à pessoa) · 🧪 4 lojas de treino |
+| *"Abra minhas 2 vagas recomendadas"* · *"Candidate-se a esta vaga com meu currículo"* | Lê suas vagas recomendadas (inclusive as salvas ★), abre uma por vez, escolhe o melhor currículo de uma pasta que **você** libera, preenche o formulário **por código** — campos de texto e listas suspensas com busca (Greenhouse, Workday) — com seu 📝 perfil de candidatura e respostas salvas, pergunta uma vez o que faltar e para pro seu OK antes de enviar | 🧪 ensaiado em cópias de páginas reais do Indeed + Ashby (3/3) · sites ao vivo a seguir |
+| *"Põe leite, ovos, bananas e uma dúzia de bagels no meu carrinho do Walmart"* | Busca item por item, escolhe pelo que você disse (marca, tamanho, orgânico) ou por um padrão sensato da marca da loja e diz por quê, acerta as quantidades (uma dúzia de bagels = 2 pacotes de 6), pergunta antes de substituir algo esgotado e antes de escolher retirada/entrega ou loja, confere o carrinho, mostra uma tabela — e **nunca fecha o pedido** (o freio pergunta antes de Checkout / Place order / Reserve time slot) | 🧪 ensaiado em cópias locais de lojas com o modelo local 8B: cópia do Walmart 3/3 carrinhos certos e nunca fechou o pedido (2/3 também conferiram o carrinho e relataram) · cópias do Whole Foods e da Target 0/1 · lojas ao vivo ainda não |
+| *"Abra um chamado na Apple sobre a bateria do meu MacBook"* · *"Pergunte na comunidade da Dell por que o ventilador do meu XPS faz barulho"* | **Começa achando o site de suporte do fabricante com uma busca na web** (qualquer marca — Dell, Canon, Logitech…), abre só resultado no domínio do próprio fabricante (anúncio de "suporte" imitação, tipo `canon-support-help.com`, é recusado) e fica lá, escolhe produto → assunto → formas de contato, procura na comunidade antes de redigir um post e **preenche o chamado por código com o que já se sabe** — o seu pedido e as respostas seguintes, o produto e o serial que você deu, um tópico parecido que ele viu — redigido pelo seu modelo com a regra "só estes fatos" (o que ele acrescentar, como o ano do modelo, é recusado e o Bah volta às suas palavras num modelo fixo), mais o assunto e os campos de contato do 📝 perfil; um cartão pede pra você conferir na aba, mudar o que quiser e apertar Continuar. Nunca senha, nunca cria conta. Página do fabricante que não carrega (Access Denied / 403, não encontrada, em branco) → ele busca essa página na web e só abre resultado do domínio do próprio fabricante; continuou bloqueada → para e diz. Tarefa que termina fora do site do fabricante é relatada como não feita; no login o Bah pausa pra você, e o **Enviar / Postar** final mostra antes o texto exato | 🧪 modelo local 8B (Qwen3-VL-8B) em cópias de treino, com o formulário preenchido por código: chamados enviados pelo cartão: Dell 3/3, Apple 2/5 (os que faltaram nem chegaram ao formulário e terminaram como falha); posts 6/6 (um como resposta no tópico parecido); todo formulário alcançado teve a descrição preenchida e o cartão de revisão; nenhuma frase inventada no que foi enviado; todo login alcançado pausou, todo envio perguntou, nenhuma senha digitada · 🧪 anúncio golpe imitando o fabricante acima do resultado verdadeiro é recusado (Canon) · ao vivo: a aba "Contact Support" da Dell responde Access Denied ao Bah — o agente busca a página em vez de sair da Dell (conferido com páginas sintéticas, não ao vivo) |
+| *"Quem são os gerentes de compras da Acme?"* | Pesquisa de pessoas no LinkedIn em **modo cuidadoso** — uma página por pedido, sem clique automático | ✅ testado |
+| *"Planeje minha viagem a Tóquio no horário de Tóquio"* | Mostra os sites no fuso do destino e avisa o agente quando a VPN deixa os preços estrangeiros | ✅ testado |
+| *"Salve este recibo em PDF"* · *"print da página inteira"* · *"copie o total"* | Salva em Downloads / copia pra você; ler a área de transferência pede sua permissão | ✅ testado |
+| Atrás de **proxy corporativo** (Blue Coat, PAC, SOCKS) com certificados da empresa | Usa o proxy e os certificados do SO nas páginas **e** nas requisições do próprio Bah; caixa de login do proxy | ✅ testado com proxy com autenticação |
+| *"Monte um carrinho de mercado pra família de quatro"* · buscas agendadas | Carrinhos com vários itens em mercados; tarefas agendadas com aviso de execução perdida | 🛠️ planejado |
+
+✅ testado de ponta a ponta no site real · 🧪 testado em páginas de teste · 🛠️ planejado.
+Quer outro fluxo? O Bah pode **salvar o que funcionou como skill** — ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
+
 ## 🎬 Demonstração
 
 ![Bah em ação](assets/demo.gif)
@@ -53,9 +78,13 @@
 
 **🍎 macOS (novo, a partir da v1.8.12):** na [mesma página de download](https://github.com/alexvilelabah/bah-browser/releases/latest), baixe o `Bah-*-arm64.dmg` se o seu Mac for Apple Silicon (M1 em diante) ou o `Bah-*-x64.dmg` se for Intel (dá pra ver no menu Apple → Sobre Este Mac). Abra o arquivo e arraste o **Bah** pra pasta Aplicativos. Precisa do macOS 13 (Ventura) ou mais novo.
 
-> ⚠️ A versão de Mac é nova e ainda não tem assinatura nem notarização da Apple, então, na primeira vez que você abrir, o macOS geralmente diz que o Bah *"está danificado e não pode ser aberto"* — ele não está danificado, é só a falta da assinatura. Abra o Terminal, rode `xattr -cr /Applications/Bah.app` e depois abra o Bah normalmente. Ainda não tem atualização automática no Mac: pra atualizar, baixe o `.dmg` novo, substitua o app e rode o comando `xattr` de novo. Pra baixar vídeos (no YouTube, em qualquer qualidade) e músicas em MP3, instale o ffmpeg pelo [Homebrew](https://brew.sh) (`brew install ffmpeg`). Sem ele, só o download de áudio funciona, no formato original (geralmente M4A). Netflix, Prime Video e Disney+ ainda não tocam na versão de Mac.
+> ⚠️ A versão de Mac é nova e ainda não tem assinatura nem notarização da Apple, então, na primeira vez que você abrir, o macOS geralmente diz que o Bah *"está danificado e não pode ser aberto"* — ele não está danificado, é só a falta da assinatura. Abra o Terminal, rode `xattr -cr /Applications/Bah.app` e depois abra o Bah normalmente. Ainda não tem atualização automática no Mac: pra atualizar, baixe o `.dmg` novo, substitua o app e rode o comando `xattr` de novo. Netflix, Prime Video e Disney+ ainda não tocam na versão de Mac.
+
+> 🍺 **Baixar vídeo/áudio no macOS usa as ferramentas do [Homebrew](https://brew.sh):** `brew install yt-dlp deno ffmpeg` (ou `brew bundle` num clone deste repositório, com o [`Brewfile`](Brewfile)). O build de Mac não baixa nem roda programas sozinho (app sem assinatura rodando binário recém-baixado é o que o macOS mais desconfia); o Homebrew instala e atualiza. Sem o ffmpeg, só o download de áudio funciona, no formato original (geralmente M4A). O resto funciona sem eles.
 
 **👨‍💻 Quero mexer no código:** clone e rode — veja [Como rodar](#como-rodar) abaixo.
+
+**🤖 Um agente de IA vai instalar o Bah pra você?** Aponte-o para o [INSTALL-FOR-AGENTS.md](INSTALL-FOR-AGENTS.md) (em inglês) — passo a passo, com uma verificação depois de cada passo.
 
 ---
 
@@ -63,15 +92,29 @@
 
 - **Navegador completo** com abas, navegação, URL, tema dark
 - **Painel AGENTE** lateral: digita um comando → a IA decide passo a passo até concluir
-- **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela
+- **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela. Funciona também em páginas que proíbem scripts (arquivos crus do Hugging Face / GitHub): o Bah lê pelo próprio mundo isolado de scripts
 - **IA**: gerar imagem **funciona grátis de cara** (sem chave). Conversar e o agente autônomo completo precisam de chave — **DeepSeek** (barato, recomendado) — também **Mistral** / **NVIDIA NIM** — ou **Ollama** (local/offline, grátis)
-- **Chat por aba** — cada aba do navegador tem a sua própria conversa; a IA lembra de cada aba separadamente
+- **Sessões do assistente nas suas abas** — na 1ª vez que você usa o assistente numa aba ela ganha uma sessão: um chip colorido com um nome curto ("Job hunt", "Groceries") na barra de abas, como um grupo de abas do Chrome. As abas de uma sessão dividem a mesma conversa — as que o agente abre, e os links que você abre a partir de uma aba da sessão, entram nela; botão direito na aba adiciona a uma sessão ou tira dela; clique no chip para renomear ou mudar a cor
+- **Uma memória por sessão, do tamanho de um modelo local pequeno** — o agente e o chat dividem a conversa da sessão (pedidos, respostas, resumos das tarefas, fatos, itens 📌 fixados) dentro de um orçamento fixo de tokens, então a página nunca perde espaço. Quando enche, os itens mais antigos viram resumo **à vista** no painel (abre pra ler o resumo; `/compact` quando quiser). Um **medidor de contexto** ao lado do nome do modelo mostra `contexto 6.1k / 16k · conversa 2.3k` e, num toque, o que ocupou a janela
+- **A conversa volta depois de reiniciar** com ⋮ → Ao abrir o Bah → "Continuar de onde parou", e o **🕘 Histórico de conversas** (⋮) lista as sessões passadas — abra só pra ler ou **Retome**, reabrindo as abas dela. Guardado cifrado neste computador, nunca das abas anônimas, apagado no "Limpar dados de navegação"
+- **Tarefas agendadas** — "dias úteis às 8h veja minhas vagas no Indeed" ou ⋮ → ⏰ Tarefas agendadas: rodam com o Bah aberto, cada uma na sua aba; um horário perdido com o Bah fechado é oferecido quando ele abre; o que precisa do seu OK (enviar, comprar, mandar formulário, entrar na conta) espera você, com notificação
+- **Entende continuação** — "você clicou?" é respondido com o registro do que o agente acabou de fazer (não com busca na web); "abriu uma janela, mas não a segunda" manda o agente terminar o que faltou; "isso" / "essa" num pedido novo é a última coisa em que o agente agiu
+- **Vai direto ao site que você cita** — "browse to linkedin, find a job…" abre o linkedin.com na hora, sem pesquisar antes. Só vale pra uma lista curta e conferida de sites conhecidos; nome desconhecido é pesquisado, nunca chutado
+- **"Resuma minhas abas abertas"** — uma linha por aba e um resumo geral, cada uma com link pra ir até ela. Pergunta antes de ler suas abas (ou segue sua escolha sempre/nunca), pula abas anônimas e páginas internas, e deixa as abas dormindo quietas a menos que você peça
+- **Economia de memória** — igual à do Chrome: abas que você não usa há um tempo (⋮ → 💤: Moderada 2 h, Equilibrada 30 min, Máxima 10 min) liberam a memória e recarregam ao clicar. Nunca abas tocando áudio/vídeo, usando câmera, microfone ou a tela, baixando, com formulário pela metade, fixadas, com notificações ou dispositivo conectado, na sua lista "manter estes sites sempre ativos", ou com tarefa da IA rodando ou esperando você
+- **Roteamento em linguagem natural** — pedidos que começam com uma ação ("procure…", "pesquise…", "abra…", "candidate-se…") vão pro agente; perguntas ganham resposta. Erros de digitação como "open 2 windos … a different video in each" ainda abrem 2 vídeos
+- **Roteador local opcional** — baixe uma vez um modelo pequeno (Qwen2.5-1.5B, 1,1 GB, Apache-2.0; ele pergunta antes) e cada mensagem é rotulada no seu próprio computador antes de chegar na IA: tarefa, pergunta sobre a página, pergunta pra web, conversa, pergunta sobre a última tarefa ou "deu errado, conserta". Entende erro de digitação ("search for a set of new golf blubs"); seu texto nunca sai do computador; sem ele as regras de palavras decidem como antes. Em pedidos de "achar/baixar" sobre uma obra nomeada ele também deixa o pedido preciso antes da IA grande começar ("clipes de top gun com tom cruise" → "…o filme Top Gun de 1986…"), mostrado como **🔎 Entendido como: …**; a IA grande recebe os dois textos e o seu manda. Coleções de mídia ("todos os clipes do filme X") são então buscadas faixa por faixa como título + artista + ano
 - **Atalhos de uma tacada**: abrir N vídeos de uma vez, pular pro momento exato em que uma frase é dita em vários vídeos, **conversar sobre um vídeo do YouTube usando a transcrição**, comparar preços, buscar notícias — atalhos determinísticos que gastam zero tokens
+- **Skills de navegação** — receitas curtas `SKILL.md` (popups, calendários, autocomplete, EULAs, seletor de SO, downloads, compras, viagens, pesquisa de pessoas, candidaturas a vagas, listas de cartões, login) escolhidas a cada passo; salve as suas depois de uma tarefa que deu certo — ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md)
+- **Segurança primeiro** — confirma pagamento/exclusão/envio; **localização é negada a todo site** sem nem perguntar (só um site que você marcar Permitir no cadeado recebe); câmera, microfone e área de transferência ficam **bloqueados até você liberar**; upload só usa arquivo que *você* escolhe ou de uma pasta que *você* libera na sessão; diálogos das páginas passam pela caixa do próprio Bah
 - **UI em inglês por padrão**, com **Português** e **Español** disponíveis nas Configurações — a IA responde no idioma que você escolher
 - **Adblock** completo (EasyList + EasyPrivacy) com bypass automático em sites que quebram (YouTube, Twitch)
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
-- **Compatibilidade com sites modernos** — se apresenta como Chrome padrão (UA Chrome, mascara `navigator.webdriver`) pra não ser bloqueado por engano
+- **Identidade honesta e consistente** — user agent, client hints e idiomas do Chrome atual definidos dentro do motor (uma fonte só, sem remendo em JavaScript), pra os sites verem um Chrome normal e não bloquearem por engano. GPU, núcleos e memória são os valores **reais** (os mesmos que o Chrome informa no seu computador) — nada inventado, então a página e os workers dela concordam. Não tenta driblar detecção de robô; sites que proíbem automação ficam em **modo cuidadoso**. Por que os testes veem mais checagens de robô do que você vai ver: [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#identidade-do-navegador-e-checagens-de-robô-o-que-os-sites-veem)
+- **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
+- **Entrega a página pra você quando o site quer uma pessoa** — checagem de robô de qualquer tipo e tela de login: a aba vem pra frente, você resolve, o Bah continua sozinho (**Watch/Takeover**)
+- **Login do Google é opcional** — um ícone redondo de perfil no canto de cima (como o do Chrome) entra no Google pra tarefas no Gmail / Drive / YouTube; o resto funciona sem isso
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -110,18 +153,22 @@ USUÁRIO → "abre o gmail e apaga os spams"
 
 ### Ferramentas que a IA pode chamar
 
-| Ação | O que faz |
-|---|---|
-| `click_ref(N)` | Clica no elemento de id N da lista observada |
-| `fill_ref(N, value)` | Preenche o input N com `value` (e confere se entrou) |
-| `click_text(text)` | Acha por texto visível e clica |
-| `click_at(x, y)` | Clique em coordenada exata (fallback visual) |
-| `type(text)` / `press(key)` | Digita no campo focado / envia uma tecla |
-| `navigate(url)` / `scroll(dir)` | Vai pra URL / rola |
-| `new_tab` / `switch_tab` / `close_tab` | Gerência de abas |
-| `done(reason, success)` | Encerra o loop |
+O agente responde com uma ação JSON por passo (ou um lote curto). Paridade de comandos com o
+[agent-browser](https://agent-browser.dev/commands), adaptada a um navegador de desktop com a pessoa no controle.
 
-O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
+| Grupo | Ações |
+|---|---|
+| **Clicar e digitar** | `click_ref` · `fill_ref` · `click_text` · `click_role` (papel + nome + nth) · `click_at` · `fill` (por rótulo/placeholder) · `type` · `insert_text` · `press` (combinações como `Control+Enter`) · `keydown` / `keyup` · `hover` · `dblclick` · `focus` · `drag` · `check` / `uncheck` · `select_option` |
+| **Ler a página** | lista de elementos (com `frame="…"` pra conteúdo de iframe e marca `disabled`) · `extract_text` (o miolo da página em Markdown; página longa em partes via `offset`, tamanho conforme o contexto livre do modelo) · `find` · `look_at` (recorte ampliado) · `get` (valor, marcado, habilitado, visível…) · `get_html` (HTML limpo de um seletor ou da página — refs `[#N]`, marca `[hidden]`, sem segredos nem scripts; pra botões duplicados, campos sem rótulo, dropdowns customizados; paginado com `offset` como o `extract_text`) |
+| **Navegar e esperar** | `navigate` · `back` / `forward` / `reload` · `scroll` · `new_tab` / `switch_tab` / `close_tab` · `wait` (`ms`, ou até `text` / `gone` / `url` / `load: "networkidle"`) |
+| **Buscar** | `web_search` (Google → Bing → DuckDuckGo → Yahoo → Perplexity, pulando os que bloqueiam) · `history_search` (pede permissão) |
+| **Arquivos** | `upload` (você escolhe no diálogo do SO) · `list_files` / `read_file` / `upload { file }` (pasta que você libera na sessão) · `download` + `list/cancel/pause/resume/retry_download` · `save_pdf` · `screenshot { full }` |
+| **Diálogos e área de transferência** | `dialog { accept }` (responde o próximo alert/confirm) · `clipboard { write }` · `clipboard { read }` (pede permissão) |
+| **Planejar e concluir** | `plan` · `store` · `suggest_time_zone` (você confirma) · `render_view` (tabela comparativa) · `done(motivo, sucesso)` |
+
+O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. Antes do clique, o ponteiro vai até o alvo pelo mesmo arco do cursor do agente que o Bah desenha na tela (sem tremor aleatório), então os eventos `mousemove` da página batem com o que você vê. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
+
+Iframes também contam: campos e botões de formulários embutidos (candidatura de vaga, campos de pagamento, widget de reserva) — da mesma origem ou de outro site — aparecem na lista de elementos marcados com `frame="host"`, e `click_ref` / `fill_ref` funcionam neles do mesmo jeito.
 
 ---
 
@@ -137,12 +184,122 @@ npm start        # ou: npx electron .
 
 Atalho Windows: clique duplo em `Abrir-Bah.bat`.
 
+### Linux: compilar e instalar
+
+Testado no Ubuntu 24.04 x64; os nomes de pacote e o passo do AppArmor abaixo valem para essa versão. Outras distros precisam dos pacotes equivalentes.
+
+**1. Pacotes do sistema.** Instale também o **Node.js 22.18 ou mais novo** (um 22.x mais antigo compila, mas o `npm run test:unit` exige o 22.18).
+
+```bash
+sudo apt-get install -y git libfuse2t64 libnss3 libgtk-3-0t64 libasound2t64 libgbm1 libnotify4 \
+  libxss1 libxtst6 libatspi2.0-0t64 libuuid1 libsecret-1-0 xdg-utils
+```
+
+O `xvfb` é opcional: só os testes de fumaça sem tela usam.
+
+**2. Gere o AppImage**, a partir da pasta clonada:
+
+```bash
+npm ci
+node node_modules/electron/install.js   # o npm não baixa o binário do Electron sozinho
+npm run build
+npx electron-builder --linux AppImage --publish never
+```
+
+O resultado é `release/Bah-<versão>.AppImage`. Se o `npm ci` falhar com `Permission denied (publickey)`, você não tem chave SSH no GitHub; rode `git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"` e tente de novo.
+
+**3. Libere o sandbox do navegador.** O Ubuntu 24.04 restringe os user namespaces que o sandbox do Chromium usa, e o Bah aborta ao abrir com um erro de `chrome-sandbox`. Rode isto **a partir da pasta clonada** para criar um perfil do AppArmor igual ao que o Chrome instala:
+
+```bash
+sudo tee /etc/apparmor.d/bah-browser > /dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bah-browser "/{tmp/.mount_Bah-*/bah-browser,${PWD#/}/release/linux-unpacked/bah-browser,${PWD#/}/node_modules/electron/dist/electron}" flags=(unconfined) {
+  userns,
+  include if exists <local/bah-browser>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bah-browser
+```
+
+Ele cobre o AppImage (montado em `/tmp`; se você define `TMPDIR`, ajuste esse caminho), o `release/linux-unpacked` e o Electron de desenvolvimento desta pasta. Não use `--no-sandbox` no lugar disso: ele desliga o sandbox do Chromium para todos os sites que você visitar.
+
+**4. Rode:** `release/Bah-*.AppImage`, ou `npx electron .` a partir da pasta do código.
+
+**Bom saber**
+
+- **IA local em GPU integrada:** o roteador embutido usa a CPU em GPUs integradas (por exemplo, Intel Iris Xe). A entrada por voz sempre roda na CPU. Ollama e `llama-server` escolhem o próprio hardware.
+- **`MESA-LOADER: failed to open nvidia-drm` em máquina sem NVIDIA:** configurações antigas da NVIDIA estão forçando o driver gráfico errado. Se o `/etc/environment` as define, remova-as e saia e entre de novo na sessão:
+  ```bash
+  sudo sed -i.bak -E '/^(GBM_BACKEND|__GLX_VENDOR_LIBRARY_NAME|LIBVA_DRIVER_NAME)=/d' /etc/environment
+  ```
+- **Netflix e outros vídeos com DRM** precisam de um pacote assinado pela castLabs (veja `build/afterSign.js`); um build local simples não os reproduz.
+
 ### Configurar a IA
+
+> **Setup testado (local):** o agente é testado com o `llama-server` do [llama.cpp](https://github.com/ggml-org/llama.cpp) rodando **`Qwen3-VL-8B-Instruct-Q4_K_M.gguf`** ([`unsloth/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/unsloth/Qwen3-VL-8B-Instruct-GGUF), com o projetor de visão) numa GPU NVIDIA de 16 GB — cabe inteiro na VRAM e é rápido o bastante pra navegar passo a passo:
+> `llama-server -hf unsloth/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M -c 32768 -ngl 99 --host 0.0.0.0 --port 8080`
+> No Bah: engrenagem → 🏠 IA Local → endpoint compatível com OpenAI `http://<servidor>:8080/v1`. Com esse modelo o agente faz de forma confiável tarefas de download em várias páginas — ex.: *"baixe a ISO mais recente do ubuntu"* (acha o índice de releases, inicia o download, espera e informa o caminho salvo; ISO conferida com o SHA256 publicado). Use um modelo com visão (variantes `-VL-`): o agente lê a captura de tela além da lista de elementos.
 
 1. Abra o navegador, clique no botão **AI** na barra de endereço.
 2. Engrenagem → escolha o provedor.
 3. Escolha **DeepSeek**, **Mistral** ou **NVIDIA NIM** e cole a chave dele (a da DeepSeek é baratíssima) → Salvar. Gerar imagem funciona sem chave de qualquer jeito; conversar e o agente precisam de uma dessas (ou do Ollama local, próximo passo).
 4. **Local (opcional, grátis/offline):** instale o [Ollama](https://ollama.com) e **deixe-o rodando** (fica na bandeja e serve os modelos em `127.0.0.1:11434`). Depois baixe um modelo dentro do Bah (☁️/🏠 → 🏠 IA Local → digite o nome → **Baixar**) ou no terminal (ex.: `ollama pull qwen3:14b`). O local roda offline, mas a nuvem (DeepSeek) é mais confiável.
+
+### Redes corporativas (proxy, certificados da empresa)
+
+O Bah segue as **configurações de proxy do sistema operacional** por padrão, como o Chrome — inclusive
+detecção automática (WPAD) e scripts PAC definidos pela TI. Para configurar à mão: menu ⋮ → **🌐 Rede e proxy**:
+**Sistema** (padrão) · **Manual** (`proxy.empresa:8080` para HTTP+HTTPS, ou `socks5://127.0.0.1:1080` para
+proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais uma lista de exceções e o botão
+**Testar conexão**. `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` pré-configuram quando nada foi salvo.
+
+- **Login no proxy (HTTP 407, ex.: Blue Coat):** o Bah pede usuário e senha numa caixa própria;
+  *Lembrar* guarda cifrado com o chaveiro do SO (`safeStorage`). Nunca chegam ao agente nem ao modelo.
+- **Tudo usa a mesma rota:** páginas, janelas de login e requisições do próprio Bah (IA, atualizações,
+  busca, downloads do agente) passam pela pilha de rede do motor do navegador — uma configuração
+  (e um login) vale para tudo.
+- **Certificados-raiz da empresa (inspeção TLS):** o Chromium já confia no repositório do SO. O Node do
+  Electron não, então o Bah lê o repositório do SO na inicialização (chaveiros do macOS, repositórios
+  `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node — downloads na
+  worker funcionam atrás de proxy com inspeção TLS também.
+- **Proteção contra vazamento de IP pelo WebRTC (ligada por padrão):** com proxy, o WebRTC só pode usar o proxy
+  (`disable_non_proxied_udp`); sem proxy, só a conexão de rede principal (`default_public_interface_only`) — nos
+  dois casos a página não lista seus endereços IP por ele. **Melhor qualidade de chamada** desliga a proteção
+  (qualquer página passa a ver seus IPs reais). **WebRTC: só IPv4** tira os candidatos IPv6 (vale depois de
+  reiniciar). O Chromium não faz login em proxy SOCKS5 (usuário/senha); SOCKS5 sem senha funciona.
+- **DNS seguro (DNS-over-HTTPS):** **Sistema** (padrão — nada muda até você escolher) · predefinições **AdGuard**
+  e **Mullvad** (bloqueiam anúncio, sem cadastro), **Quad9** (bloqueia malware), **Cloudflare** (sem filtro) ·
+  **NextDNS** (cole o ID da sua configuração — conta grátis, você gerencia as listas; plano grátis com 300 mil
+  consultas/mês, depois disso continua resolvendo mas para de filtrar) · endereço `https://` **personalizado**
+  (Pi-hole, AdGuard Home). **Estrito** faz a consulta falhar em vez de cair no DNS comum da sua rede quando o
+  servidor não responde. Uma configuração pra todas as abas, anônimas também. É configuração do navegador, não
+  extensão: extensão do Chrome não tem como trocar o resolvedor.
+- **Versão de IP:** o motor do Bah não consegue forçar só IPv4 ou só IPv6 no tráfego das páginas (testado:
+  `--disable-ipv6` não faz nada no Electron 44), então essas opções aparecem desativadas com o motivo — use as
+  configurações de rede do sistema. Só o WebRTC pode ficar limitado a IPv4 (acima).
+- **Avisos de vazamento:** se o seu proxy ou servidor de DNS seguro só é alcançável por uma versão de IP e este
+  computador também tem endereço real da outra, o painel avisa que o tráfego pode escapar (com botão pras
+  configurações de rede do sistema). Também avisa quando há proxy mas o WebRTC está em Melhor qualidade de
+  chamada, e lembra que o proxy pode fazer as próprias consultas de DNS. O Bah só olha quais versões de IP
+  existem — nunca mostra nem envia os seus endereços.
+- **Extensões de VPN:** uma extensão do Chrome que controla o proxy (`chrome.proxy`) vence enquanto está ligada,
+  como no Chrome; quando solta, as abas voltam pro proxy configurado aqui.
+
+### Região e hora (VPN, viagem)
+
+Menu ⋮ → **🌍 Região e hora**:
+- **Local da rede:** com VPN ou proxy, os sites mostram preços, moeda e estoque do país onde a conexão sai.
+  No **Automático** (padrão) o Bah confere esse país com uma requisição ao `cdn-cgi/trace` da Cloudflare quando
+  uma tarefa começa (cache de 10 min, de novo quando o proxy muda) e avisa o agente, pra ele não chamar preço
+  de fora de "local". As buscas usam esse país (`gl=` / `cc=`). Em tarefa de compra ou viagem, se o país da
+  rede for diferente do computador, o Bah pergunta uma vez qual preferir. **Região do computador** ou **um país
+  específico** nunca consultam a rede.
+- **Fuso dos sites:** o do computador (padrão), um fuso escolhido pra planejar viagem ou voo, ou **UTC** (esconde
+  seu fuso real dos scripts). Aplicado no motor como o override do DevTools; um selo 🕐 na barra mostra; volta pro
+  fuso do computador ao reiniciar, a não ser que marque *Manter*. O agente só *sugere* um fuso
+  (`suggest_time_zone`) — você confirma. Agendas com login costumam seguir o fuso da conta, não o do navegador.
 
 ---
 
@@ -156,23 +313,33 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **É a sua sessão real.** O navegador usa partition persistente (`persist:browser`), então cookies e logins ficam salvos. Se você está logado no Gmail no Bah, o agente também está. **A IA acessa tudo que você acessaria manualmente.** Não logue em contas que não confiaria a um assistente.
 
-- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, excluir ou meter dados de cartão**, o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
+- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, fechar o pedido ou reservar horário de entrega, excluir, meter dados de cartão, enviar uma candidatura a vaga ou enviar um chamado de suporte ou post em fórum** (o cartão mostra o texto que vai sair), o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
+
+- **Pop-ups das páginas não travam nada.** O `alert`/`confirm` de um site abre na caixa do próprio Bah, não na nativa que travava a página (e o agente). Durante uma tarefa, alerts são fechados e confirms comuns aceitos (o agente pode armar a resposta antes com a ação `dialog`); um confirm que parece **pagamento ou exclusão vai pra você**.
 
 - **Parar é parar.** O botão ■ Parar cancela na hora, mesmo no meio de uma chamada ao modelo ou do loop; uma resposta atrasada não "ressuscita" a tarefa cancelada.
 
 - **Sem falso sucesso.** Depois de um preenchimento, o agente confere se o campo realmente ficou com o valor; se uma ação não surtiu efeito, ele muda de estratégia em vez de relatar sucesso.
 
-- **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
+- **Passa a página pra você quando ela quer uma pessoa.** Em checagem de robô / CAPTCHA de qualquer tipo ou parede de login ele **traz a aba pra frente e deixa você fazer** — [Devolver] / [Pular este site] — e retoma sozinho assim que a página volta ao normal. Nunca toca a checagem. A única exceção é a chave opcional do menu (☑️ *Agente pode clicar em captcha de caixinha*, DESLIGADA por padrão), que ainda clica uma vez numa caixinha simples antes de passar a aba pra você. Tarefa agendada não espera: o site fica "couldn't read — human check". Em paywall ele continua parando e pedindo pra você assumir, e retoma quando você aperta Continuar.
+
+- **Entra na conta só com você.** Quando a tarefa precisa da sua conta ("minha lista", "minhas vagas salvas", pedidos, caixa de entrada) o agente pode clicar uma vez no **Entrar** do site; no formulário de login o Bah **pausa** — você entra (clique no campo de usuário para escolher um login salvo no gerenciador de senhas do Bah, ou digite) e aperta Continuar. O agente nunca digita nem vê senha e nunca chuta um usuário. O Bah acompanha se você **entrou ou não em cada site** e avisa o agente a cada passo, pra ele não clicar Entrar de novo nem supor páginas que não vê.
+- **Funciona com a sua extensão de senhas.** Com LastPass, Bitwarden ou 1Password instalado, o Bah sai da frente pra os dois gerenciadores não brigarem: nas abas normais ficam desligados a lista de logins dele e o "Salvar senha?" (tem um interruptor em Senhas). No formulário de login o agente espera alguns segundos o login automático **da própria extensão** e segue quando você já entrou. Se nada acontecer, um cartão diz pra entrar pela extensão e qual opção ligar pra ser automático da próxima vez: "Auto-login" no LastPass, "Autofill on page load" no Bitwarden. O agente nunca clica no menu da extensão e nunca lê senha.
+- **Adicionar ao Bah.** A Chrome Web Store só mostra o botão de instalar no Google Chrome. Na página de uma extensão na loja, o Bah mostra o próprio botão **Adicionar ao Bah**, que baixa o pacote público da extensão e pergunta antes de adicionar.
+
+- **Ritmo por site.** Ações que mexem na página esperam um intervalo aleatório de 1–5 s entre si no mesmo site; depois que o site mostra uma checagem anti-robô, 15–30 s pelos próximos 30 minutos. Só deixa o agente mais lento — não contorna a checagem.
 
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
-- **Compatibilidade, não evasão.** A gente se apresenta como Chrome padrão (UA Chrome + mascara `navigator.webdriver`) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos.
+- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** resolvemos CAPTCHA de imagem, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Por padrão o agente para e pede sua ajuda em qualquer verificação humana; uma chave **opcional** no menu (☑️ *Agente pode clicar em captcha de caixinha*, desligada por padrão) deixa ele clicar uma vez numa caixinha simples "Não sou um robô" / "Verifique que você é humano" — quem decide continua sendo o serviço de captcha, e qualquer coisa além disso (desafio de imagem) volta pra você. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão (entre na conta você mesmo; abra a vaga e clique em Candidatar-se, e deixe o Bah continuar no site de candidatura da empresa). Respeite os termos de cada site.
 
-- **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
+- **🔑 Login do Google (opcional) — o ícone de perfil no canto de cima.** Entrar só é preciso pra tarefas dentro do Google (Gmail, Drive, o seu YouTube). O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique no **ícone de perfil** → **Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
+
+- **📥 Downloads sem limite de tipo ou tamanho.** Qualquer tipo de arquivo pode ser baixado (instaladores inclusive), gravado direto no disco. **Torrents:** por padrão, arquivos `.torrent` baixam como qualquer arquivo e links `magnet:` abrem no app de torrent do sistema; ligue **🧲 Cliente de torrent embutido** no menu pra abrir no card de torrent do próprio Bah. Detalhes em [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#downloads-e-torrents).
 
 - **Adblock pausa em sites conhecidos.** YouTube e Twitch entram em bypass automático pro player não ser bloqueado pelo anti-adblock deles. No resto, o adblock fica ativo.
 
-**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar, sandbox separado por aba, e rate-limit de cliques pra evitar comportamento agressivo de bot.
+**Ainda não implementado** (mas seria bom): um modo "ver o plano e aprovar" antes de executar e sandbox separado por aba.
 
 ---
 

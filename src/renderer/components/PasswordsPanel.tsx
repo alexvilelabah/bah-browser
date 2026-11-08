@@ -122,6 +122,13 @@ export default function PasswordsPanel({ onClose, initialQuery }: { onClose: () 
               <span className="dl-set-txt">{t('pw.mgr.offer')}<small>{t('pw.mgr.offerHint')}</small></span>
             </label>
           )}
+          {/* Gerenciador em extensão ligado: o do Bah sai da frente (sem lista no campo nem "Salvar?"). */}
+          {!vaultOff && st?.extension && (
+            <label className="dl-set-switch" data-testid="pw-defer">
+              <input type="checkbox" checked={!!st.deferToExtension} onChange={async e => { report(await api?.setDeferToExtension(e.target.checked)); }} />
+              <span className="dl-set-txt">{t('pw.mgr.defer', { name: st.extension.name })}<small>{t('pw.mgr.deferHint', { name: st.extension.name })}</small></span>
+            </label>
+          )}
           <input className="pw-search" type="search" placeholder={t('pw.mgr.search')} value={q} onChange={e => setQ(e.target.value)} spellCheck={false} autoFocus />
           <div className="pw-list">
             {st && list.length === 0 && <div className="history-empty">{st.entries.length ? t('pw.mgr.noMatch') : t('pw.mgr.empty')}</div>}

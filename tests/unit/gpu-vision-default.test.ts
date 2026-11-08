@@ -36,3 +36,11 @@ test('no choice: on with a GPU, off without', () => {
   assert.equal(defaultVisionMode({}, { gpuDevice: [{ renderer: 'SwiftShader' }] }), 'off');
   assert.equal(defaultVisionMode({}, null), 'off');
 });
+
+test('look_at zoom forces the screenshot on the next step (unless vision is off or unsupported)', async () => {
+  const { decideAgentShot } = await import('../../src/shared/vision.ts');
+  const base = { mode: 'auto' as const, step: 5, pageChanged: false, domTextLen: 5000, imagesSent: 1, command: 'download a driver', provider: 'openai-compatible' };
+  assert.strictEqual(decideAgentShot(base).attach, false);
+  assert.deepStrictEqual(decideAgentShot({ ...base, zoomRequested: true }), { attach: true, reason: 'zoom_requested' });
+  assert.strictEqual(decideAgentShot({ ...base, zoomRequested: true, mode: 'off' as const }).attach, false);
+});

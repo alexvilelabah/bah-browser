@@ -5,6 +5,7 @@
 // lista diz isso; dá pra gerenciar as extensões, mas não clicar nelas.
 import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
+import { storeDetailId } from '../../shared/extension-store';
 
 /** O que o main manda de cada botão (cores já em CSS). */
 export interface ExtensionActionView {
@@ -27,6 +28,8 @@ interface Props {
   getActiveWcId: () => number | null;
   /** A aba que a pessoa está vendo é anônima (extensão não roda nela). */
   incognito?: boolean;
+  /** Endereço da aba que a pessoa vê: na página de uma extensão da loja aparece "Adicionar ao Bah". */
+  activeUrl?: string;
 }
 
 function ExtIcon({ view, name }: { view: ExtensionActionView; name: string }) {
@@ -35,7 +38,7 @@ function ExtIcon({ view, name }: { view: ExtensionActionView; name: string }) {
   return <span className="ext-letter" aria-hidden="true">{(name.trim()[0] || '?').toUpperCase()}</span>;
 }
 
-export default function ExtensionsToolbar({ getActiveWcId, incognito }: Props) {
+export default function ExtensionsToolbar({ getActiveWcId, incognito, activeUrl }: Props) {
   const [list, setList] = useState<ExtensionInfo[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -59,6 +62,21 @@ export default function ExtensionsToolbar({ getActiveWcId, incognito }: Props) {
   }, [open]);
 
   const isOn = (x: ExtensionInfo) => x.enabled !== false;
+  // A loja esconde o "Usar no Chrome" de quem não é o Chrome (decide no servidor). O Bah não se passa
+  // pelo Chrome: oferece o próprio botão, que baixa o pacote público e pergunta igual à loja.
+  const storeId = incognito ? '' : storeDetailId(activeUrl);
+  const [installing, setInstalling] = useState('');
+  const canInstall = !!storeId && !list.some(x => x.id === storeId);
+  const install = async () => {
+    const wc = getActiveWcId();
+    if (wc === null || installing) return;
+    setInstalling(storeId);
+    try {
+      const r = await window.electronAPI?.installExtensionFromStore?.(wc);
+      if (r && !r.ok && !r.cancelled && r.error !== 'installed') window.alert(t('ext.installFailed', { error: r.error || '' }));
+    } catch {}
+    finally { setInstalling(''); }
+  };
   const wcId = getActiveWcId();
   const viewFor = (x: ExtensionInfo) => (wcId !== null && x.tabs?.[String(wcId)]) || x.global;
 
@@ -85,6 +103,13 @@ export default function ExtensionsToolbar({ getActiveWcId, incognito }: Props) {
 
   return (
     <div className="ext-toolbar">
+      {canInstall && (
+        <button type="button" className="ext-store-install" data-testid="ext-store-install"
+          disabled={installing === storeId} aria-busy={installing === storeId}
+          title={t('ext.addToBahHint')} onClick={install}>
+          {installing === storeId ? t('ext.addingToBah') : t('ext.addToBah')}
+        </button>
+      )}
       {/* Os botões encolhem (e somem pela direita) antes de apertar o endereço ou empurrar o
           menu pra fora da janela; quem não coube continua no quebra-cabeça. */}
       <div className="ext-actions">

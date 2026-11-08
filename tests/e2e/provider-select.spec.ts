@@ -9,12 +9,14 @@ import path from 'path';
 test('selecting Claude in the provider dropdown sticks (does not snap back to DeepSeek)', async () => {
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // O shell pode recarregar uma vez logo após abrir; um evaluate nesse meio-tempo falha com 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // O painel do assistente ja abre por padrao (store.sidebarOpen inicia true) --
     // clicar em .ai-toggle aqui FECHARIA em vez de abrir.

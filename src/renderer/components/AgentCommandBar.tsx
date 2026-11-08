@@ -1,12 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { namesStore } from '../stores';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
+import { isAboutLastRun, lastRunDigest, lastRunSummary, reportsIncompleteRun, type RunFeedItem } from '../last-run';
+import type { RoutedIntent, RouterStatus } from '../../shared/router-routes';
+import RouterModelCard from './RouterModelCard';
+import { SESSION_COLOR_HEX } from '../../shared/agent-sessions';
+import { startsWithActionVerb } from '../route-words';
+import { commandIsSupport, supportRequestText } from '../support-tickets';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
+import { CommandHistory } from '../command-history';
 import { fmtUsd } from '../pricing';
+import { noteExchange, compactNow, clear as clearThread, getThread, hydratedKeys, type ThreadNotice } from '../threads';
+import { ThreadView, ThreadNoticeRow } from './ThreadView';
+import ContextMeter from './ContextMeter';
+import { nextRuns, parseSchedule, type ScheduleSpec } from '../../shared/schedule';
+import type { ScheduledRunHooks } from '../scheduler';
+import { ambiguityNote, describeSchedule, fmtWhen } from '../schedule-format';
 
 export interface StepRecord {
   step: number;
@@ -25,13 +39,18 @@ export interface StepRecord {
 export type AgentProgressEvent =
   | { kind: 'status'; message: string }
   | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
-  | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void }
+  | { kind: 'takeover'; phase: 'agent' | 'handoff' | 'takeover'; humanKind: 'captcha' | 'signin'; sites: string[]; cleared?: string[]; outcome?: string; reason?: string; instruction?: string; onHandBack: () => void; onSkip: () => void }
+  | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; onChoose?: (value: string) => void; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> }
   | { kind: 'plan_preview'; goal: string; steps: string[]; autoRunMs?: number; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void; onHold?: () => void }
   | { kind: 'thought'; message: string }
   | { kind: 'action'; action: BrowserAction }
   | { kind: 'result'; action: BrowserAction; result: any }
   | { kind: 'media'; mediaKind: 'image' | 'audio' | 'video'; paths: string[]; dir: string; total: number; label: string }
-  | { kind: 'step'; step: StepRecord };
+  | { kind: 'step'; step: StepRecord }
+  // Resumo das abas abertas (App.tsx → summarize_tabs): um cartão com link pra cada aba.
+  | { kind: 'tabs_summary'; tabs: TabsSummaryEntry[]; overall: string; skippedIncognito: number; skippedInternal: number; onOpen: (tabId: string) => void };
+
+export interface TabsSummaryEntry { id: string; title: string; url: string; state: 'read' | 'asleep' | 'no_access' | 'unreadable'; summary: string }
 
 interface ActionResult {
   thought?: string;
@@ -52,7 +71,11 @@ type FeedData =
   | { kind: 'report'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'help'; message: string; instruction: string }
-  | { kind: 'confirm'; message: string };
+  | { kind: 'takeover'; tkey: string; phase: 'agent' | 'handoff' | 'takeover'; humanKind: 'captcha' | 'signin'; sites: string[]; cleared?: string[]; outcome?: string; reason?: string; instruction?: string }
+  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> }
+  // Thread da sessão (renderer/threads.ts): avisos de orçamento/resumo/limpeza/corte, e a conversa que voltou.
+  | { kind: 'thread-notice'; notice: ThreadNotice }
+  | { kind: 'thread-recap'; key: string };
 type FeedItem = FeedData & { id: number };
 
 const FEED_CAP = 400;
@@ -107,7 +130,7 @@ function isAffirmative(msg: string): boolean {
 // Verbo de AÇÃO na web (busca/abrir/baixar/comprar/preencher/comparar…). Backup do
 // roteador determinístico (detectQuickAction/atalhos). NÃO inclui "resuma/explique/o
 // que/qual" — essas são perguntas, respondidas pelo chat com o conteúdo da página.
-const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching)\b/i;
+const ACTION_VERB_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|abr[ae]\w*|abrir|navegu\w+|naveg\w+|acess\w+|baix\w+|download|salv\w+|clic\w+|compr[ae]\w*|comprar|adicion\w+|preench\w+|envi\w+|enviar|inscrev\w+|curt\w+|post\w+|comparar|compare\b|fa[cç]a\s+(?:uma?\s+)?(?:busca|pesquisa|supercut|download)|search|searching|find|finding|look\s+up|open|opening|go\s+to|navigate|access|save|saving|get|getting|grab|click|clicking|buy|buying|add|fill|send|subscribe|like|publish|download|downloading|watch|watching|browse|browsing|visit|apply|applying)\b/i;
 function isImperativeAction(msg: string): boolean {
   return ACTION_VERB_RE.test(msg);
 }
@@ -126,8 +149,35 @@ const INFO_RE = /\b(pesquis\w+|busqu\w+|busca\b|procur\w+|encontr\w+|ach[ae]\w*|
 function isInfoRequest(msg: string): boolean { return INFO_RE.test(msg) || isQuestion(msg); }
 
 // Verbo que OPERA numa página (faz algo, não só lê/pergunta) → agente.
-const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule)\b/i;
+const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule|browse|browsing|go\s+to|navigate\s+to|head\s+(?:to|over)|visit|apply|applying|application|submit|candidat\w+|postul\w+)\b/i;
 function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
+
+// Pedido de BAIXAR um arquivo → agente (ele tem a ação download). Vem ANTES do INFO_RE no
+// roteador: "find the latest ubuntu iso and download it?" tem find/latest/"?" e ia parar
+// na pesquisa, que só responde texto. Aceita os erros de digitação comuns ("downoad",
+// "dowload", "donwload"...). "como baixar X?"/"how do I download X" continua sendo pergunta.
+// Hotel/voo/aluguel/ingresso PRA UMA DATA: preço e disponibilidade ao vivo só existem no site de
+// reserva — é tarefa do agente, não da pesquisa (que só lê o Google e não vê disponibilidade).
+const BOOKING_RE = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|inn|flights?|airfare|plane tickets?|rental cars?|car rentals?|tickets?|reservations?|hot[eé]is|hotel|hospedagem|pousadas?|passagens?|voos?|aluguel de carro|hoteles|vuelos|alojamiento)\b/i;
+const WHEN_RE = /\b(tonight|tomorrow|this weekend|next weekend|next week|weekend|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d|\d{1,2}(st|nd|rd|th)?\s*(of\s*)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{1,2}[\/.-]\d{1,2}|for \d+ nights?|check[- ]?in|amanh[aã]|fim de semana|pr[oó]xim[ao] semana|hoy|mañana|fin de semana|per night|a night|\bnight\b)\b/i;
+function wantsLiveBooking(msg: string): boolean {
+  return BOOKING_RE.test(msg) && WHEN_RE.test(msg);
+}
+
+// Loja nomeada + navegar/comparar/achar produto → agente na loja (a pesquisa só leria o Google).
+// Lista de lojas compartilhada: ../stores.ts
+const SHOP_VERB_RE = /\b(browse|shop|find|search|compare|cheapest|best|price|prices|deal|deals|under|over|larger|bigger|smaller|buy|look for|show me|need|want|procur\w*|compar\w*|pre[cç]o|barat\w*|busc\w*)\b/i;
+function wantsStoreBrowse(msg: string): boolean { return namesStore(msg) && SHOP_VERB_RE.test(msg); }
+// "compatible charger/adapter/battery for <modelo>" → o agente olha o site do fabricante e as lojas.
+const PART_RE = /\b(charger|adapter|adaptor|power supply|ac adapter|battery|replacement part|compatible|fonte|carregador|bateria|cargador)\b/i;
+const MODEL_RE = /\b(lenovo|thinkpad|ideapad|legion|yoga|dell|xps|latitude|inspiron|hp|elitebook|pavilion|probook|asus|zenbook|vivobook|acer|aspire|macbook|surface)\b|\b[a-z]{0,4}\d{2,}[a-z0-9-]*\b/i;
+function wantsPartLookup(msg: string): boolean { return PART_RE.test(msg) && MODEL_RE.test(msg) && SHOP_VERB_RE.test(msg); }
+
+const DOWNLOAD_RE = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i;
+function wantsDownload(msg: string): boolean {
+  const m = msg.trim();
+  return DOWNLOAD_RE.test(m) && !/^(how\s+(do|can|to)|como\b|cómo\b|what|o\s+que|qu[eé]\b)/i.test(m);
+}
 
 // Sobre a PÁGINA ATUAL (não a web aberta) → chat com o conteúdo da página.
 const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta|a|nessa|nesta|minha)\s+aba|(?:este|esse)\s+(artigo|texto|v[ií]deo|site)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text|video|site)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
@@ -162,19 +212,27 @@ function hostOf(url: string): string {
 }
 
 interface Props {
-  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean }) => Promise<ActionResult>;
+  /** unattended: tarefa AGENDADA (a pessoa pode não estar olhando) — o freio fica mais rígido. */
+  onExecute: (command: string, onProgress: (event: AgentProgressEvent) => void, signal?: AbortSignal, opts?: { forceImage?: boolean; unattended?: boolean }) => Promise<ActionResult>;
+  /** "every weekday at 8am …" no assistente: guarda a tarefa agendada (null = não deu: lista cheia). */
+  onCreateSchedule?: (command: string, spec: ScheduleSpec) => { nextAt: number } | null;
+  /** Relógio das tarefas agendadas (o mesmo do agendador; os testes mexem nele). */
+  schedNow?: () => number;
   /** isError: a resposta é um ERRO (IA fora, chave inválida…) — vira aviso vermelho COM dica,
    *  não uma bolha de resposta normal (antes o erro se disfarçava de resposta da IA). */
-  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
+  onSendChat: (message: string, docText?: string, streamId?: string, skipPageContext?: boolean, docIsFile?: boolean) => Promise<{ reply: string; suggestedCommand?: string; isError?: boolean }>;
   /** isError: a pesquisa falhou (buscador pediu captcha, IA fora…) — vira aviso vermelho
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
-  onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
+  /** ctx.lastRun: a última tarefa (pedido + como terminou), pro roteador local entender follow-ups.
+   *  Com o roteador: também 'last_run' (pergunta sobre a última tarefa) e 'fix' (ela ficou incompleta). */
+  onClassify?: (msg: string, ctx?: { lastRun?: { request: string; outcome: string } | null }) => Promise<RoutedIntent | null>;
+  /** Roteador local pronto → ele decide antes das regras de palavras (que ficam de reserva). */
+  routerReady?: boolean;
+  routerStatus?: RouterStatus;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
   onOpenUrl: (url: string) => void;
-  onGoogleLogin?: () => void;
-  googleLoggedIn?: boolean;
   isStartupTab?: boolean;   // só a aba inicial mostra as boas-vindas do painel
   pageOpen?: boolean;   // há uma página real aberta (não Google home/aba nova) → gate do "sobre a tela"
   activeTabTitle?: string;   // título da aba atual — mostrado no chip "lendo esta página"
@@ -195,7 +253,14 @@ interface Props {
   panelOpen?: boolean;   // painel visível? fechado é só display:none (segue montado) → pausa o que é enfeite
   onClose: () => void;
   activeTabId: string;
-  tabIds: string;   // ids das abas existentes (csv) — descarta conversas de abas fechadas
+  tabIds: string;   // chaves das conversas vivas (csv: sessão ou aba sem sessão) — descarta as que ficaram sem aba
+  /** Chave da conversa de uma aba (a sessão dela, ou ela mesma) — ver shared/agent-sessions.ts. */
+  threadKeyOf?: (tabId: string) => string;
+  /** 1º uso do assistente numa aba: cria a sessão dela (nome tirado do pedido). */
+  onEnsureSession?: (tabId: string, text: string) => void;
+  /** A sessão da aba vista (chip no topo do painel). */
+  viewSession?: { id: string; name: string; color: string; tabs: number } | null;
+  onRenameSession?: (id: string, name: string) => void;
   aiSettings: AISettings;
   onSettingsChange: (settings: AISettings) => Promise<void>;
   /** Gasto estimado desde que o app abriu (ver pricing.ts). usd=0 → nada é mostrado. */
@@ -207,7 +272,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, threadKeyOf = (id: string) => id, onEnsureSession, viewSession, onRenameSession, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud, onCreateSchedule, schedNow = Date.now }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -232,6 +297,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   }, [activeTabUrl, activeIncognito]);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // ↑/↓ = comandos já enviados (estilo terminal), pra não redigitar.
+  const cmdHistoryRef = useRef<CommandHistory | null>(null);
+  if (!cmdHistoryRef.current) cmdHistoryRef.current = new CommandHistory();
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
   // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
   const pendingSuggestionRef = useRef<string | null>(null);
@@ -252,11 +320,15 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const phRunning = (panelOpen ?? true) && winVisible;
   useEffect(() => {
     if (!phRunning) { setPh(''); return; }   // ninguém pode ver → não anima (recomeça limpo ao voltar)
+    // Exemplos = casos de uso já testados (vagas, carrinho, melhor preço, peça compatível, viagem…),
+    // intercalados com o que o Bah é (open source, bloqueador): quem olha aprende o que pode pedir.
     const phrases = [
       t('composer.phLead'),
-      t('composer.phEx1'),
-      t('composer.phEx2'),
-      t('composer.phEx3'),
+      t('composer.phEx4'), t('composer.phEx6'), t('composer.phEx1'),
+      t('composer.phEx7'), t('composer.phEx5'), t('composer.phEx2'),
+      t('composer.phEx8'), t('composer.phEx9'), t('composer.phEx3'),
+      t('composer.phEx10'), t('composer.phEx11'), t('composer.phEx13'),
+      t('composer.phEx12'), t('composer.phEx14'),
     ];
     let i = 0, c = 0, deleting = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -339,7 +411,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
 
   // Chat POR ABA: cada aba tem sua própria conversa. A aba VISTA é a ativa; uma tarefa
   // em andamento escreve na aba onde COMEÇOU (convoTabRef), mesmo se o usuário trocar.
-  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>({});
+  // Conversa que voltou (Continuar de onde parou): o feed começa com ela, só leitura.
+  const [feedsByTab, setFeedsByTab] = useState<Record<string, FeedItem[]>>(() =>
+    Object.fromEntries(hydratedKeys().map((k, i) => [k, [{ kind: 'thread-recap', key: k, id: -1 - i } as FeedItem]])));
   const convoTabRef = useRef<string>(activeTabId);
   // ── CONVERSA PRESA NA ABA DE ORIGEM ──────────────────────────────────────────────
   // As mensagens já iam pra aba onde a tarefa COMEÇOU (convoTabRef), mas o painel exibia a
@@ -356,7 +430,49 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   // vazava a conversa de uma aba pra outra — pior que o problema que resolvia, porque
   // abas precisam ser independentes. Sem estado, não há o que ficar preso.
   const viewTabId = (loading || chatLoading) ? (convoTabRef.current || activeTabId) : activeTabId;
-  const feed = useMemo<FeedItem[]>(() => feedsByTab[viewTabId] ?? [], [feedsByTab, viewTabId]);
+  const viewKey = threadKeyOf(viewTabId);
+  const feed = useMemo<FeedItem[]>(() => feedsByTab[viewKey] ?? [], [feedsByTab, viewKey]);
+  // O cartão de pergunta mais recente (só ele responde à pergunta pendente).
+  const lastConfirmId = useMemo(() => [...feed].reverse().find(i => i.kind === 'confirm')?.id ?? -1, [feed]);
+  // A conversa de uma aba mudou de chave (a aba ganhou sessão ou entrou em outra): vai junto.
+  useEffect(() => {
+    const onMove = (e: Event) => {
+      const { from, to } = (e as CustomEvent).detail || {};
+      if (!from || !to || from === to) return;
+      setFeedsByTab(m => {
+        if (!m[from]?.length) { if (!(from in m)) return m; const { [from]: _gone, ...rest } = m; return rest; }
+        const { [from]: moved, ...rest } = m;
+        const merged = [...(rest[to] ?? []), ...moved];
+        return { ...rest, [to]: merged.length > FEED_CAP ? merged.slice(-FEED_CAP) : merged };
+      });
+    };
+    window.addEventListener('bah:move-thread', onMove);
+    // Aviso que chega DEPOIS da tarefa (ex.: o download do agente terminou): entra na conversa dela.
+    const onNote = (e: Event) => {
+      const { key, text } = (e as CustomEvent).detail || {};
+      if (!key || !text) return;
+      setFeedsByTab(m => ({ ...m, [key]: [...(m[key] ?? []), { kind: 'chat-assistant', text, id: ++idRef.current } as FeedItem].slice(-FEED_CAP) }));
+    };
+    window.addEventListener('bah:agent-note', onNote);
+    return () => { window.removeEventListener('bah:move-thread', onMove); window.removeEventListener('bah:agent-note', onNote); };
+  }, []);
+  // Avisos da thread vão pro feed DA CONVERSA deles (não necessariamente a vista); conversa retomada
+  // do 🕘 histórico começa com ela mesma, só leitura.
+  useEffect(() => {
+    const add = (key: string, item: FeedData) => setFeedsByTab(m => {
+      const prev = m[key] ?? [];
+      const next = [...prev, { ...item, id: ++idRef.current } as FeedItem];
+      return { ...m, [key]: next.length > FEED_CAP ? next.slice(-FEED_CAP) : next };
+    });
+    const onNotice = (e: Event) => { const n = (e as CustomEvent).detail as ThreadNotice; if (n?.key) add(n.key, { kind: 'thread-notice', notice: n }); };
+    const onHydrated = (e: Event) => {
+      const keys: string[] = (e as CustomEvent).detail?.keys ?? [];
+      for (const k of keys) setFeedsByTab(m => (m[k]?.length ? m : { ...m, [k]: [{ kind: 'thread-recap', key: k, id: ++idRef.current }] }));
+    };
+    window.addEventListener('bah:thread-notice', onNotice);
+    window.addEventListener('bah:thread-hydrated', onHydrated);
+    return () => { window.removeEventListener('bah:thread-notice', onNotice); window.removeEventListener('bah:thread-hydrated', onHydrated); };
+  }, []);
 
   // ── PERGUNTAS SUGERIDAS SOBRE A PÁGINA ──────────────────────────────────────────
   // Painel abrindo vazio num site = tela morta, e ninguém descobre que pode perguntar
@@ -404,6 +520,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     });
   }, [tabIds]);
   const [manualHelp, setManualHelp] = useState<{ message: string; instruction: string } | null>(null);
+  // Watch/Takeover ativo: o cartão (pela chave) e os botões [Hand back] [Skip this site] da espera em curso.
+  const takeoverRef = useRef<{ key: string; handBack: () => void; skip: () => void } | null>(null);
+  const [takeoverKey, setTakeoverKey] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ message: string } | null>(null);   // freio de segurança
   const [planPreview, setPlanPreview] = useState<{ goal: string; steps: string[] } | null>(null);
   const [planDraft, setPlanDraft] = useState('');
@@ -514,7 +633,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const [startMsg, setStartMsg] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const manualContinueRef = useRef<(() => void) | null>(null);
-  const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void } | null>(null);
+  const confirmActionsRef = useRef<{ onConfirm: () => void; onCancel: () => void; onChoose?: (value: string) => void } | null>(null);
+  const confirmLabelsRef = useRef(false);   // a pergunta pendente tem botões próprios (não é o freio)
   const planCbRef = useRef<{ approve: () => void; edit: (goal: string) => void; cancel: () => void; hold?: () => void } | null>(null);
   // Quando o cartão do plano se executa sozinho (App.tsx); null = contagem parada.
   const [planAutoAt, setPlanAutoAt] = useState<number | null>(null);
@@ -533,8 +653,39 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const stickToBottomRef = useRef(true);
   const idRef = useRef(0);
 
+  // Atualiza o cartão de Watch/Takeover (em qualquer aba do feed) pela chave.
+  const patchTakeover = (key: string, patch: Partial<Extract<FeedData, { kind: 'takeover' }>>) => {
+    setFeedsByTab(prevMap => {
+      let changed = false;
+      const next: Record<string, FeedItem[]> = {};
+      for (const k of Object.keys(prevMap)) {
+        next[k] = prevMap[k].map(it => (it.kind === 'takeover' && it.tkey === key ? (changed = true, { ...it, ...patch } as FeedItem) : it));
+      }
+      return changed ? next : prevMap;
+    });
+  };
+  const onTakeoverEvent = (event: Extract<AgentProgressEvent, { kind: 'takeover' }>) => {
+    const cur = takeoverRef.current;
+    const data = { phase: event.phase, humanKind: event.humanKind, sites: event.sites, cleared: event.cleared, outcome: event.outcome, reason: event.reason, instruction: event.instruction };
+    if (event.phase === 'agent') {
+      if (cur) { patchTakeover(cur.key, data); takeoverRef.current = null; setTakeoverKey(null); }
+      else push({ kind: 'takeover', tkey: `tk-${Date.now()}-${Math.random()}`, ...data });   // agendada: nunca esperou
+      return;
+    }
+    if (cur) { cur.handBack = event.onHandBack; cur.skip = event.onSkip; patchTakeover(cur.key, data); return; }
+    const key = `tk-${Date.now()}-${Math.random()}`;
+    takeoverRef.current = { key, handBack: event.onHandBack, skip: event.onSkip };
+    setTakeoverKey(key);
+    push({ kind: 'takeover', tkey: key, ...data });
+    notifyHuman(event.sites.join(', '));
+  };
+  const handleTakeover = (what: 'handBack' | 'skip') => {
+    const cur = takeoverRef.current;
+    if (cur) (what === 'handBack' ? cur.handBack : cur.skip)();
+  };
+
   const push = (item: FeedData) => {
-    const tabId = convoTabRef.current;
+    const tabId = threadKeyOf(convoTabRef.current);
     setFeedsByTab(prevMap => {
       const prev = prevMap[tabId] ?? [];
       let next = [...prev, { ...item, id: ++idRef.current }];
@@ -604,33 +755,65 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const id = setInterval(() => setThinkIdx(i => i + 1), 1600);
     return () => clearInterval(id);
   }, [chatLoading]);
+  // Só um gesto de VERDADE da pessoa (roda, toque, teclado, ponteiro) desliga o grudar-no-fim.
+  // Antes qualquer evento de scroll contava — e o navegador gera scroll sozinho (chip de status
+  // sumindo, scroll anchoring), aí o feed parava de descer até a pessoa mexer no painel.
+  const userScrollAtRef = useRef(0);
+  const markUserScroll = () => { userScrollAtRef.current = Date.now(); };
   const onFeedScroll = () => {
     const el = feedRef.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) stickToBottomRef.current = true;
+    else if (Date.now() - userScrollAtRef.current < 1500) stickToBottomRef.current = false;
   };
+  // Conteúdo que cresce DEPOIS do item entrar (screenshot carregando, texto em stream, card que
+  // expande) também desce o feed enquanto ele está grudado no fim.
+  useEffect(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    const stick = () => { if (stickToBottomRef.current) el.scrollTop = el.scrollHeight; };
+    const mo = new MutationObserver(stick);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    el.addEventListener('load', stick, true);   // <img> carregando (o evento 'load' não sobe: captura)
+    return () => { mo.disconnect(); el.removeEventListener('load', stick, true); };
+  }, []);
 
-  const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean }) => {
+  const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean; scheduled?: ScheduledRunHooks }) => {
     // Re-entrada: um agente JÁ rodando nunca pode ser atropelado por outro (o 2º
     // sobrescreveria o abortRef e o 1º ficaria órfão, sem Stop). Duplo-Enter → ignora.
     if (abortRef.current) return;
+    // Tarefa AGENDADA: o agendador (scheduler.ts) fica sabendo quando ela para pra esperar a
+    // pessoa (cartão de confirmação / perguntas / login) e como terminou.
+    const sched = opts?.scheduled;
+    let outcome: { kind: 'success' | 'failed' | 'cancelled' | 'error'; text: string } = { kind: 'success', text: '' };
+    const waitFor = <F extends ((...a: any[]) => void) | undefined>(fn: F): F => (fn && sched
+      ? ((...a: any[]) => { sched.onResumed(); fn(...a); }) as F
+      : fn);
     busyRef.current = true;
-    convoTabRef.current = activeTabId;   // esta tarefa pertence à aba atual
+    convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, cmd);   // esta tarefa pertence à aba atual
     const abortController = new AbortController();
     abortRef.current = abortController;
     setLoading(true);
     setManualHelp(null);
     manualContinueRef.current = null;
     stickToBottomRef.current = true;
-    if (!opts?.skipPush) push({ kind: 'task', text: cmd });
+    if (!opts?.skipPush) push({ kind: 'task', text: sched ? `⏰ ${cmd}` : cmd });
     try {
       const result = await onExecute(cmd, event => {
         if (event.kind === 'step') {
           push({ kind: 'step', step: event.step });
+        } else if (event.kind === 'takeover') {
+          onTakeoverEvent(event);
         } else if (event.kind === 'manual_help') {
-          manualContinueRef.current = event.onContinue;
+          manualContinueRef.current = waitFor(event.onContinue);
           setManualHelp({ message: event.message, instruction: event.instruction });
           push({ kind: 'help', message: event.message, instruction: event.instruction });
+          sched?.onWaiting(event.message);
+        } else if (event.kind === 'plan_preview' && sched) {
+          // A pessoa já aprovou o pedido quando agendou: o plano segue sem esperar.
+          event.onApprove();
         } else if (event.kind === 'plan_preview') {
           planCbRef.current = { approve: event.onApprove, edit: event.onEdit, cancel: event.onCancel, hold: event.onHold };
           setPlanPreview({ goal: event.goal, steps: event.steps });
@@ -639,9 +822,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           setPlanDraft(event.goal);
           setPlanEditing(false);
         } else if (event.kind === 'confirm') {
-          confirmActionsRef.current = { onConfirm: event.onConfirm, onCancel: event.onCancel };
+          confirmActionsRef.current = { onConfirm: waitFor(event.onConfirm), onCancel: waitFor(event.onCancel), onChoose: waitFor(event.onChoose) };
           setPendingConfirm({ message: event.message });
-          push({ kind: 'confirm', message: event.message });
+          confirmLabelsRef.current = !!event.yesLabel || !!event.choices;
+          push({ kind: 'confirm', message: event.message, title: event.title, yesLabel: event.yesLabel, noLabel: event.noLabel, choices: event.choices, questions: event.questions });
+          sched?.onWaiting(event.title ? `${event.title} ${event.message}` : event.message);
         } else if (event.kind === 'result') {
           // skip — step cards already carry action+result (avoids duplicate noise)
         } else if (event.kind === 'media') {
@@ -649,17 +834,20 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         } else {
           push({ kind: 'event', event });
         }
-      }, abortController.signal, opts);
+      }, abortController.signal, { forceImage: opts?.forceImage, ...(sched ? { unattended: true } : {}) });
       if (result.error) {
         push({ kind: 'error', text: result.error });
+        outcome = { kind: 'error', text: result.error };
       } else if ((result.done as any)?.reason) {
         push({ kind: 'report', text: (result.done as any).reason });
+        outcome = { kind: abortController.signal.aborted ? 'cancelled' : (result.done as any).success === false ? 'failed' : 'success', text: (result.done as any).reason };
         // Só toca o sino de "pronto" em SUCESSO. Tarefa cancelada/falha mostra o
         // texto, mas sem o chime/notificação de "✅ Bah" (que dava falsa sensação de êxito).
         if ((result.done as any).success !== false) notifyDone((result.done as any).reason);
       } else if (result.thought) {
         push({ kind: 'report', text: result.thought.split('\n').slice(-3).join('\n') });
         notifyDone(result.thought);
+        outcome = { kind: 'success', text: result.thought.split('\n').slice(-1)[0] };
       }
       // Só limpa se a caixa ainda tem o pedido: o que a pessoa começou a digitar durante a
       // tarefa (a caixa fica livre) não some quando ela termina.
@@ -668,17 +856,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       // Erro inesperado do loop NÃO pode sumir mudo: mostra no feed (exceto cancelamento
       // pelo botão Parar, que é intencional e já tem o próprio fluxo).
       if (!abortController.signal.aborted) push({ kind: 'error', text: String(e?.message ?? e) });
+      outcome = abortController.signal.aborted ? { kind: 'cancelled', text: '' } : { kind: 'error', text: String(e?.message ?? e) };
     } finally {
       busyRef.current = false;
       abortRef.current = null;
+      try { sched?.onDone(outcome.kind, outcome.text); } catch {}
       setLoading(false);
       setManualHelp(null);
       manualContinueRef.current = null;
+      takeoverRef.current = null;
+      setTakeoverKey(null);
       planCbRef.current = null;
       setPlanPreview(null);
       setPlanEditing(false);
-      setPendingConfirm(null);
-      confirmActionsRef.current = null;
+      // Freio de segurança pendente morre com a tarefa. Pergunta com botões próprios (ex.: "Salvar
+      // como skill", feita JUSTO quando a tarefa termina) fica — senão o card ficava sem botões.
+      if (!confirmLabelsRef.current) {
+        setPendingConfirm(null);
+        confirmActionsRef.current = null;
+      }
       // Mensagem mandada quando a IA já estava terminando (não chegou a ler): vira o próximo
       // pedido, logo em seguida — como numa conversa. Depois do Parar ela volta pra caixa:
       // o Parar é o freio, nada roda sozinho depois dele.
@@ -699,9 +895,68 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     void runAgent(cmd, { skipPush: true });
   }, [followUp, loading, chatLoading]);
 
+  // ── TAREFAS AGENDADAS (renderer/scheduler.ts) ──────────────────────────────────
+  // O agendador pergunta se o painel está livre e pede pra rodar a tarefa na aba dela. Só um
+  // agente por vez: com uma tarefa (ou chat) da pessoa rodando, a agendada espera na fila.
+  const runAgentRef = useRef(runAgent);
+  runAgentRef.current = runAgent;
+  const activeTabRef = useRef(activeTabId);
+  activeTabRef.current = activeTabId;
+  useEffect(() => {
+    const onBusy = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d && (abortRef.current || busyRef.current)) d.busy = true;
+    };
+    const onRun = (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (!d) return;
+      if (abortRef.current || busyRef.current) { d.accepted = false; d.reason = 'busy'; return; }
+      if (activeTabRef.current !== d.tabId) { d.accepted = false; d.reason = 'tab'; return; }
+      d.accepted = true;
+      void runAgentRef.current(String(d.command), { scheduled: d.hooks });
+    };
+    window.addEventListener('bah:sched-busy', onBusy);
+    window.addEventListener('bah:sched-run', onRun);
+    return () => { window.removeEventListener('bah:sched-busy', onBusy); window.removeEventListener('bah:sched-run', onRun); };
+  }, []);
+
+  // "every weekday at 8am check my Indeed recommendations" → tarefa agendada. Claro = salva e
+  // diz quando é a próxima; ambíguo (sem hora, "at 9" manhã ou noite?, intervalo curto demais)
+  // = cartão com as próximas 3 vezes antes de salvar.
+  const tryScheduleRequest = (msg: string): boolean => {
+    if (!onCreateSchedule) return false;
+    const p = parseSchedule(msg);
+    if (!p) return false;
+    pendingSuggestionRef.current = null;
+    convoTabRef.current = activeTabId;
+    stickToBottomRef.current = true;
+    setInput('');
+    push({ kind: 'chat-user', text: msg });
+    // Aba anônima: nada dela fica guardado — e uma tarefa agendada é justamente algo guardado.
+    if (activeIncognito) { push({ kind: 'chat-assistant', text: t('sched.noIncognito') }); return true; }
+    const save = () => {
+      const r = onCreateSchedule(p.command, p.spec);
+      push(r
+        ? { kind: 'chat-assistant', text: t('sched.created', { what: p.command, when: describeSchedule(p.spec), next: fmtWhen(r.nextAt) }) }
+        : { kind: 'error', text: t('sched.full') });
+    };
+    if (!p.ambiguous.length) { save(); return true; }
+    const runs = nextRuns(p.spec, schedNow(), 3).map(x => `• ${fmtWhen(x)}`).join('\n');
+    confirmActionsRef.current = { onConfirm: save, onCancel: () => push({ kind: 'chat-assistant', text: t('sched.notSaved') }) };
+    confirmLabelsRef.current = true;
+    setPendingConfirm({ message: '' });
+    push({
+      kind: 'confirm', title: t('sched.confirmTitle'),
+      message: t('sched.confirmMsg', { what: p.command, when: describeSchedule(p.spec), note: ambiguityNote(p.ambiguous), runs }),
+      yesLabel: t('sched.confirmYes'), noLabel: t('sched.cancel'),
+    });
+    return true;
+  };
+
   const runChat = async (msg: string, docText?: string, fileName?: string, skipPush = false) => {
     busyRef.current = true;
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     setChatLoading(true);
     stickToBottomRef.current = true;
     if (!skipPush) push({ kind: 'chat-user', text: msg, file: fileName });
@@ -721,16 +976,17 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const cancelled = new Promise<never>((_, rej) => {
         chatCancelRef.current = () => rej(new Error('CHAT_CANCELLED'));
       });
-      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared), cancelled]);
+      const { reply, suggestedCommand, isError } = await Promise.race([onSendChat(msg, docText, sid, !pageShared, !!fileName), cancelled]);
       // Erro (IA fora, chave inválida…) NÃO é resposta: vira aviso vermelho COM dica
       // acionável. Antes se disfarçava de bolha normal da IA e a pessoa ficava sem saída.
-      if (isError) { push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
+      if (isError) { noteExchange(threadKeyOf(convoTabRef.current), msg); push({ kind: 'error', text: reply.replace(/^Error:\s*/i, '') }); return; }
       pendingSuggestionRef.current = suggestedCommand ?? null;
       // Modo IA Local travado (Ollama off): oferece a saída de 1 clique pra nuvem grátis.
       const localFailed = /Local AI failed/i.test(reply);
       // Modelo de raciocínio: pensamento vira o chip 💭 (com duração); resposta fica limpa.
       const { clean, thinking } = splitThink(reply);
       const text = clean || thinking || reply;   // resposta vazia (só pensou) → mostra o que houver
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || text);   // a troca entra na thread da sessão
       push({ kind: 'chat-assistant', text, suggestedCommand, localFailed,
              thinking: clean ? thinking : undefined,
              thinkSecs: (clean && thinking && thinkSecsRef.current) ? thinkSecsRef.current : undefined });
@@ -751,6 +1007,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     if (loading || chatLoading) return;
     busyRef.current = true;
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     setChatLoading(true);
     stickToBottomRef.current = true;
     if (!skipPush) push({ kind: 'chat-user', text: msg });
@@ -769,6 +1026,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       pendingSuggestionRef.current = null;
       // Modelo de raciocínio local na síntese: pensamento não vaza na resposta da pesquisa.
       const { clean, thinking } = splitThink(answer);
+      noteExchange(threadKeyOf(convoTabRef.current), msg, clean || answer);
       push({ kind: 'chat-assistant', text: clean || thinking || answer, sources, thinking: clean ? thinking : undefined });
     } catch (e: any) {
       if (String(e?.message) === 'CHAT_CANCELLED') push({ kind: 'event', event: { kind: 'status', message: '⏹ ' + t('composer.stopped') } });
@@ -791,6 +1049,19 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
     busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
+    // Roteador local pronto: ELE decide "pergunta sobre a última tarefa" / "ficou incompleta" e
+    // "sobre a tela" (entende typo e follow-up). As regras abaixo ficam pra quando ele não está
+    // (e pro modo IA dirige, que não passa por classificação nenhuma).
+    const useRouter = !!routerReady && !!onClassify && !agentDrive;
+    // Pergunta sobre a ÚLTIMA tarefa ("did you click it, or block it?") → chat com o resumo dela.
+    // Vem antes de tudo: não é pedido novo (nem no modo IA dirige) e nem busca na web.
+    if (!useRouter && isQuestion(msg) && isAboutLastRun(msg)) {
+      const digest = lastRunDigest(feed as RunFeedItem[], a => formatAction(a as BrowserAction));
+      if (digest) { pendingSuggestionRef.current = null; runChat(msg, digest); return; }
+    }
+    // "one window was opened, but not the second" → o agente termina o que faltou (ele recebe o
+    // pedido anterior e como terminou). Antes ia pro chat da página, que negava ter algo faltando.
+    if (!useRouter && reportsIncompleteRun(msg) && lastRunDigest(feed as RunFeedItem[], () => '')) { pendingSuggestionRef.current = null; runAgent(msg); return; }
     // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
     // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
     if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -799,6 +1070,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // isto o classificador mandava pra chat e a IA respondia repetindo o TEXTO ("1. repete
     // 3 vezes / 2. repete 3 vezes"), matando o recurso que sustenta automação a noite toda.
     if (parseRepeatIntent(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // Chamado de suporte / post em fórum é tarefa do navegador ("Post a question…" ia pra busca na
+    // web), e a resposta curta no meio dele ("use chat, serial X") continua a mesma tarefa.
+    { const lastGoal = ([...(getThread(threadKeyOf(activeTabId))?.entries || [])].reverse().find(e => e.kind === 'task') as { goal?: string } | undefined)?.goal;
+      if (supportRequestText(msg, lastGoal) && !(isQuestion(msg) && !commandIsSupport(msg))) { pendingSuggestionRef.current = null; runAgent(msg); return; } }
     // PEDIDO VAGO ("baixe uma música", "toca uma música", "gere uma imagem", "quanto custa",
     // "crie uma playlist com duas músicas"): sabemos a AÇÃO mas falta o ASSUNTO. Em vez de
     // mandar pra IA (que pode estar fora e devolve erro técnico inútil), ENSINA a pedir
@@ -818,7 +1093,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     //    está à vista. Precisa vir ANTES do classificador: ele mandava isso pra busca na web,
     //    que ignora a página aberta, demora e às vezes responde sobre OUTRO produto.
     //    Medido no mesmo clique: 42s (agente indo ao Google Shopping) → 2s (lendo a página).
-    if (pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
+    if (!useRouter && pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
       pendingSuggestionRef.current = null;
       runChat(msg);
       return;
@@ -835,13 +1110,22 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     //    fallback. Sobe a mensagem do usuário AGORA, antes do await, pra ela aparecer NA HORA
     //    (sem "engasgar" esperando a classificação). As rotas abaixo NÃO re-empurram (skipPush).
     convoTabRef.current = activeTabId;
+    onEnsureSession?.(activeTabId, msg);
     stickToBottomRef.current = true;
     push({ kind: 'chat-user', text: msg });
     if (onClassify && !classifyingRef.current) {
       classifyingRef.current = true;
-      let cls: 'action' | 'page' | 'web' | 'chat' | null = null;
-      try { cls = await onClassify(msg); } catch { cls = null; }
+      let cls: RoutedIntent | null = null;
+      try { cls = await onClassify(msg, { lastRun: lastRunSummary(feed as RunFeedItem[]) }); } catch { cls = null; }
       classifyingRef.current = false;
+      // Só o roteador local devolve estes dois (e só quando houve tarefa).
+      if (cls === 'last_run') {
+        const digest = lastRunDigest(feed as RunFeedItem[], a => formatAction(a as BrowserAction));
+        pendingSuggestionRef.current = null;
+        runChat(msg, digest || undefined, undefined, true);
+        return;
+      }
+      if (cls === 'fix') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'page' || cls === 'chat') { runChat(msg, undefined, undefined, true); return; }
       if (cls === 'web') { runResearch(msg, true); return; }
@@ -861,12 +1145,30 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const pointsAtScreen = pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg);
     if (isAboutCurrentPage(msg) || pointsAtScreen) { runChat(msg, undefined, undefined, skipPush); return; }
     if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsDownload(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsLiveBooking(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsStoreBrowse(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsPartLookup(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    // ORDEM imperativa no começo ("search for a set of new golf clubs", "find me…", "look up…",
+    // "procure…") é tarefa do navegador: o agente busca e abre os resultados de verdade. Antes ia pra
+    // Pesquisa Rápida (resumo de trechos), que devolvia "os resultados são genéricos". Pergunta
+    // ("what is…", "…?") continua indo pra pesquisa.
+    if (startsWithActionVerb(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
     if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     runChat(msg, undefined, undefined, skipPush);
   };
 
   const runUnified = (msg: string) => {
+    // "/compact": resume já os itens mais velhos da conversa (o feed mostra o texto que ficou no lugar).
+    if (/^\/compact\s*$/i.test(msg.trim())) {
+      setInput('');
+      convoTabRef.current = activeTabId;
+      compactNow(threadKeyOf(activeTabId));
+      return;
+    }
+    // ⏰ Checagem CEDO (antes do roteador): pedido de agendamento não é tarefa pra agora.
+    if (tryScheduleRequest(msg)) return;
     // "sim/pode/faça…" logo após uma proposta → roda a proposta (reclassificada).
     if (pendingSuggestionRef.current && isAffirmative(msg)) {
       const cmd = pendingSuggestionRef.current;
@@ -1043,11 +1345,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
+    cmdHistoryRef.current?.push(msg);
     // Tarefa do agente rodando e a pessoa mudou de ideia: a mensagem vai PRA tarefa (a IA
     // para o que está pensando, lê e decide — ajustar, mudar de rumo ou encerrar). Se a
     // tarefa estava parada em "Preciso de você", a resposta da pessoa conta como continuar.
     if (loading && !chatLoading && onInterject) {
       if (manualContinueRef.current) handleContinueAfterManualHelp();
+      else if (takeoverRef.current) handleTakeover('handBack');
       if (onInterject(msg)) { push({ kind: 'chat-user', text: msg }); setInput(''); }
       return;
     }
@@ -1107,8 +1411,18 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const actions = confirmActionsRef.current;
     confirmActionsRef.current = null;
     setPendingConfirm(null);
-    push({ kind: 'event', event: { kind: 'status', message: ok ? '✅ You confirmed — continuing.' : '✖️ You canceled the action.' } });
+    // Pergunta com botões próprios (ex.: "Salvar skill") não é o freio de segurança: sem o recado de risco.
+    if (!confirmLabelsRef.current) push({ kind: 'event', event: { kind: 'status', message: ok ? '✅ You confirmed — continuing.' : '✖️ You canceled the action.' } });
+    confirmLabelsRef.current = false;
     if (actions) (ok ? actions.onConfirm : actions.onCancel)();
+  };
+  // Pergunta com várias opções (ex.: permissão: só nesta tarefa / sempre / negar / nunca).
+  const handleChoice = (value: string) => {
+    const actions = confirmActionsRef.current;
+    confirmActionsRef.current = null;
+    setPendingConfirm(null);
+    confirmLabelsRef.current = false;
+    actions?.onChoose?.(value);
   };
 
   const handleContinueAfterManualHelp = () => {
@@ -1326,6 +1640,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
         <div className="sidebar-title-wrap">
           <h3>{t('assist.title')}</h3>
           <span className="sidebar-active-ai" title={activeAiLabel()}>{activeAiLabel()}</span>
+          <ContextMeter viewKey={viewKey} />
+          {viewSession && (
+            <SessionChip session={viewSession} onRename={name => onRenameSession?.(viewSession.id, name)} />
+          )}
           {/* Contador de gasto: só acende quando houve custo real (modo local nunca acende).
               Fica aqui, e não no feed, porque os chips de status somem sozinhos em 2s. */}
           {sessionCost.usd > 0 && (
@@ -1345,7 +1663,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
               <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
             </svg>
           </button>
-          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewTabId]: [] })); window.electronAPI?.clearChatHistory?.(viewTabId); }} title={t('assist.clear')}>
+          <button onClick={() => { setFeedsByTab(m => ({ ...m, [viewKey]: [] })); window.electronAPI?.clearChatHistory?.(viewKey); clearThread(viewKey); }} title={t('assist.clear')}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
           <button onClick={onClose} title={t('assist.close')}>
@@ -1357,6 +1675,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       {showSettings && (
         <div className="settings-panel">
           <div className="set-active-ai">{t('set.activeAi')}: <b>{activeAiLabel()}</b></div>
+          <RouterModelCard status={routerStatus} />
           <label>
             {t('settings.language')}
             <select value={getLang()} onChange={e => setLang(e.target.value as Lang)}>
@@ -1698,7 +2017,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       )}
 
       {/* ── Unified activity feed (infinite scroll, persists across tasks) ── */}
-      <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll}>
+      <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll} onWheel={markUserScroll} onTouchMove={markUserScroll} onPointerDown={markUserScroll} onKeyDown={markUserScroll} style={{ overflowAnchor: 'none' }}>
         {/* Página aberta e conversa vazia: em vez de um painel morto, mostra perguntas
             SOBRE esta página. Ancorado embaixo (perto do compositor), como um convite. */}
         {feed.length === 0 && pageOpen && pageSuggestions.length > 0 && (
@@ -1727,17 +2046,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
                 <button className="ai-onboard-btn" onClick={() => setShowSettings(true)}>{t('onboard.btn')}</button>
               </div>
             )}
-            {onGoogleLogin && !googleLoggedIn && (
-              <button className="glass-login-btn" onClick={onGoogleLogin} title={t('login.google')}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 10h-8v3.6h4.6c-.4 2-2.2 3.4-4.6 3.4a5 5 0 110-10c1.3 0 2.4.5 3.3 1.3l2.6-2.6A8.8 8.8 0 0012 3a9 9 0 100 18c5.2 0 8.7-3.7 8.7-8.9 0-.7-.1-1.4-.3-2.1z"/></svg>
-                <span>{t('login.google')}</span>
-              </button>
-            )}
             <div className="showcase-sub">{t('login.subline')}</div>
           </div>
         )}
         {feed.map(item => {
-          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} confirmActive={!!pendingConfirm} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
+          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} takeoverKey={takeoverKey} onTakeover={handleTakeover} onConfirmRisky={handleConfirmRisky} onChoose={handleChoice} confirmActive={!!pendingConfirm && item.id === lastConfirmId} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
           const transient = item.kind === 'event' && item.event.kind === 'status';
           const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
           return <div key={item.id} className={cls}>{row}</div>;
@@ -1761,7 +2074,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             : <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content thinking-line">{thinkPhrases[thinkIdx % thinkPhrases.length] || '…'}</div></div>
         )}
         {loading && convoTabRef.current === viewTabId && (
-          <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
+          pendingConfirm
+            // Esperando a PESSOA responder o cartão acima — não é o modelo que está trabalhando.
+            ? <div className="feed-working">⏸ {t('feed.waitingForYou')}</div>
+            : <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
         )}
       </div>
 
@@ -1837,8 +2153,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           className="composer-input"
           rows={1}
           value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+          onChange={e => { cmdHistoryRef.current?.reset(); setInput(e.target.value); }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); return; }
+            // ↑ só com o cursor na 1ª linha e ↓ só na última: dentro de texto com várias
+            // linhas as setas continuam movendo o cursor normalmente.
+            if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.nativeEvent.isComposing) return;
+            const el = e.currentTarget;
+            const pos = el.selectionStart ?? 0;
+            if (el.selectionStart !== el.selectionEnd) return;
+            const h = cmdHistoryRef.current;
+            if (!h) return;
+            const next = e.key === 'ArrowUp'
+              ? (el.value.lastIndexOf('\n', pos - 1) === -1 ? h.up(el.value) : null)
+              : (el.value.indexOf('\n', pos) === -1 ? h.down() : null);
+            if (next === null) return;
+            e.preventDefault();
+            setInput(next);
+            requestAnimationFrame(() => { try { el.setSelectionRange(next.length, next.length); } catch {} });
+          }}
           placeholder={attachedDoc ? t('composer.phFile') : imageMode ? t('composer.phImage') : (loading && onInterject) ? t('composer.phInterject') : ph}
           disabled={chatLoading || (loading && !onInterject)}
         />
@@ -1989,6 +2322,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
               {t('feed.continue')}
             </button>
+          ) : takeoverKey ? (
+            // Watch/Takeover: o mesmo lugar do "Continuar" devolve o controle ao Bah (= [Hand back] do cartão).
+            <button data-testid="agent-manual-continue" onClick={() => handleTakeover('handBack')} className="composer-continue" title={t('takeover.handBack')}>
+              {t('takeover.handBack')}
+            </button>
           ) : (loading || chatLoading) ? (
             <>
               {/* Com a tarefa rodando e texto na caixa: Enviar (a IA lê e decide) ao lado do Parar. */}
@@ -2036,6 +2374,41 @@ function chime() {
     setTimeout(() => { try { ac.close(); } catch {} }, 800);
   } catch {}
 }
+// A página quer uma PESSOA (Watch/Takeover): o mesmo sininho + notificação do SO se a janela não está em foco.
+function notifyHuman(sites: string) {
+  chime();
+  try {
+    if (!document.hasFocus() && 'Notification' in window) {
+      new Notification('🙋 Bah', { body: t('takeover.notify', { site: sites }).slice(0, 140) });
+    }
+  } catch {}
+}
+
+// Cartão do Watch/Takeover: quem dirige agora, o que já foi liberado, e [Hand back] [Skip this site] enquanto espera.
+function TakeoverCard({ item, active, onTakeover }: { item: Extract<FeedItem, { kind: 'takeover' }>; active: boolean; onTakeover: (what: 'handBack' | 'skip') => void }) {
+  const sites = item.sites.join(', ');
+  const title = item.humanKind === 'signin' ? t('takeover.signinTitle', { site: sites })
+    : item.sites.length > 1 ? t('takeover.titleMany', { sites }) : t('takeover.title', { site: sites });
+  const line = item.phase === 'takeover' ? t('takeover.driving')
+    : item.phase === 'handoff' ? t('takeover.waiting')
+    : t(`takeover.out.${item.outcome || 'skipped'}`);
+  return (
+    <div className={`feed-help-card takeover-card phase-${item.phase}`} data-testid="takeover-card" data-phase={item.phase} data-outcome={item.outcome || ''}>
+      <div className="feed-help-title">{title}</div>
+      {item.humanKind === 'signin' && item.reason && <div className="feed-help-msg">{item.reason}</div>}
+      {item.humanKind === 'signin' && item.instruction && item.phase !== 'agent' && <div className="feed-help-instr">{item.instruction}</div>}
+      <div className="feed-help-msg" data-testid="takeover-phase">{line}</div>
+      {!!item.cleared?.length && item.sites.length > 1 && <div className="feed-help-instr">{t('takeover.clearedList', { sites: item.cleared.join(', ') })}</div>}
+      {active && item.phase !== 'agent' && (
+        <div className="takeover-actions">
+          <button className="manual-continue-btn" data-testid="takeover-handback" onClick={() => onTakeover('handBack')}>{t('takeover.handBack')}</button>
+          <button className="manual-continue-btn secondary" data-testid="takeover-skip" onClick={() => onTakeover('skip')}>{item.sites.length > 1 ? t('takeover.skipAll') : t('takeover.skip')}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function notifyDone(message: string) {
   chime();
   try {
@@ -2045,7 +2418,7 @@ function notifyDone(message: string) {
   } catch {}
 }
 
-function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud, onToggleSpeak, speakingId }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void; onToggleSpeak: (id: number, text: string) => void; speakingId: number | null }) {
+function FeedRow({ item, onContinue, helpActive, takeoverKey, onTakeover, onConfirmRisky, onChoose, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud, onToggleSpeak, speakingId }: { item: FeedItem; onContinue: () => void; helpActive: boolean; takeoverKey: string | null; onTakeover: (what: 'handBack' | 'skip') => void; onConfirmRisky: (ok: boolean) => void; onChoose: (value: string) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void; onToggleSpeak: (id: number, text: string) => void; speakingId: number | null }) {
   switch (item.kind) {
     case 'task':
       return <div className="chat-msg user"><div className="msg-content">⚡ {item.text}</div></div>;
@@ -2131,26 +2504,75 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, confirmActive, 
           {helpActive && <button className="manual-continue-btn" onClick={onContinue}>{t('feed.continue')}</button>}
         </div>
       );
+    case 'takeover':
+      return <TakeoverCard item={item} active={item.tkey === takeoverKey} onTakeover={onTakeover} />;
     case 'step':
       return <StepCard step={item.step} />;
+    case 'thread-notice':
+      return <ThreadNoticeRow notice={item.notice} />;
+    case 'thread-recap': {
+      const th = getThread(item.key);
+      return th ? <details className="thread-notice" open data-testid="thread-recap"><summary>{t('thread.restored')}</summary><ThreadView thread={th} compact /></details> : null;
+    }
     case 'event':
       return <ProgressLine event={item.event} />;
     case 'media':
       return <MediaStrip mediaKind={item.mediaKind} paths={item.paths} dir={item.dir} total={item.total} label={item.label} />;
     case 'confirm':
+      if (item.questions?.length) return <QuestionsCard item={item} active={confirmActive} onSubmit={(a) => onChoose(JSON.stringify(a))} onSkip={() => onConfirmRisky(false)} />;
       return (
         <div className="feed-confirm-card">
-          <div className="feed-confirm-title">{t('feed.confirmTitle')}</div>
-          <div className="feed-confirm-msg">{item.message}</div>
+          <div className="feed-confirm-title">{item.title || t('feed.confirmTitle')}</div>
+          <div className="feed-confirm-msg" style={{ whiteSpace: 'pre-wrap' }}>{item.message}</div>
           {confirmActive && (
             <div className="feed-confirm-actions">
-              <button className="confirm-yes" onClick={() => onConfirmRisky(true)}>{t('feed.confirmYes')}</button>
-              <button className="confirm-no" onClick={() => onConfirmRisky(false)}>{t('feed.confirmNo')}</button>
+              {item.choices?.length
+                ? item.choices.map((c, i) => <button key={c.value} className={i < 2 ? 'confirm-yes' : 'confirm-no'} onClick={() => onChoose(c.value)}>{c.label}</button>)
+                : <>
+                    <button className="confirm-yes" onClick={() => onConfirmRisky(true)}>{item.yesLabel || t('feed.confirmYes')}</button>
+                    <button className="confirm-no" onClick={() => onConfirmRisky(false)}>{item.noLabel || t('feed.confirmNo')}</button>
+                  </>}
             </div>
           )}
         </div>
       );
   }
+}
+
+// Perguntas do formulário que o perfil e as respostas salvas não cobriram: a pessoa responde aqui
+// uma vez (e, marcado, fica salvo pra próxima candidatura). Campo vazio = pular aquela pergunta.
+function QuestionsCard({ item, active, onSubmit, onSkip }: { item: Extract<FeedItem, { kind: 'confirm' }>; active: boolean; onSubmit: (answers: { answers: Record<string, string>; save: boolean }) => void; onSkip: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [save, setSave] = useState(true);
+  const qs = item.questions || [];
+  return (
+    <div className="feed-confirm-card">
+      <div className="feed-confirm-title">{item.title}</div>
+      <div className="feed-confirm-msg" style={{ whiteSpace: 'pre-wrap' }}>{item.message}</div>
+      {active && (
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit({ answers: Object.fromEntries(Object.entries(vals).filter(([, v]) => v.trim())), save }); }}>
+          {qs.map((q) => (
+            <label key={q.key} style={{ display: 'block', margin: '8px 0' }}>
+              <div style={{ fontSize: 13, marginBottom: 4 }}>{q.label}{q.required ? ' *' : ''}</div>
+              {q.options?.length
+                ? <select value={vals[q.key] || ''} onChange={(e) => setVals({ ...vals, [q.key]: e.target.value })} style={{ width: '100%' }}>
+                    <option value="">—</option>
+                    {q.options.filter(o => o && !/^(select|choose|--)/i.test(o)).map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                : <textarea rows={q.label.length > 60 ? 3 : 1} value={vals[q.key] || ''} onChange={(e) => setVals({ ...vals, [q.key]: e.target.value })} style={{ width: '100%', resize: 'vertical' }} />}
+            </label>
+          ))}
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, margin: '6px 0' }}>
+            <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} /> {t('feed.q.save')}
+          </label>
+          <div className="feed-confirm-actions">
+            <button type="submit" className="confirm-yes">{item.yesLabel || t('feed.q.fill')}</button>
+            <button type="button" className="confirm-no" onClick={onSkip}>{item.noLabel || t('feed.q.skip')}</button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 }
 
 // Tira de mídia no feed: até 5 miniaturas + "+N", clique abre a pasta. Zero IA.
@@ -2251,9 +2673,11 @@ function StepCard({ step }: { step: StepRecord }) {
 function ProgressLine({ event }: { event: AgentProgressEvent }) {
   if (event.kind === 'step') return null;
   if (event.kind === 'manual_help') return null;
+  if (event.kind === 'takeover') return null;   // cartão próprio (TakeoverCard)
   // rendered as its own card above the composer, not as a feed row
   if (event.kind === 'plan_preview') return null;
   if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui
+  if (event.kind === 'tabs_summary') return <TabsSummaryCard event={event} />;
   if (event.kind === 'action') {
     return <div className="result-action"><span className="result-desc">▶ {formatAction(event.action)}</span></div>;
   }
@@ -2331,6 +2755,31 @@ function ProgressLine({ event }: { event: AgentProgressEvent }) {
   );
 }
 
+function TabsSummaryCard({ event }: { event: Extract<AgentProgressEvent, { kind: 'tabs_summary' }> }) {
+  const note = (e: TabsSummaryEntry) => e.state === 'asleep' ? t('tabsSummary.asleep')
+    : e.state === 'no_access' ? t('tabsSummary.noAccess')
+    : e.state === 'unreadable' ? t('tabsSummary.unreadable') : e.summary;
+  return (
+    <div className="tabs-summary-card" data-testid="tabs-summary">
+      <div className="tabs-summary-title">{t('tabsSummary.title')}</div>
+      <ol className="tabs-summary-list">
+        {event.tabs.map(e => (
+          <li key={e.id} className={`tabs-summary-item tabs-summary-${e.state}`}>
+            <button type="button" className="tabs-summary-link" data-testid="tabs-summary-link" title={`${t('tabsSummary.switch')}\n${e.url}`} onClick={() => event.onOpen(e.id)}>
+              {e.title || e.url}
+            </button>
+            {note(e) && <div className="tabs-summary-text">{note(e)}</div>}
+          </li>
+        ))}
+      </ol>
+      {event.overall && <div className="tabs-summary-overall"><b>{t('tabsSummary.overall')}:</b> {event.overall}</div>}
+      {(event.skippedIncognito > 0 || event.skippedInternal > 0) && (
+        <div className="tabs-summary-skipped">{t('tabsSummary.skipped').replace('{incognito}', String(event.skippedIncognito)).replace('{internal}', String(event.skippedInternal))}</div>
+      )}
+    </div>
+  );
+}
+
 function StatusChip({
   label,
   message,
@@ -2366,4 +2815,25 @@ function formatResult(result: any): string {
   if (result === undefined || result === null) return '';
   if (typeof result !== 'object') return String(result);
   return JSON.stringify(result);
+}
+
+// Chip da sessão no topo do painel: diz de quem é esta conversa (cor + nome da sessão da aba, e
+// quantas abas a dividem). Clique → renomeia ali mesmo.
+function SessionChip({ session, onRename }: { session: { id: string; name: string; color: string; tabs: number }; onRename: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(session.name);
+  useEffect(() => { setName(session.name); setEditing(false); }, [session.id, session.name]);
+  const bg = (SESSION_COLOR_HEX as Record<string, string>)[session.color] || SESSION_COLOR_HEX.grey;
+  const commit = () => { setEditing(false); if (name.trim() && name.trim() !== session.name) onRename(name); };
+  return (
+    <button type="button" className="panel-session-chip" style={{ background: bg }} data-testid="panel-session-chip"
+      title={t('session.panelTip').replace('{n}', String(session.tabs))}
+      onClick={() => setEditing(true)}>
+      {editing
+        ? <input value={name} maxLength={24} autoFocus aria-label={t('session.name')} onChange={e => setName(e.target.value)}
+            onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setName(session.name); setEditing(false); } }} />
+        : <span>{session.name}</span>}
+      {session.tabs > 1 && <span className="panel-session-count">· {session.tabs}</span>}
+    </button>
+  );
 }

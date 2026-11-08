@@ -102,9 +102,14 @@ export function flushSession(): void {
   if (shape !== lastShape) { lastShape = shape; requestDiskFlush(); }
 }
 
+// Quem mais precisa gravar na hora de fechar (as conversas do assistente: renderer/threads.ts). Roda
+// ANTES da sessão de abas: o "gravei" que o main espera só sai depois de todos.
+const closeHooks = new Set<() => void>();
+export function onSessionClose(fn: () => void): void { closeHooks.add(fn); }
+
 /** Grava na hora quando a janela vai fechar. Devolve o "desligar". */
 export function watchSessionClose(): () => void {
-  const flush = () => flushSession();
+  const flush = () => { closeHooks.forEach(fn => { try { fn(); } catch {} }); flushSession(); };
   window.addEventListener('beforeunload', flush);
   window.addEventListener('pagehide', flush);
   const off = window.electronAPI?.onSaveSessionNow?.(flush);

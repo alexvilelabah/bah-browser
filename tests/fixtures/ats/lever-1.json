@@ -1,0 +1,240 @@
+{
+ "ats": "lever",
+ "source": "https://jobs.lever.co/spotify/2a55d6c9-c564-443a-be3e-a3851db5a93b/apply",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "jobs.lever.co /apply (server-rendered). Card questions are cards[<uuid>][fieldN]; diversity surveys are surveysResponses[...]. Card/survey question text sits outside the input label, so some labels come out empty (scanner limitation).",
+ "fields": [
+  {
+   "label": "Resume/CV ✱ ATTACH RESUME/CV",
+   "type": "file",
+   "name": "resume",
+   "id": "resume-upload-input",
+   "expect": null
+  },
+  {
+   "label": "Full name ✱",
+   "type": "text",
+   "name": "name",
+   "required": true,
+   "expect": "fullName"
+  },
+  {
+   "label": "Let the employer know what pronouns you use so that they can address you correctly.",
+   "type": "checkbox",
+   "name": "pronouns",
+   "options": [
+    "He/him",
+    "She/her",
+    "They/them",
+    "Xe/xem",
+    "Ze/hir",
+    "Ey/em",
+    "Hir/hir",
+    "Fae/faer",
+    "Hu/hu",
+    "Use name only"
+   ],
+   "expect": "pronouns"
+  },
+  {
+   "label": "Custom",
+   "type": "checkbox",
+   "id": "customPronounsOption",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Email ✱",
+   "type": "email",
+   "name": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Phone ✱",
+   "type": "text",
+   "name": "phone",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "Current location ✱",
+   "type": "text",
+   "name": "location",
+   "id": "location-input",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "Current company ✱",
+   "type": "text",
+   "name": "org",
+   "required": true,
+   "expect": "currentCompany"
+  },
+  {
+   "label": "LinkedIn URL",
+   "type": "text",
+   "name": "urls[LinkedIn]",
+   "expect": "linkedin"
+  },
+  {
+   "label": "GitHub URL",
+   "type": "text",
+   "name": "urls[GitHub]",
+   "expect": "github"
+  },
+  {
+   "label": "Portfolio URL",
+   "type": "text",
+   "name": "urls[Portfolio]",
+   "expect": "website"
+  },
+  {
+   "label": "Other website",
+   "type": "text",
+   "name": "urls[Other]",
+   "expect": "skip"
+  },
+  {
+   "label": "",
+   "type": "checkbox",
+   "name": "cards[92a51f92-d683-4f7b-be57-e25376f60abe][field0]",
+   "required": true,
+   "options": [
+    "No",
+    "Yes - Intern",
+    "Yes - Full Time Employment"
+   ],
+   "expect": null
+  },
+  {
+   "label": "What is your location? Select... Afghanistan Albania Algeria American Samoa Andorra Angola Anguilla Antarctica Antigua a",
+   "type": "select",
+   "options": [
+    "Select...",
+    "Afghanistan",
+    "Albania",
+    "Algeria",
+    "American Samoa",
+    "Andorra",
+    "Angola",
+    "Anguilla",
+    "Antarctica",
+    "Antigua and Barbuda",
+    "Argentina",
+    "Armenia"
+   ],
+   "expect": null
+  },
+  {
+   "label": "What best describes your gender?",
+   "type": "radio",
+   "name": "surveysResponses[cbf1b3c9-4157-4ddd-a66e-41dae0d8badb][responses][field0]",
+   "options": [
+    "Woman",
+    "Man",
+    "Non-binary",
+    "I use another term",
+    "Prefer not to disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "What is your race/ethnicity?:",
+   "type": "radio",
+   "name": "surveysResponses[cbf1b3c9-4157-4ddd-a66e-41dae0d8badb][responses][field1]",
+   "options": [
+    "American Indian or Alaska Native",
+    "Asian",
+    "Black or African American",
+    "Hispanic or Latino",
+    "Native Hawaiian or Other Pacific Islander",
+    "Two or More Races",
+    "White (Not Hispanic or Latino)",
+    "Prefer not to disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Are you a veteran/have you served in the military?",
+   "type": "radio",
+   "name": "surveysResponses[cbf1b3c9-4157-4ddd-a66e-41dae0d8badb][responses][field2]",
+   "options": [
+    "Yes",
+    "No",
+    "Prefer not to disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "What best describes your gender?",
+   "type": "radio",
+   "name": "surveysResponses[380b7dba-8003-486d-b65d-28bf53a52415][responses][field0]",
+   "options": [
+    "Woman",
+    "Man",
+    "Non-binary",
+    "I use another term",
+    "Prefer not to disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "What gender do you identify with?",
+   "type": "radio",
+   "name": "surveysResponses[414f4bab-5e29-4f62-ba71-2e6d2442df59][responses][field0]",
+   "options": [
+    "Woman",
+    "Man",
+    "Choose Not to Disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "What best describes your gender?",
+   "type": "radio",
+   "name": "surveysResponses[46c5c4bd-a2d2-43e8-85a4-eefa9d51dff2][responses][field0]",
+   "options": [
+    "Woman",
+    "Man",
+    "Non-binary",
+    "I use another term",
+    "Prefer not to disclose"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "What best describes your ethnicity?",
+   "type": "radio",
+   "name": "surveysResponses[46c5c4bd-a2d2-43e8-85a4-eefa9d51dff2][responses][field1]",
+   "options": [
+    "Any other ethnic group",
+    "Arab",
+    "Asian/Asian British: Any other Asian background",
+    "Asian/Asian British: Bangladeshi",
+    "Asian/Asian British: Chinese",
+    "Asian/Asian British: Indian",
+    "Asian/Asian British: Pakistani",
+    "Black/Black British: African",
+    "Black/Black British: Any other Black/ African / Caribbean background",
+    "Black/Black British: Caribbean",
+    "Mixed: Any other mixed background",
+    "Mixed: White and Asian"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Spotify has my consent to contact me about future job opportunities.",
+   "type": "checkbox",
+   "name": "consent[marketing]",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  }
+ ]
+}
