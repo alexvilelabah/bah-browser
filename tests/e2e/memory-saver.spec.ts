@@ -8,7 +8,7 @@ import type { AddressInfo } from 'net';
 // Economia de memória (regras em src/shared/memory-saver.ts): com o tempo parada encurtado (1,5 s) e
 // a varredura a cada 1 s, a aba parada comum dorme (o <webview> é desmontado) e acorda no clique; ficam
 // acordadas a aba com formulário digitado, a fixada, a de um site da lista "sempre ativos" e a da sessão
-// com tarefa do agente parada no freio de segurança (cartão de pagamento esperando a pessoa).
+// com tarefa do agente parada no freio de candidatura (cartão esperando a pessoa).
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
   : process.platform === 'darwin' ? path.join(ROOT, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
@@ -35,8 +35,10 @@ test('memory saver: idle tab sleeps; form, pinned, keep-active site and waiting 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     const u = q.url || '/';
     if (u.startsWith('/apply')) {
-      res.end(`<title>Checkout</title><h1>Your order</h1>
-<button onclick="document.title = 'PAID'">Place order</button>`);
+      res.end(`<title>Apply: Support Engineer</title><h1>Support Engineer at Acme</h1>
+<form onsubmit="event.preventDefault(); document.title = 'SENT'">
+<label>Full name <input name="n" value="Pat Example"></label>
+<button type="submit">Submit</button></form>`);
     } else if (u.startsWith('/form')) {
       res.end('<title>Form page</title><form><input id="q" name="q"><input type="search" name="s"></form>');
     } else {
@@ -49,8 +51,8 @@ test('memory saver: idle tab sleeps; form, pinned, keep-active site and waiting 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-memsaver-'));
   const script = [
     { type: 'navigate', url: T + 'apply' },
-    { type: 'click_ref', ref: '__REF:Place order__' },
-    { type: 'done', reason: 'Left it unpaid.', success: true },
+    { type: 'click_role', role: 'button', name: 'Submit' },
+    { type: 'done', reason: 'Left it unsent.', success: true },
   ];
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({ executablePath: ELECTRON, args: [ROOT, `--user-data-dir=${tmp}`, '--use-mock-keychain'], env: { ...env, E2E_MOCK_AI: '1', E2E_MOCK_SCRIPT: JSON.stringify(script), NODE_ENV: 'test' } });
@@ -64,16 +66,16 @@ test('memory saver: idle tab sleeps; form, pinned, keep-active site and waiting 
     });
     await page.reload(); await page.waitForLoadState('domcontentloaded'); await sleep(2000);
 
-    // 1) Tarefa do agente na 1ª aba, parada no freio de pagamento (esperando a pessoa).
+    // 1) Tarefa do agente na 1ª aba, parada no freio da candidatura (esperando a pessoa).
     if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
-    await page.getByTestId('agent-command-input').fill('place the order on this page');
+    await page.getByTestId('agent-command-input').fill('apply to this job with my resume');
     await page.getByTestId('agent-command-input').press('Enter');
-    const payCancel = page.locator('.confirm-no');
-    for (let i = 0; i < 120 && !(await payCancel.last().isVisible().catch(() => false)); i++) {
+    const dontSend = page.getByRole('button', { name: "Don't send" });
+    for (let i = 0; i < 120 && !(await dontSend.last().isVisible().catch(() => false)); i++) {
       if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
       await sleep(500);
     }
-    await expect(payCancel.last()).toBeVisible();
+    await expect(dontSend.last()).toBeVisible();
 
     // 2) As outras abas: comum, formulário digitado, fixada, site da lista, e uma em branco por último (ativa).
     await openTab(page, T + 'plain');
