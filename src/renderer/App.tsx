@@ -14,7 +14,7 @@ import { useSiteMute } from './site-mute';
 import { closeOthersIds, closeRightIds, nextActiveAfterClose } from '../shared/tab-strip';
 import AddressBar from './components/AddressBar';
 import AgentCommandBar, { AgentProgressEvent } from './components/AgentCommandBar';
-import HwMonitor from './components/HwMonitor';
+import HwMonitor, { hwMonitorEnabled } from './components/HwMonitor';
 import DownloadButtonIcon from './components/DownloadButtonIcon';
 import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear, isTopNCollection, collectionCount, topNListPrompt, parseTopNList } from './download-steps';
 import { codecReport } from '../shared/media-codecs';
@@ -848,6 +848,8 @@ export default function App() {
   // Aba parada há 30+ min (não ativa, sem áudio) tem o webview DESMONTADO → o Chromium
   // libera o processo/RAM. Ao clicar na aba ela recarrega na URL onde estava (na barra ela fica igual às outras).
   const [memSaverOn, setMemSaverOn] = useState<boolean>(() => { try { return localStorage.getItem('memSaver') !== '0'; } catch { return true; } });
+  // Medidor de CPU/RAM na barra: desligado por padrão (⋮ → Mostrar CPU e RAM).
+  const [hwMon, setHwMon] = useState<boolean>(() => hwMonitorEnabled());
   const toggleMemSaver = useCallback(() => {
     setMemSaverOn(v => { const n = !v; try { localStorage.setItem('memSaver', n ? '1' : '0'); } catch {} return n; });
   }, []);
@@ -1956,7 +1958,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             keptReason={id => (memKept[id] ? t('memsaver.kept', { reason: t(`memsaver.reason.${memKept[id]}`) }) : undefined)}
           />
         </div>
-        <HwMonitor />
+        <HwMonitor on={hwMon} onChange={setHwMon} />
         <button
           className={`ai-toggle top-bar-ai ${store.sidebarOpen ? 'active' : ''}`}
           onClick={() => store.setSidebarOpen(!store.sidebarOpen)}
@@ -2182,6 +2184,11 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   <span className="menu-ic">⚡</span>
                   <span className="menu-label">{t('menu.hwAccel')}</span>
                   <span className={`menu-switch ${hwAccelOn ? 'on' : ''}`}>{hwAccelOn ? 'ON' : 'OFF'}</span>
+                </button>
+                <button className="menu-item" onClick={() => setHwMon(v => !v)} title={t('menu.hwMonTitle')} data-testid="menu-hw-mon">
+                  <span className="menu-ic">📊</span>
+                  <span className="menu-label">{t('menu.hwMon')}</span>
+                  <span className={`menu-switch ${hwMon ? 'on' : ''}`}>{hwMon ? 'ON' : 'OFF'}</span>
                 </button>
                 <MemorySaverMenu on={memSaverOn} onToggle={toggleMemSaver} level={memSaverLevel} onLevel={setMemSaverLevel}
                   keep={memSaverKeep} onKeep={setMemSaverKeep} currentUrl={store.activeTab.url} />
