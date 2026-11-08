@@ -4026,6 +4026,14 @@ app.commandLine.appendSwitch('lang', LANG_SWITCH);
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // ⋮ → Rede: WebRTC sem IPv6 (field trial do WebRTC; só vale no boot).
 applyNetworkStartupSwitches();
+// Calço das extensões (extension-shim-preload) no background delas. O Electron só roda preload
+// de SERVICE WORKER no renderer "sandbox" dele, e escolhe esse renderer por processo: com
+// --enable-sandbox ou sem --no-sandbox. Janelas e abas ganham --enable-sandbox pelas
+// webPreferences; o processo do background das extensões não tem webPreferences e não ganha.
+// Aí, rodando com --no-sandbox (comum no Linux; o Playwright sempre põe), o worker nascia sem
+// o calço e a extensão morria com TypeError. O Electron repassa este switch a todo renderer.
+// NÃO é app.enableSandbox(): aquele apaga o --no-sandbox de quem precisa dele pra abrir.
+app.commandLine.appendSwitch('enable-sandbox');
 
 // Aceleração de hardware (GPU): em alguns PCs com vídeo integrado/driver velho, abrir uma aba
 // nova dá "tela branca" (o compositor da GPU não pinta o 1º frame; só carrega com F5). O usuário
