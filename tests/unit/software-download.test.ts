@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
   machineProfile, pickHint, machineLine, macosCodename, windowsName, linuxPackageType,
-  classifyBuild, checkBuild, thirdPartyDownloadSite, thirdPartyNote, signInWall, isDownloadControl, installerFileOf,
+  classifyBuild, checkBuild, targetFromRequest, targetProfile, thirdPartyDownloadSite, thirdPartyNote, signInWall, isDownloadControl, installerFileOf,
 } from '../../src/shared/software-download.ts';
 
 const macIntel = machineProfile({ platform: 'darwin', arch: 'x64', osVersion: '15.6.1' });
@@ -153,4 +153,94 @@ test('sign-in walls: password field, auth host/path, "sign in to download" — n
   assert.strictEqual(signInWall({ url: 'https://store.steampowered.com/about/', text: 'Sign in  Install Steam  Download for Mac', elements: [{ tag: 'a', text: 'Sign in' }] }), '');
   assert.strictEqual(signInWall({ url: 'https://support.hp.com/us-en/drivers/printers', text: 'Sign in to see your products. Let HP find my products' }), '');
   assert.strictEqual(signInWall({ url: 'https://www.adobe.com/products/photoshop.html', text: 'Free trial. Buy now. Sign in' }), '');
+});
+
+test('request target: OS and CPU named in the request (en/pt/es), else none', () => {
+  const os = (t: string) => targetFromRequest(t)?.os;
+  const arch = (t: string) => targetFromRequest(t)?.arch;
+  for (const t of ['download Zoom for my Mac', 'get the macOS version of Slack', 'Zoom for OS X', 'baixe o Zoom para o meu Mac', 'baixar o Chrome pro MacBook Air', 'descarga Zoom para mi Mac', 'instalador pro iMac da minha mãe']) {
+    assert.strictEqual(os(t), 'macos', t);
+  }
+  for (const t of ['download Zoom for Windows', 'baixe o Zoom para Windows 11', 'descargar Zoom para Windows', 'Zoom installer win64', 'baixar o driver pra win 10', 'download it for a Windows PC']) {
+    assert.strictEqual(os(t), 'windows', t);
+  }
+  for (const t of ['download Zoom for Linux', 'baixe o Zoom pro Ubuntu', 'descarga Zoom para Fedora', 'Zoom for Debian 12']) {
+    assert.strictEqual(os(t), 'linux', t);
+  }
+  // Nada de SO no pedido → esta máquina. "PC" sozinho é genérico; MAC address e URL não contam.
+  for (const t of ['download Zoom for this computer', 'download Zoom for my PC', 'baixe o Zoom pro meu PC', 'baixe o Zoom pra minha máquina', 'download a MAC address changer', 'download it from https://example.com/mac/zoom', 'I want to win at chess, download Stockfish']) {
+    assert.strictEqual(targetFromRequest(t), null, t);
+  }
+  // Pacote da distro nomeada.
+  assert.strictEqual(targetFromRequest('baixe o Zoom pro Ubuntu')?.linuxPkg, 'deb');
+  assert.strictEqual(targetFromRequest('Zoom for Fedora')?.linuxPkg, 'rpm');
+  assert.strictEqual(targetFromRequest('Zoom for Linux')?.linuxPkg, '');
+  // CPU: Apple Silicon/M1–M5 (e já diz Mac), Intel, ARM64, x64, 32-bit.
+  assert.deepStrictEqual([os('Zoom for my M2 MacBook'), arch('Zoom for my M2 MacBook')], ['macos', 'arm64']);
+  assert.deepStrictEqual([os('baixe o Zoom pro Apple Silicon'), arch('baixe o Zoom pro Apple Silicon')], ['macos', 'arm64']);
+  assert.deepStrictEqual([os('para mi Mac M4 Pro'), arch('para mi Mac M4 Pro')], ['macos', 'arm64']);
+  assert.deepStrictEqual([os('Zoom for my Intel Mac'), arch('Zoom for my Intel Mac')], ['macos', 'x64']);
+  assert.strictEqual(arch('Zoom for Windows on ARM'), 'arm64');
+  assert.strictEqual(arch('Zoom for Windows arm64'), 'arm64');
+  assert.strictEqual(arch('Zoom for Linux x64'), 'x64');
+  assert.strictEqual(arch('baixe o Zoom para Windows 64 bits'), 'x64');
+  assert.strictEqual(arch('baixe o Zoom para Windows 32 bits'), 'x86');
+  assert.strictEqual(arch('descarga 7-Zip para Windows de 32 bits'), 'x86');
+  assert.strictEqual(arch('Zoom for Linux aarch64'), 'arm64');
+  assert.strictEqual(os('Zoom for x64'), undefined);
+  // Mais de um SO: nenhum é "errado".
+  assert.strictEqual(os('download Zoom for Windows and Mac'), 'other');
+});
+
+test('target profile: this machine unless the request names another OS/CPU', () => {
+  assert.strictEqual(targetProfile(ubuntu, null), ubuntu);
+  assert.strictEqual(targetProfile(macArm, targetFromRequest('Zoom for my Mac')), macArm);
+  assert.strictEqual(targetProfile(ubuntu, targetFromRequest('Zoom for Ubuntu')), ubuntu);
+  const mac = targetProfile(ubuntu, targetFromRequest('download Zoom for my Mac'));
+  assert.strictEqual(mac.os, 'macos');
+  assert.strictEqual(mac.arch, 'other');
+  assert.strictEqual(mac.requested, true);
+  assert.match(pickHint(mac), /^the macOS build — "Universal" if offered, else the Apple Silicon/);
+  assert.match(machineLine(ubuntu, mac), /^THIS COMPUTER: Linux \(Ubuntu 24\.04 LTS\) on x64 \(64-bit Intel\/AMD\)\. THE REQUEST IS FOR ANOTHER COMPUTER: macOS — download for THAT one, not for this computer\. PICK: the macOS build/);
+  assert.match(machineLine(ubuntu), /^THIS COMPUTER: Linux .*\. PICK: the Linux build/);
+  const intelMac = targetProfile(ubuntu, targetFromRequest('Zoom for my Intel Mac'));
+  assert.match(machineLine(ubuntu, intelMac), /ANOTHER COMPUTER: macOS on Intel \(x86-64\)/);
+  const winArmT = targetProfile(macArm, targetFromRequest('baixe o Zoom pro Windows ARM'));
+  assert.deepStrictEqual([winArmT.os, winArmT.arch, winArmT.archLabel], ['windows', 'arm64', 'ARM64']);
+  // Mesmo SO, outra CPU: "para o Mac Intel" digitado num Mac M-series.
+  const sameOs = targetProfile(macArm, targetFromRequest('baixe o Zoom pro Mac Intel da minha mãe'));
+  assert.deepStrictEqual([sameOs.os, sameOs.arch, sameOs.requested], ['macos', 'x64', true]);
+  assert.strictEqual(sameOs.osName, macArm.osName);
+  const fedora = targetProfile(ubuntu, targetFromRequest('Zoom for Fedora'));
+  assert.strictEqual(fedora.linuxPkg, 'rpm');
+});
+
+test('wrong build against the requested computer: "for my Mac" on Linux takes the .dmg', () => {
+  const mac = targetProfile(ubuntu, targetFromRequest('download Zoom for my Mac'));
+  // Aqui (Linux) o .dmg é WRONG OS; pro Mac pedido, serve — de qualquer CPU (a CPU não foi dita).
+  assert.strictEqual(checkBuild('zoomusInstallerFull.dmg', ubuntu).level, 'error');
+  assert.strictEqual(checkBuild('zoomusInstallerFull.dmg', mac).level, '');
+  assert.strictEqual(checkBuild('Zoom-arm64.dmg', mac).level, '');
+  assert.strictEqual(checkBuild('Zoom-x64.dmg', mac).level, '');
+  // E o pacote desta máquina passa a ser o errado.
+  const c = checkBuild('zoom_amd64.deb', mac);
+  assert.strictEqual(c.level, 'error');
+  assert.match(c.note, /WRONG OS: zoom_amd64\.deb is a Linux package but the user asked for macOS/);
+  // CPU dita: Mac Intel pedido → arm64-only não roda lá.
+  const intelMac = targetProfile(ubuntu, targetFromRequest('Zoom for my Intel Mac'));
+  const cpu = checkBuild('Zoom-arm64.dmg', intelMac);
+  assert.strictEqual(cpu.level, 'error');
+  assert.match(cpu.note, /the computer the user asked for is Intel \(x86-64\) — it will not run there/);
+  assert.strictEqual(checkBuild('Zoom-universal.dmg', intelMac).level, '');
+  // Windows ARM pedido num Mac: x64 roda emulado (aviso), .dmg é erro.
+  const winArmT = targetProfile(macArm, targetFromRequest('para Windows ARM64'));
+  assert.strictEqual(checkBuild('ZoomInstaller-x64.exe', winArmT).level, 'warn');
+  assert.strictEqual(checkBuild('Zoom.dmg', winArmT).level, 'error');
+  // Distro nomeada: Fedora pedido no Ubuntu → .deb é pacote errado.
+  const fedora = targetProfile(ubuntu, targetFromRequest('Zoom for Fedora'));
+  assert.match(checkBuild('zoom_amd64.deb', fedora).note, /WRONG PACKAGE: .*the requested Linux uses \.rpm/);
+  // Vários SOs pedidos: nada é "errado".
+  const both = targetProfile(ubuntu, targetFromRequest('download Zoom for Windows and Mac'));
+  assert.strictEqual(checkBuild('ZoomInstaller.exe', both).level, '');
+  assert.strictEqual(checkBuild('Zoom.dmg', both).level, '');
 });

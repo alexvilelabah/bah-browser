@@ -24,6 +24,8 @@ export interface MachineProfile {
   arch: CpuArch;
   archLabel: string;           // "Intel (x86-64)", "Apple Silicon (arm64)", "x64 (64-bit)"…
   linuxPkg: LinuxPkg;
+  /** Perfil de OUTRO computador, o do pedido ("pro meu Mac" digitado no Linux) — não desta máquina. */
+  requested?: boolean;
 }
 
 const MAC_NAMES: Record<string, string> = {
@@ -66,18 +68,96 @@ export function machineProfile(input: MachineInput): MachineProfile {
     const pretty = (/^PRETTY_NAME=(.*)$/m.exec(input.linuxOsRelease || '')?.[1] || '').replace(/^["']|["']$/g, '');
     osName = pretty ? `Linux (${pretty})` : 'Linux';
   }
-  const archLabel = a === 'arm64' ? (os === 'macos' ? 'Apple Silicon (arm64)' : 'ARM64')
+  return { os, osName, osVersion: ver, arch: a, archLabel: archLabelOf(os, a, input.arch), linuxPkg: os === 'linux' ? linuxPackageType(input.linuxOsRelease || '') : '' };
+}
+
+function archLabelOf(os: OsFamily, a: CpuArch, raw = ''): string {
+  return a === 'arm64' ? (os === 'macos' ? 'Apple Silicon (arm64)' : 'ARM64')
     : a === 'x64' ? (os === 'macos' ? 'Intel (x86-64)' : 'x64 (64-bit Intel/AMD)')
-    : a === 'x86' ? '32-bit x86' : input.arch;
-  return { os, osName, osVersion: ver, arch: a, archLabel, linuxPkg: os === 'linux' ? linuxPackageType(input.linuxOsRelease || '') : '' };
+    : a === 'x86' ? '32-bit x86' : raw;
+}
+
+// ── O computador do PEDIDO ───────────────────────────────────────────────────────────────────
+// "Baixe o Zoom pro meu Mac" digitado no Linux: o alvo é o Mac, não esta máquina. Lê SO (e CPU,
+// se vier) do pedido em en/pt/es; sem nada no pedido, vale esta máquina. "PC" sozinho é genérico
+// ("meu PC" = este computador) e não escolhe Windows.
+
+export interface RequestTarget {
+  /** 'other' = o pedido cita mais de um SO ("pra Windows e Mac"): nenhum é "errado". */
+  os?: OsFamily;
+  arch?: CpuArch;
+  linuxPkg?: LinuxPkg;
+  /** Como o pedido chama a distro ("Ubuntu"), pro nome no prompt. */
+  distro?: string;
+}
+
+const REQ_MAC_RE = /\b(mac\s*os(?:\s*x)?|macos(?:x)?|os\s*x|macbook(?:\s*(?:air|pro|neo))?|imac|mac\s*(?:mini|studio|pro)|macs?)\b/i;
+const REQ_WIN_RE = /\b(windows|win\s*(?:xp|7|8(?:\.1)?|10|11)|win(?:32|64))\b|\b(?:for|on|para|pra|no|en|com)\s+(?:o\s+|el\s+)?win\b/i;
+const REQ_LINUX_RE = /\b(linux|ubuntu|kubuntu|xubuntu|debian|fedora|centos|rhel|red\s*hat|opensuse|suse|manjaro|arch\s*linux|pop!?_?os|kali|raspbian|raspberry\s*pi\s*os|zorin|linux\s*mint|elementary\s*os|endeavouros|rocky\s*linux|almalinux)\b/i;
+const REQ_DEB_RE = /\b(ubuntu|kubuntu|xubuntu|debian|linux\s*mint|pop!?_?os|kali|raspbian|raspberry\s*pi\s*os|zorin|elementary\s*os)\b/i;
+const REQ_RPM_RE = /\b(fedora|centos|rhel|red\s*hat|opensuse|suse|rocky\s*linux|almalinux)\b/i;
+const REQ_PACMAN_RE = /\b(manjaro|arch\s*linux|endeavouros)\b/i;
+// Apple Silicon / chip M1–M5 (com Pro/Max/Ultra): também diz que é Mac.
+const REQ_APPLE_ARM_RE = /\bapple\s*silicon\b|\bm[1-5](?:\s*(?:pro|max|ultra))?\b/i;
+const REQ_ARM_RE = /\b(arm\s*64|arm64|aarch64|arm)\b/i;
+const REQ_X86_RE = /\b(32[\s-]?bits?|x86(?![\s_-]?64)|i[3-6]86)\b/i;
+const REQ_X64_RE = /\b(intel|x64|x86[\s_-]?64|amd64|64[\s-]?bits?)\b/i;
+
+/** SO/CPU que o PEDIDO cita ("for my Mac", "para Windows 64 bits", "para mi Mac M2"). null = nenhum. */
+export function targetFromRequest(text: string): RequestTarget | null {
+  const s = String(text || '')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ')                                   // URL não é pedido de SO
+    .replace(/\bmac\s+address(?:es)?\b|\b(?:endere[cç]o|direcci[oó]n)\s+mac\b/gi, ' ');   // "MAC address"
+  const appleArm = REQ_APPLE_ARM_RE.test(s);
+  const oses: OsFamily[] = [];
+  if (REQ_MAC_RE.test(s) || appleArm) oses.push('macos');
+  if (REQ_WIN_RE.test(s)) oses.push('windows');
+  if (REQ_LINUX_RE.test(s)) oses.push('linux');
+  const archs = new Set<CpuArch>();
+  if (appleArm || REQ_ARM_RE.test(s)) archs.add('arm64');
+  if (REQ_X86_RE.test(s)) archs.add('x86');
+  // "64 bits" junto de "ARM64" é o ARM; "Intel" com "32-bit" é o 32-bit.
+  const x64 = REQ_X64_RE.exec(s);
+  if (x64 && !(archs.size && /^64/.test(x64[1]))) archs.add('x64');
+  if (archs.has('x86') && x64 && /^intel$/i.test(x64[1])) archs.delete('x64');
+  const t: RequestTarget = {};
+  if (oses.length === 1) t.os = oses[0];
+  else if (oses.length > 1) t.os = 'other';
+  if (archs.size === 1) t.arch = [...archs][0];
+  if (t.os === 'linux') {
+    t.linuxPkg = REQ_DEB_RE.test(s) ? 'deb' : REQ_RPM_RE.test(s) ? 'rpm' : REQ_PACMAN_RE.test(s) ? 'pacman' : '';
+    const d = /\b(ubuntu|kubuntu|xubuntu|debian|fedora|centos|rhel|red\s*hat|opensuse|suse|manjaro|arch\s*linux|pop!?_?os|kali|raspbian|zorin|linux\s*mint|elementary\s*os|endeavouros|rocky\s*linux|almalinux)\b/i.exec(s);
+    if (d) t.distro = d[1].replace(/\s+/g, ' ');
+  }
+  return t.os || t.arch ? t : null;
+}
+
+/**
+ * O perfil pra quem é o download: o do pedido, se ele cita outro SO/CPU; senão esta máquina (o
+ * mesmo objeto). SO de outro computador sem CPU dita = CPU desconhecida ('other'): nada é "CPU errada".
+ */
+export function targetProfile(m: MachineProfile, t: RequestTarget | null): MachineProfile {
+  if (!t) return m;
+  const os = t.os || m.os;
+  if (os === m.os) {
+    const sameArch = !t.arch || t.arch === m.arch;
+    const samePkg = !t.linuxPkg || t.linuxPkg === m.linuxPkg;
+    if (sameArch && samePkg) return m;
+    const a = t.arch || m.arch;
+    return { ...m, arch: a, archLabel: sameArch ? m.archLabel : archLabelOf(os, a), linuxPkg: t.linuxPkg || m.linuxPkg, requested: true };
+  }
+  const a: CpuArch = t.arch || 'other';
+  const osName = os === 'other' ? 'more than one operating system' : os === 'linux' && t.distro ? `Linux (${t.distro})` : OS_WORD[os];
+  return { os, osName, osVersion: '', arch: a, archLabel: t.arch ? archLabelOf(os, a) : 'CPU not stated', linuxPkg: os === 'linux' ? t.linuxPkg || '' : '', requested: true };
 }
 
 /** O que escolher numa página de download, em uma frase (vai pro prompt do agente). */
 export function pickHint(p: MachineProfile): string {
   if (p.os === 'macos') {
+    if (p.arch === 'other') return 'the macOS build — "Universal" if offered, else the Apple Silicon (arm64) one (Macs since 2020; the user did not say Intel) — a .dmg or .pkg. Never .exe/.msi.';
     return p.arch === 'arm64'
       ? 'the macOS build for Apple Silicon ("Apple Silicon", "M1/M2", "arm64") or "Universal" — a .dmg or .pkg. An Intel-only Mac build also runs (Rosetta) if nothing else is offered. Never .exe/.msi.'
-      : 'the macOS build for Intel ("Intel", "x64", "x86_64") or "Universal" — a .dmg or .pkg. NOT an "Apple Silicon"/"M1"/"arm64"-only build (it will not run here). Never .exe/.msi.';
+      : 'the macOS build for Intel ("Intel", "x64", "x86_64") or "Universal" — a .dmg or .pkg. NOT an "Apple Silicon"/"M1"/"arm64"-only build (it will not run on an Intel Mac). Never .exe/.msi.';
   }
   if (p.os === 'windows') {
     if (p.arch === 'arm64') return 'the Windows ARM64 installer (.exe/.msi) if offered, else the x64 one (runs emulated). Never .dmg/.pkg.';
@@ -89,12 +169,19 @@ export function pickHint(p: MachineProfile): string {
     const pkg = p.linuxPkg === 'deb' ? 'a .deb package' : p.linuxPkg === 'rpm' ? 'an .rpm package' : 'the distro\'s package';
     return `the Linux build for ${cpu}: ${pkg} if offered, else an .AppImage or .tar.gz. Never .exe/.dmg.`;
   }
+  if (p.requested) return 'the build for each operating system the user named.';
   return 'the build for this operating system and CPU.';
 }
 
-/** Linha "THIS COMPUTER" do prompt de tarefas de download. */
-export function machineLine(p: MachineProfile): string {
-  return `THIS COMPUTER: ${p.osName} on ${p.archLabel}. PICK: ${pickHint(p)}`;
+/**
+ * Linha "THIS COMPUTER" do prompt de tarefas de download. `target` = o perfil do pedido
+ * (targetProfile): se for outro computador, a linha diz qual e o PICK é pra ele.
+ */
+export function machineLine(p: MachineProfile, target: MachineProfile = p): string {
+  const here = `THIS COMPUTER: ${p.osName} on ${p.archLabel}.`;
+  if (!target.requested) return `${here} PICK: ${pickHint(p)}`;
+  const cpu = target.arch === 'other' ? '' : ` on ${target.archLabel}`;
+  return `${here} THE REQUEST IS FOR ANOTHER COMPUTER: ${target.osName}${cpu} — download for THAT one, not for this computer. PICK: ${pickHint(target)}`;
 }
 
 // ── O arquivo que começou a baixar: de que SO/CPU ele é? ──────────────────────────────────
@@ -142,12 +229,14 @@ export function checkBuild(filename: string, p: MachineProfile): BuildCheck {
   const b = classifyBuild(filename);
   const mine = OS_WORD[p.os];
   if (p.os === 'other') return { level: '', note: '' };
+  // Perfil do pedido (outro computador): "o pedido é pra macOS", não "este computador".
+  const whose = p.requested ? 'the computer the user asked for' : 'this computer';
   if (b.os && b.os !== p.os) {
     const what = b.os === 'windows' ? 'a Windows installer' : b.os === 'macos' ? 'a macOS installer' : 'a Linux package';
-    return { level: 'error', note: ` ⚠️ WRONG OS: ${filename} is ${what} but the user's computer is ${mine} — this is NOT what the user needs. Go back and pick the ${mine} download (check the OS selector).` };
+    return { level: 'error', note: ` ⚠️ WRONG OS: ${filename} is ${what} but ${p.requested ? 'the user asked for' : "the user's computer is"} ${mine} — this is NOT what the user needs. Go back and pick the ${mine} download (check the OS selector).` };
   }
   if (p.os === 'linux' && p.linuxPkg && (b.pkg === 'deb' || b.pkg === 'rpm') && b.pkg !== p.linuxPkg) {
-    return { level: 'error', note: ` ⚠️ WRONG PACKAGE: ${filename} is a .${b.pkg} package but this Linux uses .${p.linuxPkg} packages. Pick the .${p.linuxPkg} (or .AppImage/.tar.gz) download.` };
+    return { level: 'error', note: ` ⚠️ WRONG PACKAGE: ${filename} is a .${b.pkg} package but ${p.requested ? 'the requested' : 'this'} Linux uses .${p.linuxPkg} packages. Pick the .${p.linuxPkg} (or .AppImage/.tar.gz) download.` };
   }
   if (!b.arch || b.arch === 'universal' || b.arch === p.arch || p.arch === 'other') return { level: '', note: '' };
   // Roda emulado/compatível: x64 num Mac/Windows ARM, 32-bit num Windows 64-bit.
@@ -155,9 +244,9 @@ export function checkBuild(filename: string, p: MachineProfile): BuildCheck {
     || (p.arch === 'x64' && b.arch === 'x86' && p.os === 'windows')
     || (p.arch === 'arm64' && b.arch === 'x86' && p.os === 'windows');
   if (runsAnyway) {
-    return { level: 'warn', note: ` (note: ${filename} is the ${ARCH_WORD[b.arch]} build; this computer is ${p.archLabel} — it runs, but the native ${p.arch === 'arm64' ? 'ARM64/Apple Silicon' : 'x64'} or Universal build is better if the page offers one.)` };
+    return { level: 'warn', note: ` (note: ${filename} is the ${ARCH_WORD[b.arch]} build; ${whose} is ${p.archLabel} — it runs, but the native ${p.arch === 'arm64' ? 'ARM64/Apple Silicon' : 'x64'} or Universal build is better if the page offers one.)` };
   }
-  return { level: 'error', note: ` ⚠️ WRONG CPU: ${filename} is built for ${ARCH_WORD[b.arch]} but this computer is ${p.archLabel} — it will not run here. Cancel it (cancel_download) and pick the ${p.os === 'macos' && p.arch === 'x64' ? 'Intel / x64 or Universal' : p.arch === 'arm64' ? 'ARM64 / Apple Silicon or Universal' : 'x64'} build.` };
+  return { level: 'error', note: ` ⚠️ WRONG CPU: ${filename} is built for ${ARCH_WORD[b.arch]} but ${whose} is ${p.archLabel} — it will not run ${p.requested ? 'there' : 'here'}. Cancel it (cancel_download) and pick the ${p.os === 'macos' && p.arch === 'x64' ? 'Intel / x64 or Universal' : p.arch === 'arm64' ? 'ARM64 / Apple Silicon or Universal' : 'x64'} build.` };
 }
 
 // ── Botão de baixar da página ────────────────────────────────────────────────────────────────
