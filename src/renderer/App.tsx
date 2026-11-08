@@ -20,7 +20,7 @@ import DownloadButtonIcon from './components/DownloadButtonIcon';
 import { commandHasFollowUp, commandWantsSeveralFiles, isMediaCollectionRequest, collectionWantsAudioOnly, listItems, collectionSubject, collectionQuery, subjectYear, isTopNCollection, collectionCount, topNListPrompt, parseTopNList } from './download-steps';
 import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
-import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
+import { paceDelay, recordHit, backoff, isBackedOff, hostOf, BOT_CHECK_RE } from './pacing';
 import { runHandoff, classifyWebview, setHumanCheckFlag, humanCheckFlag } from './takeover-driver';
 import { TAKEOVER_TIMEOUT_MS, guardAgentAction, type TakeoverOutcome } from '../shared/takeover';
 import { classifyHumanCheck, HUMAN_CHECK_SIGNALS_JS, type HumanCheckKind, type HumanCheckVerdict } from '../shared/human-check';
@@ -3053,7 +3053,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               };
               /** Passa a aba pra pessoa e espera. Devolve como terminou (cleared / handed_back / skipped / timeout / unattended). */
               const humanHandoff = async (request: ManualHelpRequest, humanKind: HumanCheckKind, w: Electron.WebviewTag, entry: { url: string; verdict: HumanCheckVerdict | null }): Promise<TakeoverOutcome> => {
-                const host = paceHostOf(entry.url) || 'this site';
+                const host = hostOf(entry.url) || 'this site';
                 const tabId = activeTabIdRef.current;
                 appendAgentRunStep(runLog, { manualHelp: { kind: request.kind, reason: request.reason, beforeUrl: entry.url }, note: `handoff (${humanKind}${entry.verdict ? `: ${entry.verdict.why}` : ''})` });
                 setAgentVisual('idle');
@@ -3649,7 +3649,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const hcVerdict = humanCheck.verdict?.kind === 'captcha' ? humanCheck.verdict : null;
                   setHumanCheckFlag(wv, hcVerdict);
                   if (hcVerdict) {
-                    const host = paceHostOf(observation.url) || 'this site';
+                    const host = hostOf(observation.url) || 'this site';
                     // OPCIONAL (menu, padrão DESLIGADO): o agente clica UMA vez a caixinha "não sou
                     // um robô" (reCAPTCHA / hCaptcha / Turnstile) com input real. Quem decide é o
                     // serviço de captcha; desafio de imagem ou falha → pede ajuda como sempre.
@@ -3684,7 +3684,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (!manualHelpNeed && commandWantsDownload && step > 0) {
                       const wall = signInWall({ url: observation.url, title: observation.title, text: observation.text_sample, elements: observation.interactive_elements as any });
                       if (wall) {
-                        const host = paceHostOf(observation.url) || 'this site';
+                        const host = hostOf(observation.url) || 'this site';
                         manualHelpNeed = { kind: 'login', reason: t('dl.signinWall.reason', { host }), instruction: t('dl.signinWall.instruction') };
                         history += `\nSIGN-IN WALL (${wall}) on ${host}: the download needs the user's account. Bah paused and asked the user. Never type a password, never create an account.`;
                       }
@@ -3707,7 +3707,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // agendada não espera). Paywall e afins: o "Continuar" de sempre.
                     const humanKind: HumanCheckKind | null = manualHelpNeed?.kind === 'captcha' ? 'captcha' : manualHelpNeed?.kind === 'login' ? 'signin' : null;
                     if (manualHelpNeed && humanKind) {
-                      const host = paceHostOf(observation.url) || 'this site';
+                      const host = hostOf(observation.url) || 'this site';
                       if (!handedOffSites.has(`${humanKind}:${host}`) && humanHandoffs < 6) {
                         humanHandoffs++;
                         onProgress({ kind: 'status', message: `Paused for manual help: ${manualHelpNeed.reason}` });
@@ -4007,7 +4007,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       if (ask.length) {
                         const reply = await new Promise<string>((resolve) => onProgress({ kind: 'confirm', risk: 'form', label: 'application questions',
                           title: `📝 ${ask.length} question${ask.length > 1 ? 's' : ''} your profile does not answer`,
-                          message: `I filled ${filledNow.length} field${filledNow.length === 1 ? '' : 's'} on ${paceHostOf(observation.url) || 'this form'} from ${profile.email ? 'your profile' : 'the résumé'}${filledNow.length ? `: ${filledNow.map(d => d.label).slice(0, 8).join(', ')}` : ''}. Answer the rest (leave blank to skip):`,
+                          message: `I filled ${filledNow.length} field${filledNow.length === 1 ? '' : 's'} on ${hostOf(observation.url) || 'this form'} from ${profile.email ? 'your profile' : 'the résumé'}${filledNow.length ? `: ${filledNow.map(d => d.label).slice(0, 8).join(', ')}` : ''}. Answer the rest (leave blank to skip):`,
                           questions: ask.map(f => ({ key: questionKey(f.label), label: f.label, options: f.options, required: f.required })),
                           onChoose: (v: string) => resolve(v), onConfirm: () => resolve(''), onCancel: () => resolve('') } as any));
                         throwIfCancelled();
@@ -4192,7 +4192,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     return t && (t === txt.toLowerCase() || t.startsWith(txt.toLowerCase().slice(0, 40)));
                   });
                   if (uiState?.promo && !memory.some(m => m.key === 'promo' && m.value === uiState.promo)) {
-                    memory.push({ key: 'promo', value: uiState.promo, source: paceHostOf(observation.url), ts: Date.now() });
+                    memory.push({ key: 'promo', value: uiState.promo, source: hostOf(observation.url), ts: Date.now() });
                     onProgress({ kind: 'status', message: `🏷️ Noted an offer from a popup: ${uiState.promo.slice(0, 80)}` });
                   }
                   // Os botões DO diálogo, com o [id] certo pela posição (o "Download" do modal × o da página atrás).
@@ -4201,7 +4201,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     ? `OPEN DIALOG/POPUP: "${uiState.dialog}".${dlgBtns.length ? ` Its own buttons: ${dlgBtns.join(', ')} — if one of them is what the task needs (e.g. the dialog's Download/Continue), click THAT [id], not a same-named button on the page behind.` : ''}${uiState.promo ? ` It mentions an offer — Bah saved it to MEMORY ("${uiState.promo.slice(0, 100)}"); mention it in your answer only if it applies to what the user wants.` : ''} While it is open the page behind it cannot be used (its fields/buttons are not in the list). Close it FIRST${uiState.closers.length ? ': ' + uiState.closers.map(c => { const e = elFor(c); return e ? `[${e.id}] "${c}"` : `"${c}"`; }).join(' or ') + ' — or press "Escape"' : ': press "Escape" (or click an empty part of the page)'} — unless this dialog IS what the task needs.`
                     // Realidade da página ATUAL: o modelo pequeno repete "travado num popup" de passos antigos.
                     : /\b(popup|pop-up|overlay|modal|dialog|blocking|blocked by)\b/i.test(lastEvalText)
-                      ? `PAGE CHECK: Bah sees NO open popup/dialog on ${paceHostOf(observation.url) || 'this page'} right now — the page is usable. Do not repeat earlier observations; act on the current page.`
+                      ? `PAGE CHECK: Bah sees NO open popup/dialog on ${hostOf(observation.url) || 'this page'} right now — the page is usable. Do not repeat earlier observations; act on the current page.`
                       : '';
                   // O agente diz duas vezes seguidas que um popup bloqueia ESTA página e Bah vê um aberto:
                   // Bah aperta Escape por ele (fecha painel de busca/"Trending", menus, a maioria dos modais).
@@ -4235,7 +4235,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   { let dlgWcId: number | undefined; try { dlgWcId = (wv as any).getWebContentsId?.(); } catch {}
                     agentDialogsTab(dlgWcId); }
                   history += drainDialogLog();
-                  { const acct = noteAccountState(observation); const h = paceHostOf(observation.url);
+                  { const acct = noteAccountState(observation); const h = hostOf(observation.url);
                     // Fato da sessão: em que site a pessoa está (ou não) logada.
                     if (acct && h) noteThreadFact(threadKey, `account:${h}`, `${acct === 'signed-in' ? 'signed in' : 'signed out'} on ${h}`); }
                   // Buscador mostrando página de bloqueio/captcha: fica de fora por 1h (web_search e a linha SEARCH ENGINE pulam).
@@ -4291,10 +4291,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (step >= 20 && !replanRequested) replanRequested = true;
                   const stuckOnUrl = stepsOnSameUrl >= 5;
                   // Ritmo por site: página com cara de checagem anti-robô → esperas maiores neste host por 30 min.
-                  { const h = paceHostOf(observation.url);
+                  { const h = hostOf(observation.url);
                     if (h && BOT_CHECK_RE.test(`${observation.title} ${(observation.text_sample || '').slice(0, 600)}`)) backoff(h); }
-                  const pacingLine = isBackedOff(paceHostOf(observation.url))
-                    ? `PACING: ${paceHostOf(observation.url)} flagged automated access — Bah now waits 15–30s between actions here for 30 minutes. Do only what is necessary on this site; prefer another source when the task allows.`
+                  const pacingLine = isBackedOff(hostOf(observation.url))
+                    ? `PACING: ${hostOf(observation.url)} flagged automated access — Bah now waits 15–30s between actions here for 30 minutes. Do only what is necessary on this site; prefer another source when the task allows.`
                     : '';
                   const prompt = [
                     history, '',
@@ -4845,7 +4845,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   if (action.type === 'click_ref' || action.type === 'click_text' || action.type === 'dblclick') {
                     const tgtText = action.type === 'click_text' ? String((action as any).text || '')
                       : String((observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.text || (observation.interactive_elements.find(e => e.id === (action as any).ref) as any)?.aria || '');
-                    if (tgtText.trim()) lastTarget = `"${tgtText.replace(/\s+/g, ' ').trim().slice(0, 120)}" on ${paceHostOf(observation.url) || observation.url}`;
+                    if (tgtText.trim()) lastTarget = `"${tgtText.replace(/\s+/g, ' ').trim().slice(0, 120)}" on ${hostOf(observation.url) || observation.url}`;
                     if (/^\W*(sign ?in|log ?in|sign ?up|register|create (an )?account|join( now)?|continue with (google|apple|facebook|microsoft|email)|sign in with|log in with|entrar|fazer login|cadastr|iniciar sesi[oó]n|reg[ií]strate)\b/i.test(tgtText.trim())
                         && !/\b(sign ?in|log ?in|login|account|conta|cuenta|my profile|logged|signed in|register|sign ?up|cadastr|entrar na)\b/i.test(command) && !commandLikelyNeedsAccount(command)) {
                       history += `\nNOT SIGNING IN: "${tgtText.slice(0, 50)}" starts a sign-in/sign-up, and the user did not ask for anything that needs an account. Close the popup (its close button or press "Escape") and continue without an account — searching does not need one. If the site truly blocks without an account, try another site.`;
@@ -4856,7 +4856,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Site cuidadoso (termos proíbem automação, ex.: LinkedIn): UMA navegação por pedido +
                   // leitura. Clique/digitação/scroll/paginação ficam com a pessoa — recusa com explicação.
                   {
-                    const targetHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                    const targetHost = action.type === 'navigate' ? hostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : hostOf(observation.url);
                     if (isCarefulHost(targetHost)) {
                       const refuse = (why: string) => {
                         history += `\nCAREFUL SITE (${targetHost}): ${why} The user continues by hand — summarize what is visible (extract_text) and finish with done/report telling them the next step.`;
@@ -4897,7 +4897,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // HARD RULE: numa página de checagem humana o agente nunca opera nada (clicar, segurar, digitar,
                   // teclar, rolar…). Só leitura passiva ou sair da página. Só a pessoa resolve a checagem.
                   {
-                    const refusal = guardAgentAction(action.type, humanCheckFlag(wv), paceHostOf(observation.url) || 'this site');
+                    const refusal = guardAgentAction(action.type, humanCheckFlag(wv), hostOf(observation.url) || 'this site');
                     if (refusal) {
                       history += `\nREFUSED: ${refusal}`;
                       onProgress({ kind: 'status', message: `🛡️ ${refusal}` });
@@ -4911,7 +4911,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // host (15–30s depois que o site mostrou checagem anti-robô). Ações internas não esperam.
                   // Fica ANTES do cursor/ondinha, pra eles aparecerem na hora do clique de verdade.
                   const touchesPage = ['navigate', 'click_ref', 'click_text', 'click_at', 'fill', 'fill_ref', 'type', 'press', 'select_option', 'check', 'uncheck', 'back', 'forward', 'reload', 'hover', 'dblclick', 'focus', 'drag', 'scroll', 'upload', 'insert_text', 'keydown', 'keyup'].includes(action.type);
-                  const paceHost = action.type === 'navigate' ? paceHostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : paceHostOf(observation.url);
+                  const paceHost = action.type === 'navigate' ? hostOf(/^https?:\/\//i.test(String((action as any).url || '')) ? String((action as any).url) : `https://${String((action as any).url || '')}`) : hostOf(observation.url);
                   if (touchesPage && paceHost) {
                     const waitMs = paceDelay(paceHost);
                     if (waitMs > 0) {
@@ -6488,7 +6488,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (!target || wcIdUp == null) {
                       toolResult = { success: false, error: `No element with ref @${action.ref} — re-observe the page.` };
                     } else {
-                      const site = paceHostOf(wv.getURL()) || 'this site';
+                      const site = hostOf(wv.getURL()) || 'this site';
                       const field = (target.text || target.aria || 'upload field').slice(0, 60);
                       // Arquivo de uma pasta que a pessoa liberou nesta sessão: o agente escolhe, sem cartão.
                       let direct: { ok: boolean; token?: string; names?: string[]; error?: string } | null = null;
@@ -6987,7 +6987,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const navUrl = String((action as any).url || '');
                     const failedUrl = (/^chrome-error:|^about:/.test(afterObservation.url) && navUrl) ? navUrl : afterObservation.url;
                     // O bloqueio é desta página: o resto do site oficial continua valendo (o recovery marcava o domínio todo).
-                    recovery.blockedDomains.delete(paceHostOf(failedUrl));
+                    recovery.blockedDomains.delete(hostOf(failedUrl));
                     const again = supportLoadFailures.includes(failedUrl);
                     supportLoadFailures.push(failedUrl);
                     if (again || supportLoadFailures.length >= 4) {
@@ -7000,7 +7000,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: t('agent.supportLoad.search', { detail: loadProblem.detail }) });
                   } else if (supportVendor && urlChangedByAction && /^https?:/i.test(afterObservation.url) && !vendorUrlOk(afterObservation.url, supportVendor)) {
                     // Um link levou pra fora do fabricante (blog, loja, revista): o chamado não é lá.
-                    history += `\nOFF ${supportVendor.vendor.toUpperCase()}'S SITE: ${paceHostOf(afterObservation.url)} is not ${supportVendor.vendor}'s site — go back (go_back) to ${vendorDomainsLabel(supportVendor)}. A support request goes only through the vendor's own site.`;
+                    history += `\nOFF ${supportVendor.vendor.toUpperCase()}'S SITE: ${hostOf(afterObservation.url)} is not ${supportVendor.vendor}'s site — go back (go_back) to ${vendorDomainsLabel(supportVendor)}. A support request goes only through the vendor's own site.`;
                   }
                   const checkoutLikeUrl = /checkout|payment|pagamento|cart|carrinho|comprar|buy|order\/confirm|pedido\/confirm/i.test(afterObservation.url);
                   const openedRegularPage = recoveryVerdict.blocker === 'sensitive_action'
@@ -7060,7 +7060,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     onProgress({ kind: 'status', message: `🛡️ Recovery: ${recoveryVerdict.reason.slice(0, 120)}` });
                     let instruction = recoveryInstruction(recoveryVerdict);
                     if (supportVendor && recoveryVerdict.decision === 'search_alternative') {
-                      recovery.blockedDomains.delete(paceHostOf(afterObservation.url));
+                      recovery.blockedDomains.delete(hostOf(afterObservation.url));
                       instruction = `\nRECOVERY: ${recoveryVerdict.reason}\nINSTRUCTION: this is a support request with ${supportVendor.vendor} — do NOT go to another site. If the page you wanted did not load, web_search for it (e.g. "${supportVendor.vendor} contact technical support") and open the result on ${vendorDomainsLabel(supportVendor)}. If nothing works, stop and tell the user what blocks you.`;
                     }
                     history += instruction;
@@ -7095,7 +7095,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         // com a instrução de recuperação no histórico, sem perguntar de novo.
                         if (kind !== 'paywall') {
                           const humanKind: HumanCheckKind = kind === 'captcha' ? 'captcha' : 'signin';
-                          const host = paceHostOf(afterObservation.url) || 'this site';
+                          const host = hostOf(afterObservation.url) || 'this site';
                           if (!handedOffSites.has(`${humanKind}:${host}`) && humanHandoffs < 6) {
                             humanHandoffs++;
                             const after = await classifyWebview(wv as any);
