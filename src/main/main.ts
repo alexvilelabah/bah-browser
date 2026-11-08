@@ -412,6 +412,8 @@ html:has(> head > meta[name="color-scheme"]:only-child) > body > pre:only-child 
 // (did-attach-webview) e quem lê é o evalAdblockForHost, lá dentro do setupIPC.
 let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
+// Mundo isolado do Bah nas abas (renderer/page-eval.ts: o mesmo número).
+const BAH_ISOLATED_WORLD = 1047;
 
 // Identidade Chrome (UA, sec-ch-ua, navigator.userAgentData): UMA fonte, chrome-identity.ts.
 // Versão = Chrome estável atual (CURRENT_CHROME_MAJOR) no formato reduzido; SO e arquitetura REAIS.
@@ -1907,6 +1909,15 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     if (typeof from !== 'string' || typeof to !== 'string') return;
     aiEngine?.moveHistory(from, to);
     localEngine?.moveHistory(from, to);
+  });
+  // Script do Bah numa aba cuja página PROÍBE scripts (CSP sandbox): roda no mundo isolado do Bah
+  // (renderer/page-eval.ts). Só abas <webview> desta janela; o código é do próprio Bah (o renderer).
+  ipcMain.handle('page:eval-isolated', async (e, wcId: unknown, code: unknown, userGesture: unknown) => {
+    if (e.sender !== mainWindow?.webContents) throw new Error('not allowed');
+    if (typeof wcId !== 'number' || typeof code !== 'string' || code.length > 2_000_000) throw new Error('bad request');
+    const wc = webContents.fromId(wcId);
+    if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || wc.hostWebContents !== mainWindow?.webContents) throw new Error('no such tab');
+    return wc.executeJavaScriptInIsolatedWorld(BAH_ISOLATED_WORLD, [{ code }], userGesture === true);
   });
 
   // AI agent action — hybrid routing: 'local' → localEngine, 'flash'/'pro' → mainEngine

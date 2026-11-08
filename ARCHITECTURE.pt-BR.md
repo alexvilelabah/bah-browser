@@ -620,6 +620,15 @@ e preferir outra fonte. Outros hosts e ações internas (extrair, guardar, relat
 Parar continua cancelando durante a espera. O ritmo só deixa o agente mais lento; não resolve nem
 pula a checagem.
 
+**Páginas que proíbem scripts.** Arquivos servidos com a CSP `default-src 'none'; sandbox` (arquivos crus
+do Hugging Face, GitHub…) desligam o JavaScript da página, e junto todo `<webview>.executeJavaScript` que o
+Bah usa pra ler páginas (amostra de texto, `extract_text`, estado da tela, formulários).
+`src/renderer/page-eval.ts` embrulha o `executeJavaScript` de cada aba uma vez (`WebViewContainer`): tenta
+no mundo da página; se falhar, um teste trivial separa erro de verdade do script (repassado, nunca roda de
+novo) de página que bloqueia scripts (→ o mesmo código roda no **mundo isolado** 1047 do Bah via
+`page:eval-isolated` no `main.ts`, o mecanismo dos content scripts de extensão, lembrado até a aba mudar de
+endereço). Testes: `tests/unit/page-eval.test.ts`, `tests/e2e/no-js-page.spec.ts`.
+
 ---
 
 ## Sessões do agente (chip na aba + conversa dividida)
