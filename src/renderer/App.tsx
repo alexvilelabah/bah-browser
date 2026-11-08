@@ -25,7 +25,8 @@ import {
 import { meterState } from '../shared/context-meter';
 import { ENGINES, engineOrder, engineForUrl, markBlocked, agentSearchLine, SEARCH_BLOCK_RE, preferredEngine, setPreferredEngine, type EngineId } from './search-engines';
 import { namesStore } from './stores';
-import { namedSiteHint } from './known-sites';
+import { namedSiteHint, localeCountry } from './known-sites';
+import { isPriceComparison, priceCompareQuery, pickStores, unknownNamedStores, storeSearchUrl, blockedReason, pageSnippets, readPricePrompt, parseReadReply, checkRead, titleMatchesQuery, looksLikeAccessory, isStoreSource, compareTableSpec, compareSummary, type PriceRow, type PriceStore } from './price-compare';
 import { collectHtmlScript, serializeHtml, selectorNotFoundMessage, pageHtmlBlock, type CollectResult } from '../shared/html-clean';
 import { readBudget, resolveReadMax, pageText as pageOfText, pageTextBlock, pastEndMessage, rangeLine, nextCall, type PageInfo } from '../shared/read-paging';
 import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
@@ -156,6 +157,7 @@ declare global {
       setUILanguage?: (lang: string) => Promise<any>;
       setSearchEngine?: (setting: { id: string; custom?: string }, googleLocale: string) => void;
       e2eSearchResults?: (q: string) => Promise<Array<{ title: string; snippet: string; url: string }> | null>;
+      e2ePriceStores?: () => Promise<PriceStore[] | null>;
       onZoom?: (cb: (pct: number) => void) => void;
       setLocalProvider?: (provider: string, apiKey: string, baseUrl?: string, modelName?: string, opts?: { contextMode?: 'auto' | 'custom'; contextTokens?: number; maxOutputTokens?: number; ollamaNumCtx?: 'auto' | number; vision?: boolean; visionMode?: VisionMode }) => Promise<any>;
       localDiscover?: (provider: string, baseUrl?: string, authKey?: string) => Promise<{ ok: boolean; models: Array<{ id: string; loaded?: boolean; vision: string; contextTokens?: number; contextSource?: string; unsuitable?: string }>; error?: string }>;
@@ -2961,12 +2963,15 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // (Mesmo caso do "repete N vezes": ordem explícita nunca é muleta de atalho.)
                 // "Resuma minhas abas" também passa com a IA no comando: o modelo não lê aba por aba sem
                 // trocar de aba (switch_tab, uma pergunta de permissão por aba); o executor lê todas de uma vez.
-                let quickAction = (aiDrive && !opts?.forceImage)
+                // Comparar preço ENTRE LOJAS: o Bah visita cada loja (laço abaixo) — nem o atalho do Google
+                // Shopping (agregador) nem a busca numa loja só.
+                const storeCompare = !opts?.forceImage && isPriceComparison(command);
+                let quickAction = storeCompare ? null : (aiDrive && !opts?.forceImage)
                   ? (wantsTabsSummary(command) ? { type: 'summarize_tabs', wake: wantsWakeTabs(command) } as QuickAction : null)
                   : detectQuickAction(command, { forceImage: !!opts?.forceImage, weakModel });
                 // FOLLOW-UP sem IA: "e com a palavra bom dia?" / "agora com a frase X"
                 // reaproveita a intenção do pedido anterior trocando só o termo.
-                if (!aiDrive && !quickAction && lastQuickActionRef.current) {
+                if (!aiDrive && !storeCompare && !quickAction && lastQuickActionRef.current) {
                   const fu = command.trim().match(
                     /^(?:e|agora)[\s,]+(?:(?:com|pra|para|usando|de)\s+(?:a\s+|o\s+)?(?:palavra|frase|m[uú]sica|v[ií]deo)?|(?:a\s+)?(?:palavra|frase))\s*[:"'“”]?\s*(.{2,80}?)[\s"'“”?!.]*$/i,
                   );
@@ -2982,7 +2987,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   }
                 }
                 if (quickAction) lastQuickActionRef.current = quickAction;
-                const initialShortcut = (aiDrive || quickAction) ? null : getInitialShortcutAction(command);
+                const initialShortcut = (aiDrive || quickAction || storeCompare) ? null : getInitialShortcutAction(command);
                 if (quickAction) {
                   actionQueue.push({ action: quickAction as BrowserAction });
                   usedInitialShortcut = true;
@@ -3028,6 +3033,115 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Medido: "browse to linkedin…" → web_search("LinkedIn") (~25s) antes do navigate.
                   const siteHint = namedSiteHint(command);
                   if (siteHint) history += `\n${siteHint}`;
+                }
+
+                // PREÇO EM VÁRIAS LOJAS ("compare prices for AirPods Pro on Amazon and other stores"). A pessoa usa um
+                // navegador: espera ver o Bah ir em cada loja, buscar lá e olhar o preço na página da loja. Antes o
+                // modelo lia uma matéria de blog de ofertas e a apresentava como preços das lojas. Aqui o Bah planeja
+                // as lojas e visita uma por uma (como a coleção de músicas): navega na busca da própria loja, confere
+                // se a página é da loja e se não é erro/captcha/login, o modelo LÊ o preço (texto + print da página) e
+                // o Bah confere que o preço está mesmo na página. Loja bloqueada → "couldn't read — motivo", segue.
+                // Nunca dribla checagem de robô, nunca põe no carrinho, compra ou entra em conta.
+                if (storeCompare) {
+                  // País pelo locale do sistema (o painel de região, quando entrar, troca por searchCountry()).
+                  const country = localeCountry();
+                  const query = priceCompareQuery(command, country);
+                  const e2eStores = await window.electronAPI?.e2ePriceStores?.().catch(() => null);   // só no teste e2e
+                  const stores = e2eStores?.length ? e2eStores : pickStores(command, country);
+                  // Linhas do feed por loja: 'thought' fica no feed (status some em 2s).
+                  const rows: PriceRow[] = unknownNamedStores(command, country).map(name => ({ store: name, status: 'not_checked' as const, url: '', reason: "no verified address for this store (Bah never guesses store domains)" }));
+                  onProgress({ kind: 'thought', message: `🛒 Comparing "${query}" at ${stores.map(s => s.label).join(', ')} — visiting each store's own site` });
+                  console.log(`[PriceCompare] query="${query}" country=${country} stores=${stores.map(s => s.id).join(',')}`);
+                  // Lê a página aberta: endereço, título, texto e links de produto (mesmo site).
+                  const readPage = async (w: Electron.WebviewTag) => {
+                    const r = await withTimeout(Promise.resolve(w.executeJavaScript(`(function(){
+                      var t = (document.body && document.body.innerText) || '';
+                      var links = [], seen = {};
+                      var as = document.querySelectorAll('a[href]');
+                      for (var i = 0; i < as.length && links.length < 250; i++) {
+                        var a = as[i], txt = (a.innerText || a.getAttribute('aria-label') || a.title || '').replace(/\\s+/g, ' ').trim();
+                        if (txt.length < 8 || txt.length > 220 || seen[a.href]) continue;
+                        if (a.hostname !== location.hostname) continue;
+                        seen[a.href] = 1; links.push({ text: txt, href: a.href });
+                      }
+                      return { url: location.href, title: document.title || '', text: t.slice(0, 60000), links: links };
+                    })()`, false)), 8000, null as any).catch(() => null);
+                    return (r || { url: w.getURL(), title: w.getTitle(), text: '', links: [] }) as { url: string; title: string; text: string; links: Array<{ text: string; href: string }> };
+                  };
+                  // O modelo lê o preço: trechos do texto em volta do produto + o print da página (se o modelo enxerga).
+                  const askModel = async (st: { label: string }, pg: { url: string; title: string; text: string }) => {
+                    const shot = await withTimeout(captureFrame({ image: true, png: false }), 8000, undefined as any).catch(() => undefined);
+                    const prompt = readPricePrompt({ store: st.label, query, url: pg.url, title: pg.title, snippets: pageSnippets(pg.text, query) });
+                    setAgentVisual('thinking');
+                    const r = await withTimeout(Promise.resolve(window.electronAPI?.aiChat?.(prompt, '', true, store.localSettings.enabled, undefined, undefined, undefined, shot?.image)), 120000, null as any).catch(() => null);
+                    return parseReadReply(String(r?.response || ''));
+                  };
+                  for (let i = 0; i < stores.length; i++) {
+                    throwIfCancelled();
+                    const st = stores[i];
+                    if (deadline.remainingMs() <= 0 || deadline.fired()) { rows.push({ store: st.label, status: 'not_checked', url: storeSearchUrl(st, query), reason: 'task time limit reached' }); continue; }
+                    const w = getActiveWebview();
+                    if (!w) break;
+                    onProgress({ kind: 'thought', message: `🛒 Checking ${st.label}… (${i + 1}/${stores.length})` });
+                    setAgentVisual('acting');
+                    const searchUrl = storeSearchUrl(st, query);
+                    const beforeUrl = w.getURL();
+                    const nav = await executeBrowserAction(w, { type: 'navigate', url: searchUrl } as BrowserAction);
+                    await waitForWebviewSettled(w, beforeUrl);
+                    await waitForSettle(w, { maxMs: 6000, minMs: 800 });
+                    throwIfCancelled();
+                    let pg = await readPage(w);
+                    allResults.push({ action: { type: 'navigate', url: searchUrl } as BrowserAction, result: nav });
+                    appendAgentRunStep(runLog, { step: i, urlBefore: beforeUrl, urlAfter: pg.url, titleAfter: pg.title, ...summarizeAction({ type: 'navigate', url: searchUrl } as BrowserAction), result: summarizeResult(nav), success: nav?.success !== false, note: `price compare: ${st.label}` });
+                    let blocked = nav?.success === false && !pg.text ? `the page didn't load (${String(nav?.error || '').slice(0, 60)})` : blockedReason(pg, st);
+                    let row: PriceRow;
+                    if (blocked) {
+                      row = { store: st.label, status: 'blocked', url: pg.url || searchUrl, reason: blocked };
+                    } else {
+                      const read = await askModel(st, pg);
+                      throwIfCancelled();
+                      row = checkRead(read, pg, st, query);
+                      // Sem preço na busca: abre a página do PRODUTO (só link da própria loja) e lê de novo.
+                      // Site "cuidadoso" (careful-sites.ts): uma navegação só — não abre o produto.
+                      if (row.status !== 'read' && !read?.blocked && !isCarefulHost(st.domain)) {
+                        const fits = (l: { text: string; href: string }) => titleMatchesQuery(l.text, query) && !looksLikeAccessory(l.text, query) && isStoreSource(l.href, st);
+                        const want = (read?.title || '').toLowerCase().slice(0, 40);
+                        const pick = (want && pg.links.find(l => fits(l) && l.text.toLowerCase().includes(want))) || pg.links.find(fits);
+                        if (pick) {
+                          onProgress({ kind: 'thought', message: `🛒 ${st.label}: no price in the results — opening the product page…` });
+                          setAgentVisual('acting');
+                          const b2 = w.getURL();
+                          const nav2 = await executeBrowserAction(w, { type: 'navigate', url: pick.href } as BrowserAction);
+                          await waitForWebviewSettled(w, b2);
+                          await waitForSettle(w, { maxMs: 6000, minMs: 800 });
+                          throwIfCancelled();
+                          pg = await readPage(w);
+                          allResults.push({ action: { type: 'navigate', url: pick.href } as BrowserAction, result: nav2 });
+                          blocked = blockedReason(pg, st);
+                          if (blocked) row = { store: st.label, status: 'blocked', url: pg.url, reason: blocked };
+                          else { const row2 = checkRead(await askModel(st, pg), pg, st, query); if (row2.status === 'read' || row2.status === 'blocked') row = row2; }
+                        }
+                      }
+                    }
+                    rows.push(row);
+                    console.log(`[PriceCompare] ${st.label}: ${row.status}${row.price ? ` ${row.price}` : ''}${row.reason ? ` — ${row.reason}` : ''} (${row.url})`);
+                    onProgress({ kind: 'thought', message: row.status === 'read'
+                      ? `✅ ${st.label}: ${row.price} — ${String(row.title).slice(0, 80)}`
+                      : `⚠️ ${st.label}: couldn't read — ${row.reason}` });
+                  }
+                  const readCount = rows.filter(r => r.status === 'read').length;
+                  let doneMsg = compareSummary(query, rows);
+                  const rv = await window.electronAPI?.renderView?.(compareTableSpec(query, rows));
+                  if (rv?.success && rv.url) {
+                    // addBackgroundTab: mesma razão do compare_prices — o painel segue a aba ativa.
+                    const newId = store.addBackgroundTab(rv.url, opensIncognito('from-tab', aiOnIncognito()));
+                    store.joinOpenerSession(newId, taskTabId);
+                    activeTabIdRef.current = newId;
+                    doneMsg += ' The table with every store and its link opened in a tab.';
+                  }
+                  onProgress({ kind: 'status', message: `${readCount ? '✅' : '⚠️'} ${doneMsg}` });
+                  finishRun(readCount ? 'success' : 'failed', doneMsg);
+                  return { thought: doneMsg, results: allResults, done: { type: 'done', reason: doneMsg, success: readCount > 0 } as BrowserAction };
                 }
 
                 // "Os 3 maiores sucessos do X": a lista é conhecimento do modelo, não uma página. O 8B navegava

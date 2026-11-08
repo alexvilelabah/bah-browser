@@ -337,6 +337,7 @@ pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode 
 | `search-engines.ts` | Ordem dos buscadores da pesquisa rápida e do `web_search` do agente, e quais estão bloqueados agora |
 | `known-sites.ts` | Lista curada nome do site → endereço oficial (sem domínio chutado) |
 | `stores.ts` | "O pedido citou um lugar pra comprar?" (`namesStore`), pelo formato do pedido, sem lista de lojas |
+| `price-compare.ts` | Comparação de preços em várias lojas: detecção (en/pt), a busca só com o produto, a lista de lojas (citadas + varejistas da região até 4), a URL de busca de cada loja, `blockedReason` (erro / checagem de robô / login / fora do domínio), `checkRead` — uma linha só vale se lida no domínio da própria loja e com o preço no texto da página; artigo e comparador nunca contam |
 | `command-history.ts` | ↑/↓ na caixa de comando trazem os comandos anteriores |
 
 ### Buscadores, roteamento de pedidos e sites nomeados

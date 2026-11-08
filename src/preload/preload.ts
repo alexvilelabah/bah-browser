@@ -325,6 +325,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSearchEngine: (setting: unknown, googleLocale: string) => ipcRenderer.send('search:set-engine', setting, googleLocale),
   // E2E: resultados fixos pro web_search do agente (só com NODE_ENV=test; senão null).
   e2eSearchResults: (q: string) => ipcRenderer.invoke('e2e:search-results', q),
+  e2ePriceStores: () => ipcRenderer.invoke('e2e:price-stores'),
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),

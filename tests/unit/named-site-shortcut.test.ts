@@ -44,3 +44,15 @@ test('"summarize my open tabs" is a quick action; wake only on request', async (
   assert.deepStrictEqual(detectQuickAction('resuma minhas abas abertas, inclusive as dormindo'), { type: 'summarize_tabs', wake: true });
   assert.notDeepStrictEqual(detectQuickAction('summarize this page')?.type, 'summarize_tabs');
 });
+
+test('multi-store price comparison: no single-store fast path, no Google Shopping shortcut', async () => {
+  const { getInitialShortcutAction, detectQuickAction } = await load();
+  // Era `amazon search for "AirPods Pro other stores"`: várias lojas viravam uma e o pedido vazava pra busca.
+  assert.strictEqual(getInitialShortcutAction('compare prices for AirPods Pro on Amazon and other stores'), null);
+  assert.strictEqual(getInitialShortcutAction('Amazon vs Best Buy price for Sony WH-1000XM5'), null);
+  assert.notStrictEqual(detectQuickAction('compare prices for AirPods Pro', { weakModel: true })?.type, 'compare_prices');
+  assert.notStrictEqual(detectQuickAction('onde comprar PS5 mais barato', { weakModel: true })?.type, 'compare_prices');
+  // Uma loja só continua com o atalho de busca da loja; preço genérico continua no Shopping.
+  assert.match(getInitialShortcutAction('search amazon for AirPods Pro')?.action.url || '', /amazon\.[a-z.]+\/s\?k=AirPods/);
+  assert.strictEqual(detectQuickAction('preço do iphone 15', { weakModel: true })?.type, 'compare_prices');
+});

@@ -339,6 +339,7 @@ for the result:
 | `search-engines.ts` | Search engine order for quick research and the agent's `web_search`, and which engines are blocked right now |
 | `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
 | `stores.ts` | "Did the request name a place to buy?" (`namesStore`), by the shape of the request, no store list |
+| `price-compare.ts` | Multi-store price comparison: detection (en/pt), the product-only query, the store list (named + region retailers up to 4), each store's own search URL, `blockedReason` (error / bot check / sign-in / off-domain), `checkRead` — a row counts only if read on the store's own domain and the price is in that page's text; articles and aggregators never count |
 | `command-history.ts` | ↑/↓ in the command box recall earlier commands |
 
 ### Search engines, request routing and named sites
