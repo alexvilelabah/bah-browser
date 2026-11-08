@@ -751,11 +751,29 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const id = setInterval(() => setThinkIdx(i => i + 1), 1600);
     return () => clearInterval(id);
   }, [chatLoading]);
+  // Só um gesto de VERDADE da pessoa (roda, toque, teclado, ponteiro) desliga o grudar-no-fim.
+  // Antes qualquer evento de scroll contava — e o navegador gera scroll sozinho (chip de status
+  // sumindo, scroll anchoring), aí o feed parava de descer até a pessoa mexer no painel.
+  const userScrollAtRef = useRef(0);
+  const markUserScroll = () => { userScrollAtRef.current = Date.now(); };
   const onFeedScroll = () => {
     const el = feedRef.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) stickToBottomRef.current = true;
+    else if (Date.now() - userScrollAtRef.current < 1500) stickToBottomRef.current = false;
   };
+  // Conteúdo que cresce DEPOIS do item entrar (screenshot carregando, texto em stream, card que
+  // expande) também desce o feed enquanto ele está grudado no fim.
+  useEffect(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    const stick = () => { if (stickToBottomRef.current) el.scrollTop = el.scrollHeight; };
+    const mo = new MutationObserver(stick);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    el.addEventListener('load', stick, true);   // <img> carregando (o evento 'load' não sobe: captura)
+    return () => { mo.disconnect(); el.removeEventListener('load', stick, true); };
+  }, []);
 
   const runAgent = async (cmd: string, opts?: { forceImage?: boolean; skipPush?: boolean; scheduled?: ScheduledRunHooks }) => {
     // Re-entrada: um agente JÁ rodando nunca pode ser atropelado por outro (o 2º
@@ -1995,7 +2013,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       )}
 
       {/* ── Unified activity feed (infinite scroll, persists across tasks) ── */}
-      <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll}>
+      <div className="agent-feed" ref={feedRef} onScroll={onFeedScroll} onWheel={markUserScroll} onTouchMove={markUserScroll} onPointerDown={markUserScroll} onKeyDown={markUserScroll} style={{ overflowAnchor: 'none' }}>
         {/* Página aberta e conversa vazia: em vez de um painel morto, mostra perguntas
             SOBRE esta página. Ancorado embaixo (perto do compositor), como um convite. */}
         {feed.length === 0 && pageOpen && pageSuggestions.length > 0 && (
