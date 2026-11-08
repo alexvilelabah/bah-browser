@@ -7626,7 +7626,7 @@ states: [${SKILL_STATES.join(', ')}]   (optional — only those that apply)
 tasks: [${SKILL_TASKS.join(', ')}]       (optional — only those that apply)
 priority: 40
 ---
-1. numbered steps, written with the agent's actions (navigate, click_ref, fill_ref, select_option, check, find, look_at, extract_text, render_view, download, wait)
+1. numbered steps, written with the agent's actions (navigate, click_ref, fill_ref, select_option, check, find, look_at, web_search, extract_text, render_view, download, wait)
 
 Rules: at least one of sites/states/tasks; body under ${SKILL_MAX_WORDS - 40} words; keep URL patterns that worked (e.g. search/results URLs with parameters); leave out dead ends and failed attempts; no personal data.
 

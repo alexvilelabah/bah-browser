@@ -31,7 +31,7 @@ tasks: [download, search, travel, shopping, parts, people, jobs, grocery, suppor
 priority: 40
 ---
 1. Numbered steps using the agent's actions: navigate, click_ref, fill_ref, select_option,
-   check, find, look_at, extract_text, render_view, download, wait...
+   check, find, look_at, web_search, extract_text, render_view, download, wait...
 ```
 
 Rules (enforced by `validateSkill` in `src/shared/skills.ts` and `tests/unit/skills.test.ts`): at least
