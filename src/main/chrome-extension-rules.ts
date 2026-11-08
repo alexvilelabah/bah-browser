@@ -504,15 +504,16 @@ export function accessIncrease(granted: AccessGrant | null | undefined, manifest
 // Electron, mas o Bah já tem ouvintes de webRequest na sessão das abas, e nesse caso o
 // Electron desliga o das extensões — o Bah só emula o webRequest.onAuthRequired do proxy
 // (webRequestAuthProvider). omnibox e contextMenus só têm "casca" (não quebram, mas não
-// aparecem). proxy, cookies, notifications, privacy e management o Bah faz (calço + main).
+// aparecem). proxy, cookies, notifications, privacy e management o Bah faz (calço + main); e,
+// pros gerenciadores de senha, webNavigation, windows, idle (tela travada) e offscreen.
 const UNSUPPORTED_PERMISSIONS = [
   'webRequest', 'webRequestBlocking',
   'declarativeNetRequest', 'declarativeNetRequestWithHostAccess', 'declarativeNetRequestFeedback',
-  'sidePanel', 'identity', 'identity.email', 'nativeMessaging', 'debugger', 'offscreen',
+  'sidePanel', 'identity', 'identity.email', 'nativeMessaging', 'debugger',
   'tabCapture', 'desktopCapture', 'downloads', 'downloads.open', 'downloads.ui',
-  'history', 'bookmarks', 'contextMenus', 'webNavigation', 'tabGroups', 'tts', 'ttsEngine',
+  'history', 'bookmarks', 'contextMenus', 'tabGroups', 'tts', 'ttsEngine',
   'pageCapture', 'browsingData', 'topSites', 'sessions', 'search', 'fontSettings',
-  'contentSettings', 'idle', 'power', 'gcm', 'readingList', 'userScripts', 'favicon', 'printing',
+  'contentSettings', 'power', 'gcm', 'readingList', 'userScripts', 'favicon', 'printing',
   'printingMetrics', 'certificateProvider', 'platformKeys', 'documentScan', 'enterprise.platformKeys',
   'enterprise.deviceAttributes', 'enterprise.hardwarePlatform', 'enterprise.networkingAttributes',
   'system.cpu', 'system.memory', 'system.display', 'system.storage', 'vpnProvider', 'wallpaper',
@@ -832,6 +833,88 @@ export function mergeExtensionViews(
     out.push({ id, name: e.name || id, version: e.version, hasOptions: false, enabled: false, global, tabs: {} });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+// ── Instalar pelo Bah (botão "Adicionar ao Bah") ──────────────────────────────
+// A Chrome Web Store passou a decidir no SERVIDOR se o navegador é o Chrome: a partir do Chrome
+// 142.0.7430 (versão que a página pergunta pro webstorePrivate), o script dela só confia num sinal
+// que o servidor manda junto com a página — e esse sinal é falso pra todo navegador que não é o
+// Chrome do Google. A página mostra "Switch to Chrome" e esconde o botão de instalar. O Bah NÃO
+// finge ser o Chrome pra passar: mostra o próprio botão quando a aba está na página de uma extensão,
+// baixa o .crx público do mesmo endereço de atualização que a loja usa e passa pela mesma aprovação.
+
+export { STORE_ORIGIN, storeDetailId } from '../shared/extension-store.ts';
+
+/** Versão do manifesto como nome de pasta: só "1.2.3.4" (vira caminho no disco). Outra coisa lança. */
+export function normalizeVersionDir(v: unknown): string {
+  if (typeof v !== 'string' || !/^\d{1,9}(\.\d{1,9}){0,3}$/.test(v)) throw new Error('invalid extension version');
+  return v;
+}
+
+/** Endereço público do .crx (o mesmo que o Chrome e a biblioteca da loja usam). */
+export function crxDownloadUrl(id: string, chromeVersion: string): string {
+  const u = new URL('https://clients2.google.com/service/update2/crx');
+  u.searchParams.append('response', 'redirect');
+  u.searchParams.append('acceptformat', 'crx2,crx3');
+  u.searchParams.append('x', new URLSearchParams({ id, uc: '' }).toString());
+  u.searchParams.append('prodversion', chromeVersion);
+  return u.toString();
+}
+
+// Protobuf mínimo (só o que o cabeçalho do CRX3 usa: varint e bytes).
+function pbFields(b: Uint8Array): Array<[number, Uint8Array | number]> {
+  const out: Array<[number, Uint8Array | number]> = [];
+  let i = 0;
+  const varint = (): number => {
+    let r = 0, s = 0;
+    for (let n = 0; n < 10; n++) {
+      if (i >= b.length) throw new Error('truncated');
+      const x = b[i++];
+      r += (x & 0x7f) * 2 ** s; s += 7;
+      if (!(x & 0x80)) return r;
+    }
+    throw new Error('bad varint');
+  };
+  while (i < b.length) {
+    const key = varint();
+    const no = Math.floor(key / 8), wt = key % 8;
+    if (wt === 2) {
+      const len = varint();
+      if (i + len > b.length) throw new Error('truncated');
+      out.push([no, b.subarray(i, i + len)]); i += len;
+    } else if (wt === 0) out.push([no, varint()]);
+    else throw new Error('unsupported wire type');
+  }
+  return out;
+}
+
+const idFromBytes = (bytes: Uint8Array): string =>
+  Buffer.from(bytes.subarray(0, 16)).toString('hex').replace(/[0-9a-f]/g, c => String.fromCharCode(97 + parseInt(c, 16)));
+
+/**
+ * Lê um .crx (CRX3): devolve o ID declarado, a chave pública cujo hash É esse ID e o zip. Recusa
+ * (lança) o que não confere — mesma checagem da biblioteca da loja. O arquivo vem por HTTPS do
+ * Google; o ID esperado é conferido por quem chama.
+ */
+export function parseCrx3(buf: Uint8Array): { id: string; publicKey: Buffer; zip: Buffer } {
+  const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (b.length < 12 || b.toString('latin1', 0, 4) !== 'Cr24') throw new Error('not a CRX file');
+  if (b.readUInt32LE(4) !== 3) throw new Error('unsupported CRX version');
+  const hlen = b.readUInt32LE(8);
+  if (12 + hlen > b.length) throw new Error('truncated CRX header');
+  const header = pbFields(b.subarray(12, 12 + hlen));
+  const signed = header.find(([n, v]) => n === 10000 && typeof v !== 'number')?.[1] as Uint8Array | undefined;
+  const crxId = signed ? pbFields(signed).find(([n, v]) => n === 1 && typeof v !== 'number')?.[1] as Uint8Array | undefined : undefined;
+  if (!crxId || crxId.length !== 16) throw new Error('CRX has no declared id');
+  const id = idFromBytes(crxId);
+  for (const [n, v] of header) {
+    if ((n !== 2 && n !== 3) || typeof v === 'number') continue;
+    const pub = pbFields(v).find(([k, x]) => k === 1 && typeof x !== 'number')?.[1] as Uint8Array | undefined;
+    if (pub && idFromBytes(createHash('sha256').update(pub).digest()) === id) {
+      return { id, publicKey: Buffer.from(pub), zip: b.subarray(12 + hlen) };
+    }
+  }
+  throw new Error('CRX key does not match its id');
 }
 
 /**

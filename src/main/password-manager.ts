@@ -22,12 +22,15 @@ import fs from 'fs';
 import path from 'path';
 import * as R from './password-rules';
 import type { PwError, PwOffer, PwState, PwSuggest } from '../shared/password-types';
+import type { PwExtension } from '../shared/password-extensions';
 
 interface Deps {
   getMainWindow: () => BrowserWindow | null;
   t: (key: string, vars?: Record<string, string>) => string;
   browserSession: Session;   // persist:browser — pergunta se salva e preenche
   privateSession: Session;   // aba anônima — só preenche (nunca pergunta, nunca marca "usada agora")
+  /** Gerenciador de senha em extensão ligado agora (LastPass, Bitwarden, 1Password), ou null. */
+  passwordExtension?: () => PwExtension | null;
 }
 
 interface Guest { wc: WebContents; frame: WebFrameMain; origin: string; incognito: boolean }
@@ -145,7 +148,13 @@ export function setupPasswordManager(deps: Deps): { noteAgentInput: (wcId: numbe
   // "Salvar senha?" — a tecla dela chega à página como tecla de verdade, igual à da pessoa.
   const agentInputAt = new Map<number, number>();
   const agentTyping = (wcId: number) => Date.now() - (agentInputAt.get(wcId) ?? -1e9) < AGENT_QUIET_MS;
-  const captureOn = (origin: string) => !readOnly && data.offerToSave && vault() === 'ok' && !data.never.includes(origin);
+  // Gerenciador em extensão ligado (e a pessoa deixou o Bah sair da frente): nas abas NORMAIS o do Bah
+  // não oferece lista nem "Salvar senha?" — os dois brigariam. Na anônima a extensão não roda (igual
+  // ao Chrome): lá o do Bah continua preenchendo. captureOn só vale pra aba normal (quem chama já
+  // confere a anônima).
+  const extensionActive = (): PwExtension | null => { try { return deps.passwordExtension?.() || null; } catch { return null; } };
+  const steppedBack = (incognito: boolean) => !incognito && data.deferToExtension !== false && !!extensionActive();
+  const captureOn = (origin: string) => !readOnly && data.offerToSave && vault() === 'ok' && !data.never.includes(origin) && !steppedBack(false);
 
   // ── Tela do Bah ──────────────────────────────────────────────────────────────────────
   const mainWin = () => { const mw = deps.getMainWindow(); return mw && !mw.isDestroyed() ? mw : null; };
@@ -362,7 +371,7 @@ export function setupPasswordManager(deps: Deps): { noteAgentInput: (wcId: numbe
   // Clique num campo de login: se o site tem conta guardada, a tela desenha a lista em cima do campo.
   ipcMain.on('pw:focus', (e, m: any) => {
     const g = guest(e);
-    if (!g || vault() !== 'ok') return;
+    if (!g || vault() !== 'ok' || steppedBack(g.incognito)) return;
     const list = R.entriesFor(data.entries, g.origin);
     if (!list.length) return;
     const token = typeof m?.token === 'string' && /^[a-z0-9]{4,64}$/.test(m.token) ? m.token : '';
@@ -413,6 +422,8 @@ export function setupPasswordManager(deps: Deps): { noteAgentInput: (wcId: numbe
     vault: vault(),
     readOnly,
     offerToSave: data.offerToSave,
+    deferToExtension: data.deferToExtension !== false,
+    extension: (() => { const x = extensionActive(); return x ? { name: x.name, kind: x.kind } : null; })(),
     entries: data.entries
       .map(x => ({ id: x.id, origin: x.origin, host: x.host, username: x.username, created: x.created, lastUsed: x.lastUsed }))
       .sort((a, b) => a.host.localeCompare(b.host) || a.username.localeCompare(b.username)),
@@ -502,6 +513,19 @@ export function setupPasswordManager(deps: Deps): { noteAgentInput: (wcId: numbe
   });
 
   ipcMain.handle('passwords:state', (e) => (fromMainWindow(e) ? state() : null));
+
+  ipcMain.handle('passwords:set-defer', (e, on: unknown) => {
+    if (!fromMainWindow(e)) return fail('canceled');
+    data.deferToExtension = on === true;
+    if (!save()) return fail('write-failed');
+    pushConfig(); changed();
+    return { ok: true };
+  });
+  // Extensão ligada/desligada/instalada: o gerenciador mostra (ou tira) o aviso, e as abas abertas
+  // passam a perguntar (ou não) — sem esperar recarregar.
+  for (const ev of ['extension-loaded', 'extension-unloaded'] as const) {
+    try { deps.browserSession.extensions.on(ev as any, () => { setTimeout(() => { pushConfig(); changed(); }, 0); }); } catch {}
+  }
 
   ipcMain.handle('passwords:set-offer', (e, on: unknown) => {
     if (!fromMainWindow(e)) return fail('canceled');

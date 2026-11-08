@@ -145,6 +145,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onSuggestHide: (cb) => on('passwords:suggest-hide', cb),
       fill: (suggestId, entryId) => ipcRenderer.invoke('passwords:fill', suggestId, entryId),
       setOfferToSave: (v) => ipcRenderer.invoke('passwords:set-offer', v),
+      setDeferToExtension: (v) => ipcRenderer.invoke('passwords:set-defer', v),
       reveal: (id) => ipcRenderer.invoke('passwords:reveal', id),
       copy: (id, what) => ipcRenderer.invoke('passwords:copy', id, what),
       update: (id, patch) => ipcRenderer.invoke('passwords:update', id, patch),
@@ -183,6 +184,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Interruptor do quebra-cabeça: desligada = descarregada (arquivos e dados ficam).
   setExtensionEnabled: (extId: string, enabled: boolean) => ipcRenderer.invoke('extensions:set-enabled', extId, enabled),
   openExtensionStore: () => ipcRenderer.invoke('extensions:open-store'),
+  installExtensionFromStore: (wcId: number) => ipcRenderer.invoke('extensions:install-from-store', wcId),
+  getPasswordExtensions: () => ipcRenderer.invoke('extensions:password-managers'),
   openExtensionOptions: (extId: string) => ipcRenderer.invoke('extensions:open-options', extId),
   // Real OS-level input
   realClick: (wcId: number, x: number, y: number, backendNodeId?: number) =>
