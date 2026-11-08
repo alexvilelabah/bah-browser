@@ -3857,7 +3857,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       return { thought: thoughts.join('\n\n') || reason, results: allResults, done: { type: 'done', success: false, reason } as BrowserAction };
                     }
                     if (choice === 'restart') {
-                      history = `GOAL: ${command}\nNOTE: the task was restarted with a different model (${to}); start over from the current page.`;
+                      history = `GOAL: ${command}${understoodLine()}\nNOTE: the task was restarted with a different model (${to}); start over from the current page.`;
                       plan = [];
                       memory.length = 0;
                     } else {
