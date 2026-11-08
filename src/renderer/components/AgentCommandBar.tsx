@@ -7,6 +7,7 @@ import type { RoutedIntent, RouterStatus } from '../../shared/router-routes';
 import RouterModelCard from './RouterModelCard';
 import { SESSION_COLOR_HEX } from '../../shared/agent-sessions';
 import { startsWithActionVerb } from '../route-words';
+import { commandIsSupport, supportRequestText } from '../support-tickets';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
@@ -1009,6 +1010,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // isto o classificador mandava pra chat e a IA respondia repetindo o TEXTO ("1. repete
     // 3 vezes / 2. repete 3 vezes"), matando o recurso que sustenta automação a noite toda.
     if (parseRepeatIntent(msg)) { pendingSuggestionRef.current = null; runAgent(msg); return; }
+    // Chamado de suporte / post em fórum é tarefa do navegador ("Post a question…" ia pra busca na
+    // web), e a resposta curta no meio dele ("use chat, serial X") continua a mesma tarefa.
+    { const lastGoal = ([...(getThread(threadKeyOf(activeTabId))?.entries || [])].reverse().find(e => e.kind === 'task') as { goal?: string } | undefined)?.goal;
+      if (supportRequestText(msg, lastGoal) && !(isQuestion(msg) && !commandIsSupport(msg))) { pendingSuggestionRef.current = null; runAgent(msg); return; } }
     // PEDIDO VAGO ("baixe uma música", "toca uma música", "gere uma imagem", "quanto custa",
     // "crie uma playlist com duas músicas"): sabemos a AÇÃO mas falta o ASSUNTO. Em vez de
     // mandar pra IA (que pode estar fora e devolve erro técnico inútil), ENSINA a pedir
