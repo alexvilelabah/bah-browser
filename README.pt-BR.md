@@ -171,7 +171,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **É a sua sessão real.** O navegador usa partition persistente (`persist:browser`), então cookies e logins ficam salvos. Se você está logado no Gmail no Bah, o agente também está. **A IA acessa tudo que você acessaria manualmente.** Não logue em contas que não confiaria a um assistente.
 
-- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, excluir ou meter dados de cartão**, o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
+- **Freio de segurança em ações sensíveis.** Antes de **pagar, comprar, fechar o pedido ou reservar horário de entrega, excluir ou meter dados de cartão**, o agente **para e pede sua confirmação** — e isso vale em *todos* os caminhos (clique do modelo, clique por coordenada, Enter numa página de pagamento, atalhos aprendidos e automações repetidas). Nunca faz isso em silêncio.
 
 - **Pop-ups das páginas não travam nada.** O `alert`/`confirm` de um site abre na caixa do próprio Bah, não na nativa que travava a página (e o agente). Durante uma tarefa, alerts são fechados e confirms comuns aceitos (o agente pode armar a resposta antes com a ação `dialog`); um confirm que parece **pagamento ou exclusão vai pra você**.
 

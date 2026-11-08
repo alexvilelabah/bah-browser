@@ -4,8 +4,9 @@
 // nag on "remove filter", "clear search" etc.). Looks at the LABEL of the button/field
 // the agent is about to touch. Pure function → testable.
 export interface RiskInfo { kind: string; label: string }
-/** unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too. */
-export interface RiskOpts { unattended?: boolean }
+/** unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too.
+ *  cart: the task fills a shopping cart — editing the cart (remove a line, Enter on the cart page) is the job, not a risk. */
+export interface RiskOpts { unattended?: boolean; cart?: boolean }
 
 export function classifyRisk(
   actionType: string,
@@ -33,6 +34,17 @@ export function classifyRisk(
   // NOT prompt. Real destructive deletes (file/email/account/server) have none of these.
   const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form|like|gostei|curtir|descurtir|dislike|playlist|inscri\w*|subscrib\w*|unsubscribe|seguir|unfollow|follow|voto|votar|vote|upvote|downvote|reacao|reaction|notificac\w*|notification)\b/;
   if (PAY.test(hay)) return { kind: 'payment', label: shown || 'payment' };
+  // Mercado/loja: os botões que levam ao pagamento ou comprometem um pedido ("Check out Whole Foods Market
+  // Cart", "Continue to payment", "Place your order", "Reserve time slot"). "Check out" com espaço só como
+  // rótulo curto de botão — "Check out our weekly deals" é um link comum.
+  const ORDER = /\b(place (your |my |the )?order|submit (your |my |the )?order|(continue|proceed|go) to (checkout|check out|payment|pay)|pay now|confirm (and|&) pay|reserve (a |your |this )?(delivery |pickup )?(time ?slot|slot|time)|book (a |your )?(delivery |pickup )?(time ?)?slot|realizar pedido|tramitar pedido|pagar ahora|reservar (horario|franja))\b/;
+  const SHORT = norm(label).trim();
+  if (ORDER.test(hay) || (SHORT.length <= 40 && /^check ?out\b/.test(SHORT) && !/\b(deals?|recipes?|offers?|ideas?|this|these|our|more|new|latest)\b/.test(SHORT))) {
+    return { kind: 'payment', label: shown || 'checkout' };
+  }
+  // Tarefa de carrinho: "Remove"/"Delete <produto>" tira uma linha do carrinho (a Amazon chama de Delete) — editar
+  // o carrinho é a tarefa. Conta, tudo e "permanentemente" continuam perguntando.
+  if (opts.cart && /^(remove|delete|excluir|remover|eliminar|apagar)\b/.test(norm(label).trim()) && !/\b(account|conta|cuenta|all|tudo|todo|permanent\w*)\b/.test(hay)) return null;
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
   // Tarefa agendada rodando sozinha: mandar/publicar/reservar sai em nome da pessoa e não volta.
   // Com ela olhando o agente segue (pediu "manda"); sem ela, o cartão espera (e o aviso do sistema chama).
@@ -125,8 +137,13 @@ export function riskForAction(
     case 'press': {
       // Enter can submit a payment. With no label, only brake on a checkout page.
       const k = (action.key || '').toLowerCase();
-      const checkout = !!currentUrl && /checkout|payment|pagamento|\/cart\b|carrinho|comprar|order\/?confirm|pedido\/?confirm|finalizar/i.test(currentUrl);
-      return (k === 'enter' || k === 'return') && checkout ? { kind: 'payment', label: 'Enter on the payment page' } : null;
+      if (k !== 'enter' && k !== 'return') return null;
+      // Numa tarefa de carrinho o próprio carrinho é o destino (Enter no campo de quantidade/busca);
+      // checkout/pagamento continuam freados.
+      const checkout = !!currentUrl && (opts.cart
+        ? /checkout|payment|pagamento|comprar|order\/?confirm|pedido\/?confirm|finalizar/i
+        : /checkout|payment|pagamento|\/cart\b|carrinho|comprar|order\/?confirm|pedido\/?confirm|finalizar/i).test(currentUrl);
+      return checkout ? { kind: 'payment', label: 'Enter on the payment page' } : null;
     }
     default:
       return null;

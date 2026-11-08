@@ -19,7 +19,9 @@ const PAYWALL_PATTERNS = /\b(paywall|subscribe|assinante|assine|subscription|pre
 // positivo de tarefa privada. Os substantivos de conta cobrem os casos reais.
 // "my list/my jobs/my saved…" (substantivo de conta logo depois do possessivo) conta.
 // "salvo/salvos" saiu — pegava "arquivo salvo" (download) como tarefa de conta.
-const PRIVATE_TASK_PATTERNS = /\b(minha\s+conta|sua\s+conta|perfil|pedido|pedidos|carrinho|favorito|favoritos|historico|hist[oó]rico|mensagem|mensagens|notifica[cç][oõ]es|endere[cç]o|endere[cç]os|pagamento|cart[aã]o|assinatura|inbox|gmail|my\s+(?:list|jobs?|saved|recommend\w*|matches|feed|messages|orders|applications?|connections|network|subscriptions|library|playlists?)|minhas?\s+(?:lista|vagas?|candidaturas?|mensagens))\b/i;
+// Carrinho NÃO conta: lojas aceitam carrinho sem conta, e o "Sign In" do cabeçalho fazia uma tarefa de mercado
+// travada pausar pedindo login. Login de verdade (campo de senha, "sign in to continue") continua pausando.
+const PRIVATE_TASK_PATTERNS = /\b(minha\s+conta|sua\s+conta|perfil|pedido|pedidos|favorito|favoritos|historico|hist[oó]rico|mensagem|mensagens|notifica[cç][oõ]es|endere[cç]o|endere[cç]os|pagamento|cart[aã]o|assinatura|inbox|gmail|my\s+(?:list|jobs?|saved|recommend\w*|matches|feed|messages|orders|applications?|connections|network|subscriptions|library|playlists?)|minhas?\s+(?:lista|vagas?|candidaturas?|mensagens))\b/i;
 const PUBLIC_TASK_PATTERNS = /\b(pesquis|buscar|busque|procure|pre[cç]o|comparar|compare|abrir|ver|ler|resum|produto|noticia|not[ií]cia|wikipedia|github|youtube|mercado\s*livre|amazon)\b/i;
 
 export function commandLikelyNeedsAccount(command: string): boolean {

@@ -571,7 +571,7 @@ Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggest
 autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
 EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
 busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
-aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`.
+aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`, `grocery`.
 Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na
 sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`.
 Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
@@ -580,7 +580,18 @@ arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).
 Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
 skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`, `grocery-cart`.
+Numa tarefa `grocery` (adicionar/pôr… no carrinho, compras de mercado, lista de compras — substitui `shopping`, cuja
+skill manda nunca pôr no carrinho) cada passo recebe ainda, de `src/renderer/grocery.ts` (testado em
+`tests/unit/grocery.test.ts`, e2e em `tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — nome,
+preço, preço por unidade, Sponsored / OUT OF STOCK / IN CART ×n de cada cartão de produto e a `[ref]` dos botões
+Add, + e − (casados com os elementos interativos pela posição na tela: uma grade de botões "Add" iguais deixa de ser
+ambígua); **CART PAGE** — linhas, quantidades, subtotal e o botão de checkout que ele não deve clicar; e **SHOPPING
+LIST** — o pedido separado em itens ("a dozen bagels" = 12) contra o que a loja mostra no carrinho. Encerrar (`done`,
+`report` ou `render_view`) com item faltando ou a menos, sem ter visto a página do carrinho depois da última mudança,
+ou sem citar um item esgotado volta (até 3 vezes). O freio (`risk.ts`) pergunta antes de Checkout / Check out /
+Continue to payment / Place (your) order / Reserve time slot; numa tarefa de carrinho, tirar uma linha do carrinho e
+Enter na página do carrinho não perguntam.
 Skills do usuário ficam em `<userData>/skills/` (menu → 🧩 Minhas skills); depois de uma tarefa que deu
 certo (3+ passos, e a mensagem final não diz que falhou) o Bah oferece rascunhar uma ("Salvar como skill" →
 revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).

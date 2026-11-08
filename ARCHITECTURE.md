@@ -594,7 +594,18 @@ line (ISO date and the coming weekend) so small models get dates right.
 
 Task types come from the request: `download` (download words, typos included), `collection` (every track of a soundtrack, album or top-N list: `isMediaCollectionRequest`), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
-`parts` (charger/adapter/battery/compatible...), `people`. Per-site **account state** (signed in / signed out, read
+`parts` (charger/adapter/battery/compatible...), `people`, `grocery` (add/put… to a cart or basket, groceries, a
+shopping list — replaces `shopping`, whose skill says never to add to a cart). On a `grocery` task each step also
+gets, from `src/renderer/grocery.ts` (unit-tested in `tests/unit/grocery.test.ts`, e2e in
+`tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — every product tile's name, price, unit price,
+Sponsored / OUT OF STOCK / IN CART ×n, and the `[ref]` of its Add, + and − buttons (matched to the interactive
+elements by screen position, so a grid of identical "Add" buttons is no longer ambiguous); **CART PAGE** — lines,
+quantities, subtotal and the checkout button it must not click; and **SHOPPING LIST** — the request parsed into items
+("a dozen bagels" = 12) checked against what the store shows in the cart. Finishing (`done`, `report` or
+`render_view`) with an item missing or short, without having seen the cart page after the last change, or without
+naming an out-of-stock item is sent back (up to 3 times). The brake (`risk.ts`) asks before Checkout / Check out /
+Continue to payment / Place (your) order / Reserve time slot; in a cart task, removing a cart line and Enter on the
+cart page do not ask. Per-site **account state** (signed in / signed out, read
 from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an
 `ACCOUNT:` line. **Bundled skills are general rules, not recipes
 for named sites** — site-specific recipes belong in user/contributed skills.
@@ -606,7 +617,7 @@ parses, has triggers and stays short), loader + `skills:list` / `skills:save` / 
 `src/main/skills-loader.ts` (re-reads the files for every task; packaged via `electron-builder.yml`
 `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`, `grocery-cart`.
 
 ---
 
