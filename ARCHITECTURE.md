@@ -326,7 +326,7 @@ for the result:
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
 | `page-executor.ts` | Executes browser actions inside the page |
-| `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `risk.ts` | The safety-brake classifier (`riskForAction`). Kinds: payment, deletion, card data, application ("Submit application" always; a bare Submit/Send in a `jobs` task; Enter on an application review page), sending (unattended) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
 | `agent-permissions.ts` | What the agent may use besides its own task tabs — your other tabs and your history: Ask (default) / Always / Never |
 | `shared/html-clean.ts` | `get_html`: the in-page DOM walk (`collectHtmlScript`, run through `executeJavaScript` so it falls back to the isolated world on no-script pages) and the pure cleaner/serializer (`serializeHtml`): attribute allowlist, secret values redacted, script/style/svg bodies dropped, `data:` URLs shortened, `[#N]` element-list refs (stamped by `cdp:mark-refs` in `main/frames.ts` under a nonce attribute, removed after the read), `[hidden]` marks; paged by `offset` on tag boundaries (`serializeHtml` → `shared/read-paging.ts`). The HTML goes in the next prompt only, framed as page data, not instructions |
@@ -335,6 +335,8 @@ for the result:
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Job applications filled by code from the 📝 applicant profile. The page scan (`FORM_SCAN_SCRIPT`) returns `FieldInfo[]`, including a stable `automationId` (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` detects the ATS (`detectAts`: URL, or field names for embedded forms) and classifies each field with **that ATS's table first** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), then the generic label/name/autocomplete rules. A table can also say `skip` (honeypots such as Workday's `beecatcher`, passwords, react-select internals) so a field is neither filled nor asked. Tables are built from public forms; their minimized field inventories live in `tests/fixtures/ats/*.json` and `tests/unit/ats-tables.test.ts` checks them and prints coverage per ATS |
 | `pacing.ts` | Per-site pacing between agent actions (random 1–5 s; 15–30 s for 30 min after a bot check) |
 | `search-engines.ts` | Search engine order for quick research and the agent's `web_search`, and which engines are blocked right now |
 | `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
@@ -496,7 +498,7 @@ end: `tests/e2e/agent-sessions.spec.ts`.
 **One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
 `src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
 clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
-written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site) plus 📌
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site, jobs looked at) plus 📌
 **pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
 chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
 skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
@@ -546,7 +548,7 @@ request (no time, "at 9" morning or evening, interval below the minimum) gets a 
   tab and session (chip "⏰ <name>"), reused on later runs while it stays open. The agent loop gets
   `unattended: true`: the risk brake also stops at a bare Send/Post/Book/Order (`risk.ts`), and the
   Gmail/YouTube auto-send helpers are off. Outcome + short summary go to the task history.
-- **Waiting for the user**: a confirm card (risk brake, permission) or a sign-in pause
+- **Waiting for the user**: a confirm card (risk brake, permission, questions card) or a sign-in pause
   stops the run; the scheduler marks it "waiting for you" in the panel/menu and posts a system notification
   (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
   waits. Nothing risky happens until the person answers.
@@ -592,7 +594,7 @@ line (ISO date and the coming weekend) so small models get dates right.
 
 Task types come from the request: `download` (download words, typos included), `collection` (every track of a soundtrack, album or top-N list: `isMediaCollectionRequest`), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
-`parts` (charger/adapter/battery/compatible...), `people`. Per-site **account state** (signed in / signed out, read
+`parts` (charger/adapter/battery/compatible...), `people`, `jobs`. Per-site **account state** (signed in / signed out, read
 from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an
 `ACCOUNT:` line. **Bundled skills are general rules, not recipes
 for named sites** — site-specific recipes belong in user/contributed skills.
@@ -604,7 +606,7 @@ parses, has triggers and stays short), loader + `skills:list` / `skills:save` / 
 `src/main/skills-loader.ts` (re-reads the files for every task; packaged via `electron-builder.yml`
 `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+`used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`.
 
 ---
 

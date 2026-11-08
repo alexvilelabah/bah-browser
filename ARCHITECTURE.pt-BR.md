@@ -324,7 +324,7 @@ pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode 
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |
 | `page-executor.ts` | Executa as ações do navegador dentro da página |
-| `risk.ts` | O classificador do freio de segurança (`riskForAction`) |
+| `risk.ts` | O classificador do freio de segurança (`riskForAction`). Tipos: pagamento, exclusão, dados de cartão, candidatura ("Submit application" sempre; Submit/Send puro numa tarefa `jobs`; Enter na página de revisão da candidatura), envio (sem ninguém olhando) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Recuperação de estado travado + detecção de login/captcha |
 | `agent-permissions.ts` | O que o agente pode usar além das abas da própria tarefa — suas outras abas e seu histórico: Perguntar (padrão) / Sempre / Nunca |
 | `shared/html-clean.ts` | `get_html`: o passeio no DOM dentro da página (`collectHtmlScript`, via `executeJavaScript`, então recua pro mundo isolado em página sem script) e o limpador/serializador puro (`serializeHtml`): lista de atributos permitidos, valores secretos removidos, corpo de script/style/svg fora, URLs `data:` encurtadas, refs `[#N]` da lista de elementos (carimbadas por `cdp:mark-refs` em `main/frames.ts` num atributo com nonce, apagado depois da leitura), marca `[hidden]`; paginado por `offset` em fronteira de tag (`serializeHtml` → `shared/read-paging.ts`). O HTML vai só no próximo pedido, marcado como dado da página, não instrução |
@@ -333,6 +333,8 @@ pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode 
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
+| `form-filler.ts`, `dropdown-page.ts` | Formulário de candidatura preenchido **por código** (regras em `shared/form-fill.ts`): ler → planejar → aplicar. Listas suspensas com busca (react-select `input[role=combobox]`, combobox ARIA, "prompt" do Workday `button[aria-haspopup=listbox]`, inclusive com caixa de busca) vão uma a uma por `shared/dropdown-fill.ts`: digita o valor, espera (com teto) a lista de `role=option` — que pode carregar com atraso e vir num portal —, escolhe a melhor opção (semântica do `pickOption` + apelidos de país + palavra única) com a sequência completa de eventos de ponteiro/mouse e confere que o campo mostra o valor. Nada casou → as opções da lista vão como escolhas pro cartão único de perguntas. Fecha a lista com blur/clique fora, nunca Escape dentro de diálogo (fecharia o modal do Easy Apply). Documento principal + diálogo aberto, como o resto do preenchimento |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Candidatura preenchida por código a partir do 📝 perfil de candidato. O scan da página (`FORM_SCAN_SCRIPT`) devolve `FieldInfo[]`, com um `automationId` estável (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` reconhece o ATS (`detectAts`: pela URL ou, no formulário embutido, pelos nomes dos campos) e classifica cada campo **primeiro pela tabela desse ATS** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), depois pelas regras genéricas de rótulo/nome/autocomplete. A tabela também pode dizer `skip` (honeypot como o `beecatcher` do Workday, senha, peças internas do react-select): o campo não é preenchido nem perguntado. Tabelas montadas a partir de formulários públicos; o inventário mínimo de cada um fica em `tests/fixtures/ats/*.json`, e `tests/unit/ats-tables.test.ts` confere e mostra a cobertura por ATS |
 | `pacing.ts` | Ritmo por site entre ações do agente (aleatório 1–5 s; 15–30 s por 30 min depois de uma checagem anti-robô) |
 | `search-engines.ts` | Ordem dos buscadores da pesquisa rápida e do `web_search` do agente, e quais estão bloqueados agora |
 | `known-sites.ts` | Lista curada nome do site → endereço oficial (sem domínio chutado) |
@@ -494,7 +496,7 @@ UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-session
 `src/shared/thread-store.ts`): **turnos** (o que você pediu, o que o chat respondeu — os recentes palavra
 por palavra, com teto), **resumos das tarefas do agente** (objetivo, últimos passos-chave, desfecho, o
 último alvo — não cada passo; gravados pelo `finishRun` do `App.tsx`) e **fatos** (logado ou não em cada
-site) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
+site, vagas vistas) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
 REQUESTS THIS SESSION") e o chat leem o mesmo bloco (`promptBlock`); o chat o manda pro `ai:chat` e o
 `ai-engine.ts` deixa de usar o próprio histórico por aba (lá só fica o arquivo anexado, `lastDocs`). A
 thread tem um **orçamento fixo de tokens por prompt** — ~15% da janela do modelo, de 512 a 4096; 3000 com
@@ -545,7 +547,7 @@ de salvar; o claro é salvo e a resposta diz a próxima vez. A checagem cedo fic
   agente recebe `unattended: true`: o freio também para num "Send/Post/Book/Order" puro (`risk.ts`) e os
   assistentes de envio automático do Gmail/YouTube ficam desligados. Resultado + resumo curto vão pro
   histórico da tarefa.
-- **Esperando a pessoa**: um cartão de confirmação (freio, permissão) ou uma pausa de login
+- **Esperando a pessoa**: um cartão de confirmação (freio, permissão, perguntas) ou uma pausa de login
   para a vez; o agendador marca "esperando você" no painel/menu e manda uma notificação do sistema
   (`sched:notify`; clique → a aba da tarefa). O relógio da tarefa (`task-deadline.ts`) dorme enquanto o
   cartão espera. Nada arriscado acontece até a pessoa responder.
@@ -569,7 +571,7 @@ Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggest
 autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
 EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
 busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
-aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`.
+aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`, `jobs`.
 Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na
 sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`.
 Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
@@ -578,7 +580,7 @@ arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).
 Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
 skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`.
+`used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`.
 Skills do usuário ficam em `<userData>/skills/` (menu → 🧩 Minhas skills); depois de uma tarefa que deu
 certo (3+ passos, e a mensagem final não diz que falhou) o Bah oferece rascunhar uma ("Salvar como skill" →
 revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
