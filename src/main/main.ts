@@ -45,6 +45,7 @@ import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
 import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupUpload, setUploadTextExtractor } from './upload';
+import { setupApplicantProfile } from './applicant-profile';
 import { setupMemorySaverSignals } from './memory-saver-signals';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
@@ -1909,6 +1910,10 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     return true;
   });
   ipcMain.handle('ai:action', async (_event, command: string, pageContent?: string, screenshot?: VisionImage, tier?: 'local' | 'flash' | 'pro', actionId?: string) => {
+    // Diagnóstico (dev): BAH_DUMP_PROMPTS=<pasta> grava cada pedido ao modelo (o que o agente viu) num arquivo.
+    if (process.env.BAH_DUMP_PROMPTS) {
+      try { fs.mkdirSync(process.env.BAH_DUMP_PROMPTS, { recursive: true }); fs.writeFileSync(path.join(process.env.BAH_DUMP_PROMPTS, `prompt-${Date.now()}.txt`), `${command}\n<<<PAGE>>>\n${pageContent ?? ''}`); } catch {}
+    }
     if (process.env.E2E_MOCK_AI === '1') {
       // E2E_MOCK_SCRIPT = JSON array of actions: returned one per step (then done), and every
       // prompt is kept in global.__e2ePrompts so a test can assert what the agent was shown.
@@ -2612,7 +2617,9 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
           if (tId && hId) {
             const rel = await wc.debugger.sendCommand('Runtime.callFunctionOn', {
               objectId: tId,
-              functionDeclaration: 'function(o){return this===o||this.contains(o)||o.contains(this);}',
+              // A <label> on top is the target's own label (it forwards the click), not an overlay —
+              // Ashby/Greenhouse draw the résumé field's label over the "Upload File" button.
+              functionDeclaration: 'function(o){if(this===o||this.contains(o)||o.contains(this))return true;var l=o.closest&&o.closest("label");return !!(l&&(l.contains(this)||l.control===this||(l.parentElement&&l.parentElement.contains(this))));}',
               arguments: [{ objectId: hId }],
               returnByValue: true,
             }) as any;
@@ -3993,6 +4000,7 @@ function setupAutoUpdater(): void {
 
 app.whenReady().then(async () => {
   setupChatStore(() => mainWindow);
+  setupApplicantProfile();
   setupScheduledTasks({ getMainWindow: () => mainWindow, showMainWindow });
   // Widevine (DRM): sem ele Netflix/Prime/Disney+ mostram tela de erro em vez do vídeo
   // (M7701-1003). O Electron de cima não embute CDM nenhum — por isso o app roda no fork

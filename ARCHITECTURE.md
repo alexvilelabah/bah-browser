@@ -326,7 +326,10 @@ for the result:
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
 | `page-executor.ts` | Executes browser actions inside the page |
-| `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `risk.ts` | The safety-brake classifier (`riskForAction`). Kinds: payment, deletion, card data, application ("Submit application" always; a bare Submit/Send in a `jobs` task; Enter on an application review page), sending (unattended) and **message** — a support ticket or forum post: "Submit ticket/request", "Create case", "Post your question", "Request/Schedule a call" always; a bare Submit/Send/Post/Start chat in a `support` task; Enter on a ticket/post form URL |
+| `support-draft.ts` | The ticket/post text from what is known so far, filled by code: `supportFacts` (request + follow-up replies from the session thread + product/serial/contact method the user gave + a similar thread the agent saw, command and "continue / use chat" directives stripped), `draftPrompt` (the configured model writes SUBJECT/DESCRIPTION from ONLY those facts), `finalDraft` (a reply that adds any number/code not in the facts — e.g. a model year — or comes back malformed falls back to `templateDraft`, the user's own sentences in sections; product/serial always included), `planSupportFill` (description box, subject/title, serial, product, 📝 contact fields only; fields the user filled and password forms untouched; applied by `form-filler.ts`'s `applyFill`). App.tsx fills once per form, shows the review card ("look it over in the tab, then Continue"), re-reads the form with `SUPPORT_DRAFT_SCRIPT` and tells the model FORM FILLED BY BAH. `unsupportedSentences` drops draft sentences whose content words are mostly not in the facts (an 8B model wrote "I've not tried any fixes yet", "I've tried resetting the SMC" — never said). `supportFinishProblem`: a support task that ends off the vendor's domain is reported as failed; so is one that sent nothing and whose final message admits it did not get there; only a ticket/post the user actually sent is offered as a skill. The user's webmail is never opened for a support task |
+| `page-load.ts` | "The page did not load", generic: Access Denied / 403 (Akamai errors.edgesuite.net), not found, browser error page, blank page, repeated clicks with no effect. In a support task the prompt gets `pageLoadHint` (the failed URL, then `web_search` for that page and open a result on the vendor's domains), the generic "abandon this site, use Google/Wikipedia" recovery text is replaced, and the same URL failing again (or 4 failures) stops the task with a plain message — no retries, no getting around blocks |
+| `support-tickets.ts` | Support tickets and support-forum posts: `commandIsSupport`/`commandIsForum` (en/pt/es), the vendor's **official** support/community address (`SUPPORT_SITES`, first vendor named wins), the prompt block with only the 📝 profile's contact fields, and `SUPPORT_DRAFT_SCRIPT` + `formatSupportDraft`: the send card shows the form's filled fields and the full description, never a password (an empty description box is flagged). **First step:** `supportVendorFor` finds the vendor — the table's or any brand named where a vendor would be ("my Canon printer", "contact Logitech support") — and code queues a `web_search` (vendor + product + support/contact or community) before step 0; the table's address is only the fallback. `offSupportSite`: web_search is always allowed; navigate/new_tab only to the vendor's own domain (`vendorUrlOk`: table domains, or a registrable domain that *is* the vendor's name — `canon.com`, `canon.co.uk`; look-alikes like `canon-support-help.com` or `canon.support` are refused). Support tasks count as account tasks, so the sign-in form pauses for the user (a support lobby offering sign-in, or "Change a subscription", is not a wall) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
 | `takeover-driver.ts` (+ `shared/takeover.ts`, `shared/human-check.ts`) | Watch/Takeover: generic human-check / sign-in-wall classifier, hand-off state machine, guard that refuses agent actions on a human check |
 | `agent-permissions.ts` | What the agent may use besides its own task tabs — your other tabs and your history: Ask (default) / Always / Never |
@@ -336,6 +339,8 @@ for the result:
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Job applications filled by code from the 📝 applicant profile. The page scan (`FORM_SCAN_SCRIPT`) returns `FieldInfo[]`, including a stable `automationId` (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` detects the ATS (`detectAts`: URL, or field names for embedded forms) and classifies each field with **that ATS's table first** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), then the generic label/name/autocomplete rules. A table can also say `skip` (honeypots such as Workday's `beecatcher`, passwords, react-select internals) so a field is neither filled nor asked. Tables are built from public forms; their minimized field inventories live in `tests/fixtures/ats/*.json` and `tests/unit/ats-tables.test.ts` checks them and prints coverage per ATS |
 | `pacing.ts` | Per-site pacing between agent actions (random 1–5 s; 15–30 s for 30 min after a bot check) |
 | `search-engines.ts` | Search engine order for quick research and the agent's `web_search`, and which engines are blocked right now |
 | `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
@@ -498,7 +503,7 @@ end: `tests/e2e/agent-sessions.spec.ts`.
 **One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
 `src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
 clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
-written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site) plus 📌
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site, jobs looked at) plus 📌
 **pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
 chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
 skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
@@ -548,7 +553,7 @@ request (no time, "at 9" morning or evening, interval below the minimum) gets a 
   tab and session (chip "⏰ <name>"), reused on later runs while it stays open. The agent loop gets
   `unattended: true`: the risk brake also stops at a bare Send/Post/Book/Order (`risk.ts`), and the
   Gmail/YouTube auto-send helpers are off. Outcome + short summary go to the task history.
-- **Waiting for the user**: a confirm card (risk brake, permission) or a sign-in pause
+- **Waiting for the user**: a confirm card (risk brake, permission, questions card) or a sign-in pause
   stops the run; the scheduler marks it "waiting for you" in the panel/menu and posts a system notification
   (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
   waits. Nothing risky happens until the person answers.
@@ -594,7 +599,7 @@ line (ISO date and the coming weekend) so small models get dates right.
 
 Task types come from the request: `download` (download words, typos included), `collection` (every track of a soundtrack, album or top-N list: `isMediaCollectionRequest`), `search` (find/search/
 compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (prices, buy, cheapest...),
-`parts` (charger/adapter/battery/compatible...), `people`, `grocery` (add/put… to a cart or basket, groceries, a
+`parts` (charger/adapter/battery/compatible...), `people`, `jobs`, `support` (a support ticket or a support-forum post: `commandIsSupport`), `grocery` (add/put… to a cart or basket, groceries, a
 shopping list — replaces `shopping`, whose skill says never to add to a cart). On a `grocery` task each step also
 gets, from `src/renderer/grocery.ts` (unit-tested in `tests/unit/grocery.test.ts`, e2e in
 `tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — every product tile's name, price, unit price,
@@ -617,7 +622,8 @@ parses, has triggers and stays short), loader + `skills:list` / `skills:save` / 
 `src/main/skills-loader.ts` (re-reads the files for every task; packaged via `electron-builder.yml`
 `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`, `grocery-cart`.
+`used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`, `grocery-cart`,
+`support-ticket` (task `support`: a support ticket or a support-forum post — see `support-tickets.ts`).
 
 ---
 

@@ -1,0 +1,28 @@
+{
+ "ats": "icims",
+ "source": "https://careers-guelph.icims.com/jobs/4245/aquatic-part-time-staff/job?mode=apply&iis=Job+Board",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "iCIMS: apply starts with an email-first login inside an iframe (in_iframe=1) protected by an invisible hCaptcha. The candidate profile form is only shown after creating an account / signing in, which we did not do. Only the login step is captured.",
+ "fields": [
+  {
+   "label": "Email",
+   "type": "email",
+   "name": "css_loginName",
+   "id": "email",
+   "autocomplete": "email",
+   "expect": "email"
+  },
+  {
+   "label": "I accept City of Guelph's Privacy Policy",
+   "type": "checkbox",
+   "name": "accept_privacy",
+   "id": "accept_privacy",
+   "required": true,
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  }
+ ]
+}

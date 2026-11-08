@@ -324,7 +324,10 @@ pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode 
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |
 | `page-executor.ts` | Executa as ações do navegador dentro da página |
-| `risk.ts` | O classificador do freio de segurança (`riskForAction`) |
+| `risk.ts` | O classificador do freio de segurança (`riskForAction`). Tipos: pagamento, exclusão, dados de cartão, candidatura ("Submit application" sempre; Submit/Send puro numa tarefa `jobs`; Enter na página de revisão da candidatura), envio (sem ninguém olhando) e **message** — chamado de suporte ou post em fórum: "Submit ticket/request", "Create case", "Post your question", "Request/Schedule a call" sempre; Submit/Send/Post/Start chat puro numa tarefa `support`; Enter num endereço de formulário de chamado/post |
+| `support-draft.ts` | O texto do chamado/post com o que já se sabe, preenchido por código: `supportFacts` (pedido + respostas seguintes da thread da sessão + produto/serial/forma de contato que a pessoa deu + tópico parecido que o agente viu, sem o "abra um chamado" e sem ordens como "continue / use chat"), `draftPrompt` (o modelo configurado redige SUBJECT/DESCRIPTION SÓ com esses fatos), `finalDraft` (resposta que acrescenta número/código fora dos fatos — ex.: ano do modelo — ou vem fora do formato cai no `templateDraft`, as frases da própria pessoa em seções; produto/serial sempre entram), `planSupportFill` (caixa de descrição, assunto/título, serial, produto, só os campos de contato do 📝 perfil; campo que a pessoa preencheu e formulário de senha ficam intocados; aplicado pelo `applyFill` do `form-filler.ts`). O App.tsx preenche uma vez por formulário, mostra o cartão de revisão ("confira na aba e aperte Continuar"), relê o formulário com `SUPPORT_DRAFT_SCRIPT` e avisa o modelo com FORM FILLED BY BAH. `unsupportedSentences` tira do rascunho a frase cujas palavras de conteúdo quase não estão nos fatos (um modelo 8B escreveu "I've not tried any fixes yet", "I've tried resetting the SMC" — nada disso foi dito). `supportFinishProblem`: tarefa de suporte que termina fora do domínio do fabricante é falha; também a que não enviou nada e cuja mensagem final admite que não chegou lá; só vira oferta de skill o chamado/post que a pessoa enviou de fato. O webmail da pessoa nunca é aberto numa tarefa de suporte |
+| `page-load.ts` | "A página não carregou", genérico: Access Denied / 403 (Akamai errors.edgesuite.net), não encontrada, página de erro do navegador, em branco, cliques repetidos sem efeito. Numa tarefa de suporte o prompt ganha o `pageLoadHint` (a URL que falhou, e `web_search` por essa página abrindo um resultado do domínio do fabricante), o texto genérico do recovery ("abandone o site, use Google/Wikipedia") é trocado, e a mesma URL falhando de novo (ou 4 falhas) encerra a tarefa com uma mensagem clara — sem insistir, sem contornar bloqueio |
+| `support-tickets.ts` | Chamados de suporte e posts em fórum de suporte: `commandIsSupport`/`commandIsForum` (en/pt/es), o endereço **oficial** de suporte/comunidade do fabricante (`SUPPORT_SITES`, vale o primeiro citado), o bloco do prompt só com os campos de contato do 📝 perfil, e `SUPPORT_DRAFT_SCRIPT` + `formatSupportDraft`: o cartão de envio mostra os campos preenchidos e a descrição inteira, nunca senha (caixa de descrição vazia é avisada). **Primeiro passo:** `supportVendorFor` acha o fabricante — o da tabela ou qualquer marca citada onde caberia um fabricante ("minha impressora Canon", "falar com o suporte da Logitech") — e o código põe um `web_search` (fabricante + produto + support/contact ou community) antes do passo 0; o endereço da tabela é só a reserva. `offSupportSite`: web_search sempre liberado; navigate/new_tab só pro domínio do próprio fabricante (`vendorUrlOk`: domínios da tabela, ou domínio registrável que *é* o nome do fabricante — `canon.com`, `canon.co.uk`; imitação como `canon-support-help.com` ou `canon.support` é recusada). Tarefa de suporte conta como tarefa de conta: o formulário de login pausa pra pessoa (página inicial de suporte com "Sign in" ou "Change a subscription" não é parede) |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Recuperação de estado travado + detecção de login/captcha |
 | `takeover-driver.ts` (+ `shared/takeover.ts`, `shared/human-check.ts`) | Watch/Takeover: classificador genérico de checagem humana / parede de login, máquina de estados da passagem pra pessoa, trava que recusa ação do agente numa checagem |
 | `agent-permissions.ts` | O que o agente pode usar além das abas da própria tarefa — suas outras abas e seu histórico: Perguntar (padrão) / Sempre / Nunca |
@@ -334,6 +337,8 @@ pedaços já têm esses nomes enquanto são gravados, então pedaço nunca pode 
 | `store.ts` | Estado da UI/configurações (localStorage) |
 | `i18n.ts` | i18n na mão en / pt / es; **inglês é o padrão** |
 | `macros.ts` | Gravar/repetir macros determinísticas |
+| `form-filler.ts`, `dropdown-page.ts` | Formulário de candidatura preenchido **por código** (regras em `shared/form-fill.ts`): ler → planejar → aplicar. Listas suspensas com busca (react-select `input[role=combobox]`, combobox ARIA, "prompt" do Workday `button[aria-haspopup=listbox]`, inclusive com caixa de busca) vão uma a uma por `shared/dropdown-fill.ts`: digita o valor, espera (com teto) a lista de `role=option` — que pode carregar com atraso e vir num portal —, escolhe a melhor opção (semântica do `pickOption` + apelidos de país + palavra única) com a sequência completa de eventos de ponteiro/mouse e confere que o campo mostra o valor. Nada casou → as opções da lista vão como escolhas pro cartão único de perguntas. Fecha a lista com blur/clique fora, nunca Escape dentro de diálogo (fecharia o modal do Easy Apply). Documento principal + diálogo aberto, como o resto do preenchimento |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Candidatura preenchida por código a partir do 📝 perfil de candidato. O scan da página (`FORM_SCAN_SCRIPT`) devolve `FieldInfo[]`, com um `automationId` estável (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` reconhece o ATS (`detectAts`: pela URL ou, no formulário embutido, pelos nomes dos campos) e classifica cada campo **primeiro pela tabela desse ATS** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), depois pelas regras genéricas de rótulo/nome/autocomplete. A tabela também pode dizer `skip` (honeypot como o `beecatcher` do Workday, senha, peças internas do react-select): o campo não é preenchido nem perguntado. Tabelas montadas a partir de formulários públicos; o inventário mínimo de cada um fica em `tests/fixtures/ats/*.json`, e `tests/unit/ats-tables.test.ts` confere e mostra a cobertura por ATS |
 | `pacing.ts` | Ritmo por site entre ações do agente (aleatório 1–5 s; 15–30 s por 30 min depois de uma checagem anti-robô) |
 | `search-engines.ts` | Ordem dos buscadores da pesquisa rápida e do `web_search` do agente, e quais estão bloqueados agora |
 | `known-sites.ts` | Lista curada nome do site → endereço oficial (sem domínio chutado) |
@@ -496,7 +501,7 @@ UI: `TabBar.tsx`, `AgentCommandBar.tsx`; ponta a ponta: `tests/e2e/agent-session
 `src/shared/thread-store.ts`): **turnos** (o que você pediu, o que o chat respondeu — os recentes palavra
 por palavra, com teto), **resumos das tarefas do agente** (objetivo, últimos passos-chave, desfecho, o
 último alvo — não cada passo; gravados pelo `finishRun` do `App.tsx`) e **fatos** (logado ou não em cada
-site) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
+site, vagas vistas) mais os 📌 **fixados**, que nunca viram resumo. O prompt do agente ("PREVIOUS
 REQUESTS THIS SESSION") e o chat leem o mesmo bloco (`promptBlock`); o chat o manda pro `ai:chat` e o
 `ai-engine.ts` deixa de usar o próprio histórico por aba (lá só fica o arquivo anexado, `lastDocs`). A
 thread tem um **orçamento fixo de tokens por prompt** — ~15% da janela do modelo, de 512 a 4096; 3000 com
@@ -547,7 +552,7 @@ de salvar; o claro é salvo e a resposta diz a próxima vez. A checagem cedo fic
   agente recebe `unattended: true`: o freio também para num "Send/Post/Book/Order" puro (`risk.ts`) e os
   assistentes de envio automático do Gmail/YouTube ficam desligados. Resultado + resumo curto vão pro
   histórico da tarefa.
-- **Esperando a pessoa**: um cartão de confirmação (freio, permissão) ou uma pausa de login
+- **Esperando a pessoa**: um cartão de confirmação (freio, permissão, perguntas) ou uma pausa de login
   para a vez; o agendador marca "esperando você" no painel/menu e manda uma notificação do sistema
   (`sched:notify`; clique → a aba da tarefa). O relógio da tarefa (`task-deadline.ts`) dorme enquanto o
   cartão espera. Nada arriscado acontece até a pessoa responder.
@@ -571,7 +576,7 @@ Estados detectados a cada passo (`App.tsx`): `dialog` (modal visível), `suggest
 autocomplete), `datepicker` (calendário / `input[type=date]` / `role=grid`), `eula` (controles falam de
 EULA/licença/termos), `os-selector` (página oferece Windows **e** macOS/Linux), `searchbox` (campo de
 busca/destino), `tabs` (abas), `cards` (lista de cartões), `signin` (campo de senha, página de login ou
-aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`, `grocery`.
+aviso "entre para ver…"). Tipos de tarefa: `download`, `collection` (todas as faixas de uma trilha sonora, álbum ou lista top-N: `isMediaCollectionRequest`), `search`, `travel`, `shopping`, `parts`, `people`, `jobs`, `grocery`, `support` (chamado de suporte ou post em fórum de suporte: `commandIsSupport`).
 Estado da **conta por site** (entrou / não entrou — lido da página a cada passo e lembrado por site na
 sessão, `agent-login-policy.ts`) vai no prompt numa linha `ACCOUNT:`.
 Código: `src/shared/skills.ts` (parse + escolha, testado em `tests/unit/skills.test.ts`),
@@ -580,7 +585,8 @@ arquivos a cada tarefa; empacotado via `files` do `electron-builder.yml`).
 Skills incluídas — **regras gerais, não receitas de sites específicos** (receita de site fica pras
 skills do usuário/contribuídas): `popup-dismiss`, `autocomplete-pick`, `date-picker`, `site-search`, `page-tabs`,
 `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`, `shopping-compare`,
-`used-listings`, `travel-search`, `people-search`, `card-list`, `sign-in`, `grocery-cart`.
+`used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`, `grocery-cart`,
+`support-ticket` (tarefa `support`: chamado de suporte ou post em fórum de suporte — ver `support-tickets.ts`).
 Numa tarefa `grocery` (adicionar/pôr… no carrinho, compras de mercado, lista de compras — substitui `shopping`, cuja
 skill manda nunca pôr no carrinho) cada passo recebe ainda, de `src/renderer/grocery.ts` (testado em
 `tests/unit/grocery.test.ts`, e2e em `tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — nome,

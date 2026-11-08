@@ -1,0 +1,148 @@
+{
+ "ats": "ashby",
+ "source": "https://jobs.ashbyhq.com/ramp/34413f8d-26bf-4bbc-8ade-eb309a0e2245/application",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "jobs.ashbyhq.com /application, US role. Phone is a company UUID field (label/tel type). SMS/WhatsApp consent radios get a wrong neighbouring label (\"WhatsApp\").",
+ "fields": [
+  {
+   "label": "Autofill from resume",
+   "type": "file",
+   "expect": null
+  },
+  {
+   "label": "Legal Name",
+   "type": "text",
+   "name": "_systemfield_name",
+   "id": "_systemfield_name",
+   "automationId": "_systemfield_name",
+   "required": true,
+   "expect": "fullName"
+  },
+  {
+   "label": "Email",
+   "type": "email",
+   "name": "_systemfield_email",
+   "id": "_systemfield_email",
+   "automationId": "_systemfield_email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Phone",
+   "type": "tel",
+   "name": "4b71793a-c95c-4cc9-9d06-02e6ef7c5777",
+   "id": "4b71793a-c95c-4cc9-9d06-02e6ef7c5777",
+   "automationId": "4b71793a-c95c-4cc9-9d06-02e6ef7c5777",
+   "required": true,
+   "expect": "phone"
+  },
+  {
+   "label": "WhatsApp",
+   "type": "radio",
+   "name": "smsConsent",
+   "automationId": "4b71793a-c95c-4cc9-9d06-02e6ef7c5777",
+   "options": [
+    "Yes - I consent to receiving SMS text messages",
+    "No - I do not consent to receiving SMS text messages"
+   ],
+   "expect": null
+  },
+  {
+   "label": "WhatsApp",
+   "type": "radio",
+   "name": "whatsAppConsent",
+   "automationId": "4b71793a-c95c-4cc9-9d06-02e6ef7c5777",
+   "options": [
+    "Yes - I consent to receiving WhatsApp messages",
+    "No - I do not consent to receiving WhatsApp messages"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Start typing...",
+   "type": "combobox",
+   "automationId": "_systemfield_location",
+   "expect": "location"
+  },
+  {
+   "label": "Resume",
+   "type": "file",
+   "id": "_systemfield_resume",
+   "automationId": "_systemfield_resume",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "LinkedIn Profile",
+   "type": "text",
+   "name": "dc915b3a-c535-49df-abd6-dc8f3ddf6728",
+   "id": "dc915b3a-c535-49df-abd6-dc8f3ddf6728",
+   "automationId": "dc915b3a-c535-49df-abd6-dc8f3ddf6728",
+   "required": true,
+   "expect": "linkedin"
+  },
+  {
+   "label": "Cover Letter",
+   "type": "file",
+   "id": "6686ff1d-a7f9-484b-af56-4c32ff8cd99f",
+   "automationId": "6686ff1d-a7f9-484b-af56-4c32ff8cd99f",
+   "expect": null
+  },
+  {
+   "label": "WhatsApp",
+   "type": "checkbox",
+   "name": "3080cfba-13cc-4441-94b9-159da1278e66",
+   "automationId": "3080cfba-13cc-4441-94b9-159da1278e66",
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  },
+  {
+   "label": "WhatsApp",
+   "type": "checkbox",
+   "name": "66d3b6e2-6cef-4cf8-9193-87200193ab98",
+   "automationId": "66d3b6e2-6cef-4cf8-9193-87200193ab98",
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Please elaborate on your experience building software in AWS (with Terraform)",
+   "type": "textarea",
+   "name": "0086e069-bc0c-467b-8d38-c3f023146e79",
+   "id": "0086e069-bc0c-467b-8d38-c3f023146e79",
+   "automationId": "0086e069-bc0c-467b-8d38-c3f023146e79",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Here's some text encoded in a common format. Figure out the correct secret and submit it in the field below. IyEvdXNyL2J",
+   "type": "textarea",
+   "name": "c88f753e-ac4c-461c-81ec-3495a671c5bd",
+   "id": "c88f753e-ac4c-461c-81ec-3495a671c5bd",
+   "automationId": "c88f753e-ac4c-461c-81ec-3495a671c5bd",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "In the above question, we ask you to figure out a secret to prove two things: (1) that you are not a bot auto-applying t",
+   "type": "textarea",
+   "name": "3285cb76-c9b1-4ac1-92ce-c4059b19e4a0",
+   "id": "3285cb76-c9b1-4ac1-92ce-c4059b19e4a0",
+   "automationId": "3285cb76-c9b1-4ac1-92ce-c4059b19e4a0",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "We believe exceptional performance in one area is a good indication of performance in other areas. Do you have any examp",
+   "type": "text",
+   "name": "3e666775-f7f9-4eab-bbdb-1a3bb13bc8a4",
+   "id": "3e666775-f7f9-4eab-bbdb-1a3bb13bc8a4",
+   "automationId": "3e666775-f7f9-4eab-bbdb-1a3bb13bc8a4",
+   "expect": null
+  }
+ ]
+}

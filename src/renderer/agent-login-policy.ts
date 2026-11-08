@@ -1,4 +1,5 @@
 import type { ObservedState } from './page-executor';
+import { commandIsSupport } from './support-tickets.ts';
 
 export type ManualHelpKind = 'login' | 'captcha' | 'paywall' | 'blocked' | 'stuck' | 'local_unavailable';
 
@@ -25,7 +26,8 @@ const PRIVATE_TASK_PATTERNS = /\b(minha\s+conta|sua\s+conta|perfil|pedido|pedido
 const PUBLIC_TASK_PATTERNS = /\b(pesquis|buscar|busque|procure|pre[cç]o|comparar|compare|abrir|ver|ler|resum|produto|noticia|not[ií]cia|wikipedia|github|youtube|mercado\s*livre|amazon)\b/i;
 
 export function commandLikelyNeedsAccount(command: string): boolean {
-  return PRIVATE_TASK_PATTERNS.test(normalize(command));
+  // Chamado/post sai em nome da pessoa: a parede de login é dela (o agente nunca entra nem cria conta).
+  return PRIVATE_TASK_PATTERNS.test(normalize(command)) || commandIsSupport(command);
 }
 
 export function commandLooksPublic(command: string): boolean {
@@ -65,7 +67,8 @@ export function detectManualHelpNeed(
   // Já entrou (Me / Sign out / My account à vista) → nem paywall nem login: "Premium" no cartão do
   // perfil do LinkedIn virava "precisa de assinatura" numa tarefa da própria conta.
   const signedInNow = accountStateOf(observation) === 'signed-in';
-  if (PAYWALL_PATTERNS.test(page) && privateTask && !signedInNow) {
+  // Chamado de suporte não é conteúdo pago: "Change a subscription" na home do suporte da Apple pausava.
+  if (PAYWALL_PATTERNS.test(page) && privateTask && !commandIsSupport(command) && !signedInNow) {
     return {
       kind: 'paywall',
       reason: `The content on ${host || 'this site'} seems to require a subscription or account access.`,
@@ -91,7 +94,10 @@ export function detectManualHelpNeed(
     && (loginFormVisible || urlLooksLikeLogin || (loginVisible && noEffectCount >= 2))
     && (stepsOnSameUrl >= 2 || noEffectCount >= 2);
 
-  if ((hardLoginGate || atLoginForm || likelyStuckOnLogin) && !publicTask && !signedInNow) {
+  // Suporte: a página inicial ("Sign in for personalized support… or choose a product") não é parede —
+  // o fluxo segue sem conta até o formulário de login de verdade. Só ele pausa.
+  const stuckCounts = likelyStuckOnLogin && !commandIsSupport(command);
+  if ((hardLoginGate || atLoginForm || stuckCounts) && !publicTask && !signedInNow) {
     return {
       kind: 'login',
       reason: `For this task, ${host || 'the current site'} seems to need a login.`,

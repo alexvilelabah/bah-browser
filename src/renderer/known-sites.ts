@@ -71,6 +71,11 @@ export function officialSites(locale?: string): OfficialSite[] {
     { id: 'airbnb', label: 'Airbnb', names: ['airbnb'], url: 'https://www.airbnb.com/' },
     { id: 'expedia', label: 'Expedia', names: ['expedia'], url: 'https://www.expedia.com/' },
     { id: 'craigslist', label: 'Craigslist', names: ['craigslist'], url: 'https://www.craigslist.org/' },
+    // Suporte de fabricante: golpe de "suporte técnico" é comum — só o domínio do próprio fabricante.
+    { id: 'applesupport', label: 'Apple Support', names: ['apple support', 'apple tech support'], url: 'https://support.apple.com/' },
+    { id: 'applecommunity', label: 'Apple Support Community', names: ['apple support community', 'apple support communities', 'apple community', 'apple discussions'], url: 'https://discussions.apple.com/' },
+    { id: 'dellsupport', label: 'Dell Support', names: ['dell support', 'dell tech support', 'dell technical support'], url: 'https://www.dell.com/support/home/en-us' },
+    { id: 'dellcommunity', label: 'Dell Community', names: ['dell community', 'dell support community', 'dell forums', 'dell forum'], url: 'https://www.dell.com/community/' },
   ];
 }
 
