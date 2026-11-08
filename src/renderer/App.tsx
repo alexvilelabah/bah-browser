@@ -84,7 +84,7 @@ import BookmarksBar from './components/BookmarksBar';
 import SiteIcon from './components/SiteIcon';
 import IncognitoPage from './components/IncognitoPage';
 import { isIncognitoBlank, mayRecord, opensIncognito, partitionFor } from '../shared/incognito';
-import { guidanceKey } from '../shared/password-extensions';
+import { AUTO_LOGIN, guidanceKey, loginWaitStep, PASSWORD_FIELD_FILLED_JS, SUBMIT_FILLED_LOGIN_JS } from '../shared/password-extensions';
 import { incognitoReady, setAiIncognitoProbe } from './incognito';
 import {
   BrowserAction,
@@ -134,6 +134,8 @@ import {
   detectManualHelpNeed,
   commandLikelyNeedsAccount,
   noteAccountState,
+  accountStateOf,
+  loginFormVisible,
   accountStateLine,
   manualHelpHistoryNote,
   type ManualHelpRequest,
@@ -3085,13 +3087,47 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 return outcome;
               };
               // Gerenciador de senha em extensão (LastPass/Bitwarden/1Password) no formulário de login:
-              // o cartão de pausa diz como entrar com ELE e qual opção ligar nele. O Bah não preenche nada.
-              const extensionLoginGuidance = async (w: Electron.WebviewTag): Promise<string | null> => {
+              // espera um tempo curto o login automático dele (o formulário some ou a conta aparece).
+              // Bitwarden só PREENCHE: com a senha posta por ele, o Bah aperta "Entrar" uma vez. O Bah
+              // nunca lê a senha — só pergunta à página se o campo tem algo (sim/não).
+              const waitForExtensionLogin = async (w: Electron.WebviewTag): Promise<{ done: boolean; name?: string; instruction?: string }> => {
                 let partition = '';
                 try { partition = w.getAttribute('partition') || ''; } catch {}
-                if (partition && partition !== partitionFor(false)) return null;   // anônima: extensão não roda
+                if (partition && partition !== partitionFor(false)) return { done: false };   // anônima: extensão não roda
                 const exts = await window.electronAPI?.getPasswordExtensions?.().catch(() => []) ?? [];
-                return exts[0] ? t(guidanceKey(exts[0].kind)) : null;
+                const ext = exts[0];
+                if (!ext) return { done: false };
+                const instruction = t(guidanceKey(ext.kind));
+                if (!AUTO_LOGIN[ext.kind].acts) return { done: false, name: ext.name, instruction };
+                onProgress({ kind: 'status', message: t('pwext.waiting', { name: ext.name }) });
+                const started = Date.now();
+                let submitted = false;
+                let filledBefore = false;   // preenchido em DUAS olhadas seguidas: a extensão (instantâneo), não alguém digitando
+                for (;;) {
+                  await sleep(800);
+                  throwIfCancelled();
+                  const o = await observeFast(w, 6000).catch(() => null);
+                  if (!o) continue;
+                  const filledNow = (await w.executeJavaScript(PASSWORD_FIELD_FILLED_JS).catch(() => false)) === true;
+                  const filled = filledNow && filledBefore;
+                  filledBefore = filledNow;
+                  const step = loginWaitStep({
+                    kind: ext.kind, elapsedMs: Date.now() - started, submitted,
+                    snap: { loginForm: loginFormVisible(o), signedIn: accountStateOf(o) === 'signed-in', passwordFilled: filled },
+                  });
+                  if (step === 'continue') {
+                    noteAccountState(o);
+                    onProgress({ kind: 'status', message: t('pwext.signedIn', { name: ext.name }) });
+                    return { done: true, name: ext.name };
+                  }
+                  if (step === 'submit') {
+                    submitted = true;
+                    const ok = await w.executeJavaScript(SUBMIT_FILLED_LOGIN_JS, true).catch(() => false);
+                    if (ok) onProgress({ kind: 'status', message: t('pwext.submitted', { name: ext.name }) });
+                    continue;
+                  }
+                  if (step === 'pause') return { done: false, name: ext.name, instruction };
+                }
               };
               // FREIO: pausa e pergunta antes de ação de risco (pagamento/exclusão/cartão).
               // Resolve true = pode; false = cancelar. Aborta (false) se o usuário parar a tarefa.
@@ -3635,10 +3671,19 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         history += `\nSIGN-IN WALL (${wall}) on ${host}: the download needs the user's account. Bah paused and asked the user. Never type a password, never create an account.`;
                       }
                     }
-                    // Login com gerenciador de senha em extensão ligado: o cartão fala dele (o nome certo da opção).
+                    // Login numa tarefa da conta com gerenciador de senha em extensão ligado: o Bah não
+                    // preenche nada — espera o login automático DA EXTENSÃO; se não vier, o cartão diz
+                    // como ligar a opção nela (o nome certo pra cada uma).
                     if (manualHelpNeed?.kind === 'login') {
-                      const instruction = await extensionLoginGuidance(wv);
-                      if (instruction) manualHelpNeed = { ...manualHelpNeed, instruction };
+                      const viaExt = await waitForExtensionLogin(wv);
+                      if (viaExt.done) {
+                        history += `\nSIGN-IN: ${viaExt.name} (the user's password-manager extension) signed the user in on its own. Do not type credentials; continue the task.`;
+                        noEffectCount = 0;
+                        stepsOnSameUrl = 0;
+                        actionQueue = [];
+                        continue;
+                      }
+                      if (viaExt.instruction) manualHelpNeed = { ...manualHelpNeed, instruction: viaExt.instruction };
                     }
                     // Checagem humana / login → Watch/Takeover (volta sozinho quando a página normaliza; tarefa
                     // agendada não espera). Paywall e afins: o "Continuar" de sempre.

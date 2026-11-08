@@ -8,9 +8,11 @@ import type { AddressInfo } from 'net';
 
 // Gerenciador de senha em extensão (LastPass/Bitwarden/1Password) — com uma extensão LOCAL que imita
 // um deles (nada de conta de verdade, nada de senha de ninguém: a "senha" é do formulário de teste).
-// A extensão entra pelo botão "Adicionar ao Bah" numa página da loja (servida aqui, sem internet); no
-// login, o cartão manda ligar "Auto-login" na extensão; e a interface que ela injeta (iframe
-// chrome-extension:// + ícone no campo) não vira alvo de clique.
+//  1. auto-login ligado (tipo LastPass: preenche e envia): o agente espera e segue já dentro da conta;
+//  2. só preenche (tipo Bitwarden, "Autofill on page load"): o Bah aperta Entrar e segue;
+//  3. auto-login desligado: o cartão manda ligar "Auto-login" na extensão; e a interface que ela injeta
+//     (iframe chrome-extension:// + ícone no campo) não vira alvo de clique. A extensão entra pelo botão
+//     "Adicionar ao Bah" numa página da loja (servida aqui, sem internet).
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
   : process.platform === 'darwin' ? path.join(ROOT, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
@@ -20,8 +22,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const AdmZip = require('adm-zip');
 
 const FIXTURE_PASSWORD = 'fixture-pw-only-for-this-test';
+type Mode = 'submit' | 'fill' | 'off';
+
 // ── A extensão de teste ─────────────────────────────────────────────────────────────
-function makeExtension() {
+function makeExtension(mode: Mode) {
   const { publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const der = publicKey.export({ type: 'spki', format: 'der' }) as Buffer;
   const idBytes = crypto.createHash('sha256').update(der).digest().subarray(0, 16);
@@ -71,6 +75,20 @@ function makeExtension() {
       f.src = chrome.runtime.getURL('menu.html');
       f.style.cssText = 'position:absolute;left:30px;top:220px;width:320px;height:110px;border:1px solid #888;z-index:2147483647;background:#fff';
       document.body.appendChild(f);
+      const MODE = ${JSON.stringify(mode)};
+      if (MODE === 'off') return;
+      const go = () => {
+        user.value = 'ada@example.com';
+        pw.value = ${JSON.stringify(FIXTURE_PASSWORD)};
+        for (const el of [user, pw]) el.dispatchEvent(new Event('input', { bubbles: true }));
+        f.remove();
+        if (MODE === 'submit') pw.form.requestSubmit();
+      };
+      // "submit": o auto-login dispara quando o teste manda (evento na página), DEPOIS que o Bah já
+      // está esperando — o agente leva segundos até olhar a página e a extensão de verdade pode ser
+      // mais rápida (aí ele nem vê o formulário, o que também está certo). "fill": logo na carga.
+      if (MODE === 'submit') document.addEventListener('fakepass-go', go, { once: true });
+      else setTimeout(go, 1200);
     })();`;
   const files: Record<string, string> = {
     'manifest.json': JSON.stringify(manifest, null, 1),
@@ -153,13 +171,63 @@ const tabEval = (app: ElectronApplication, js: string) => app.evaluate(({ webCon
   return w.executeJavaScript(code as string);
 }, js);
 
-test('login card names the extension\'s setting; extension UI is never a click target; "Add to Bah" installs from the store page', async () => {
+async function runSignedIn(mode: 'submit' | 'fill', kind: 'lastpass' | 'bitwarden') {
+  const { server, posts } = siteServer();
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-pwext-'));
+  const ext = makeExtension(mode);
+  stageExtension(tmp, ext);
+  const app = await launch(tmp, ext.id, kind, [
+    { type: 'navigate', url: `${T}login` },
+    { type: 'done', reason: 'Opened your saved jobs.', success: true },
+  ]);
+  try {
+    const page = await ready(app);
+    for (let i = 0; i < 40 && !(await loaded(app, ext.id)); i++) await sleep(250);
+    expect(await loaded(app, ext.id)).toBe(true);
+    await page.getByTestId('agent-command-input').fill('open my saved jobs on this site');
+    await page.getByTestId('agent-command-input').press('Enter');
+    let ps: string[] = [];
+    for (let i = 0; i < 160; i++) {
+      if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
+      ps = await app.evaluate(() => (global as any).__e2ePrompts || []);
+      if (ps.some(p => /SIGN-IN: /.test(p))) break;
+      // O Bah está esperando a extensão → a extensão entra (só no modo "submit").
+      if (mode === 'submit' && await page.getByText(/Waiting for LastPass to sign you in/).last().isVisible().catch(() => false)) {
+        await tabEval(app, `document.dispatchEvent(new CustomEvent('fakepass-go')); 1`).catch(() => {});
+      }
+      // Nunca pode pausar pedindo login: a extensão é quem entra.
+      expect(await page.getByTestId('agent-manual-continue').isVisible().catch(() => false)).toBe(false);
+      await sleep(500);
+    }
+    if (!ps.some(p => /SIGN-IN: /.test(p))) console.log('PROMPTS:\n' + ps.map(p => p.slice(-1500)).join('\n=====\n'));
+    expect(ps.some(p => /SIGN-IN: LastPass|SIGN-IN: Bitwarden/.test(p))).toBe(true);
+    // A extensão enviou o login uma vez, com a senha dela; o agente não digitou nada e a senha não
+    // apareceu pra IA em lugar nenhum. (O calço do background tem o teste próprio, no fim.)
+    expect(posts).toEqual([{ user: 'ada@example.com', pwOk: true }]);
+    expect(ps.join('\n')).not.toContain(FIXTURE_PASSWORD);
+    expect(await tabEval(app, 'location.pathname')).toBe('/home');
+  } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+test('password-manager extension with auto-login: the agent waits, never types, and continues signed in', async () => {
+  test.setTimeout(150_000);
+  await runSignedIn('submit', 'lastpass');
+});
+
+test('fill-only extension (Bitwarden "Autofill on page load"): Bah presses Sign in once and continues', async () => {
+  test.setTimeout(150_000);
+  await runSignedIn('fill', 'bitwarden');
+});
+
+test('auto-login off: guidance card names the setting; extension UI is never a click target; "Add to Bah" installs from the store page', async () => {
   test.setTimeout(180_000);
   const { server, posts } = siteServer();
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-pwext-'));
-  const ext = makeExtension();
+  const ext = makeExtension('off');
   const crx = makeCrx(ext);
   const app = await launch(tmp, ext.id, 'lastpass', [
     { type: 'navigate', url: `${T}login` },
@@ -215,18 +283,20 @@ test('login card names the extension\'s setting; extension UI is never a click t
       const id = wv.getWebContentsId();
       const api: any = (window as any).electronAPI;
       const ax = await api.getAxTree(id);
+      const fr = await api.getFramesAx(id);
       // O que dá pra clicar (botão, link, item de menu, campo): o rótulo <label> que envolve o ícone soma o
       // texto dele no nome, mas rótulo não é alvo.
       const CLICKABLE = /^(button|link|menuitem|textbox|checkbox|combobox|option|tab)$/;
       const names = (nodes: any[]) => (nodes || []).filter((n: any) => !n.ignored && CLICKABLE.test(String(n?.role?.value || '')))
         .map((n: any) => String(n?.name?.value || '')).filter(Boolean);
-      return { page: names(ax.nodes) };
+      return { page: names(ax.nodes), frames: (fr.frames || []).map((f: any) => ({ label: f.label, names: names(f.nodes) })) };
     });
     expect(seen.page).toContain('Sign in');
     // (O campo "Email" pode levar o texto do ícone no nome — o <label> envolve o ícone —, mas o botão
     // do ícone em si não aparece.)
     const extControl = /^(Fill with FakePass|Use login|Open FakePass vault)/;
     expect(seen.page.filter(n => extControl.test(n))).toEqual([]);
+    expect(seen.frames.flatMap(f => f.names).filter(n => extControl.test(n))).toEqual([]);
   } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -240,7 +310,7 @@ test('password-manager background worker gets webNavigation, windows and offscre
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-pwext-'));
-  const ext = makeExtension();
+  const ext = makeExtension('off');
   stageExtension(tmp, ext);
   const app = await launch(tmp, ext.id, 'bitwarden', []);
   try {

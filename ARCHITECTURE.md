@@ -425,16 +425,25 @@ extensions is enabled, Bah's manager offers neither its logins list nor "Save pa
 two managers competing over the same field is the surprise to avoid. Private tabs keep Bah's manager,
 because extensions don't run there (same as Chrome).
 
-**Agent at a login form** (`extensionLoginGuidance` in `App.tsx`). When the agent pauses at a login form
-and one of these extensions is enabled (normal tabs only), the pause card names the extension's setting:
-LastPass "Auto-login" (site item → Edit → Advanced Settings), Bitwarden "Autofill on page load" (Settings →
-Autofill, also per login), or 1Password's pick-and-submit. The agent never types credentials.
+**Agent at a login form** (`loginWaitStep`, `waitForExtensionLogin` in `App.tsx`). On an account task:
+
+- With a password-manager extension, Bah waits up to 8 s for the extension's own auto-login. If the form
+  disappears or the page shows signed-in, the agent continues.
+- Bitwarden's "Autofill on page load" only fills. If the extension filled the password, Bah presses the
+  form's Sign in once.
+- 1Password never fills on its own, so Bah does not wait for it.
+- Otherwise Bah pauses with a card naming the extension's setting: LastPass "Auto-login" (site item →
+  Edit → Advanced Settings), Bitwarden "Autofill on page load" (Settings → Autofill, also per login), or
+  1Password's pick-and-submit.
+- The agent never types credentials. Bah asks the page only whether the password field is empty (yes/no)
+  and never reads the value.
 
 **Extension UI is not part of the page** (`shared/extension-ui.ts`). The agent never sees or clicks
 `chrome-extension://` iframes, or the marked injection roots under which LastPass and 1Password draw
 their icons and menus:
 
-- they are removed from the page's accessibility tree (`cdp:axtree`);
+- they are removed from the main accessibility tree (`cdp:axtree`) and from the iframe trees
+  (`cdp:frames-ax`);
 - the cookie-banner sweeper (`overlays:dismiss`) skips them.
 
 Clicking a password manager's menu would hand out a credential on the AI's initiative.

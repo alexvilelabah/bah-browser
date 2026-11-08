@@ -3,9 +3,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-  detectPasswordExtensions, parseExtraPasswordIds, guidanceKey, AUTO_LOGIN,
+  detectPasswordExtensions, parseExtraPasswordIds, loginWaitStep, guidanceKey, AUTO_LOGIN, AUTO_LOGIN_WAIT_MS,
+  PASSWORD_FIELD_FILLED_JS, SUBMIT_FILLED_LOGIN_JS,
 } from '../../src/shared/password-extensions.ts';
 import { dropExtensionUi, isExtensionFrameUrl, EXTENSION_UI_SELECTOR } from '../../src/shared/extension-ui.ts';
+import { loginFormVisible } from '../../src/renderer/agent-login-policy.ts';
 
 const LP = 'hdokiejnpimakedhajhdlcegeplioahd', BW = 'nngceckbapebfimnlniiiahkandclblb', OP = 'aeblfdkhhhdcdjpifhhbdiojplfjncoa';
 
@@ -42,6 +44,32 @@ test('setting names per extension (official docs) and which ones act on their ow
   assert.equal(guidanceKey('1password'), 'pwext.guide.1password');
 });
 
+test('wait decision: signed in / form gone continue; fill-only gets one submit; timeout pauses', () => {
+  const snap = (o: Partial<{ loginForm: boolean; signedIn: boolean; passwordFilled: boolean; agentTyped: boolean }>) =>
+    ({ loginForm: true, signedIn: false, passwordFilled: false, ...o });
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: 500, submitted: false, snap: snap({}) }), 'wait');
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: 500, submitted: false, snap: snap({ signedIn: true }) }), 'continue');
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: 500, submitted: false, snap: snap({ loginForm: false }) }), 'continue');
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: AUTO_LOGIN_WAIT_MS, submitted: false, snap: snap({}) }), 'pause');
+  // LastPass envia sozinho: campo preenchido é só esperar o envio dele.
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: 500, submitted: false, snap: snap({ passwordFilled: true }) }), 'wait');
+  // Bitwarden só preenche: o Bah aperta Entrar UMA vez.
+  assert.equal(loginWaitStep({ kind: 'bitwarden', elapsedMs: 500, submitted: false, snap: snap({ passwordFilled: true }) }), 'submit');
+  assert.equal(loginWaitStep({ kind: 'bitwarden', elapsedMs: 500, submitted: true, snap: snap({ passwordFilled: true }) }), 'wait');
+  assert.equal(loginWaitStep({ kind: 'bitwarden', elapsedMs: 99_999, submitted: true, snap: snap({ passwordFilled: true }) }), 'pause');
+  // 1Password nunca entra sozinho → pausa já, sem esperar.
+  assert.equal(loginWaitStep({ kind: '1password', elapsedMs: 0, submitted: false, snap: snap({}) }), 'pause');
+  // Quem digitou foi o agente → não é a extensão: nada de enviar.
+  assert.equal(loginWaitStep({ kind: 'bitwarden', elapsedMs: 0, submitted: false, snap: snap({ passwordFilled: true, agentTyped: true }) }), 'pause');
+  assert.equal(loginWaitStep({ kind: 'lastpass', elapsedMs: 3000, budgetMs: 2000, submitted: false, snap: snap({}) }), 'pause');
+});
+
+test('page scripts compile and only answer yes/no (never return the password)', () => {
+  new Function(PASSWORD_FIELD_FILLED_JS);
+  new Function(SUBMIT_FILLED_LOGIN_JS);
+  for (const js of [PASSWORD_FIELD_FILLED_JS, SUBMIT_FILLED_LOGIN_JS]) assert.doesNotMatch(js, /return\s+[^;]*\.value\s*[;}]/);
+});
+
 test('extension frames and injected UI roots are recognised', () => {
   assert.ok(isExtensionFrameUrl('chrome-extension://hdokiejnpimakedhajhdlcegeplioahd/webclient-infield.html'));
   assert.ok(!isExtensionFrameUrl('https://example.com/'));
@@ -64,4 +92,12 @@ test('AX nodes under an extension root are dropped (root included), page nodes s
   const kept = dropExtensionUi(nodes, new Set([30, 40])).map(n => n.nodeId);
   assert.deepEqual(kept, ['1', '2', '7']);
   assert.equal(dropExtensionUi(nodes, new Set()).length, nodes.length);
+});
+
+test('login form visible: password field or a login URL', () => {
+  const page = (url: string, els: Array<{ tag: string; aria?: string; text?: string }>) =>
+    ({ url, title: '', text_sample: '', interactive_elements: els.map((e, i) => ({ id: i, x: 1, y: 1, w: 1, h: 1, text: '', ...e })) });
+  assert.ok(loginFormVisible(page('https://x.com/a', [{ tag: 'input', aria: 'Password' }])));
+  assert.ok(loginFormVisible(page('https://x.com/login', [])));
+  assert.ok(!loginFormVisible(page('https://x.com/home', [{ tag: 'a', text: 'Sign out' }])));
 });

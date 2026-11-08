@@ -425,17 +425,27 @@ extensões ligada, nas abas normais o gerenciador do Bah não oferece a lista de
 dois gerenciadores brigando pelo mesmo campo é a surpresa a evitar. Nas abas anônimas continua o do Bah,
 porque extensão não roda lá (igual ao Chrome).
 
-**Agente num formulário de login** (`extensionLoginGuidance` no `App.tsx`). Quando o agente pausa num
-formulário de login e uma dessas extensões está ligada (só nas abas normais), o cartão da pausa diz o nome
-da opção na extensão: no LastPass, "Auto-login" (item do site → Editar → Configurações avançadas); no
-Bitwarden, "Autofill on page load" (Configurações → Preenchimento automático, e também por login); no
-1Password, escolher o login e deixar ele enviar. O agente nunca digita credencial.
+**Agente num formulário de login** (`loginWaitStep` e `waitForExtensionLogin` no `App.tsx`). Numa tarefa
+da conta:
+
+- Com extensão de gerenciador de senha, o Bah espera até 8 s o login automático da própria extensão. Se o
+  formulário some ou a página mostra a conta, o agente segue.
+- O "Autofill on page load" do Bitwarden só preenche. Se a extensão preencheu a senha, o Bah aperta Entrar
+  do formulário uma vez.
+- O 1Password nunca preenche sozinho, então o Bah nem espera por ele.
+- Se nada disso acontece, o Bah pausa com um cartão que diz o nome da opção na extensão: no LastPass,
+  "Auto-login" (item do site → Editar → Configurações avançadas); no Bitwarden, "Autofill on page load"
+  (Configurações → Preenchimento automático, e também por login); no 1Password, escolher o login e deixar
+  ele enviar.
+- O agente nunca digita credencial. O Bah só pergunta à página se o campo de senha está vazio (sim/não) e
+  nunca lê o valor.
 
 **Interface de extensão não é da página** (`shared/extension-ui.ts`). O agente nunca vê nem clica nos
 iframes `chrome-extension://`, nem nas raízes de injeção marcadas onde o LastPass e o 1Password desenham
 os ícones e menus deles:
 
-- eles saem da árvore de acessibilidade da página (`cdp:axtree`);
+- eles saem da árvore de acessibilidade da página (`cdp:axtree`) e das árvores dos iframes
+  (`cdp:frames-ax`);
 - o porteiro de avisos de cookie (`overlays:dismiss`) pula esses frames.
 
 Clicar no menu de um gerenciador de senha entregaria uma credencial por iniciativa da IA.
