@@ -3,7 +3,7 @@ import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
 import { ProxySettings, ProxyAuthPrompt } from './components/ProxyPanel';
 import { RegionPanel } from './components/RegionPanel';
-import { refreshRegion, onRegionState, regionState } from './region-state';
+import { refreshRegion, onRegionState, regionState, agentRegionLine, askedNetworkCountries, searchCountry } from './region-state';
 import { ApplicantPanel } from './components/ApplicantPanel';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
@@ -2773,6 +2773,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsShopping = namesStore(command) || /\b(buy|price|prices|cheapest|compare|deal|deals|product|products|under \$?\d+|pre[cç]os?|barat\w*|comprar)\b/i.test(command);
               const commandIsPeople = /\b(people|person|contacts?|who works|employees?|profiles?|recruiters?|founders?|ceo|cto|cfo|coo|vp|directors?|head of|managers? at|engineers? at|linkedin)\b/i.test(command);
               const commandIsTravel = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|ski trip|flights?|rental cars?|car rentals?|hot[eé]is|hospedagem|pousadas?|voos?|hoteles|vuelos|alojamiento)\b/i.test(command);
+              // Compras/viagem com a conexão saindo em OUTRO país (VPN/proxy): os sites vão mostrar preço,
+              // moeda e estoque de lá. Pergunta uma vez por país, por sessão; só a pessoa muda a configuração.
+              { const rs = regionState();
+                if ((commandIsShopping || commandIsTravel) && rs && rs.settings.shopping === 'auto' && rs.network && rs.os && rs.network !== rs.os && !askedNetworkCountries.has(rs.network)) {
+                  askedNetworkCountries.add(rs.network);
+                  const name = (c: string) => { try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(c) || c; } catch { return c; } };
+                  const useOs = await new Promise<boolean>((resolve) => onProgress({ kind: 'confirm', risk: 'region', label: 'shopping region',
+                    title: `🌍 Your connection exits in ${name(rs.network)}`,
+                    message: `Sites will show ${name(rs.network)}'s prices, currency and stock (VPN or proxy). Your computer is set to ${name(rs.os)}.\nShop for ${name(rs.network)}, or prefer ${name(rs.os)} stores and searches? You can change this in menu → 🌍 Region & time.`,
+                    yesLabel: `Prefer ${name(rs.os)}`, noLabel: `Use ${name(rs.network)}`, onConfirm: () => resolve(true), onCancel: () => resolve(false) } as any));
+                  if (useOs) { await window.electronAPI?.regionSet?.({ ...rs.settings, shopping: 'fixed', fixedCountry: rs.os }); await refreshRegion(); }
+                } }
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
               // Peça compatível com um modelo (carregador/fonte/bateria pra "Lenovo IdeaPad 3 15ADA05").
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
@@ -2780,6 +2792,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
               // Skills de navegação: carregadas uma vez por tarefa; escolhidas a cada passo.
               const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
+              await refreshRegion();   // país de saída da rede (VPN/proxy) — cache de 10 min no main
               // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
               const unattended = !!opts?.unattended;
               // Carrinho de mercado ("add milk, eggs… to my Walmart cart"): skill grocery-cart, cartões de produto com
@@ -3291,8 +3304,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 // o Bah confere que o preço está mesmo na página. Loja bloqueada → "couldn't read — motivo", segue.
                 // Nunca dribla checagem de robô, nunca põe no carrinho, compra ou entra em conta.
                 if (storeCompare) {
-                  // País pelo locale do sistema (o painel de região, quando entrar, troca por searchCountry()).
-                  const country = localeCountry();
+                  const country = searchCountry() || localeCountry();
                   const query = priceCompareQuery(command, country);
                   const e2eStores = await window.electronAPI?.e2ePriceStores?.().catch(() => null);   // só no teste e2e
                   const stores = e2eStores?.length ? e2eStores : pickStores(command, country);
@@ -4170,6 +4182,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     buildKnownSitesBlock(observation),
                     '',
                     agentSearchLine(),
+                    agentRegionLine(),
                     accountStateLine(observation),
                     dialogBlock,
                     suggestBlock,
@@ -6135,6 +6148,20 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       results: [...allResults, { action, result: { reported } }],
                       done: { type: 'done', reason: reported, success: true } as any,
                     };
+                  } else if (action.type === 'suggest_time_zone') {
+                    // O agente só SUGERE; quem muda o fuso dos sites é a pessoa (cartão de confirmação).
+                    const cur = regionState();
+                    if (cur?.tzOverride === action.zone) toolResult = { success: true, info: { zone: action.zone, already: true } };
+                    else {
+                      const city = action.zone.split('/').pop()!.replace(/_/g, ' ');
+                      const yes = await new Promise<boolean>((resolve) => onProgress({ kind: 'confirm', risk: 'region', label: 'time zone', title: `🕐 Show sites in ${city} time?`,
+                        message: `${action.reason ? action.reason + '\n' : ''}Sites will see the time zone ${action.zone} instead of your computer's (${cur?.osTz || 'local'}). A 🕐 chip shows it in the address bar; change it back any time in menu → 🌍 Region & time.`,
+                        yesLabel: `🕐 Use ${city} time`, noLabel: 'Keep my time zone', onConfirm: () => resolve(true), onCancel: () => resolve(false) } as any));
+                      throwIfCancelled();
+                      if (yes && cur) { await window.electronAPI?.regionSet?.({ ...cur.settings, tz: 'zone', zone: action.zone }); await refreshRegion('peek'); }
+                      toolResult = yes ? { success: true, info: { zone: action.zone, note: 'Sites now use this time zone. Reload the page so it picks it up.' } }
+                        : { success: false, error: 'The user kept their own time zone. Convert times yourself if needed.' };
+                    }
                   } else if (action.type === 'history_search') {
                     if (!(await askPermission('history', `Search your browsing history for "${action.query.slice(0, 80)}".`))) {
                       toolResult = { success: false, error: 'The user did not allow the agent to read their browsing history.' };
@@ -6664,7 +6691,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // Internal actions (plan/store/extract_text) never change the page — skip the
                   // settle + re-observe machinery (10-20s on heavy pages) and reuse the current state.
                   const pageNeutralAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
-                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
+                    || action.type === 'look_at' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud';
@@ -6728,7 +6755,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   });
                   // Internal-state actions (plan/store/extract) don't change the page — don't penalize them
                   const internalAction = action.type === 'plan' || action.type === 'store' || action.type === 'extract_text'
-                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
+                    || action.type === 'look_at' || action.type === 'find' || action.type === 'web_search' || action.type === 'history_search' || action.type === 'suggest_time_zone' || action.type === 'list_files' || action.type === 'read_file' || action.type === 'dialog' || action.type === 'get' || action.type === 'get_html' || action.type === 'save_pdf' || action.type === 'screenshot' || action.type === 'clipboard'
                     || action.type === 'list_downloads' || action.type === 'cancel_download' || action.type === 'pause_download' || action.type === 'resume_download' || action.type === 'retry_download'
                     || action.type === 'extract_images' || action.type === 'search_images' || action.type === 'harvest_images' || action.type === 'generate_image' || action.type === 'download' || action.type === 'download_video'
                     || action.type === 'read_aloud' || action.type === 'wait';

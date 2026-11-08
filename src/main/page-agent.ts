@@ -1,4 +1,5 @@
 import { AIEngine } from './ai-engine';
+import { isTimeZone } from '../shared/region';
 import type { VisionImage, VisionReport } from '../shared/vision';
 import { classifyError, type AgentErrorCode } from '../shared/error-codes';
 import { isPrivateAi } from './incognito-session';
@@ -45,6 +46,7 @@ export type AgentAction =
   | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
   | { type: 'find'; text: string }
   | { type: 'web_search'; query: string }
+  | { type: 'suggest_time_zone'; zone: string; reason: string }
   | { type: 'back' }
   | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
   | { type: 'drag'; ref: number; to_ref: number }
@@ -91,6 +93,7 @@ const VALID_ACTIONS = new Set([
   'drag',
   'forward',
   'reload',
+  'suggest_time_zone',
   'web_search',
   'look_at',
   'find',
@@ -390,6 +393,8 @@ export class PageAgent {
         return { type: 'click_ref', ref: toRef(action.ref) };
       case 'look_at':
         return { type: 'look_at', ref: action.ref != null && action.ref !== '' ? toRef(action.ref) : undefined, x: toOptionalNumber(action.x), y: toOptionalNumber(action.y), w: toOptionalNumber(action.w ?? action.width), h: toOptionalNumber(action.h ?? action.height) };
+      case 'suggest_time_zone':
+        return { type: 'suggest_time_zone', zone: String(action.zone ?? action.time_zone ?? action.timezone ?? '').trim(), reason: String(action.reason ?? '').trim().slice(0, 200) };
       case 'web_search':
         return { type: 'web_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
       case 'find':
@@ -526,6 +531,7 @@ export function validateAction(a: AgentAction): string | null {
       if (a.ref != null) return finiteInt(a.ref) ? null : `look_at "ref" must be a non-negative integer, got ${JSON.stringify((a as any).ref)}`;
       return [a.x, a.y, a.w, a.h].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) && (a.w as number) > 0 && (a.h as number) > 0
         ? null : 'look_at needs "ref", or "x","y","w","h" (viewport pixels) for the area to zoom into';
+    case 'suggest_time_zone': return isTimeZone(a.zone) ? null : 'suggest_time_zone needs an IANA "zone" such as "Asia/Tokyo" or "America/Denver"';
     case 'web_search': return nonEmpty(a.query) ? null : 'web_search needs a non-empty "query"';
     case 'find': return nonEmpty(a.text) ? null : 'find needs the "text" to look for';
     case 'back': case 'forward': case 'reload': return null;

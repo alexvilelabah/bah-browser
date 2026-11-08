@@ -47,10 +47,11 @@ the entire boundary between the web/UI side and the privileged side (see below).
   browser engine already trusts. It does not add or trust anything the OS does not. See
   [`src/main/system-ca.ts`](src/main/system-ca.ts).
 - **Network country check:** in *Auto* shopping region only, one request to `https://www.cloudflare.com/cdn-cgi/trace`
-  (through the browser engine, same route as your tabs) when the 🌍 panel opens, cached 10 minutes.
+  (through the browser engine, same route as your tabs) when a task starts or the 🌍 panel opens, cached 10 minutes.
   Only the country code is used. Choose *My computer's region* or a fixed country to turn it off. See
   [`src/main/region.ts`](src/main/region.ts).
-- **Time zone:** like every browser, page scripts can read your time zone. Choose **UTC** in 🌍
+- **Time zone:** like every browser, page scripts can read your time zone. Bah also puts your region and time zone
+  in the agent's prompt, which goes to your AI provider (stays local with a local model). Choose **UTC** in 🌍
   Region & time to hide it from pages.
 - **Location** is denied to every site without asking: sites see `denied`, not a `prompt`. Only a site you
   set to *Allow* in its padlock menu gets it. Bah's own window never gets it either. See `DENY_UNLESS_ALLOWED` in

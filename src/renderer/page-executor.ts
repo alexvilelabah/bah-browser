@@ -43,6 +43,7 @@ export type BrowserAction =
   | { type: 'find'; text: string }
   | { type: 'web_search'; query: string }
   | { type: 'summarize_tabs'; wake?: boolean }
+  | { type: 'suggest_time_zone'; zone: string; reason: string }
   | { type: 'back' }
   | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
   | { type: 'drag'; ref: number; to_ref: number }
@@ -139,6 +140,7 @@ export function formatAction(action: BrowserAction): string {
     case 'close_tab': return `close_tab(${action.tab})`;
     case 'click_ref': return `click_ref(@${action.ref})`;
     case 'look_at': return action.ref != null ? `look_at(@${action.ref})` : `look_at(${action.x},${action.y} ${action.w}x${action.h})`;
+    case 'suggest_time_zone': return `suggest_time_zone(${action.zone})`;
     case 'summarize_tabs': return `summarize_tabs(${action.wake ? 'wake sleeping' : 'open tabs'})`;
     case 'find': return `find("${shorten(action.text, 50)}")`;
     case 'web_search': return `web_search("${shorten(action.query, 60)}")`;

@@ -2,11 +2,17 @@
 // bloqueio "tráfego incomum" (IP rate-limited) travava tudo. Aqui: ordem de tentativa (o
 // preferido primeiro, os outros depois) e memória de "este bloqueou" por 1h.
 import { googleLocaleParams, bingLocale } from './i18n';
+import { searchCountry } from './region-state';
+import { searchCountryParam } from '../shared/region';
+
+// País da busca = país da rede/compras (VPN em Portugal → resultados de Portugal, iguais ao que os sites mostram).
+const googleParams = () => { const c = searchCountryParam('google', searchCountry()); const base = googleLocaleParams(); return c ? `${base.replace(/&?gl=[A-Z]{2}/, '')}&${c}` : base; };
+const bingCountry = () => { const c = searchCountryParam('bing', searchCountry()); return c ? `&${c}` : ''; };
 
 export type EngineId = 'google' | 'bing' | 'duckduckgo' | 'yahoo' | 'perplexity';
 export const ENGINES: Array<{ id: EngineId; label: string; url: (q: string) => string }> = [
-  { id: 'google', label: 'Google', url: q => `https://www.google.com/search?q=${encodeURIComponent(q)}&${googleLocaleParams()}&pws=0` },
-  { id: 'bing', label: 'Bing', url: q => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=${bingLocale()}` },
+  { id: 'google', label: 'Google', url: q => `https://www.google.com/search?q=${encodeURIComponent(q)}&${googleParams()}&pws=0` },
+  { id: 'bing', label: 'Bing', url: q => `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=${bingLocale()}${bingCountry()}` },
   // A versão HTML do DDG: sem JS, resultados em <h2><a> — o extrator genérico lê.
   { id: 'duckduckgo', label: 'DuckDuckGo', url: q => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}` },
   { id: 'yahoo', label: 'Yahoo', url: q => `https://search.yahoo.com/search?p=${encodeURIComponent(q)}` },

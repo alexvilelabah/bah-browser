@@ -47,10 +47,11 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   confiar no mesmo que o motor do navegador já confia. Não adiciona nem confia em nada que o SO não confie.
   Ver [`src/main/system-ca.ts`](src/main/system-ca.ts).
 - **Consulta do país da rede:** só na região de compras *Automática*, uma requisição a
-  `https://www.cloudflare.com/cdn-cgi/trace` (pelo motor do navegador, mesma rota das abas) quando o painel 🌍
-  abre, com cache de 10 minutos. Só o código do país é usado. Escolha *Região do meu computador* ou um
+  `https://www.cloudflare.com/cdn-cgi/trace` (pelo motor do navegador, mesma rota das abas) quando uma tarefa começa
+  ou o painel 🌍 abre, com cache de 10 minutos. Só o código do país é usado. Escolha *Região do meu computador* ou um
   país fixo para desligar. Ver [`src/main/region.ts`](src/main/region.ts).
-- **Fuso horário:** como em todo navegador, os scripts da página leem seu fuso. Escolha **UTC** em 🌍 Região e hora
+- **Fuso horário:** como em todo navegador, os scripts da página leem seu fuso. O Bah também põe sua região e fuso no
+  prompt do agente, que vai pro seu provedor de IA (fica local com modelo local). Escolha **UTC** em 🌍 Região e hora
   pra esconder dos sites.
 - **Localização** é negada a todo site sem perguntar: o site vê `denied`, não um `prompt`. Só um site que você
   marcar *Permitir* no cadeado recebe. A própria janela do Bah também não recebe. Ver `DENY_UNLESS_ALLOWED` em

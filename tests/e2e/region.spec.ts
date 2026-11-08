@@ -5,8 +5,8 @@ import os from 'os';
 import path from 'path';
 import type { AddressInfo } from 'net';
 
-// 🌍 Região e hora: o fuso que os sites veem só muda quando a PESSOA escolhe (painel), aparece num
-// selo na barra, e volta pro do computador ao reiniciar (sem "manter").
+// 🌍 Região e hora: o fuso que os sites veem só muda quando a PESSOA escolhe (painel ou cartão do
+// agente), aparece num selo na barra, e volta pro do computador ao reiniciar (sem "manter").
 // Região de compras em "computador" → nenhuma consulta de rede no teste.
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
@@ -16,15 +16,19 @@ const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/el
 // num perfil novo de teste; o chaveiro falso do Chromium evita o pedido.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('time zone for sites: panel, chip, reset on restart', async () => {
+test('time zone for sites: panel, chip, agent suggestion, reset on restart', async () => {
   test.setTimeout(150_000);
   const server = http.createServer((_q, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Flights</title><h1>Flight times</h1>'); });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-region-'));
   fs.writeFileSync(path.join(tmp, 'region.json'), JSON.stringify({ shopping: 'os', tz: 'os' }));
+  const script = [
+    { type: 'suggest_time_zone', zone: 'Asia/Tokyo', reason: 'You are booking a flight that departs from Tokyo.' },
+    { type: 'done', reason: 'Suggested Tokyo time.', success: true },
+  ];
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
-  const launch = () => electron.launch({ executablePath: ELECTRON, args: [ROOT, `--user-data-dir=${tmp}`, '--use-mock-keychain'], env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' } });
+  const launch = () => electron.launch({ executablePath: ELECTRON, args: [ROOT, `--user-data-dir=${tmp}`, '--use-mock-keychain'], env: { ...env, E2E_MOCK_AI: '1', E2E_MOCK_SCRIPT: JSON.stringify(script), NODE_ENV: 'test' } });
   let app = await launch();
   try {
     let page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await sleep(1500);
@@ -64,10 +68,19 @@ test('time zone for sites: panel, chip, reset on restart', async () => {
     await expect(page.locator('.tz-chip')).toBeHidden();
     await go(T + '/back'); expect(await pageTz()).toBe(osTz);
 
-    // Fuso escolhido com "manter" desligado → selo antes de reiniciar.
-    await openPanel(); await page.locator('.region-tz').selectOption('zone'); await page.locator('.region-zone').fill('Asia/Tokyo');
-    await page.locator('.region-save').click(); await page.locator('.region-panel .tour-x').click();
-    await expect(page.locator('.tz-chip')).toHaveText(/Tokyo/);
+    // Agente sugere Tóquio → cartão → a pessoa aceita.
+    if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
+    await page.getByTestId('agent-command-input').fill('check the departure times on this flight page');
+    await page.getByTestId('agent-command-input').press('Enter');
+    const accept = page.getByRole('button', { name: /Use Tokyo time/ });
+    for (let i = 0; i < 40 && !(await accept.isVisible().catch(() => false)); i++) {
+      if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
+      await sleep(500);
+    }
+    await accept.click();
+    await expect(page.locator('.tz-chip')).toHaveText(/Tokyo/, { timeout: 10_000 });
+    const prompts: string[] = await app.evaluate(() => (global as any).__e2ePrompts || []);
+    expect(prompts.some(p => /TIME ZONE: sites see the computer's time zone/.test(p))).toBe(true);
     await go(T + '/tokyo'); expect(await pageTz()).toBe('Asia/Tokyo');
 
     // Reinício sem "manter" → volta pro fuso do computador.

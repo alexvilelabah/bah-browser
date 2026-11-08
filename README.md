@@ -263,12 +263,15 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
 Menu ⋮ → **🌍 Region & time**:
 - **Network location:** with a VPN or proxy, sites show the prices, currency and stock of the country your
   connection exits in. In **Auto** (default) Bah checks that country with one request to Cloudflare's
-  `cdn-cgi/trace` when the panel opens (cached 10 min, rechecked when the proxy changes) and says when it
-  differs from your computer's region. **My computer's region** or **a specific country** never checks the network.
+  `cdn-cgi/trace` when a task starts (cached 10 min, rechecked when the proxy changes) and tells the agent,
+  so it does not call foreign prices "local". Searches use that country (`gl=` / `cc=`). On a shopping or
+  travel task, if the network country differs from your computer's, Bah asks once which to prefer.
+  **My computer's region** or **a specific country** never checks the network.
 - **Time zone for sites:** your computer's (default), a chosen zone for planning a trip or a flight, or
   **UTC** (hides your real zone from page scripts). Set in the engine like DevTools' override; a 🕐 chip in
-  the address bar shows it; it goes back to your computer's zone on restart unless you tick *Keep*.
-  Signed-in calendars usually follow the time zone in your account settings, not the browser's.
+  the address bar shows it; it goes back to your computer's zone on restart unless you tick *Keep*. The
+  agent can only *suggest* a zone (`suggest_time_zone`) — you confirm. Signed-in calendars usually follow
+  the time zone in your account settings, not the browser's.
 
 ---
 
