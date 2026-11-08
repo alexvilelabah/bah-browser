@@ -94,6 +94,7 @@ moves that end on the click and bow away from the straight line.
 | `popup-shield.ts`, `overlay-script.ts` | Popup/overlay handling and dismissal |
 | `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | Page `alert`/`confirm` in tabs: replaces Electron's blocking native box (internal `-run-dialog`) with Bah's dialog for the user, and the agent policy on its tabs (armed `dialog` action > alert closes > ordinary confirm accepted > payment/delete confirm asks the user); `beforeunload` on agent tabs leaves when the agent navigates. `prompt()` is not available in Electron (it throws) |
 | `job-queue.ts` | Serialises long-running jobs |
+| `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Permission handlers for the sites' sessions: sensitive permissions denied until the user answers the Bah bar (once / always / never, per origin), background/hidden tabs auto-denied, unknown permissions denied. **Location** is denied without asking on every site (`DENY_UNLESS_ALLOWED` in `site-permission-rules.ts`) — only an Allow the user picks in the padlock menu passes; sites see `denied`, not a faked `prompt` |
 | `frames.ts` (+ `src/shared/frames.ts`) | Iframe content for the agent (embedded job/payment/booking forms): accessibility trees of same-process frames (by `frameId`) and cross-origin frames (flattened CDP sessions via `Target.setAutoAttach`), coordinates mapped to the page viewport; elements are listed with `frame="host"`. Fills set the value on the node inside its frame (focus-independent); clicks in cross-origin frames use CDP `Input` on the frame's session (`sendInputEvent` stops at the `<iframe>`). Extension-injected `chrome-extension://` frames are left out |
 | `upload.ts` | Agent `upload` (OS file dialog → token; file field by node/label/position, or the OS picker intercepted with `Page.setInterceptFileChooserDialog` during the action; `DOM.setFileInputFiles`) and session folder grants for `list_files` / `read_file` / `upload { file }` (realpath-checked) |
 
@@ -471,6 +472,7 @@ break on every update. So Bah only *guides*, and names the setting.
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
 | `page-executor.ts` | Executes browser actions inside the page |
+| `tabs-summary.ts` | "Summarize my open tabs": tab selection, permission, prompt and reply parsing |
 | `risk.ts` | The safety-brake classifier (`riskForAction`). Kinds: payment, deletion, card data, application ("Submit application" always; a bare Submit/Send in a `jobs` task; Enter on an application review page), sending (unattended) and **message** — a support ticket or forum post: "Submit ticket/request", "Create case", "Post your question", "Request/Schedule a call" always; a bare Submit/Send/Post/Start chat in a `support` task; Enter on a ticket/post form URL |
 | `support-draft.ts` | The ticket/post text from what is known so far, filled by code: `supportFacts` (request + follow-up replies from the session thread + product/serial/contact method the user gave + a similar thread the agent saw, command and "continue / use chat" directives stripped), `draftPrompt` (the configured model writes SUBJECT/DESCRIPTION from ONLY those facts), `finalDraft` (a reply that adds any number/code not in the facts — e.g. a model year — or comes back malformed falls back to `templateDraft`, the user's own sentences in sections; product/serial always included), `planSupportFill` (description box, subject/title, serial, product, 📝 contact fields only; fields the user filled and password forms untouched; applied by `form-filler.ts`'s `applyFill`). App.tsx fills once per form, shows the review card ("look it over in the tab, then Continue"), re-reads the form with `SUPPORT_DRAFT_SCRIPT` and tells the model FORM FILLED BY BAH. `unsupportedSentences` drops draft sentences whose content words are mostly not in the facts (an 8B model wrote "I've not tried any fixes yet", "I've tried resetting the SMC" — never said). `supportFinishProblem`: a support task that ends off the vendor's domain is reported as failed; so is one that sent nothing and whose final message admits it did not get there; only a ticket/post the user actually sent is offered as a skill. The user's webmail is never opened for a support task |
 | `page-load.ts` | "The page did not load", generic: Access Denied / 403 (Akamai errors.edgesuite.net), not found, browser error page, blank page, repeated clicks with no effect. In a support task the prompt gets `pageLoadHint` (the failed URL, then `web_search` for that page and open a result on the vendor's domains), the generic "abandon this site, use Google/Wikipedia" recovery text is replaced, and the same URL failing again (or 4 failures) stops the task with a plain message — no retries, no getting around blocks |
@@ -781,6 +783,42 @@ parses, has triggers and stays short), loader + `skills:list` / `skills:save` / 
 
 ---
 
+## Browser identity & bot checks (what sites see)
+
+Measured 2026-11-03 on an Intel MacBook Pro (i7-9750H, 6 cores / 12 threads, 16 GB, UHD 630), the same
+snippet on `https://example.com` in real Chrome 156 and in Bah (temp profile):
+
+| Signal | Real Chrome | Bah |
+|---|---|---|
+| `hardwareConcurrency` / `deviceMemory` (page and worker) | 6 / 16 | 6 / 16 |
+| WebGL renderer | ANGLE Metal, Intel UHD Graphics 630 | same |
+| `navigator.plugins`, UA, `userAgentData` arch / platformVersion | 5 PDF viewers, Intel Mac, x86, 26.7.1 | same |
+| `userAgentData.fullVersionList` | Chrome **156.0.8078.79** | Chrome **156.0.0.0** |
+| `navigator.webdriver` | **false** | **true** when launched by Playwright |
+
+GPU, cores and memory are the engine's own values (the old page-script override — "Intel Iris 6100", 8 cores,
+8 GB — was removed: workers saw the real numbers, a classic tampering signal; `tests/e2e/hardware-identity.spec.ts`).
+Canvas, audio and fonts are not touched. Chromium itself reports physical cores on this Mac (real Chrome says 6 too)
+and real RAM (16, not capped at 8).
+
+**Likely culprits for the bot checks seen in demos and tests** (Target "Press & hold", Walmart "Robot or human?",
+Amazon error pages):
+1. **`navigator.webdriver = true`.** Every e2e spec, demo take (`tools/record-demo-mac.mjs`) and probe launches Bah
+   through Playwright, which adds Chromium's automation flag. That is an honest "automated" signal and should stay
+   honest — but it means our runs are the worst case. Bah opened normally reports `false`; we expect checks to be
+   rare in everyday use. Judge bot-check rates from a normal launch, not from test/demo runs.
+2. **Version mismatch.** Bah presents itself as Chrome 156 (needed for Google sign-in, see the Chrome Web Store
+   section) on Electron 44's older Chromium, and the full version is `156.0.0.0`, not a real build. A detector can
+   notice a "Chrome 156" missing 156-only features. The honest fix (report the real engine) may bring back the Google
+   sign-in block — open decision.
+3. **Fresh profiles.** Test and demo profiles start empty (no sign-ins, no cookies from checks already passed), so
+   every visit looks like a first visit.
+
+When a human check appears the user completes it (Watch/Takeover handoff); the only exception is upstream's opt-in
+switch (☑️ *Agent may click captcha checkboxes*, OFF by default), which clicks a simple checkbox once first.
+
+---
+
 ## Memory saver (sleeping tabs)
 
 Chrome's Memory Saver, plus one Bah rule. A sweep in `App.tsx` (every 60 s) unmounts the `<webview>` of a
@@ -808,6 +846,8 @@ in `src/shared/memory-saver.ts` (tested in `tests/unit/memory-saver.test.ts`); U
   overrides for tests) to shorten the idle time and the sweep.
 
 ## Build & release
+
+> **E2E on macOS:** launch Electron with `--use-mock-keychain`. The password vault (`safeStorage`) otherwise opens a Keychain prompt for the unsigned dev build in a fresh test profile, and the synchronous call freezes the main process (Playwright then times out with no error).
 
 - **Build:** Renderer = Vite + `tsc` typecheck; Main = `tsc`. An i18n parity gate
   (`scripts/i18n-check.mjs`) **fails the build** if en/pt/es drift out of sync.

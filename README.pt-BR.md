@@ -37,6 +37,31 @@
   <a href="https://ollama.com"><img src="https://img.shields.io/badge/Ollama-101010?style=flat-square&logo=ollama&logoColor=white" alt="Ollama" /></a>
 </p>
 
+## 💡 Pra que as pessoas usam o Bah
+
+Um **agente de navegador com IA**, open source, pras partes chatas da web: lê a página, clica, digita,
+envia arquivos e espera como uma pessoa faria, e **pergunta antes de qualquer coisa arriscada** (pagar,
+excluir, enviar formulário, ler seus arquivos ou a área de transferência). Funciona com modelo na nuvem
+ou **100% local** (Ollama ou llama.cpp — testado com `Qwen3-VL-8B` numa GPU de 16 GB).
+
+| Peça… | O que o Bah faz | Status |
+|---|---|---|
+| *"Baixe a ISO mais recente do Ubuntu"* · *"o driver da impressora pro meu Mac"* | Acha o arquivo certo pro **seu** SO e CPU, passa por EULA e seletor de SO, baixa em segundo plano (qualquer tamanho) e informa o caminho; confere checksum | ✅ testado de ponta a ponta |
+| *"Baixe a última versão do Steam / software da impressora HP / Office / SolidWorks / Altium / Photoshop pra este computador"* | Vai à página **oficial** do fabricante (marca agregadores de "free download"), pega a versão do seu SO **e CPU** (Intel × Apple Silicon, x64 × ARM64), avisa se o arquivo é do SO/CPU errado e **para na parede de login** pra você decidir (nunca digita senha nem cria conta). Nunca abre o instalador | 🧪 páginas de teste (detecção automática, lista SO/CPU, modelo de impressora, modal, login). Ao vivo, Qwen3-VL-8B local, Mac Intel: ✅ Steam (`steam.dmg`) · ✅ Altium (parou no login) · ❌ HP 9015e, Office, SolidWorks, Photoshop (chegou à página oficial, não escolheu versão) |
+| *"Hotel em Nova York até US$ 450 a diária no próximo fim de semana"* | Busca em sites de reserva, escolhe datas no calendário, fecha popups (guarda cupons) e compara preços | ✅ testado (Booking.com) |
+| *"Compare preços do AirPods Pro na Amazon e em outras lojas"* · *"carregador compatível com meu notebook"* | **Visita o site de cada loja** (as que você citar, completando com as grandes varejistas da sua região), busca lá, lê o preço naquela página e monta a tabela só com essas leituras — artigo de ofertas ou comparador de preços nunca é fonte. Loja com checagem de robô vai pra você (Watch/Takeover) ou fica como "não deu pra ler"; cada linha tem o link da página lida | ✅ ao vivo, modelo local 8B: Amazon, Best Buy, Walmart lidas · Target mostrou checagem "segure o botão" (entregue à pessoa) · 🧪 4 lojas de treino |
+| *"Abra minhas 2 vagas recomendadas"* · *"Candidate-se a esta vaga com meu currículo"* | Lê suas vagas recomendadas (inclusive as salvas ★), abre uma por vez, escolhe o melhor currículo de uma pasta que **você** libera, preenche o formulário **por código** — campos de texto e listas suspensas com busca (Greenhouse, Workday) — com seu 📝 perfil de candidatura e respostas salvas, pergunta uma vez o que faltar e para pro seu OK antes de enviar | 🧪 ensaiado em cópias de páginas reais do Indeed + Ashby (3/3) · sites ao vivo a seguir |
+| *"Põe leite, ovos, bananas e uma dúzia de bagels no meu carrinho do Walmart"* | Busca item por item, escolhe pelo que você disse (marca, tamanho, orgânico) ou por um padrão sensato da marca da loja e diz por quê, acerta as quantidades (uma dúzia de bagels = 2 pacotes de 6), pergunta antes de substituir algo esgotado e antes de escolher retirada/entrega ou loja, confere o carrinho, mostra uma tabela — e **nunca fecha o pedido** (o freio pergunta antes de Checkout / Place order / Reserve time slot) | 🧪 ensaiado em cópias locais de lojas com o modelo local 8B: cópia do Walmart 3/3 carrinhos certos e nunca fechou o pedido (2/3 também conferiram o carrinho e relataram) · cópias do Whole Foods e da Target 0/1 · lojas ao vivo ainda não |
+| *"Abra um chamado na Apple sobre a bateria do meu MacBook"* · *"Pergunte na comunidade da Dell por que o ventilador do meu XPS faz barulho"* | **Começa achando o site de suporte do fabricante com uma busca na web** (qualquer marca — Dell, Canon, Logitech…), abre só resultado no domínio do próprio fabricante (anúncio de "suporte" imitação, tipo `canon-support-help.com`, é recusado) e fica lá, escolhe produto → assunto → formas de contato, procura na comunidade antes de redigir um post e **preenche o chamado por código com o que já se sabe** — o seu pedido e as respostas seguintes, o produto e o serial que você deu, um tópico parecido que ele viu — redigido pelo seu modelo com a regra "só estes fatos" (o que ele acrescentar, como o ano do modelo, é recusado e o Bah volta às suas palavras num modelo fixo), mais o assunto e os campos de contato do 📝 perfil; um cartão pede pra você conferir na aba, mudar o que quiser e apertar Continuar. Nunca senha, nunca cria conta. Página do fabricante que não carrega (Access Denied / 403, não encontrada, em branco) → ele busca essa página na web e só abre resultado do domínio do próprio fabricante; continuou bloqueada → para e diz. Tarefa que termina fora do site do fabricante é relatada como não feita; no login o Bah pausa pra você, e o **Enviar / Postar** final mostra antes o texto exato | 🧪 modelo local 8B (Qwen3-VL-8B) em cópias de treino, com o formulário preenchido por código: chamados enviados pelo cartão: Dell 3/3, Apple 2/5 (os que faltaram nem chegaram ao formulário e terminaram como falha); posts 6/6 (um como resposta no tópico parecido); todo formulário alcançado teve a descrição preenchida e o cartão de revisão; nenhuma frase inventada no que foi enviado; todo login alcançado pausou, todo envio perguntou, nenhuma senha digitada · 🧪 anúncio golpe imitando o fabricante acima do resultado verdadeiro é recusado (Canon) · ao vivo: a aba "Contact Support" da Dell responde Access Denied ao Bah — o agente busca a página em vez de sair da Dell (conferido com páginas sintéticas, não ao vivo) |
+| *"Quem são os gerentes de compras da Acme?"* | Pesquisa de pessoas no LinkedIn em **modo cuidadoso** — uma página por pedido, sem clique automático | ✅ testado |
+| *"Planeje minha viagem a Tóquio no horário de Tóquio"* | Mostra os sites no fuso do destino e avisa o agente quando a VPN deixa os preços estrangeiros | ✅ testado |
+| *"Salve este recibo em PDF"* · *"print da página inteira"* · *"copie o total"* | Salva em Downloads / copia pra você; ler a área de transferência pede sua permissão | ✅ testado |
+| Atrás de **proxy corporativo** (Blue Coat, PAC, SOCKS) com certificados da empresa | Usa o proxy e os certificados do SO nas páginas **e** nas requisições do próprio Bah; caixa de login do proxy | ✅ testado com proxy com autenticação |
+| *"Monte um carrinho de mercado pra família de quatro"* · buscas agendadas | Carrinhos com vários itens em mercados; tarefas agendadas com aviso de execução perdida | 🛠️ planejado |
+
+✅ testado de ponta a ponta no site real · 🧪 testado em páginas de teste · 🛠️ planejado.
+Quer outro fluxo? O Bah pode **salvar o que funcionou como skill** — ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md).
+
 ## 🎬 Demonstração
 
 ![Bah em ação](assets/demo.gif)
@@ -74,18 +99,21 @@
 - **A conversa volta depois de reiniciar** com ⋮ → Ao abrir o Bah → "Continuar de onde parou", e o **🕘 Histórico de conversas** (⋮) lista as sessões passadas — abra só pra ler ou **Retome**, reabrindo as abas dela. Guardado cifrado neste computador, nunca das abas anônimas, apagado no "Limpar dados de navegação"
 - **Tarefas agendadas** — "dias úteis às 8h veja minhas vagas no Indeed" ou ⋮ → ⏰ Tarefas agendadas: rodam com o Bah aberto, cada uma na sua aba; um horário perdido com o Bah fechado é oferecido quando ele abre; o que precisa do seu OK (enviar, comprar, mandar formulário, entrar na conta) espera você, com notificação
 - **Entende continuação** — "você clicou?" é respondido com o registro do que o agente acabou de fazer (não com busca na web); "abriu uma janela, mas não a segunda" manda o agente terminar o que faltou; "isso" / "essa" num pedido novo é a última coisa em que o agente agiu
+- **Vai direto ao site que você cita** — "browse to linkedin, find a job…" abre o linkedin.com na hora, sem pesquisar antes. Só vale pra uma lista curta e conferida de sites conhecidos; nome desconhecido é pesquisado, nunca chutado
 - **"Resuma minhas abas abertas"** — uma linha por aba e um resumo geral, cada uma com link pra ir até ela. Pergunta antes de ler suas abas (ou segue sua escolha sempre/nunca), pula abas anônimas e páginas internas, e deixa as abas dormindo quietas a menos que você peça
 - **Economia de memória** — igual à do Chrome: abas que você não usa há um tempo (⋮ → 💤: Moderada 2 h, Equilibrada 30 min, Máxima 10 min) liberam a memória e recarregam ao clicar. Nunca abas tocando áudio/vídeo, usando câmera, microfone ou a tela, baixando, com formulário pela metade, fixadas, com notificações ou dispositivo conectado, na sua lista "manter estes sites sempre ativos", ou com tarefa da IA rodando ou esperando você
 - **Roteamento em linguagem natural** — pedidos que começam com uma ação ("procure…", "pesquise…", "abra…", "candidate-se…") vão pro agente; perguntas ganham resposta. Erros de digitação como "open 2 windos … a different video in each" ainda abrem 2 vídeos
-- **Roteador local opcional** — baixe uma vez um modelo pequeno (Qwen2.5-1.5B, 1,1 GB, Apache-2.0; ele pergunta antes) e cada mensagem é rotulada no seu próprio computador antes de chegar na IA: tarefa, pergunta sobre a página, pergunta pra web ou conversa. Entende erro de digitação ("search for a set of new golf blubs"); seu texto nunca sai do computador; sem ele as regras de palavras decidem como antes. Em GPU integrada (por exemplo, Intel Iris Xe) ele roda na CPU. Em pedidos de "achar/baixar" sobre uma obra nomeada ele também deixa o pedido preciso antes da IA grande começar ("clipes de top gun com tom cruise" → "…o filme Top Gun de 1986…"), mostrado como **🔎 Entendido como: …**; a IA grande recebe os dois textos e o seu manda
+- **Roteador local opcional** — baixe uma vez um modelo pequeno (Qwen2.5-1.5B, 1,1 GB, Apache-2.0; ele pergunta antes) e cada mensagem é rotulada no seu próprio computador antes de chegar na IA: tarefa, pergunta sobre a página, pergunta pra web, conversa, pergunta sobre a última tarefa ou "deu errado, conserta". Entende erro de digitação ("search for a set of new golf blubs"); seu texto nunca sai do computador; sem ele as regras de palavras decidem como antes. Em pedidos de "achar/baixar" sobre uma obra nomeada ele também deixa o pedido preciso antes da IA grande começar ("clipes de top gun com tom cruise" → "…o filme Top Gun de 1986…"), mostrado como **🔎 Entendido como: …**; a IA grande recebe os dois textos e o seu manda. Coleções de mídia ("todos os clipes do filme X") são então buscadas faixa por faixa como título + artista + ano
 - **Atalhos de uma tacada**: abrir N vídeos de uma vez, pular pro momento exato em que uma frase é dita em vários vídeos, **conversar sobre um vídeo do YouTube usando a transcrição**, comparar preços, buscar notícias — atalhos determinísticos que gastam zero tokens
 - **Skills de navegação** — receitas curtas `SKILL.md` (popups, calendários, autocomplete, EULAs, seletor de SO, downloads, compras, viagens, pesquisa de pessoas, candidaturas a vagas, listas de cartões, login) escolhidas a cada passo; salve as suas depois de uma tarefa que deu certo — ver [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md)
+- **Segurança primeiro** — confirma pagamento/exclusão/envio; **localização é negada a todo site** sem nem perguntar (só um site que você marcar Permitir no cadeado recebe); câmera, microfone e área de transferência ficam **bloqueados até você liberar**; upload só usa arquivo que *você* escolhe ou de uma pasta que *você* libera na sessão; diálogos das páginas passam pela caixa do próprio Bah
 - **UI em inglês por padrão**, com **Português** e **Español** disponíveis nas Configurações — a IA responde no idioma que você escolher
 - **Adblock** completo (EasyList + EasyPrivacy) com bypass automático em sites que quebram (YouTube, Twitch)
 - **Safe Browsing** (lista de domínios comprometidos da [NetAPI](https://netapi.com/compromised-urls/), atualiza diariamente)
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
-- **Compatibilidade com sites modernos** — se apresenta como um Chrome atual no seu SO real (user agent, client hints e idiomas definidos de forma consistente dentro do motor; GPU/CPU/memória reais; `navigator.webdriver` fica com o motor) pra não ser bloqueado por engano
+- **Identidade honesta e consistente** — user agent, client hints e idiomas do Chrome atual definidos dentro do motor (uma fonte só, sem remendo em JavaScript), pra os sites verem um Chrome normal e não bloquearem por engano. GPU, núcleos e memória são os valores **reais** (os mesmos que o Chrome informa no seu computador) — nada inventado, então a página e os workers dela concordam. Não tenta driblar detecção de robô; sites que proíbem automação ficam em **modo cuidadoso**. Por que os testes veem mais checagens de robô do que você vai ver: [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#identidade-do-navegador-e-checagens-de-robô-o-que-os-sites-veem)
 - **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
+- **Entrega a página pra você quando o site quer uma pessoa** — checagem de robô de qualquer tipo e tela de login: a aba vem pra frente, você resolve, o Bah continua sozinho (**Watch/Takeover**)
 - **Login do Google é opcional** — um ícone redondo de perfil no canto de cima (como o do Chrome) entra no Google pra tarefas no Gmail / Drive / YouTube; o resto funciona sem isso
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
@@ -125,18 +153,18 @@ USUÁRIO → "abre o gmail e apaga os spams"
 
 ### Ferramentas que a IA pode chamar
 
-| Ação | O que faz |
+O agente responde com uma ação JSON por passo (ou um lote curto). Paridade de comandos com o
+[agent-browser](https://agent-browser.dev/commands), adaptada a um navegador de desktop com a pessoa no controle.
+
+| Grupo | Ações |
 |---|---|
-| `click_ref(N)` | Clica no elemento de id N da lista observada |
-| `fill_ref(N, value)` | Preenche o input N com `value` (e confere se entrou) |
-| `click_text(text)` | Acha por texto visível e clica |
-| `click_at(x, y)` | Clique em coordenada exata (fallback visual) |
-| `type(text)` / `press(key)` | Digita no campo focado / envia uma tecla |
-| `navigate(url)` / `scroll(dir)` | Vai pra URL / rola |
-| `new_tab` / `switch_tab` / `close_tab` | Gerência de abas |
-| `extract_text(offset?, max_chars?)` | O miolo da página em Markdown; página longa em partes via `offset`, no tamanho do contexto livre do modelo |
-| `get_html(selector?, offset?, max?)` | HTML limpo de um seletor ou da página — refs `[#N]`, marca `[hidden]`, sem segredos nem scripts; pra botões duplicados, campos sem rótulo, dropdowns customizados; paginado como o `extract_text` |
-| `done(reason, success)` | Encerra o loop |
+| **Clicar e digitar** | `click_ref` · `fill_ref` · `click_text` · `click_role` (papel + nome + nth) · `click_at` · `fill` (por rótulo/placeholder) · `type` · `insert_text` · `press` (combinações como `Control+Enter`) · `keydown` / `keyup` · `hover` · `dblclick` · `focus` · `drag` · `check` / `uncheck` · `select_option` |
+| **Ler a página** | lista de elementos (com `frame="…"` pra conteúdo de iframe e marca `disabled`) · `extract_text` (o miolo da página em Markdown; página longa em partes via `offset`, tamanho conforme o contexto livre do modelo) · `find` · `look_at` (recorte ampliado) · `get` (valor, marcado, habilitado, visível…) · `get_html` (HTML limpo de um seletor ou da página — refs `[#N]`, marca `[hidden]`, sem segredos nem scripts; pra botões duplicados, campos sem rótulo, dropdowns customizados; paginado com `offset` como o `extract_text`) |
+| **Navegar e esperar** | `navigate` · `back` / `forward` / `reload` · `scroll` · `new_tab` / `switch_tab` / `close_tab` · `wait` (`ms`, ou até `text` / `gone` / `url` / `load: "networkidle"`) |
+| **Buscar** | `web_search` (Google → Bing → DuckDuckGo → Yahoo → Perplexity, pulando os que bloqueiam) · `history_search` (pede permissão) |
+| **Arquivos** | `upload` (você escolhe no diálogo do SO) · `list_files` / `read_file` / `upload { file }` (pasta que você libera na sessão) · `download` + `list/cancel/pause/resume/retry_download` · `save_pdf` · `screenshot { full }` |
+| **Diálogos e área de transferência** | `dialog { accept }` (responde o próximo alert/confirm) · `clipboard { write }` · `clipboard { read }` (pede permissão) |
+| **Planejar e concluir** | `plan` · `store` · `suggest_time_zone` (você confirma) · `render_view` (tabela comparativa) · `done(motivo, sucesso)` |
 
 O clique acontece via `webContents.sendInputEvent` no main process — um evento de mouse **real** do Chromium, não synthetic, então sites com React/Vue/anti-bot respondem normal. Antes do clique, o ponteiro vai até o alvo pelo mesmo arco do cursor do agente que o Bah desenha na tela (sem tremor aleatório), então os eventos `mousemove` da página batem com o que você vê. A IA prefere o caminho **DOM-first** (`click_ref`), com fallback pra texto e depois coordenada.
 
@@ -201,6 +229,7 @@ Ele cobre o AppImage (montado em `/tmp`; se você define `TMPDIR`, ajuste esse c
 
 **Bom saber**
 
+- **IA local em GPU integrada:** o roteador embutido usa a CPU em GPUs integradas (por exemplo, Intel Iris Xe). A entrada por voz sempre roda na CPU. Ollama e `llama-server` escolhem o próprio hardware.
 - **`MESA-LOADER: failed to open nvidia-drm` em máquina sem NVIDIA:** configurações antigas da NVIDIA estão forçando o driver gráfico errado. Se o `/etc/environment` as define, remova-as e saia e entre de novo na sessão:
   ```bash
   sudo sed -i.bak -E '/^(GBM_BACKEND|__GLX_VENDOR_LIBRARY_NAME|LIBVA_DRIVER_NAME)=/d' /etc/environment
@@ -208,6 +237,10 @@ Ele cobre o AppImage (montado em `/tmp`; se você define `TMPDIR`, ajuste esse c
 - **Netflix e outros vídeos com DRM** precisam de um pacote assinado pela castLabs (veja `build/afterSign.js`); um build local simples não os reproduz.
 
 ### Configurar a IA
+
+> **Setup testado (local):** o agente é testado com o `llama-server` do [llama.cpp](https://github.com/ggml-org/llama.cpp) rodando **`Qwen3-VL-8B-Instruct-Q4_K_M.gguf`** ([`unsloth/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/unsloth/Qwen3-VL-8B-Instruct-GGUF), com o projetor de visão) numa GPU NVIDIA de 16 GB — cabe inteiro na VRAM e é rápido o bastante pra navegar passo a passo:
+> `llama-server -hf unsloth/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M -c 32768 -ngl 99 --host 0.0.0.0 --port 8080`
+> No Bah: engrenagem → 🏠 IA Local → endpoint compatível com OpenAI `http://<servidor>:8080/v1`. Com esse modelo o agente faz de forma confiável tarefas de download em várias páginas — ex.: *"baixe a ISO mais recente do ubuntu"* (acha o índice de releases, inicia o download, espera e informa o caminho salvo; ISO conferida com o SHA256 publicado). Use um modelo com visão (variantes `-VL-`): o agente lê a captura de tela além da lista de elementos.
 
 1. Abra o navegador, clique no botão **AI** na barra de endereço.
 2. Engrenagem → escolha o provedor.
@@ -298,7 +331,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Limite de 25 passos por comando.** Se a tarefa não concluir em 25 ações, o agente para sozinho.
 
-- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** resolvemos CAPTCHA de imagem, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Por padrão o agente para e pede sua ajuda em qualquer verificação humana; uma chave **opcional** no menu (☑️ *Agente pode clicar em captcha de caixinha*, desligada por padrão) deixa ele clicar uma vez numa caixinha simples "Não sou um robô" / "Verifique que você é humano" — quem decide continua sendo o serviço de captcha, e qualquer coisa além disso (desafio de imagem) volta pra você. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão.
+- **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** resolvemos CAPTCHA de imagem, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Por padrão o agente para e pede sua ajuda em qualquer verificação humana; uma chave **opcional** no menu (☑️ *Agente pode clicar em captcha de caixinha*, desligada por padrão) deixa ele clicar uma vez numa caixinha simples "Não sou um robô" / "Verifique que você é humano" — quem decide continua sendo o serviço de captcha, e qualquer coisa além disso (desafio de imagem) volta pra você. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão (entre na conta você mesmo; abra a vaga e clique em Candidatar-se, e deixe o Bah continuar no site de candidatura da empresa). Respeite os termos de cada site.
 
 - **🔑 Login do Google (opcional) — o ícone de perfil no canto de cima.** Entrar só é preciso pra tarefas dentro do Google (Gmail, Drive, o seu YouTube). O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique no **ícone de perfil** → **Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 

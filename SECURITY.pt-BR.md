@@ -39,6 +39,13 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   local do roteador híbrido).
 - **OCR e screenshots usados pra OCR** rodam **no aparelho** (Tesseract) — a imagem nunca é
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Permissões de site (localização, câmera, microfone, área de transferência, notificações, MIDI, arquivos):**
+  negadas até você responder na barra do Bah — *Permitir desta vez* (até a página recarregar), *Sempre permitir* /
+  *Nunca permitir* (salvo por site em `site-permissions.json`; revise ou redefina no menu ⋮ → 🔒 Permissões dos
+  sites). A barra é UI do próprio Bah, fora da página, então o agente não consegue responder; pedidos de abas em
+  segundo plano ou ocultas são negados sem perguntar. Captura de tela, USB/HID/serial e permissões desconhecidas
+  são sempre negadas. Antes disto, o padrão do Electron liberava tudo isso pra qualquer site, calado. Ver
+  [`src/main/site-permissions.ts`](src/main/site-permissions.ts).
 - **Proxy:** com um proxy configurado (no SO, no painel 🌐 Rede e proxy ou via `HTTPS_PROXY`), todo o
   tráfego do Bah passa por ele — é esse o objetivo. Senhas de proxy são digitadas na caixa do próprio Bah,
   salvas só se você marcar *Lembrar*, cifradas com o chaveiro do SO (`safeStorage`, arquivo

@@ -39,6 +39,13 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Site permissions (location, camera, microphone, clipboard, notifications, MIDI, files):** denied
+  until you answer Bah's bar — *Allow this time* (until the page reloads), *Always allow* / *Never allow*
+  (saved per site in `site-permissions.json`; review or reset in menu ⋮ → 🔒 Site permissions). The bar is
+  Bah's own UI, outside the page, so the agent cannot answer it; requests from background or hidden tabs
+  are denied without asking. Screen capture, USB/HID/serial and unknown permissions are always denied.
+  Before this, Electron's default granted all of these to every site silently. See
+  [`src/main/site-permissions.ts`](src/main/site-permissions.ts).
 - **Proxy:** when a proxy is configured (OS settings, the 🌐 Network & proxy panel or `HTTPS_PROXY`),
   all of Bah's traffic goes through it — that is the point. Proxy passwords are typed into Bah's own
   box, stored only if you tick *Remember*, encrypted with the OS keychain (`safeStorage`, file

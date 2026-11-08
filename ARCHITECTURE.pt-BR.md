@@ -92,6 +92,7 @@ movimentos que terminam no clique e se afastam da reta.
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
 | `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | `alert`/`confirm` das páginas: troca a caixa nativa do Electron (que trava a página; evento interno `-run-dialog`) pela caixa do Bah pra pessoa, e pela política do agente nas abas dele (`dialog` armado > alert fecha > confirm comum aceito > confirm de pagamento/exclusão pergunta à pessoa); `beforeunload` nas abas do agente sai quando ele navega. `prompt()` não existe no Electron (lança erro) |
 | `job-queue.ts` | Serializa tarefas longas |
+| `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Handlers de permissão das sessões dos sites: o sensível fica negado até a pessoa responder na barra do Bah (desta vez / sempre / nunca, por origem), abas em segundo plano/ocultas negadas direto, permissões desconhecidas negadas. **Localização** é negada sem perguntar em todo site (`DENY_UNLESS_ALLOWED` em `site-permission-rules.ts`) — só passa um Permitir que a pessoa escolhe no cadeado; o site vê `denied`, não um `prompt` inventado |
 | `frames.ts` (+ `src/shared/frames.ts`) | Conteúdo de iframes pro agente (formulário de vaga/pagamento/reserva embutido): árvores de acessibilidade dos frames do mesmo processo (por `frameId`) e dos cross-origin (sessões CDP achatadas via `Target.setAutoAttach`), coordenadas na viewport da página; elementos aparecem com `frame="host"`. Preencher grava no nó dentro do frame (sem depender de foco); clique em frame cross-origin usa CDP `Input` na sessão do frame (`sendInputEvent` para no `<iframe>`). Frames `chrome-extension://` injetados por extensões ficam de fora |
 | `upload.ts` | `upload` do agente (diálogo do SO → token; campo por nó/label/posição, ou o seletor do SO interceptado com `Page.setInterceptFileChooserDialog` durante a ação; `DOM.setFileInputFiles`) e pastas liberadas na sessão pra `list_files` / `read_file` / `upload { file }` (conferidas por realpath) |
 
@@ -762,6 +763,42 @@ revisão → Salvar → proposta opcional no GitHub). Ver [CONTRIBUTING-SKILLS.m
 
 ---
 
+## Identidade do navegador e checagens de robô (o que os sites veem)
+
+Medido em 03/11/2026 num MacBook Pro Intel (i7-9750H, 6 núcleos / 12 threads, 16 GB, UHD 630), o mesmo
+trecho em `https://example.com` no Chrome 156 de verdade e no Bah (perfil temporário):
+
+| Sinal | Chrome de verdade | Bah |
+|---|---|---|
+| `hardwareConcurrency` / `deviceMemory` (página e worker) | 6 / 16 | 6 / 16 |
+| WebGL renderer | ANGLE Metal, Intel UHD Graphics 630 | igual |
+| `navigator.plugins`, UA, arch / platformVersion do `userAgentData` | 5 leitores de PDF, Mac Intel, x86, 26.7.1 | igual |
+| `userAgentData.fullVersionList` | Chrome **156.0.8078.79** | Chrome **156.0.0.0** |
+| `navigator.webdriver` | **false** | **true** quando aberto pelo Playwright |
+
+GPU, núcleos e memória são os valores do próprio motor (o remendo antigo do script da página — "Intel Iris 6100",
+8 núcleos, 8 GB — saiu: o worker via os números reais, sinal clássico de adulteração;
+`tests/e2e/hardware-identity.spec.ts`). Canvas, áudio e fontes não são mexidos. O Chromium informa os núcleos
+físicos neste Mac (o Chrome de verdade também diz 6) e a RAM real (16, sem teto de 8).
+
+**Prováveis culpados pelas checagens de robô vistas nas demos e testes** ("Press & hold" da Target, "Robot or
+human?" do Walmart, páginas de erro da Amazon):
+1. **`navigator.webdriver = true`.** Todo teste e2e, gravação de demo (`tools/record-demo-mac.mjs`) e sonda abre o
+   Bah pelo Playwright, que liga a flag de automação do Chromium. É um sinal honesto de "automatizado" e deve
+   continuar honesto — mas faz das nossas execuções o pior caso. O Bah aberto normalmente diz `false`; esperamos
+   checagens raras no uso do dia a dia. Medir a frequência de checagens com o Bah aberto normalmente, não em teste/demo.
+2. **Versão que não bate.** O Bah se apresenta como Chrome 156 (preciso pro login do Google, ver a seção da Chrome
+   Web Store) sobre o Chromium mais antigo do Electron 44, e a versão completa é `156.0.0.0`, não um build real. Um
+   detector pode notar um "Chrome 156" sem recursos que só o 156 tem. A correção honesta (informar o motor real)
+   pode trazer de volta o bloqueio do login do Google — decisão em aberto.
+3. **Perfis novos.** Perfis de teste e demo começam vazios (sem logins, sem cookies de checagens já passadas): toda
+   visita parece a primeira.
+
+Quando aparece uma checagem de humano, a pessoa resolve (entrega Watch/Takeover); a única exceção é a opção do
+upstream (☑️ *Agente pode clicar em captcha de caixinha*, DESLIGADA por padrão), que clica uma caixinha simples uma vez antes.
+
+---
+
 ## Economia de memória (abas dormindo)
 
 O "Memory Saver" do Chrome, mais uma regra do Bah. Uma varredura no `App.tsx` (a cada 60 s) desmonta o
@@ -790,6 +827,8 @@ puras em `src/shared/memory-saver.ts` (testadas em `tests/unit/memory-saver.test
   localStorage só pra testes) pra encurtar o tempo parada e a varredura.
 
 ## Build e release
+
+> **E2E no macOS:** abra o Electron com `--use-mock-keychain`. Sem isso o cofre de senhas (`safeStorage`) abre um pedido do Chaveiro pro build de dev sem assinatura num perfil novo de teste, e a chamada síncrona trava o processo principal (o Playwright só estoura o tempo, sem erro).
 
 - **Build:** Renderer = Vite + typecheck `tsc`; Main = `tsc`. Um gate de paridade de i18n
   (`scripts/i18n-check.mjs`) **falha o build** se en/pt/es saírem de sincronia.
