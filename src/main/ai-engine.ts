@@ -1983,3 +1983,6 @@ export class AIEngine {
     }
   }
 }
+
+/** Tests only: the agent system prompt as sent (incl. the computer/region block). */
+export const _agentSystemPromptForTests = () => BROWSER_AGENT_SYSTEM_PROMPT;

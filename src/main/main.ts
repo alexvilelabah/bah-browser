@@ -2468,6 +2468,19 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     }
   });
 
+  // Selecionar tudo no campo com foco (inclusive dentro de iframe): comando de edição via CDP — no macOS
+  // Cmd+A por sendInputEvent não seleciona (é comando de menu, não tecla).
+  ipcMain.handle('input:select-all', async (_e, wcId: number) => {
+    const wc = webContents.fromId(wcId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    try {
+      await sharedEnsureDebugger(wc, wcId);
+      const mod = process.platform === 'darwin' ? 4 : 2;
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: mod, commands: ['selectAll'] });
+      await wc.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: mod });
+      return { success: true };
+    } catch (e: any) { return { success: false, error: String(e?.message || e) }; }
+  });
   ipcMain.handle('input:key', async (_e, wcId: number, key: string) => {
     const wc = webContents.fromId(wcId);
     if (!wc) return { success: false, error: 'webContents not found' };
@@ -4321,8 +4334,12 @@ app.on('before-quit', () => {
   import('./ocr-engine').then(m => m.terminateOcrWorkers()).catch(() => {});
 });
 
+// Fechar a janela SAI do app em todo SO — inclusive no macOS, onde o padrão seria ficar
+// vivo no Dock sem janela. O Bah é de janela única: vivo e invisível, ele segurava o perfil
+// e abrir de novo podia subir uma 2ª instância no mesmo perfil. (Bandeja ligada: o close
+// só esconde a janela, então isto nem dispara.)
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  app.quit();
 });
 
 app.on('activate', () => {

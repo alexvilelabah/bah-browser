@@ -209,6 +209,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageScreenshot: (wcId: number, full: boolean, name?: string) => ipcRenderer.invoke('agent:screenshot', wcId, full, name),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:write-text', text),
+  selectAll: (wcId: number) => ipcRenderer.invoke('input:select-all', wcId),
   realKey: (wcId: number, key: string) =>
     ipcRenderer.invoke('input:key', wcId, key),
   inspect: (wcId: number, target: any) => ipcRenderer.invoke('cdp:inspect', wcId, target),

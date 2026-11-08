@@ -268,6 +268,7 @@ declare global {
       realType?: (wcId: number, text: string) => Promise<any>;
       abortTyping?: () => Promise<any>;
       realKey?: (wcId: number, key: string) => Promise<any>;
+      selectAll?: (wcId: number) => Promise<any>;
       inspect?: (wcId: number, target: any) => Promise<{ ok: boolean; state?: any; error?: string }>;
       keyState?: (wcId: number, key: string, down: boolean) => Promise<any>;
       insertText?: (wcId: number, text: string) => Promise<any>;
@@ -887,6 +888,16 @@ export default function App() {
   const toggleTorrentSeed = useCallback(() => {
     setTorrentSeed(v => { const n = !v; try { localStorage.setItem('torrentSeed', n ? '1' : '0'); } catch {} window.electronAPI?.torrentSetSeed?.(n); return n; });
   }, []);
+  // A PESSOA fechou a última aba (× ou Cmd/Ctrl+W) → fecha o navegador, como no Chrome. Abas ocultas
+  // (pesquisa em segundo plano) não contam. Fechar pelo agente/código continua repondo uma aba nova.
+  const closeTabByUser = useCallback((id: string) => {
+    const visible = store.tabs.filter(t => !t.hidden);
+    if (visible.length <= 1 && (!visible[0] || visible[0].id === id)) {
+      window.electronAPI?.close();
+      return;
+    }
+    store.closeTab(id);
+  }, [store]);
   // Cliente de torrent embutido — padrão DESLIGADO (.torrent baixa como arquivo; magnet vai pro app do sistema).
   const [torrentBuiltin, setTorrentBuiltin] = useState<boolean>(() => { try { return localStorage.getItem('torrentBuiltin') === '1'; } catch { return false; } });
   const toggleTorrentBuiltin = useCallback(() => {
@@ -1574,7 +1585,7 @@ export default function App() {
     switch (action) {
       case 'new-tab': store.addTab(); break;
       case 'new-incognito-tab': void openIncognitoTab(); break;   // Ctrl+Shift+N
-      case 'close-tab': store.closeTab(store.activeTabId); break;
+      case 'close-tab': closeTabByUser(store.activeTabId); break;
       case 'reopen-tab': store.reopenClosedTab(); break;
       case 'focus-url': { const el = document.querySelector('.url-input') as HTMLInputElement | null; if (el) { el.focus(); el.select(); } break; }
       case 'reload': reload(); break;
@@ -1963,7 +1974,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
             tabs={store.tabs}
             activeTabId={store.activeTabId}
             onSelect={store.setActiveTabId}
-            onClose={store.closeTab}
+            onClose={closeTabByUser}
             onNew={store.addTab}
             onMove={store.moveTab}
             onCommand={onTabCommand}
@@ -5903,6 +5914,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const sm = await window.electronAPI?.stockMovers?.(action.direction, action.count);
                       if (sm?.success && sm.spec) spec = sm.spec;
                       else failMsg = sm?.error || 'Stock quote sources are unavailable right now.';
+                    } else if (!Array.isArray(action.rows) || action.rows.length === 0) {
+                      // Tabela VAZIA não encerra a tarefa como sucesso (o modelo "relatava" 0 linhas e parava).
+                      failMsg = 'render_view needs rows with real data — you have none yet. Collect the data first (extract_text on the result pages), then call render_view with those rows.';
                     } else {
                       spec = {
                         title: action.title, columns: action.columns, rows: action.rows,
