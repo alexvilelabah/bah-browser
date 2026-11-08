@@ -4,8 +4,9 @@
 // nag on "remove filter", "clear search" etc.). Looks at the LABEL of the button/field
 // the agent is about to touch. Pure function → testable.
 export interface RiskInfo { kind: string; label: string }
-/** unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too. */
-export interface RiskOpts { unattended?: boolean }
+/** jobs: the task is a job application — a bare "Submit"/"Send" button sends it (Workday, iCIMS…).
+ *  unattended: a SCHEDULED run (nobody may be watching) — sending/posting/booking waits for the person too. */
+export interface RiskOpts { jobs?: boolean; unattended?: boolean }
 
 export function classifyRisk(
   actionType: string,
@@ -33,6 +34,12 @@ export function classifyRisk(
   // NOT prompt. Real destructive deletes (file/email/account/server) have none of these.
   const BENIGN_CLEAR = /\b(busca|pesquisa|search|filtro|filtros|filter|filters|campo|field|texto|text|rascunho|draft|carrinho|cart|formulario|form|like|gostei|curtir|descurtir|dislike|playlist|inscri\w*|subscrib\w*|unsubscribe|seguir|unfollow|follow|voto|votar|vote|upvote|downvote|reacao|reaction|notificac\w*|notification)\b/;
   if (PAY.test(hay)) return { kind: 'payment', label: shown || 'payment' };
+  // Sending a job application: it goes to an employer under the person's name and can't be taken back.
+  const APPLY = /\b(submit (my |your |the |this )?application|send (my |your |the )?application|submit and apply|enviar (minha |a )?candidatura|finalizar candidatura|enviar solicitud|postularme)\b/;
+  if (APPLY.test(hay)) return { kind: 'application', label: shown || 'submit application' };
+  if (opts.jobs && (label || '').trim().length <= 30 && /^(submit|send|finish|complete|enviar|concluir|finalizar)\b/.test(norm(label).trim())) {
+    return { kind: 'application', label: shown || 'submit' };
+  }
   if (DEL.test(hay) && !BENIGN_CLEAR.test(hay)) return { kind: 'deletion', label: shown || 'deletion' };
   // Tarefa agendada rodando sozinha: mandar/publicar/reservar sai em nome da pessoa e não volta.
   // Com ela olhando o agente segue (pediu "manda"); sem ela, o cartão espera (e o aviso do sistema chama).
@@ -125,8 +132,12 @@ export function riskForAction(
     case 'press': {
       // Enter can submit a payment. With no label, only brake on a checkout page.
       const k = (action.key || '').toLowerCase();
+      if (k !== 'enter' && k !== 'return') return null;
       const checkout = !!currentUrl && /checkout|payment|pagamento|\/cart\b|carrinho|comprar|order\/?confirm|pedido\/?confirm|finalizar/i.test(currentUrl);
-      return (k === 'enter' || k === 'return') && checkout ? { kind: 'payment', label: 'Enter on the payment page' } : null;
+      if (checkout) return { kind: 'payment', label: 'Enter on the payment page' };
+      // ...or on an application's review step (Enter there submits the form).
+      const review = !!currentUrl && opts.jobs && /review|submit|confirm/i.test(currentUrl);
+      return review ? { kind: 'application', label: 'Enter on the application review page' } : null;
     }
     default:
       return null;

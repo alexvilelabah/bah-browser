@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import AgentVisualOverlay, { AgentVisualState, ClickRipple } from './components/AgentVisualOverlay';
 import { AppGuideBar, BeginnerTour } from './components/AppGuide';
+import { ApplicantPanel } from './components/ApplicantPanel';
 import { prefetchGpuInfo, gpuInfo, gpuIsLoaded } from './gpu-info';
 import TorrentSheet, { TorrentSheetData } from './components/TorrentSheet';
 import { useTabStore } from './store';
@@ -17,6 +18,12 @@ import { codecReport } from '../shared/media-codecs';
 import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './risk';
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
+// Rótulo de botão que abre o seletor de arquivos do SO.
+const UPLOAD_BUTTON_RE = /^(upload|attach|browse|choose|select|add)\b[\w\s'’/-]{0,25}\b(files?|r[eé]sum[eé]s?|cv|documents?|cover letter|attachments?)(?![a-z0-9])|^(upload|attach|browse|choose files?|anexar|enviar arquivo)\.{0,3}$/i;
+import { FORM_SCAN_SCRIPT, applyFill, readDropdownOptions } from './form-filler';
+import { planFill, questionKey, type FieldInfo, type FillDecision } from '../shared/form-fill';
+import { FORM_FIELDS_SCRIPT, formatFormProgress, resumeFacts, type FormField } from './form-progress';
+import { JOB_LISTINGS_SCRIPT, formatJobListings, jobIdOf, noteOpenedByTitle, openedJobOn, formatOpenedJobs, jobsAsked, type JobListing, type OpenedJob } from './job-listings';
 import {
   promptBlock as threadPromptBlock, estimateTokens as estimateThreadTokens, noteTask as noteThreadTask,
   noteFact as noteThreadFact, noteUsage as noteContextUsage, noteTrimmed as noteThreadTrimmed,
@@ -333,6 +340,11 @@ declare global {
       schedSave?: (list: import('../shared/schedule').ScheduledTask[]) => Promise<{ ok: boolean; tasks: import('../shared/schedule').ScheduledTask[] }>;
       schedClock?: () => Promise<{ offset: number; test: boolean }>;
       schedNotify?: (n: { title: string; body: string; taskId?: string }) => Promise<{ ok: boolean }>;
+      applicantGet?: () => Promise<{ profile: import('../shared/form-fill').ApplicantProfile; answers: Record<string, string>; available: boolean }>;
+      applicantSetProfile?: (p: any) => Promise<{ ok: boolean }>;
+      applicantSaveAnswers?: (a: Record<string, string>) => Promise<{ ok: boolean }>;
+      applicantDeleteAnswer?: (key: string) => Promise<{ ok: boolean }>;
+      applicantClear?: () => Promise<{ ok: boolean }>;
       onSchedFocus?: (cb: (taskId: string) => void) => () => void;
       jsDialogRespond?: (id: number, accept: boolean, text?: string) => Promise<any>;
       jsDialogAgentTabs?: (ids: number[]) => Promise<any>;
@@ -1158,6 +1170,7 @@ export default function App() {
   const [monitorsOpen, setMonitorsOpen] = useState(false);
   // ⏰ Tarefas agendadas (renderer/scheduler.ts): cada uma roda numa aba com sessão própria.
   const [schedOpen, setSchedOpen] = useState(false);
+  const [applicantOpen, setApplicantOpen] = useState(false);
   const sched = useScheduler({
     openRunTab: (_task, reuse) => {
       if (reuse && tabsRef.current.some(x => x.id === reuse && !x.hidden)) { store.setActiveTabId(reuse); return reuse; }
@@ -2179,6 +2192,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     <span className="menu-switch">{t('menu.folderRevoke')}</span>
                   </button>
                 )}
+                <button className="menu-item" onClick={() => { setMenuOpen(false); setApplicantOpen(true); }} title={t('menu.applicantTitle')}>
+                  <span className="menu-ic">📝</span>
+                  <span className="menu-label">{t('menu.applicant')}</span>
+                </button>
                 <button className="menu-item" onClick={() => toggleReadPage()} title={t('menu.readPageTitle')}>
                   <span className="menu-ic">{pageSpeaking ? '⏹️' : '🔊'}</span>
                   <span className="menu-label">{pageSpeaking ? t('menu.readPageStop') : t('menu.readPage')}</span>
@@ -2322,6 +2339,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
           {/* Aba anônima que ainda não abriu nada: a explicação (desenhada aqui, sem internet). */}
           {activeIncognito && isIncognitoBlank(store.activeTab.url) && <IncognitoPage />}
           <PermissionPrompt ask={permAsks.find(a => a.tabId === store.activeTabId)} onAnswer={answerPerm} />
+          {applicantOpen && <ApplicantPanel onClose={() => setApplicantOpen(false)} />}
           {schedOpen && <ScheduledTasksPanel sched={sched} onClose={() => setSchedOpen(false)} />}
           <MissedRunsCard sched={sched} />
           <JsDialogHost />
@@ -2664,11 +2682,23 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const commandWantsSearch = /\b(find|search|look up|compare|cheapest|available|list|show me|procur\w*|busc\w*|pesquis\w*|encontr\w*)\b/i.test(command);
               // Peça compatível com um modelo (carregador/fonte/bateria pra "Lenovo IdeaPad 3 15ADA05").
               const commandIsParts = /\b(charger|chargers|adapter|adaptor|power (supply|adapter|brick)|ac adapter|battery|replacement|compatible|part number|fru|fonte|carregador|bateria|cargador)\b/i.test(command);
+              // Candidatura a vaga: liga a skill job-apply e o freio do "Submit" puro do formulário.
+              const commandIsJobs = /\b(jobs?|job (posting|listing|application|offer)s?|apply (to|for)|applying|career(s| page)?|hiring|(my |a )?(r[eé]sum[eé]|cv)|cover letter|indeed|linkedin|glassdoor|greenhouse|workday|lever\.co|vagas?|candidat\w+|curr[ií]culo|emprego|empleo|trabajo)\b/i.test(command);
               // Skills de navegação: carregadas uma vez por tarefa; escolhidas a cada passo.
               const allSkills: Skill[] = await window.electronAPI?.skillsList?.().catch(() => []) ?? [];
               // Tarefa agendada (ninguém olhando): enviar/publicar/reservar também espera a pessoa (risk.ts).
               const unattended = !!opts?.unattended;
-              const riskOpts = { unattended };
+              const riskOpts = { jobs: commandIsJobs, unattended };
+              // Vagas já abertas nesta tarefa (ID da vaga no endereço): o bloco de vagas marca e aponta a próxima.
+              const openedJobIds = new Set<string>();
+              const openedJobs: OpenedJob[] = [];
+              let lastReadFile: string | null = null;
+              let lastFormFields: FormField[] = [];
+              const autoFilledForms = new Set<string>();   // páginas de formulário já preenchidas por código nesta tarefa
+              let lastResumeFacts: ReturnType<typeof resumeFacts> = {};   // formulário de candidatura da última observação
+              let resumeFirstBlocks = 0;   // último arquivo lido da pasta liberada (o currículo escolhido)
+              const jobsAskedN = jobsAsked(command);
+              const seenJobs: JobListing[] = [];   // cartões vistos nesta tarefa (pra reconhecer a vaga aberta pelo título)
               // Site cuidadoso: quantas navegações o agente já fez nele NESTA tarefa (máx. 1).
               let carefulNavs = 0, carefulRefusals = 0;
               // A última coisa em que o agente agiu (texto do clique + página): o próximo pedido pode dizer "it/that".
@@ -2762,6 +2792,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                 const keySteps = allResults.filter(r => r.result?.success !== false && r.action?.type !== 'done' && r.action?.type !== 'report')
                   .slice(-4).map(r => { try { return formatAction(r.action); } catch { return String(r.action?.type || ''); } });
                 noteThreadTask(runsKey, { goal: command, status, outcome: reason.slice(0, 300), steps: keySteps, target: lastTarget || undefined });
+                if (commandIsJobs && lastTarget) noteThreadFact(runsKey, `job:${lastTarget.slice(0, 60)}`, `looked at job ${lastTarget}`);
                 // Run com passos de página bem-sucedidos = receita reaproveitável.
                 // (Replays não regravam: a receita original é a fonte da verdade.)
                 // "report" encerra como sucesso mesmo quando o texto diz que não deu ("Unable to locate…"):
@@ -2854,6 +2885,9 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               const confirmRisky = (risk: { kind: string; label: string }): Promise<boolean> => {
                 setAgentVisual('idle');
                 const verb = risk.kind === 'card data' ? 'fill in' : 'click';
+                const message = risk.kind === 'application'
+                  ? `📨 Ready to send your application. Check the form in the tab first: I will click "${risk.label}" and it goes to the employer. Send it?`
+                  : `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`;
                 // Pessoa pensando não é o modelo lento: o relógio da tarefa dorme enquanto o cartão espera
                 // (numa tarefa agendada ele pode esperar horas, até a pessoa voltar).
                 deadline.suspend();
@@ -2865,7 +2899,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     kind: 'confirm',
                     risk: risk.kind,
                     label: risk.label,
-                    message: `⚠️ Safety pause — this involves ${risk.kind}. I will ${verb} "${risk.label}". Do you want me to continue?`,
+                    message,
+                    ...(risk.kind === 'application' ? { title: '📨 Send application?', yesLabel: '📨 Send it', noLabel: "Don't send" } : {}),
                     onConfirm: () => finish(true),
                     onCancel: () => finish(false),
                   });
@@ -3386,6 +3421,77 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       .slice(0, 3)
                     : [];
                   stepDlButtons = dlButtons;
+                  // Tarefa de vaga: os cartões de vaga desta página, com o ★ de salvo (ver job-listings.ts).
+                  if (commandIsJobs) { const jid = jobIdOf(observation.url); if (jid) openedJobIds.add(jid); }
+                  const pageJobs = commandIsJobs ? await withTimeout(wv.executeJavaScript(JOB_LISTINGS_SCRIPT), 3000, [] as JobListing[]).catch(() => [] as JobListing[]) : [];
+                  if (commandIsJobs) {
+                    for (const j of pageJobs || []) if (!seenJobs.some(x => x.title === j.title)) seenJobs.push(j);   // ordem em que apareceram (a lista da home vem primeiro)
+                    noteOpenedByTitle(openedJobIds, observation.title, seenJobs);
+                  }
+                  let onOpenedJob = false;
+                  if (commandIsJobs) {
+                    // Página de uma vaga aberta: guarda o texto dela (o modelo saía sem ler e não tinha o que relatar).
+                    const onJob = openedJobOn(observation.url, observation.title, seenJobs);
+                    onOpenedJob = !!onJob;
+                    if (onJob && !openedJobs.some(o => o.title === onJob.title)) {
+                      // A partir do título da vaga (antes vem o menu do site), e o bastante pra pegar os requisitos.
+                      const text = await withTimeout(wv.executeJavaScript(`(function(t){ var s = (document.body.innerText || '').replace(/\\s+/g, ' '); var i = s.indexOf(t); return s.slice(Math.max(i, 0), Math.max(i, 0) + 1600); })(${JSON.stringify(onJob.title)})`), 2000, '').catch(() => '');
+                      openedJobs.push({ title: onJob.title, url: observation.url, text: String(text || observation.text_sample || '').slice(0, 1600) });
+                    }
+                  }
+                  // Formulário de candidatura (campo de arquivo ou ≥4 campos — não a busca da home): lista do que falta.
+                  let formFields = commandIsJobs ? await withTimeout(wv.executeJavaScript(FORM_FIELDS_SCRIPT), 3000, [] as FormField[]).catch(() => [] as FormField[]) : [];
+                  let isAppForm = !!formFields && (formFields.some((f: FormField) => f.kind === "file") || formFields.length >= 4);
+                  // Preenchimento POR CÓDIGO (uma vez por página de formulário): perfil + respostas salvas + currículo;
+                  // o que sobrar a pessoa responde num cartão só. O modelo só cuida do resto.
+                  if (isAppForm && !autoFilledForms.has(observation.url)) {
+                    const applicant = await window.electronAPI?.applicantGet?.().catch(() => null);
+                    const profile = applicant?.profile || {};
+                    if (profile.email || lastReadFile) {
+                      autoFilledForms.add(observation.url);
+                      const scanFields = await withTimeout(wv.executeJavaScript(FORM_SCAN_SCRIPT), 4000, [] as FieldInfo[]).catch(() => [] as FieldInfo[]);
+                      const plan = planFill(scanFields || [], profile, applicant?.answers || {}, lastResumeFacts, { url: observation.url });   // URL → tabela do ATS (ats-tables.ts)
+                      // Cada chamada à página com teto próprio; lista suspensa (react-select/Workday) vai uma a uma.
+                      const pageExec = (js: string) => withTimeout(wv.executeJavaScript(js), 6000, null as any);
+                      const first = plan.fill.length ? await applyFill(pageExec, plan.fill, scanFields || []).catch(() => ({ done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> })) : { done: [] as number[], failed: [] as FieldInfo[], texts: {} as Record<number, string> };
+                      const pickedText: Record<number, string> = { ...first.texts };
+                      const filledNow = plan.fill.filter(d => first.done.includes(d.idx));
+                      // Pergunta à pessoa: o que falta e o modelo não deve inventar (obrigatórias e escolhas; não arquivo).
+                      // Lista suspensa cujo valor do perfil não estava nas opções também vem pra cá, com as opções lidas.
+                      const missingAll = [...plan.missing.filter(f => !first.failed.some(x => x.idx === f.idx)), ...first.failed]
+                        .filter(f => f.type !== 'file' && (f.required || (f.options && f.options.length) || first.failed.includes(f)));
+                      const ask = (await readDropdownOptions(pageExec, missingAll.slice(0, 12)).catch(() => missingAll.slice(0, 12)));
+                      let answered: FillDecision[] = [];
+                      if (ask.length) {
+                        const reply = await new Promise<string>((resolve) => onProgress({ kind: 'confirm', risk: 'form', label: 'application questions',
+                          title: `📝 ${ask.length} question${ask.length > 1 ? 's' : ''} your profile does not answer`,
+                          message: `I filled ${filledNow.length} field${filledNow.length === 1 ? '' : 's'} on ${paceHostOf(observation.url) || 'this form'} from ${profile.email ? 'your profile' : 'the résumé'}${filledNow.length ? `: ${filledNow.map(d => d.label).slice(0, 8).join(', ')}` : ''}. Answer the rest (leave blank to skip):`,
+                          questions: ask.map(f => ({ key: questionKey(f.label), label: f.label, options: f.options, required: f.required })),
+                          onChoose: (v: string) => resolve(v), onConfirm: () => resolve(''), onCancel: () => resolve('') } as any));
+                        throwIfCancelled();
+                        let got: { answers?: Record<string, string>; save?: boolean } = {};
+                        try { got = JSON.parse(reply || '{}'); } catch {}
+                        if (got.answers && Object.keys(got.answers).length) {
+                          if (got.save) await window.electronAPI?.applicantSaveAnswers?.(got.answers).catch(() => null);
+                          const second = planFill(ask.map(f => ({ ...f, filled: false })), {}, got.answers);
+                          const r2 = second.fill.length ? await applyFill(pageExec, second.fill, ask).catch(() => null) : null;
+                          Object.assign(pickedText, r2?.texts || {});
+                          answered = second.fill.filter(d => (r2?.done || []).includes(d.idx));
+                        }
+                      }
+                      if (filledNow.length || answered.length) {
+                        history += `\nFORM FILLED BY BAH (from ${profile.email ? 'the user\'s profile' : 'the résumé'} and saved answers — do not retype these): ${[...filledNow, ...answered].map(d => `${d.label} = ${pickedText[d.idx] ?? d.value ?? ([...ask, ...scanFields].find((f: FieldInfo) => f.idx === d.idx)?.options || [])[d.option ?? -1] ?? '✓'}`).join('; ')}.`;
+                        onProgress({ kind: 'status', message: `✍️ Filled ${filledNow.length + answered.length} field(s) from ${profile.email ? 'your profile' : 'the résumé'}${answered.length ? ' and your answers' : ''}` });
+                        formFields = await withTimeout(wv.executeJavaScript(FORM_FIELDS_SCRIPT), 3000, formFields).catch(() => formFields);
+                        isAppForm = !!formFields && (formFields.some((f: FormField) => f.kind === "file") || formFields.length >= 4);
+                      }
+                    }
+                  }
+                  lastFormFields = isAppForm ? formFields : [];
+                  const formBlock = isAppForm ? formatFormProgress(formFields, !!lastReadFile, lastResumeFacts) : '';
+                  const jobsBlock = commandIsJobs
+                    ? [formatOpenedJobs(openedJobs, jobsAskedN, seenJobs.find(j => !openedJobs.some(o => o.title === j.title)) || null), (onOpenedJob ? '' : formatJobListings(pageJobs || [], 8, openedJobIds))].filter(Boolean).join('\n')   // na página da vaga, as "vagas parecidas" só distraem
+                    : '';
                   const dlButtonsBlock = dlButtons.length
                     ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for this computer)` : ''}`; }).join('\n')}`
                     : '';
@@ -3511,7 +3617,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   ].filter(Boolean);
                   const stepSkills = selectSkills(allSkills, {
                     url: observation.url, states: pageStates,
-                    tasks: [commandWantsDownload ? 'download' : '', isMediaCollectionRequest(command) ? 'collection' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : ''].filter(Boolean),
+                    tasks: [commandWantsDownload ? 'download' : '', isMediaCollectionRequest(command) ? 'collection' : '', commandWantsSearch ? 'search' : '', commandIsTravel ? 'travel' : '', commandIsShopping ? 'shopping' : '', commandIsParts ? 'parts' : '', commandIsPeople ? 'people' : '', commandIsJobs ? 'jobs' : ''].filter(Boolean),
                   });
                   const skillsBlock = formatSkillsBlock(stepSkills);
                   if (stepSkills.length) onProgress({ kind: 'status', message: `🧩 Skills: ${stepSkills.map(x => x.name).join(', ')}` });
@@ -3539,6 +3645,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     commandWantsDownload ? thirdPartyNote(thirdPartyDownloadSite(observation.url)) : '',
                     downloadsBlock,
                     dlButtonsBlock,
+                    jobsBlock,
+                    formBlock,
                     skillsBlock,
                     '',
                     planBlock,
@@ -3832,6 +3940,18 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (pick) { onProgress({ kind: 'status', message: `🎯 ${action.role}${action.name ? ` "${action.name}"` : ''}${action.nth ? ` #${action.nth}` : ''} → @${pick.id}` }); action = { type: 'click_ref', ref: pick.id }; }
                     else roleMiss = hits.length ? `only ${hits.length} ${action.role}(s) match "${action.name || ''}" — nth ${action.nth} does not exist` : `no ${action.role} labelled "${action.name || ''}" in INTERACTIVE ELEMENTS (scroll, use find, or pick a ref)`;
                   }
+                  // Botão que abre o seletor de arquivos do SO ("Upload File", "Attach résumé"…): o agente não
+                  // usa esse diálogo — vira a ação upload (o arquivo que ele acabou de ler da pasta liberada,
+                  // ou a pessoa escolhe). No Ashby o modelo clicava o botão até desistir.
+                  if (action?.type === 'click_ref') {
+                    const clickRef = action.ref;
+                    const t = observation.interactive_elements.find(e => e.id === clickRef);
+                    const lbl = `${t?.text || ''}`.trim() || `${(t as any)?.aria || ''}`.trim();
+                    if (t && lbl.length <= 40 && UPLOAD_BUTTON_RE.test(lbl)) {
+                      onProgress({ kind: 'status', message: `📎 "${lbl}" opens a file picker — attaching ${lastReadFile ? lastReadFile.split('/').pop() : 'a file you pick'} instead` });
+                      action = { type: 'upload', ref: clickRef, ...(lastReadFile ? { file: lastReadFile } : {}) } as any;
+                    }
+                  }
                   if (!action) {
                     finishRun('failed', 'AI did not return an action.');
                     return { error: 'AI did not return an action.', thought: thoughts.join('\n'), results: allResults };
@@ -3984,6 +4104,14 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     const claimsDone = action.success === true || (
                       /\b(success\w*|complete\w*|finished|downloaded|baixad\w*|conclu\w*)\b/i.test(action.reason || '')
                       && !/\b(unable|could ?n[o']t|cannot|can't|failed to|não consegui|no pude)\b/i.test(action.reason || ''));
+                    // Candidatura: parar no formulário com campos obrigatórios vazios SEM ter lido o currículo
+                    // (o modelo pedia nome/e-mail à pessoa — estão no currículo). Uma vez, manda ler.
+                    if (commandIsJobs && !lastReadFile && resumeFirstBlocks < 1 && lastFormFields.some(f => f.required && !f.done && f.kind !== 'choice')) {
+                      resumeFirstBlocks++;
+                      history += `\nNOT DONE YET: the application form still has empty required fields and you have not read the résumé. Do list_files, then read_file the résumé that fits this job; fill the fields from it. Ask the user only for what it does not say.`;
+                      onProgress({ kind: 'status', message: '📄 Reading the résumé before asking you.' });
+                      continue;
+                    }
                     if (commandWantsDownload && claimsDone && noDownloadYetBlocks < 2) {
                       const anyDownload = [...dlLatestRef.current.values()]
                         .some(d => ofThisTask(d) && d.state !== 'failed');   // cancelado = tratado (agente ou pessoa decidiu)
@@ -3997,7 +4125,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     // Pedido de BUSCA (pessoas, produtos, hotéis, resultados) encerrado com uma frase vaga
                     // ("os resultados estão visíveis") — uma vez, pede a lista do que está na página.
                     // Só leitura: não exige carregar outra página (vale também em site cuidadoso).
-                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel) && !commandWantsDownload) {
+                    if (vagueFinishBlocks < 1 && (commandIsPeople || commandWantsSearch || commandIsShopping || commandIsTravel || commandIsJobs) && !commandWantsDownload) {
                       const r = String(action.reason || '');
                       const hasList = /\n\s*(?:[-*•]|\d+[.)])\s|\|/.test(r) || (r.match(/\d/g) || []).length >= 3 || r.length > 260;
                       if (!hasList) {
@@ -4098,7 +4226,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                         const signInWall = /\b(log ?in|sign ?in|sign ?up|join)\b/i.test(observation.title || '') || /\/(login|signup|uas\/login|checkpoint)\b/i.test(observation.url || '');
                         const msg = `🛡️ ${targetHost} is in careful mode: its terms forbid automated browsing, so Bah only opens and reads pages there — no clicking or typing.`
                           + (signInWall ? ' Sign in yourself in this tab (once — the session stays), then ask again.' : '')
-                          + ' Continue by hand from here.';
+                          + (commandIsJobs ? ' Open the job and click Apply yourself; if it sends you to the company\'s own application site, ask Bah to continue there.' : ' Continue by hand from here.');
                         const done: BrowserAction = { type: 'done', success: false, reason: msg };
                         finishRun('failed', msg);
                         return { thought: thoughts.join('\n\n') || msg, results: allResults, done };
@@ -4146,8 +4274,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   let toolResult: any;
                   if ((action.type === 'click_ref' || action.type === 'fill_ref') && wcId != null) {
                     const target = observation.interactive_elements.find(e => e.id === action.ref);
+                    const editable = (e: any) => /^(input|textarea|select)$/i.test(e?.tag || '') || /^(textbox|combobox|searchbox|spinbutton)$/i.test(e?.role || '') || e?.contentEditable === true || e?.editable === true;
                     if (!target) {
                       toolResult = { success: false, error: `No element with ref @${action.ref}` };
+                    } else if (action.type === 'fill_ref' && !editable(target)) {
+                      // Digitar num <div>/aba/link clicava nele — no Ashby saiu do formulário.
+                      toolResult = { success: false, reason: 'not_editable', error: `@${action.ref} is a <${target.tag}${(target as any).role ? ` role="${(target as any).role}"` : ''}> "${String(target.text || '').slice(0, 40)}", not a text field. fill_ref only works on fields listed as <input>/<textarea>/<select> or role textbox/combobox. If this form has no such field, skip it.` };
                     } else {
                       // FREIO DE SEGURANÇA: pagamento/exclusão/cartão → confirma antes de agir.
                       const risk = classifyRisk(action.type, target.text, target.placeholder, target.aria, riskOpts);
@@ -5621,10 +5753,12 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       toolResult = { success: true, info: { files: files.length } };
                     } else {
                       const r = await window.electronAPI?.uploadReadFile?.(action.file);
-                      if (r?.ok) { history += `\nFILE ${action.file}:\n${r.text}`; toolResult = { success: true, info: { chars: r.text?.length || 0 } }; }
+                      if (r?.ok) { history += `\nFILE ${action.file}:\n${r.text}`; lastReadFile = action.file; lastResumeFacts = resumeFacts(r.text || ''); toolResult = { success: true, info: { chars: r.text?.length || 0 } }; }
                       else toolResult = { success: false, error: r?.error || 'could not read the file' };
                     }
                   } else if (action.type === 'upload') {
+                    // Sem arquivo dito, mas o agente acabou de ler um da pasta liberada (o currículo escolhido): é esse.
+                    if (!(action as any).file && lastReadFile) (action as any).file = lastReadFile;
                     // Arquivo SÓ do diálogo do SO, escolhido pela pessoa (ou reusado dela nesta tarefa).
                     const target = observation.interactive_elements.find(e => e.id === action.ref);
                     const wcIdUp = (wv as any).getWebContentsId?.();

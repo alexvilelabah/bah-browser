@@ -1,0 +1,285 @@
+{
+ "ats": "ashby",
+ "source": "https://jobs.ashbyhq.com/ashby/7458d4e9-da2e-47bd-98cb-adfda43d42b2/application",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "jobs.ashbyhq.com /application (React). System fields are _systemfield_*; location combobox carries data-field-path=_systemfield_location on its container; company questions are UUIDs. Diversity survey renders one checkbox per option (names = option text) and radio groups without a legend.",
+ "fields": [
+  {
+   "label": "Autofill from resume",
+   "type": "file",
+   "expect": null
+  },
+  {
+   "label": "Name",
+   "type": "text",
+   "name": "_systemfield_name",
+   "id": "_systemfield_name",
+   "automationId": "_systemfield_name",
+   "required": true,
+   "expect": "fullName"
+  },
+  {
+   "label": "Email",
+   "type": "email",
+   "name": "_systemfield_email",
+   "id": "_systemfield_email",
+   "automationId": "_systemfield_email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Resume",
+   "type": "file",
+   "id": "_systemfield_resume",
+   "automationId": "_systemfield_resume",
+   "expect": null
+  },
+  {
+   "label": "LinkedIn Profile",
+   "type": "text",
+   "name": "2f73c135-4c72-40cf-84bc-ba7700192f2f",
+   "id": "2f73c135-4c72-40cf-84bc-ba7700192f2f",
+   "automationId": "2f73c135-4c72-40cf-84bc-ba7700192f2f",
+   "required": true,
+   "expect": "linkedin"
+  },
+  {
+   "label": "Do you currently live in the EMEA timezone? If not, please explain why you're applying to this role",
+   "type": "text",
+   "name": "c96f681c-a8cf-4bf2-b6cf-fc08420a01d8",
+   "id": "c96f681c-a8cf-4bf2-b6cf-fc08420a01d8",
+   "automationId": "c96f681c-a8cf-4bf2-b6cf-fc08420a01d8",
+   "expect": null
+  },
+  {
+   "label": "Start typing...",
+   "type": "combobox",
+   "automationId": "_systemfield_location",
+   "expect": "location"
+  },
+  {
+   "label": "Upload File",
+   "type": "checkbox",
+   "name": "9dbddae8-2594-40be-b4b9-92420e945f18",
+   "automationId": "9dbddae8-2594-40be-b4b9-92420e945f18",
+   "options": [
+    "checked"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Describe the best engineer you've worked with, someone else in your top 5, and the difference between the two.",
+   "type": "textarea",
+   "name": "f890254e-5bf6-483d-87cb-a8cb9ec59a83",
+   "id": "f890254e-5bf6-483d-87cb-a8cb9ec59a83",
+   "automationId": "f890254e-5bf6-483d-87cb-a8cb9ec59a83",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "What is something you've built that you're particularly proud of? Something with technical depth and real user impact.",
+   "type": "textarea",
+   "name": "5668eabe-daee-426a-bfac-e22ee07a4a5e",
+   "id": "5668eabe-daee-426a-bfac-e22ee07a4a5e",
+   "automationId": "5668eabe-daee-426a-bfac-e22ee07a4a5e",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "How do you typically communicate a difficult decision or a change in direction to your team? Give us a specific example.",
+   "type": "textarea",
+   "name": "2fc5a8e3-79e3-447d-8247-e5a75116f47b",
+   "id": "2fc5a8e3-79e3-447d-8247-e5a75116f47b",
+   "automationId": "2fc5a8e3-79e3-447d-8247-e5a75116f47b",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "7629766a-1771-4b1c-932a-4f60419737dd_cf0f1bc7-7ce6-4eb3-aebc-b6562141cb68",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_cf0f1bc7-7ce6-4eb3-aebc-b6562141cb68-labeled-radio-0",
+   "automationId": "cf0f1bc7-7ce6-4eb3-aebc-b6562141cb68",
+   "options": [
+    "Under 30",
+    "30-39",
+    "40-49",
+    "50-59",
+    "60 or older",
+    "I prefer not to answer"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "7629766a-1771-4b1c-932a-4f60419737dd_8d7dcc65-3a0b-476a-b679-574b869780bb",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_8d7dcc65-3a0b-476a-b679-574b869780bb-labeled-radio-0",
+   "automationId": "8d7dcc65-3a0b-476a-b679-574b869780bb",
+   "options": [
+    "Man",
+    "Woman",
+    "Non-Binary",
+    "Another Gender Identity",
+    "I prefer not to answer"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Asian or Asian American",
+   "type": "checkbox",
+   "name": "Asian or Asian American",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-0",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Black or African American",
+   "type": "checkbox",
+   "name": "Black or African American",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-1",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Hispanic or Latine",
+   "type": "checkbox",
+   "name": "Hispanic or Latine",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-2",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Indigenous or Native American",
+   "type": "checkbox",
+   "name": "Indigenous or Native American",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-3",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Native Hawaiian or Other Pacific Islander",
+   "type": "checkbox",
+   "name": "Native Hawaiian or Other Pacific Islander",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-4",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "White",
+   "type": "checkbox",
+   "name": "White",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-5",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Other",
+   "type": "checkbox",
+   "name": "Other",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-6",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "",
+   "type": "checkbox",
+   "name": "I prefer not to answer",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_1e21d43f-548e-481a-aa5f-f048c73f3de3-labeled-checkbox-7",
+   "automationId": "1e21d43f-548e-481a-aa5f-f048c73f3de3",
+   "options": [
+    "I prefer not to answer",
+    "I prefer not to answer"
+   ],
+   "expect": "voluntary"
+  },
+  {
+   "label": "Person with disability",
+   "type": "checkbox",
+   "name": "Person with disability",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-0",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Neurodivergent",
+   "type": "checkbox",
+   "name": "Neurodivergent",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-1",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Veteran",
+   "type": "checkbox",
+   "name": "Veteran",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-2",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Parent",
+   "type": "checkbox",
+   "name": "Parent",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-3",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "Refugee or immigrant",
+   "type": "checkbox",
+   "name": "Refugee or immigrant",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-4",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  },
+  {
+   "label": "None of the above",
+   "type": "checkbox",
+   "name": "None of the above",
+   "id": "7629766a-1771-4b1c-932a-4f60419737dd_a76e67f9-eeb8-4d06-a9a5-b1596a9726e7-labeled-checkbox-5",
+   "automationId": "a76e67f9-eeb8-4d06-a9a5-b1596a9726e7",
+   "options": [
+    "checked"
+   ],
+   "expect": "skip"
+  }
+ ]
+}

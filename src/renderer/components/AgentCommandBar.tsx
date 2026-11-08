@@ -38,7 +38,7 @@ export interface StepRecord {
 export type AgentProgressEvent =
   | { kind: 'status'; message: string }
   | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
-  | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; onChoose?: (value: string) => void }
+  | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; onChoose?: (value: string) => void; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> }
   | { kind: 'plan_preview'; goal: string; steps: string[]; autoRunMs?: number; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void; onHold?: () => void }
   | { kind: 'thought'; message: string }
   | { kind: 'action'; action: BrowserAction }
@@ -69,7 +69,7 @@ type FeedData =
   | { kind: 'report'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'help'; message: string; instruction: string }
-  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }> }
+  | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; questions?: Array<{ key: string; label: string; options?: string[]; required?: boolean }> }
   // Thread da sessão (renderer/threads.ts): avisos de orçamento/resumo/limpeza/corte, e a conversa que voltou.
   | { kind: 'thread-notice'; notice: ThreadNotice }
   | { kind: 'thread-recap'; key: string };
@@ -766,7 +766,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           confirmActionsRef.current = { onConfirm: waitFor(event.onConfirm), onCancel: waitFor(event.onCancel), onChoose: waitFor(event.onChoose) };
           setPendingConfirm({ message: event.message });
           confirmLabelsRef.current = !!event.yesLabel || !!event.choices;
-          push({ kind: 'confirm', message: event.message, title: event.title, yesLabel: event.yesLabel, noLabel: event.noLabel, choices: event.choices });
+          push({ kind: 'confirm', message: event.message, title: event.title, yesLabel: event.yesLabel, noLabel: event.noLabel, choices: event.choices, questions: event.questions });
           sched?.onWaiting(event.title ? `${event.title} ${event.message}` : event.message);
         } else if (event.kind === 'result') {
           // skip — step cards already carry action+result (avoids duplicate noise)
@@ -2014,7 +2014,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             : <div className="chat-msg assistant"><div className="chat-ai-label">{activeAiLabel()}</div><div className="msg-content thinking-line">{thinkPhrases[thinkIdx % thinkPhrases.length] || '…'}</div></div>
         )}
         {loading && convoTabRef.current === viewTabId && (
-          <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
+          pendingConfirm
+            // Esperando a PESSOA responder o cartão acima — não é o modelo que está trabalhando.
+            ? <div className="feed-working">⏸ {t('feed.waitingForYou')}</div>
+            : <div className="feed-working"><span className="agent-spinner" /> <span className="feed-working-ai">{activeAiLabel()}</span> · {t('feed.working')}</div>
         )}
       </div>
 
@@ -2414,6 +2417,7 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confi
     case 'media':
       return <MediaStrip mediaKind={item.mediaKind} paths={item.paths} dir={item.dir} total={item.total} label={item.label} />;
     case 'confirm':
+      if (item.questions?.length) return <QuestionsCard item={item} active={confirmActive} onSubmit={(a) => onChoose(JSON.stringify(a))} onSkip={() => onConfirmRisky(false)} />;
       return (
         <div className="feed-confirm-card">
           <div className="feed-confirm-title">{item.title || t('feed.confirmTitle')}</div>
@@ -2431,6 +2435,42 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confi
         </div>
       );
   }
+}
+
+// Perguntas do formulário que o perfil e as respostas salvas não cobriram: a pessoa responde aqui
+// uma vez (e, marcado, fica salvo pra próxima candidatura). Campo vazio = pular aquela pergunta.
+function QuestionsCard({ item, active, onSubmit, onSkip }: { item: Extract<FeedItem, { kind: 'confirm' }>; active: boolean; onSubmit: (answers: { answers: Record<string, string>; save: boolean }) => void; onSkip: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [save, setSave] = useState(true);
+  const qs = item.questions || [];
+  return (
+    <div className="feed-confirm-card">
+      <div className="feed-confirm-title">{item.title}</div>
+      <div className="feed-confirm-msg" style={{ whiteSpace: 'pre-wrap' }}>{item.message}</div>
+      {active && (
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit({ answers: Object.fromEntries(Object.entries(vals).filter(([, v]) => v.trim())), save }); }}>
+          {qs.map((q) => (
+            <label key={q.key} style={{ display: 'block', margin: '8px 0' }}>
+              <div style={{ fontSize: 13, marginBottom: 4 }}>{q.label}{q.required ? ' *' : ''}</div>
+              {q.options?.length
+                ? <select value={vals[q.key] || ''} onChange={(e) => setVals({ ...vals, [q.key]: e.target.value })} style={{ width: '100%' }}>
+                    <option value="">—</option>
+                    {q.options.filter(o => o && !/^(select|choose|--)/i.test(o)).map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                : <textarea rows={q.label.length > 60 ? 3 : 1} value={vals[q.key] || ''} onChange={(e) => setVals({ ...vals, [q.key]: e.target.value })} style={{ width: '100%', resize: 'vertical' }} />}
+            </label>
+          ))}
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, margin: '6px 0' }}>
+            <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} /> {t('feed.q.save')}
+          </label>
+          <div className="feed-confirm-actions">
+            <button type="submit" className="confirm-yes">{item.yesLabel || t('feed.q.fill')}</button>
+            <button type="button" className="confirm-no" onClick={onSkip}>{item.noLabel || t('feed.q.skip')}</button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 }
 
 // Tira de mídia no feed: até 5 miniaturas + "+N", clique abre a pasta. Zero IA.

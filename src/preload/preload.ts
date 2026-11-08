@@ -222,6 +222,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatHistoryGet: (id: string) => ipcRenderer.invoke('chat-history:get', id),
   chatHistoryDelete: (id: string) => ipcRenderer.invoke('chat-history:delete', id),
   chatHistoryClear: (since: number | null) => ipcRenderer.invoke('chat-history:clear', since),
+  applicantGet: () => ipcRenderer.invoke('applicant:get'),
+  applicantSetProfile: (p: any) => ipcRenderer.invoke('applicant:set-profile', p),
+  applicantSaveAnswers: (a: Record<string, string>) => ipcRenderer.invoke('applicant:save-answers', a),
+  applicantDeleteAnswer: (key: string) => ipcRenderer.invoke('applicant:delete-answer', key),
+  applicantClear: () => ipcRenderer.invoke('applicant:clear'),
   // Tarefas agendadas (guardadas cifradas no main; relógio/fila no renderer)
   schedList: () => ipcRenderer.invoke('sched:list'),
   schedSave: (list: any[]) => ipcRenderer.invoke('sched:save', list),
