@@ -4177,8 +4177,8 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       || /\\b(sign in|log in|join|entre|fa[cç]a login|inicia sesi[oó]n) (to|para) (see|view|continue|access|apply|ver|continuar|acessar)\\b/i.test((document.body.innerText || '').slice(0, 4000));
                     return { promo: promo, dialog: label, closers: closers, buttons: dlg ? btnsOf(dlg) : [], overlays: overlays, backdrop: backdrop, options: opts, datepicker: datepicker, eula: eula, osSelector: osSel, searchbox: searchbox, tabs: tabs, cards: cards, signin: signin };
                   })()`).catch(() => null), 2000, null) as { dialog: string; closers: string[]; buttons?: PageControl[]; overlays?: OverlayCandidate[]; backdrop?: boolean; options: string[]; datepicker: boolean; eula: boolean; osSelector: boolean; searchbox: boolean; tabs: boolean; cards?: boolean; signin?: boolean; promo?: string } | null;
-                  // Modal sem ARIA (div fixa por cima): vira o "dialog" daqui pra frente — o mesmo aviso
-                  // e o Escape dos popups de sempre, mais a lista dos botões dele.
+                  // Modal sem ARIA (div fixa por cima): vira o "dialog" daqui pra frente — o mesmo aviso,
+                  // skill popup-dismiss e Escape dos popups de sempre, mais a lista dos botões dele.
                   if (uiState && !uiState.dialog && uiState.overlays?.length) {
                     const ov = pickOverlay(uiState.overlays, !!uiState.backdrop);
                     if (ov) {
