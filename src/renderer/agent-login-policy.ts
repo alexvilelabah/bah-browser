@@ -1,4 +1,5 @@
 import type { ObservedState } from './page-executor';
+import { commandIsSupport } from './support-tickets.ts';
 
 export type ManualHelpKind = 'login' | 'captcha' | 'paywall' | 'blocked' | 'stuck' | 'local_unavailable';
 
@@ -11,18 +12,20 @@ export interface ManualHelpRequest {
 const LOGIN_BLOCK_PATTERNS = /\b(fa[cç]a\s*login\s*para\s*continuar|log\s*in\s*to\s*continue|sign\s*in\s*required|login\s*required|please\s*sign\s*in|entre\s*para\s*ver|you\s*must\s*be\s*logged\s*in|crie?\s*uma?\s*conta\s*para|entrar\s*para\s*continuar|acesse\s*sua\s*conta)\b/i;
 const LOGIN_UI_PATTERNS = /\b(entrar|fazer\s*login|login|sign\s*in|continue\s*with|continuar\s*com|criar\s*conta|sign\s*up)\b/i;
 const LOGIN_FORM_PATTERNS = /\b(senha|password|e-?mail|email|telefone|phone|cpf|usuario|usu[aá]rio).{0,40}\b(entrar|continuar|login|sign\s*in)\b|\b(entrar|continuar|login|sign\s*in).{0,40}\b(senha|password|e-?mail|email|telefone|phone|cpf|usuario|usu[aá]rio)\b/i;
-const LOGGED_IN_HINT_PATTERNS = /\b(minha\s*conta|sua\s*conta|meu\s*perfil|minhas\s*compras|meus\s*pedidos|ol[aá][, ]|bem[- ]?vindo|bem[- ]?vinda|sair|logout|log\s*out)\b/i;
+const LOGGED_IN_HINT_PATTERNS = /\b(minha\s*conta|sua\s*conta|meu\s*perfil|minhas\s*compras|meus\s*pedidos|ol[aá][, ]|bem[- ]?vindo|bem[- ]?vinda|sair|logout|log\s*out|sign\s*out|cerrar\s*sesi[oó]n)\b/i;
 const CAPTCHA_PATTERNS = /\b(captcha|recaptcha|hcaptcha|n[aã]o\s*sou\s*um?\s*rob[oô]|i'?m?\s*not\s*a\s*robot|verify\s*you\s*are\s*human|prove\s*you'?re\s*human|verifi(ca[cç][aã]o|que).*human|cloudflare|checking\s*your\s*browser|security\s*check|seleciona(r)?\s*(todos\s*)?os\s*quadrados|selecione\s*(todas\s*)?as\s*imagens|quadrados\s*que\s*cont[eê]m|bots?\s*tamb[eé]m\s*usam|complet[ae]\s*o\s*(seguinte\s*)?desafio|confirm(e|ar)\s*que\s*este\s*pedido)\b/i;
 const PAYWALL_PATTERNS = /\b(paywall|subscribe|assinante|assine|subscription|premium|conte[uú]do\s*exclusivo)\b/i;
 
 // Nota: possessivos soltos ("meu/minha") NAO entram — "meus downloads" virava falso
 // positivo de tarefa privada. Os substantivos de conta cobrem os casos reais.
+// "my list/my jobs/my saved…" (substantivo de conta logo depois do possessivo) conta.
 // "salvo/salvos" saiu — pegava "arquivo salvo" (download) como tarefa de conta.
-const PRIVATE_TASK_PATTERNS = /\b(minha\s+conta|sua\s+conta|perfil|pedido|pedidos|carrinho|favorito|favoritos|historico|hist[oó]rico|mensagem|mensagens|notifica[cç][oõ]es|endere[cç]o|endere[cç]os|pagamento|cart[aã]o|assinatura|inbox|gmail)\b/i;
+const PRIVATE_TASK_PATTERNS = /\b(minha\s+conta|sua\s+conta|perfil|pedido|pedidos|carrinho|favorito|favoritos|historico|hist[oó]rico|mensagem|mensagens|notifica[cç][oõ]es|endere[cç]o|endere[cç]os|pagamento|cart[aã]o|assinatura|inbox|gmail|my\s+(?:list|jobs?|saved|recommend\w*|matches|feed|messages|orders|applications?|connections|network|subscriptions|library|playlists?)|minhas?\s+(?:lista|vagas?|candidaturas?|mensagens))\b/i;
 const PUBLIC_TASK_PATTERNS = /\b(pesquis|buscar|busque|procure|pre[cç]o|comparar|compare|abrir|ver|ler|resum|produto|noticia|not[ií]cia|wikipedia|github|youtube|mercado\s*livre|amazon)\b/i;
 
 export function commandLikelyNeedsAccount(command: string): boolean {
-  return PRIVATE_TASK_PATTERNS.test(normalize(command));
+  // Chamado/post sai em nome da pessoa: a parede de login é dela (o agente nunca entra nem cria conta).
+  return PRIVATE_TASK_PATTERNS.test(normalize(command)) || commandIsSupport(command);
 }
 
 export function commandLooksPublic(command: string): boolean {
@@ -59,7 +62,11 @@ export function detectManualHelpNeed(
     return null;
   }
 
-  if (PAYWALL_PATTERNS.test(page) && privateTask) {
+  // Já entrou (Me / Sign out / My account à vista) → nem paywall nem login: "Premium" no cartão do
+  // perfil do LinkedIn virava "precisa de assinatura" numa tarefa da própria conta.
+  const signedInNow = accountStateOf(observation) === 'signed-in';
+  // Chamado de suporte não é conteúdo pago: "Change a subscription" na home do suporte da Apple pausava.
+  if (PAYWALL_PATTERNS.test(page) && privateTask && !commandIsSupport(command) && !signedInNow) {
     return {
       kind: 'paywall',
       reason: `The content on ${host || 'this site'} seems to require a subscription or account access.`,
@@ -75,16 +82,24 @@ export function detectManualHelpNeed(
   });
   const looksLoggedIn = LOGGED_IN_HINT_PATTERNS.test(page);
   const urlLooksLikeLogin = /\/(login|signin|sign-in|entrar|account\/login|accounts)/i.test(observation.url);
+  // Formulário de login de verdade (campo de senha) ou página de login, numa tarefa que precisa da conta:
+  // pausa JÁ — o agente nunca digita senha, e esperar 2 passos travado só gasta tempo e chamada.
+  const passwordField = observation.interactive_elements.some(e => /input|textbox/i.test(`${e.tag} ${e.role || ''}`)
+    && /\b(password|senha|contrase[nñ]a)\b/.test(normalize(`${e.text || ''} ${e.aria || ''} ${e.placeholder || ''}`)));
+  const atLoginForm = privateTask && !looksLoggedIn && (passwordField || urlLooksLikeLogin);
   const likelyStuckOnLogin = privateTask
     && !looksLoggedIn
     && (loginFormVisible || urlLooksLikeLogin || (loginVisible && noEffectCount >= 2))
     && (stepsOnSameUrl >= 2 || noEffectCount >= 2);
 
-  if ((hardLoginGate || likelyStuckOnLogin) && !publicTask) {
+  // Suporte: a página inicial ("Sign in for personalized support… or choose a product") não é parede —
+  // o fluxo segue sem conta até o formulário de login de verdade. Só ele pausa.
+  const stuckCounts = likelyStuckOnLogin && !commandIsSupport(command);
+  if ((hardLoginGate || atLoginForm || stuckCounts) && !publicTask && !signedInNow) {
     return {
       kind: 'login',
       reason: `For this task, ${host || 'the current site'} seems to need a login.`,
-      instruction: 'Log in or create the account manually on the site itself. I do not need to see your password. Once the page is logged in, click Continue so I can take it from here.',
+      instruction: 'Sign in yourself in this tab: click the username field to pick a login saved in Bah\'s password manager, or type it. I never see your password. Once you are signed in, click Continue and I take it from here.',
     };
   }
 
@@ -109,3 +124,49 @@ function normalize(value: string): string {
 function getHost(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
+
+// ── Estado da conta por site (entrou / não entrou) ──────────────────────────────────────
+// Carrega com o agente: lido da página a cada passo e lembrado por site enquanto o Bah está
+// aberto — o modelo pequeno esquecia que já tinha entrado (ou que não tinha) e clicava "Sign in"
+// de novo, ou supunha "minha lista" visível sem conta. Outros níveis (ex.: admin elevado) cabem
+// no tipo quando um site precisar; pra quase todos, os dois bastam.
+export type AccountState = 'signed-in' | 'signed-out';
+
+const SIGNED_IN_CONTROL = /^(sign\s*out|log\s*out|logout|sair|cerrar\s*sesi[oó]n|my\s*account|your\s*account|minha\s*conta|account\s*menu|view\s*profile|your\s*profile|meu\s*perfil|me|notifications|notifica[cç][oõ]es)$/;
+const SIGNED_OUT_CONTROL = /^(sign\s*in|log\s*in|login|entrar|fazer\s*login|iniciar\s*sesi[oó]n|join(\s*now)?|sign\s*up|register|create\s*(an\s*)?account|criar\s*conta)$/;
+
+/** O que a página mostra agora: entrou, não entrou, ou não dá pra dizer (null). */
+export function accountStateOf(observation: ObservedState): AccountState | null {
+  const labels = observation.interactive_elements.map(e => normalize(`${e.text || e.aria || ''}`).replace(/\s+/g, ' ').trim());
+  const signedIn = labels.some(l => SIGNED_IN_CONTROL.test(l));
+  const passwordField = observation.interactive_elements.some(e => /input|textbox/i.test(`${e.tag} ${e.role || ''}`)
+    && /\b(password|senha|contrase[nñ]a)\b/.test(normalize(`${e.text || ''} ${e.aria || ''} ${e.placeholder || ''}`)));
+  const signedOut = passwordField || labels.some(l => SIGNED_OUT_CONTROL.test(l))
+    || /\/(login|signin|sign-in|uas\/login)\b/i.test(observation.url);
+  if (signedIn && !passwordField) return 'signed-in';
+  if (signedOut && !signedIn) return 'signed-out';
+  return null;
+}
+
+const siteAccounts = new Map<string, AccountState>();
+
+/** Atualiza o estado do site com o que a página mostra (sem sinal claro, mantém o anterior). */
+export function noteAccountState(observation: ObservedState): AccountState | null {
+  const host = getHost(observation.url);
+  if (!host) return null;
+  const now = accountStateOf(observation);
+  if (now) siteAccounts.set(host, now);
+  return siteAccounts.get(host) ?? null;
+}
+
+export function accountStateLine(observation: ObservedState): string {
+  const host = getHost(observation.url);
+  const st = host ? siteAccounts.get(host) : undefined;
+  if (!st) return '';
+  return st === 'signed-in'
+    ? `ACCOUNT: signed in on ${host} — the user's own pages (their lists, saved items, recommendations) are available; do not click Sign in.`
+    : `ACCOUNT: signed out on ${host} — pages for the user's own account are not available until they sign in (see the sign-in skill).`;
+}
+
+/** Só pra teste. */
+export function resetAccountStates(): void { siteAccounts.clear(); }

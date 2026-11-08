@@ -12,11 +12,18 @@ import fs from 'fs';
 import { isInsideAllowedRoot } from './validate';
 import { MultiDownload, probeDownload, partPathFor, DEFAULT_ENGINE_CONFIG, MAX_CONNECTIONS, type EngineConfig } from './multi-download';
 import { downloadRoots, getDownloadDir, setDownloadDir } from './download-dir';
+import { agentCadenceMs } from './download-progress';
+import { currentMachineInput } from './machine-info';
 
 interface Deps {
   getMainWindow: () => Electron.BrowserWindow | null;
   uniqueDownloadPath: (base: string) => string;
-  blockedExtensions: RegExp;
+  /** true = outro dono assumiu este download (ex.: .torrent com o cliente embutido ligado). */
+  interceptDownload?: (url: string, filename: string) => boolean;
+  /** true = agente trabalhando: um 2º download do MESMO arquivo/URL ainda baixando é recusado. */
+  blockDuplicates?: () => boolean;
+  /** Cancela um download que não é deste gerenciador (ex.: ação `download` do agente). */
+  cancelExternal?: (id: string) => boolean;
 }
 
 interface Tracked {
@@ -85,6 +92,8 @@ export function setupDownloadManager(deps: Deps) {
   const engineJobs = new Map<string, EngineJob>();
   // URLs que o motor devolveu pro Chromium (não suportou): o próximo will-download passa direto.
   const bypass = new Set<string>();
+  // Download → aba de onde saiu (webContents id): a Economia de memória não põe essa aba pra dormir.
+  const srcWc = new Map<string, number>();
   let settings: DownloadEngineSettings = { ...DEFAULT_DOWNLOAD_ENGINE_SETTINGS };
   let seq = 0;
   const engineConfig = (): Partial<EngineConfig> => ({
@@ -96,7 +105,21 @@ export function setupDownloadManager(deps: Deps) {
     readTimeoutMs: settings.readTimeoutS * 1000,
   });
 
+  // `notify` = este evento vai pra história do agente: início/fim sempre; progresso na
+  // mesma cadência pelo ETA da ação `download` do agente (download-progress.ts). O painel
+  // recebe todos.
+  const lastNotify = new Map<string, number>();
   const send = (payload: any) => {
+    const key = String(payload.id || payload.path || payload.filename);
+    if (payload.state === 'progress') {
+      const now = Date.now();
+      const last = lastNotify.get(key) ?? 0;
+      if (!payload.paused && now - last >= agentCadenceMs(payload.etaSec ?? null)) { payload.notify = true; lastNotify.set(key, now); }
+    } else {
+      payload.notify = true;
+      if (payload.state === 'completed' || payload.state === 'failed' || payload.state === 'cancelled') lastNotify.delete(key);
+      else lastNotify.set(key, Date.now());
+    }
     try { deps.getMainWindow()?.webContents.send('agent:download-event', payload); } catch {}
   };
   // Quantos estão DE FATO baixando: nem os segurados pela fila, nem os pausados
@@ -220,11 +243,17 @@ export function setupDownloadManager(deps: Deps) {
     sess.on('will-download', (event, item, wc) => {
       const filename = item.getFilename() || 'download.bin';
       const url = item.getURL();
-      if (deps.blockedExtensions.test(filename) || deps.blockedExtensions.test(url)) {
-        event.preventDefault();
-        console.warn(`[Download] BLOCKED executable: ${filename}`);
-        send({ state: 'blocked', filename, reason: 'executable/script blocked' });
-        return;
+      if (deps.interceptDownload?.(url, filename)) { event.preventDefault(); return; }
+      // Agente impaciente clicando de novo (ou noutro mirror) no arquivo que JÁ está baixando:
+      // recusa a cópia e avisa (sem linha no painel — o 'duplicate' é só pro agente).
+      if (deps.blockDuplicates?.()) {
+        const busy = [...reg.values()].some(t => t.url === url || t.filename === filename)
+          || [...engineJobs.values()].some(j => j.url === url || j.filename === filename);
+        if (busy) {
+          event.preventDefault();
+          send({ state: 'duplicate', filename, url, reason: 'already downloading' });
+          return;
+        }
       }
       const target = deps.uniqueDownloadPath(filename);
       item.setSavePath(target);   // suprime o "Salvar como" nativo
@@ -235,6 +264,7 @@ export function setupDownloadManager(deps: Deps) {
       const willQueue = activeCount() >= MAX_CONCURRENT;
       const t: Tracked = { id, item, url, filename: path.basename(target), path: target, lastBytes: 0, lastTime: now, speedBps: 0, lastEmit: 0, queued: willQueue };
       originOf.set(id, sess);
+      if (wc) { srcWc.set(id, wc.id); if (srcWc.size > MAX_ORIGINS) srcWc.delete(srcWc.keys().next().value as string); }
       if (originOf.size > MAX_ORIGINS) originOf.delete(originOf.keys().next().value as string);
       reg.set(id, t);
       if (willQueue) { try { item.pause(); } catch {} }
@@ -365,6 +395,7 @@ export function setupDownloadManager(deps: Deps) {
     return { ok: !!t };
   });
   ipcMain.handle('download:cancel', (_e, id: string) => {
+    if (deps.cancelExternal?.(id)) return { ok: true };
     if (engineAction(id, 'cancel')) return { ok: true };
     const t = reg.get(id);
     if (t) { try { t.item.cancel(); } catch {} }
@@ -394,6 +425,9 @@ export function setupDownloadManager(deps: Deps) {
     try { shell.openPath(p); } catch {}
     return { ok: true };
   });
+  // O computador (SO/versão/CPU) pro renderer: checar se o arquivo que o agente baixou serve AQUI
+  // (navigator.platform mente — num Mac M-series diz "MacIntel").
+  ipcMain.handle('machine:info', () => currentMachineInput());
 
   // Fechando o Bah no meio: os parciais (.bahpart) não têm como continuar depois — some com eles.
   app.on('before-quit', () => {
@@ -402,5 +436,15 @@ export function setupDownloadManager(deps: Deps) {
     }
   });
 
-  return { attach };
+  // Abas com download em andamento (baixando, na fila ou pausado; Chromium ou várias conexões).
+  const activeWcIds = (): Set<number> => {
+    const out = new Set<number>();
+    for (const [id, wcId] of srcWc) {
+      const job = engineJobs.get(id);
+      if (reg.has(id) || (job && (job.dl.state === 'downloading' || job.dl.state === 'paused'))) out.add(wcId);
+      else if (!job) srcWc.delete(id);
+    }
+    return out;
+  };
+  return { attach, activeWcIds };
 }
