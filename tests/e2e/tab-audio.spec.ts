@@ -27,8 +27,8 @@ test('tab shows the speaker icon while audio plays and drops it when it stops', 
 
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();

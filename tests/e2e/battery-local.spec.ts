@@ -59,8 +59,8 @@ test('battery: diagnostic run against the local model', async () => {
   // IA REAL: garantir que o mock NÃO está ligado.
   const { ELECTRON_RUN_AS_NODE: _n, E2E_MOCK_AI: _m, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     env: { ...env, NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
