@@ -22,6 +22,12 @@ directories:
 files:
   - dist/**/*
   - package.json
+  # Roteador local (node-llama-cpp): sem os binários CUDA (centenas de MB; Vulkan cobre a GPU no
+  # Windows/Linux, Metal no Mac, e sempre há CPU), sem o código-fonte do llama.cpp (só serve pra
+  # compilar, e o app usa build:'never') e sem os templates do CLI.
+  - "!node_modules/@node-llama-cpp/*-cuda*/**"
+  - "!node_modules/node-llama-cpp/llama/gitRelease.bundle"
+  - "!node_modules/node-llama-cpp/templates/**"
 # Ícone acessível em runtime (bandeja do sistema) — o exe embute o ícone, mas o Tray
 # precisa de um arquivo em disco. Vai pra resources/ no app empacotado. tray.png é o logo já
 # desenhado em 32 px (fica mais nítido que encolher o PNG de 1024 na hora).
@@ -46,6 +52,13 @@ asarUnpack:
   - "node_modules/bufferutil/**"
   - "node_modules/utf-8-validate/**"
   - "node_modules/fs-native-extensions/**"
+  # Roteador local: os binários nativos do llama.cpp (.node + .dylib/.dll/.so, carregados por dlopen)
+  # têm que estar no disco. O JS do node-llama-cpp e o motor (dist/main/router/engine.mjs) ficam NO
+  # asar: o node-llama-cpp acha os binários em app.asar.unpacked sozinho, e as ~120 dependências
+  # dele só resolvem de dentro do asar (desempacotar o pacote sem elas quebraria o import).
+  - "node_modules/@node-llama-cpp/**"
+  - "node_modules/node-llama-cpp/bins/**"
+  - "node_modules/node-llama-cpp/llama/localBuilds/**"
 win:
   target:
     - nsis

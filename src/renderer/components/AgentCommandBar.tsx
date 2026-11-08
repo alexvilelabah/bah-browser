@@ -1,11 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { namesStore } from '../stores';
 import { t, getLang, setLang, LANGS, Lang } from '../i18n';
 import { BrowserAction, formatAction } from '../page-executor';
+import type { RoutedIntent, RouterStatus } from '../../shared/router-routes';
+import RouterModelCard from './RouterModelCard';
 import { AISettings, LocalProvider, LocalSettings } from '../store';
 import { resolveVisionMode, type VisionMode } from '../../shared/vision';
 import { detectQuickAction, getInitialShortcutAction, commandHasExplicitUrl, pointsAtOpenScreen, vagueRequestKind } from '../site-knowledge';
 import { speak, stopSpeaking } from '../tts';
 import { parseRepeatIntent } from '../macros';
+import { CommandHistory } from '../command-history';
 import { fmtUsd } from '../pricing';
 
 export interface StepRecord {
@@ -129,6 +133,33 @@ function isInfoRequest(msg: string): boolean { return INFO_RE.test(msg) || isQue
 const PAGE_OP_RE = /\b(abr[ae]\w*|abrir|clic\w+|preench\w+|compr[ae]\w*|comprar|carrinho|finaliz\w+|login|logar|logue|entr[ae]\w*\s+(na|no|em|com)|curt\w+|inscrev\w+|seguir|post\w+|publi\w+|coment\w+|envi\w+\s+(email|e-mail|mensagem|coment)|cadastr\w+|reserv\w+|agend\w+|toc[ae]\w*\s+(o|a|um)|assist\w+|click|fill|buy|cart|checkout|log\s?in|sign\s+in|subscribe|follow|publish|comment|send\s+(?:an?\s+)?(?:email|message)|register|book|schedule)\b/i;
 function isPageOp(msg: string): boolean { return PAGE_OP_RE.test(msg); }
 
+// Pedido de BAIXAR um arquivo → agente (ele tem a ação download). Vem ANTES do INFO_RE no
+// roteador: "find the latest ubuntu iso and download it?" tem find/latest/"?" e ia parar
+// na pesquisa, que só responde texto. Aceita os erros de digitação comuns ("downoad",
+// "dowload", "donwload"...). "como baixar X?"/"how do I download X" continua sendo pergunta.
+// Hotel/voo/aluguel/ingresso PRA UMA DATA: preço e disponibilidade ao vivo só existem no site de
+// reserva — é tarefa do agente, não da pesquisa (que só lê o Google e não vê disponibilidade).
+const BOOKING_RE = /\b(hotels?|motels?|lodging|accommodations?|airbnb|hostels?|resorts?|inn|flights?|airfare|plane tickets?|rental cars?|car rentals?|tickets?|reservations?|hot[eé]is|hotel|hospedagem|pousadas?|passagens?|voos?|aluguel de carro|hoteles|vuelos|alojamiento)\b/i;
+const WHEN_RE = /\b(tonight|tomorrow|this weekend|next weekend|next week|weekend|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d|\d{1,2}(st|nd|rd|th)?\s*(of\s*)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{1,2}[\/.-]\d{1,2}|for \d+ nights?|check[- ]?in|amanh[aã]|fim de semana|pr[oó]xim[ao] semana|hoy|mañana|fin de semana|per night|a night|\bnight\b)\b/i;
+function wantsLiveBooking(msg: string): boolean {
+  return BOOKING_RE.test(msg) && WHEN_RE.test(msg);
+}
+
+// Loja nomeada + navegar/comparar/achar produto → agente na loja (a pesquisa só leria o Google).
+// Lista de lojas compartilhada: ../stores.ts
+const SHOP_VERB_RE = /\b(browse|shop|find|search|compare|cheapest|best|price|prices|deal|deals|under|over|larger|bigger|smaller|buy|look for|show me|need|want|procur\w*|compar\w*|pre[cç]o|barat\w*|busc\w*)\b/i;
+function wantsStoreBrowse(msg: string): boolean { return namesStore(msg) && SHOP_VERB_RE.test(msg); }
+// "compatible charger/adapter/battery for <modelo>" → o agente olha o site do fabricante e as lojas.
+const PART_RE = /\b(charger|adapter|adaptor|power supply|ac adapter|battery|replacement part|compatible|fonte|carregador|bateria|cargador)\b/i;
+const MODEL_RE = /\b(lenovo|thinkpad|ideapad|legion|yoga|dell|xps|latitude|inspiron|hp|elitebook|pavilion|probook|asus|zenbook|vivobook|acer|aspire|macbook|surface)\b|\b[a-z]{0,4}\d{2,}[a-z0-9-]*\b/i;
+function wantsPartLookup(msg: string): boolean { return PART_RE.test(msg) && MODEL_RE.test(msg) && SHOP_VERB_RE.test(msg); }
+
+const DOWNLOAD_RE = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i;
+function wantsDownload(msg: string): boolean {
+  const m = msg.trim();
+  return DOWNLOAD_RE.test(m) && !/^(how\s+(do|can|to)|como\b|cómo\b|what|o\s+que|qu[eé]\b)/i.test(m);
+}
+
 // Sobre a PÁGINA ATUAL (não a web aberta) → chat com o conteúdo da página.
 const CUR_PAGE_RE = /\b(resum\w+|resumir|(?:essa|esta|dessa|desta|da|nessa|nesta)\s+p[aá]gina|(?:essa|esta|a|nessa|nesta|minha)\s+aba|(?:este|esse)\s+(artigo|texto|v[ií]deo|site)|o\s+que\s+(diz|fala|tem)\s+(aqui|a\s+p[aá]gina)|tradu\w+\s+(essa|esta|a)\s+p[aá]gina|summari[sz]e\w*|(?:this|the)\s+(page|tab|article|text|video|site)|what\s+does\s+this\s+(say|page|article)|translate\s+(?:this|the)\s+page)\b/i;
 function isAboutCurrentPage(msg: string): boolean { return CUR_PAGE_RE.test(msg); }
@@ -170,7 +201,12 @@ interface Props {
    *  COM dica, e não uma "resposta" que disfarça a falha. */
   onResearch: (query: string) => Promise<{ answer: string; sources: Array<{ title: string; url: string }>; isError?: boolean }>;
   /** Classifica o pedido por IA (com o contexto da aba) → agir/página/web/chat. null = falhou/indisponível (cai no fallback determinístico). */
-  onClassify?: (msg: string) => Promise<'action' | 'page' | 'web' | 'chat' | null>;
+  /** ctx.lastRun: a última tarefa (pedido + como terminou), pro roteador local entender follow-ups.
+   *  Com o roteador: também 'last_run' (pergunta sobre a última tarefa) e 'fix' (ela ficou incompleta). */
+  onClassify?: (msg: string, ctx?: { lastRun?: { request: string; outcome: string } | null }) => Promise<RoutedIntent | null>;
+  /** Roteador local pronto → ele decide antes das regras de palavras (que ficam de reserva). */
+  routerReady?: boolean;
+  routerStatus?: RouterStatus;
   onFetchHeadlines?: (query: string) => Promise<string[]>;
   onOpenUrl: (url: string) => void;
   onGoogleLogin?: () => void;
@@ -207,7 +243,7 @@ interface Props {
 }
 
 
-export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
+export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onClassify, onOpenUrl, onGoogleLogin, googleLoggedIn, isStartupTab, pageOpen, activeTabTitle, activeTabUrl, activeIncognito, agentMaxSteps, onAgentStepsChange, agentTimeLimitMin, onAgentTimeLimitChange, onToggleAgentDrive, onInterject, takeUnreadInterjections, onSuggestQuestions, agentDrive, routerReady, routerStatus, panelOpen, onClose, activeTabId, tabIds, aiSettings, onSettingsChange, sessionCost, localSettings, onLocalSettingsChange, onSwitchToCloud }: Props) {
   const [input, setInput] = useState('');
   // ── CHIP "LENDO ESTA PÁGINA" ────────────────────────────────────────────────────
   // A IA SEMPRE recebeu o conteúdo da aba aberta, mas isso era INVISÍVEL: quem usa não
@@ -232,6 +268,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   }, [activeTabUrl, activeIncognito]);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // ↑/↓ = comandos já enviados (estilo terminal), pra não redigitar.
+  const cmdHistoryRef = useRef<CommandHistory | null>(null);
+  if (!cmdHistoryRef.current) cmdHistoryRef.current = new CommandHistory();
   // Caixa unificada: a proposta de ação do último turno de chat (se houver). Um "sim"
   // do usuário, ou o botão "⚡ Fazer isso", executa este comando no agente.
   const pendingSuggestionRef = useRef<string | null>(null);
@@ -791,6 +830,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const chatCancelRef = useRef<(() => void) | null>(null);
   const routeCommand = async (msg: string) => {
     busyRef.current = true;   // cobre a janela do classify; o run* despachado assume e limpa
+    // Roteador local pronto: ELE decide "sobre a tela" (entende typo). A regra abaixo fica pra
+    // quando ele não está (e pro modo IA dirige, que não passa por classificação nenhuma).
+    const useRouter = !!routerReady && !!onClassify && !agentDrive;
     // Modo "Deixar a IA dirigir": TUDO vira tarefa do agente — sem atalhos, sem classificador,
     // sem desvio pra chat/pesquisa. A IA observa a página e decide cada passo (estilo Comet).
     if (agentDrive) { pendingSuggestionRef.current = null; runAgent(msg); return; }
@@ -818,7 +860,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     //    está à vista. Precisa vir ANTES do classificador: ele mandava isso pra busca na web,
     //    que ignora a página aberta, demora e às vezes responde sobre OUTRO produto.
     //    Medido no mesmo clique: 42s (agente indo ao Google Shopping) → 2s (lendo a página).
-    if (pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
+    if (!useRouter && pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg)) {
       pendingSuggestionRef.current = null;
       runChat(msg);
       return;
@@ -839,9 +881,13 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     push({ kind: 'chat-user', text: msg });
     if (onClassify && !classifyingRef.current) {
       classifyingRef.current = true;
-      let cls: 'action' | 'page' | 'web' | 'chat' | null = null;
+      let cls: RoutedIntent | null = null;
       try { cls = await onClassify(msg); } catch { cls = null; }
       classifyingRef.current = false;
+      // 'last_run' / 'fix' só vêm do roteador local quando ele recebe a última tarefa (ctx.lastRun);
+      // esta caixa ainda não manda → não chegam aqui. Se chegarem: chat / agente.
+      if (cls === 'last_run') { runChat(msg, undefined, undefined, true); return; }
+      if (cls === 'fix') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'action') { pendingSuggestionRef.current = null; runAgent(msg, { skipPush: true }); return; }
       if (cls === 'page' || cls === 'chat') { runChat(msg, undefined, undefined, true); return; }
       if (cls === 'web') { runResearch(msg, true); return; }
@@ -861,6 +907,10 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     const pointsAtScreen = pageOpen && isQuestion(msg) && pointsAtOpenScreen(msg);
     if (isAboutCurrentPage(msg) || pointsAtScreen) { runChat(msg, undefined, undefined, skipPush); return; }
     if (isPageOp(msg) && !isQuestion(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsDownload(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsLiveBooking(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsStoreBrowse(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
+    if (wantsPartLookup(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     if (isInfoRequest(msg)) { runResearch(msg, skipPush); return; }
     if (getInitialShortcutAction(msg) || isImperativeAction(msg)) { pendingSuggestionRef.current = null; runAgent(msg, { skipPush }); return; }
     runChat(msg, undefined, undefined, skipPush);
@@ -1043,6 +1093,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const handleSubmit = () => {
     const msg = input.trim();
     if (!msg) return;
+    cmdHistoryRef.current?.push(msg);
     // Tarefa do agente rodando e a pessoa mudou de ideia: a mensagem vai PRA tarefa (a IA
     // para o que está pensando, lê e decide — ajustar, mudar de rumo ou encerrar). Se a
     // tarefa estava parada em "Preciso de você", a resposta da pessoa conta como continuar.
@@ -1357,6 +1408,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       {showSettings && (
         <div className="settings-panel">
           <div className="set-active-ai">{t('set.activeAi')}: <b>{activeAiLabel()}</b></div>
+          <RouterModelCard status={routerStatus} />
           <label>
             {t('settings.language')}
             <select value={getLang()} onChange={e => setLang(e.target.value as Lang)}>
@@ -1837,8 +1889,25 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           className="composer-input"
           rows={1}
           value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
+          onChange={e => { cmdHistoryRef.current?.reset(); setInput(e.target.value); }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); return; }
+            // ↑ só com o cursor na 1ª linha e ↓ só na última: dentro de texto com várias
+            // linhas as setas continuam movendo o cursor normalmente.
+            if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.nativeEvent.isComposing) return;
+            const el = e.currentTarget;
+            const pos = el.selectionStart ?? 0;
+            if (el.selectionStart !== el.selectionEnd) return;
+            const h = cmdHistoryRef.current;
+            if (!h) return;
+            const next = e.key === 'ArrowUp'
+              ? (el.value.lastIndexOf('\n', pos - 1) === -1 ? h.up(el.value) : null)
+              : (el.value.indexOf('\n', pos) === -1 ? h.down() : null);
+            if (next === null) return;
+            e.preventDefault();
+            setInput(next);
+            requestAnimationFrame(() => { try { el.setSelectionRange(next.length, next.length); } catch {} });
+          }}
           placeholder={attachedDoc ? t('composer.phFile') : imageMode ? t('composer.phImage') : (loading && onInterject) ? t('composer.phInterject') : ph}
           disabled={chatLoading || (loading && !onInterject)}
         />
