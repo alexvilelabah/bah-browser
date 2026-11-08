@@ -175,7 +175,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🔓 **It's your real session.** The browser uses a persistent partition (`persist:browser`), so cookies and logins are saved. If you're logged into Gmail in Bah, so is the agent. **The AI can access anything you could access manually.** Don't log into accounts you wouldn't trust an assistant with.
 
-- 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
+- 🛡️ **Safety brake on sensitive actions.** Before **paying, buying, checking out or reserving a delivery slot, deleting, or entering card data**, the agent **pauses and asks for your confirmation** — and this works on *every* path (model clicks, coordinate clicks, Enter on a checkout page, learned shortcuts, and repeated automations). It never does those silently.
 
 - 💬 **Page pop-ups don't freeze anything.** A site's `alert`/`confirm` opens in Bah's own box instead of the native one that locked the page (and the agent). During a task, alerts are closed and ordinary confirms accepted (the agent can arm the answer first with its `dialog` action); a confirm that looks like a **payment or a deletion goes to you**.
 

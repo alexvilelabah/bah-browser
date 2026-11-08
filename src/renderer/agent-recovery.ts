@@ -89,6 +89,10 @@ export interface RecoveryInput {
   commandRequiresThisSite: boolean;
   /** Tarefa de BAIXAR algo: página "Get the app / Install X" é o objetivo, não um beco sem saída. */
   commandWantsDownload?: boolean;
+  /** Tarefa de encher carrinho: tirar uma linha ("Remove", "Delete <produto>") é editar o carrinho, não ação sensível. */
+  cartTask?: boolean;
+  /** O freio de risco já perguntou à pessoa nesta ação (ela aprovou ou recusou): não perguntar de novo. */
+  brakeAsked?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -367,9 +371,12 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   // da página inteira → numa página de produto (que sempre tem "Comprar"/"carrinho")
   // qualquer clique inócuo ("Mais informações", "Especificações") disparava o alerta.
   // Agora só dispara se o elemento clicado for de fato um botão de compra/pagar/excluir.
-  if (input.lastActionType && /click/i.test(input.lastActionType)) {
+  // Já perguntado pelo freio (ou recusado: nada aconteceu) → sem segundo pedido de confirmação.
+  const answered = !!input.brakeAsked || input.lastResult?.reason === 'user_cancelled';
+  if (!answered && input.lastActionType && /click/i.test(input.lastActionType)) {
     const targetText = (input.lastActionTargetText || '').trim();
-    if (targetText && SENSITIVE_ACTION_PATTERNS.test(targetText)) {
+    const cartEdit = !!input.cartTask && /^(remove|delete|excluir|remover|eliminar|decrease|increase)\b/i.test(targetText) && !/\b(account|conta|cuenta|all|tudo)\b/i.test(targetText);
+    if (targetText && !cartEdit && SENSITIVE_ACTION_PATTERNS.test(targetText)) {
       return {
         decision: 'ask_user',
         reason: 'Sensitive action detected (purchase/payment/deletion). Asking the user for confirmation before proceeding.',
