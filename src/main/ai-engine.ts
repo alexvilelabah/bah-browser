@@ -238,7 +238,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - click_ref: { "action": "click_ref", "ref": number } — PREFERRED. Clicks the element with that id from interactive_elements. Most reliable.
 - fill_ref: { "action": "fill_ref", "ref": number, "value": string } — PREFERRED for inputs. Fills the input element with that id.
 - get: { "action": "get", "ref": number } — reads an element's state: tag, value, text, checked, enabled, visible, selected option, href/placeholder/aria/required… Use it to CHECK a field took your input, a box is ticked, a button is enabled, before moving on.
-- keydown / keyup: { "action": "keydown", "key": "Shift" } … { "action": "keyup", "key": "Shift" } — hold a key while you click (shift-click, ctrl-click).
+- keydown / keyup: { "action": "keydown", "key": "Shift" } … { "action": "keyup", "key": "Shift" } — hold a key while you click (shift-click, ctrl-click). press also takes combos: { "action": "press", "key": "Control+Enter" }.
 - insert_text: { "action": "insert_text", "text": "..." } — pastes text into the FOCUSED field at once (long cover letters/descriptions); no per-key events. Click/fill_ref the field first.
 - click_role: { "action": "click_role", "role": "button", "name": "Submit", "nth"?: 2 } — clicks the element with that role whose label is (or contains) name; nth picks the 2nd, 3rd… match in page order. Roles: button, link, textbox, checkbox, radio, combobox, tab, menuitem, option, switch. Handy when several elements share a label.
 - save_pdf: { "action": "save_pdf", "name"?: "..." } — saves the current page as a PDF in the user's Downloads folder; the result gives the path (receipts, confirmations, job postings).
@@ -248,7 +248,7 @@ Never generate JavaScript, CSS selectors unless using the fill tool selector fie
 - click_at: { "action": "click_at", "x": number, "y": number } clicks at pixel coordinates of the attached screenshot (only when one is attached), useful when text selection fails.
 - type: { "action": "type", "text": string } types into the currently focused element.
 - fill: { "action": "fill", "selector"?: string, "label"?: string, "value": string } fills an input, textarea, or rich text editor by selector, visible label, placeholder, name, or currently focused editable area.
-- press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc. Combos work too: { "action": "press", "key": "Control+Enter" }.
+- press: { "action": "press", "key": string } presses Enter, Tab, Escape, ArrowDown, etc.
 - navigate: { "action": "navigate", "url": string } navigates directly to a URL.
 - scroll: { "action": "scroll", "direction": "up"|"down"|"top"|"bottom", "amount"?: number }
 - wait: { "action": "wait", "ms": number } — or wait for a CONDITION (ends as soon as it is true, max "timeout" ms, default 15000, max 60000): { "action": "wait", "text": "Results" } (text appears on the page), { "action": "wait", "gone": "Loading" } (text disappears), { "action": "wait", "url": "/checkout" } (URL contains it; "**/orders/*" globs work), { "action": "wait", "load": "networkidle" } (no network activity; "load" = page finished loading). Prefer a condition over a fixed sleep after search/submit buttons.
