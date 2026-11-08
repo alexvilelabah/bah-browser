@@ -90,6 +90,7 @@
 - **Real mouse clicks** via Chromium `sendInputEvent` (not synthetic events — goes through React, Vue, Angular without being ignored)
 - **Modern-site compatibility** — presents as a current Chrome on your real OS (user agent, client hints and languages set consistently inside the engine; real GPU/CPU/memory; `navigator.webdriver` left to the engine) so sites don't wrongly block the browser
 - **Network & privacy** — system/manual/PAC/SOCKS proxies with sign-in, OS root certificates, **Secure DNS** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, your NextDNS, or your own Pi-hole), **WebRTC IP-leak protection on by default**, IP-version and leak warnings ("your proxy is IPv4-only but this computer also has IPv6"), VPN-aware region and a "time zone for sites" setting
+- **Google sign-in is optional** — a round profile icon at the top right (like Chrome's) signs in to Google for Gmail / Drive / YouTube tasks; everything else works without it
 - **Comet-style visual overlay** — pulsing border, scan line, click ripple, status label
 
 ---
@@ -301,7 +302,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🧩 **Compatibility, not evasion.** We present as a standard, current Chrome (user agent, client hints and languages set consistently inside the engine — no page-script patching) only to avoid being wrongly blocked. We do **not** break CAPTCHAs, dodge rate-limits, or automate things sites forbid in their terms. Sites whose terms forbid automation (LinkedIn by default) get **careful mode**: one page load per request plus reading — no automated clicking, typing or scrolling; a second refused action ends the task and tells you what to do by hand.
 
-- **🔑 Google login — use the "Sign in to Google" button.** Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click **🔑 Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
+- **🔑 Google login (optional) — the profile icon at the top right.** Signing in is only needed for tasks inside Google (Gmail, Drive, your YouTube). Google blocks login *inside* embedded browsers (Electron/webview). Bah handles it the right way: click the **profile icon** → **Sign in to Google** → it opens the login in your **real Chrome/Edge** (where Google trusts it), you sign in, and Bah **detects it automatically**, imports the session (cookies via CDP) and closes the login window. Do it **once** and you stay logged in.
 
 - 📥 **Downloads have no type or size limit.** Any file type can be downloaded (installers included), streamed straight to disk. **Torrents:** by default `.torrent` files just download like any other file and `magnet:` links open in your system's torrent app; turn on **🧲 Built-in torrent client** in the menu to open them in Bah's own torrent card instead. Details in [ARCHITECTURE.md](ARCHITECTURE.md#downloads--torrents).
 

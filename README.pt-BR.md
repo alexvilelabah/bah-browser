@@ -86,6 +86,7 @@
 - **Cliques reais de mouse** via Chromium `sendInputEvent` (não synthetic — passa por React, Vue, Angular sem ser ignorado)
 - **Compatibilidade com sites modernos** — se apresenta como um Chrome atual no seu SO real (user agent, client hints e idiomas definidos de forma consistente dentro do motor; GPU/CPU/memória reais; `navigator.webdriver` fica com o motor) pra não ser bloqueado por engano
 - **Rede e privacidade** — proxy do sistema/manual/PAC/SOCKS com login, certificados-raiz do SO, **DNS seguro** (DNS-over-HTTPS: AdGuard, Mullvad, Quad9, Cloudflare, o seu NextDNS ou o seu Pi-hole), **proteção contra vazamento de IP pelo WebRTC ligada por padrão**, versão de IP e avisos de vazamento ("seu proxy só funciona em IPv4, mas este computador também tem IPv6"), região ciente de VPN e "fuso dos sites"
+- **Login do Google é opcional** — um ícone redondo de perfil no canto de cima (como o do Chrome) entra no Google pra tarefas no Gmail / Drive / YouTube; o resto funciona sem isso
 - **Overlay visual** estilo Comet — borda pulsante, scan line, ripple no clique, label de status
 
 ---
@@ -296,7 +297,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Compatibilidade, não evasão.** A gente se apresenta como um Chrome padrão e atual (user agent, client hints e idiomas definidos de forma consistente dentro do motor — sem remendar scripts da página) só pra não ser bloqueado por engano. **Não** burlamos CAPTCHA, não driblamos rate-limit, não automatizamos o que os sites proíbem nos termos. Sites cujos termos proíbem automação (LinkedIn, por padrão) ficam em **modo cuidadoso**: uma página por pedido mais leitura — sem clique, digitação nem rolagem automáticos; a segunda ação recusada encerra a tarefa e diz o que fazer à mão.
 
-- **🔑 Login do Google — use o botão "Entrar no Google".** O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique em **🔑 Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
+- **🔑 Login do Google (opcional) — o ícone de perfil no canto de cima.** Entrar só é preciso pra tarefas dentro do Google (Gmail, Drive, o seu YouTube). O Google bloqueia login *dentro* de navegadores embutidos (Electron/webview). O Bah resolve do jeito certo: clique no **ícone de perfil** → **Entrar no Google** → ele abre o login no seu **Chrome/Edge real** (onde o Google confia), você loga, e o Bah **detecta sozinho**, importa a sessão (cookies via CDP) e fecha a janela de login. Faça **uma vez** e fica logado.
 
 - **📥 Downloads sem limite de tipo ou tamanho.** Qualquer tipo de arquivo pode ser baixado (instaladores inclusive), gravado direto no disco. **Torrents:** por padrão, arquivos `.torrent` baixam como qualquer arquivo e links `magnet:` abrem no app de torrent do sistema; ligue **🧲 Cliente de torrent embutido** no menu pra abrir no card de torrent do próprio Bah. Detalhes em [ARCHITECTURE.pt-BR.md](ARCHITECTURE.pt-BR.md#downloads-e-torrents).
 
