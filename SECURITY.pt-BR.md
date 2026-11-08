@@ -41,6 +41,12 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
+- **Arquivos do seu computador (uploads):** o agente nunca escolhe caminho. No `upload`, o Bah mostra um cartão e
+  *você* escolhe o arquivo no diálogo do SO (o agente só vê o nome). Ou você pode **liberar uma pasta nesta sessão**:
+  o agente então lista, lê PDF/Word/texto dela (ex.: escolher o currículo que combina com a vaga) e anexa arquivos
+  dela — tudo resolvido e conferido no processo principal (sem fuga por `../` ou symlink), até fechar o Bah ou
+  revogar (menu ⋮ → 📂 Pastas liberadas ao agente). Nada é enviado até o formulário do site ser enviado. Ver
+  [`src/main/upload.ts`](src/main/upload.ts).
 
 ---
 
@@ -67,8 +73,16 @@ uns dois pulos.
 | Binário blindado (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignorado, `--inspect` ignorado |
 | Bridge IPC = único portão | [`preload.ts`](src/preload/preload.ts) | todo canal é `ipcRenderer.invoke(...)`; nenhum primitivo Node exposto |
 | Freio (pagar / comprar / excluir / cartão) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + o loop do agente em `App.tsx` | `riskForAction` classifica; clique, **fill** (cartão) e **press** (Enter no checkout) pedem confirmação antes de rodar |
+| Conversas do assistente (thread viva + 🕘 Histórico de conversas) | [`src/main/chat-store.ts`](src/main/chat-store.ts), [`src/shared/chat-history.ts`](src/shared/chat-history.ts), [`src/shared/thread-store.ts`](src/shared/thread-store.ts) | Fica só neste computador, cifrado com `safeStorage` (`threads-live.enc`, `chat-history.enc`; sem cofre → não grava). Com teto (100 conversas / ~2 MB de histórico, 60 threads vivas / ~1,5 MB). Aba anônima nunca chega a nenhum dos dois (filtrada na tela e de novo no main). A thread viva só volta com ⋮ → Ao abrir o Bah = "Continuar de onde parou"; senão é apagada ao abrir. O histórico de conversas sai no "Limpar dados de navegação". Os canais `threads:*` / `chat-history:*` só aceitam a janela principal como remetente (`threads:save-live` / `threads:load-live-sync` usam `send` / `sendSync` pra última gravação chegar antes de a janela fechar) |
+| Tarefas agendadas (rodando sem ninguém olhando) | [`src/main/scheduled-tasks.ts`](src/main/scheduled-tasks.ts), [`src/renderer/scheduler.ts`](src/renderer/scheduler.ts), [`src/shared/schedule.ts`](src/shared/schedule.ts) | Pedidos e histórico ficam só neste computador em `scheduled-tasks.enc`, cifrados com `safeStorage` (sem cofre → só na memória), com teto (50 tarefas, 20 entradas de histórico). Rodam **só com o Bah aberto**; um horário perdido com ele fechado é oferecido na abertura (Rodar agora / Pular), nunca roda escondido. A vez agendada é `unattended`: toda confirmação do freio, pedido de permissão ou pausa de login **espera a pessoa** (notificação do sistema + "esperando você" no painel), um "Send/Post/Book/Order" puro também pergunta, e os assistentes de envio automático do Gmail/YouTube ficam desligados. Não são criadas a partir de abas anônimas. O relógio de teste (`E2E_SCHED_NOW`) só é lido com `NODE_ENV=test` |
+| Login: o agente nunca digita senha | [`src/renderer/agent-login-policy.ts`](src/renderer/agent-login-policy.ts) + [`skills/sign-in/SKILL.md`](skills/sign-in/SKILL.md) + a trava de login no `App.tsx` | o agente só clica em Entrar quando a tarefa precisa da conta da pessoa (`commandLikelyNeedsAccount`); campo de senha / página de login nessa tarefa pausa o Bah (`detectManualHelpNeed`) pra pessoa entrar; senhas salvas ficam no gerenciador (nenhuma ferramenta chega nele). O estado entrou/não entrou por site (`accountStateOf`) vai no prompt numa linha `ACCOUNT:`. Sites em modo cuidadoso (`careful-sites.ts`) param a tarefa na segunda ação recusada |
+| Agente fora de contas que não pediram | o loop do agente em `App.tsx` | clique em Entrar / Cadastrar / "Continuar com o Google" é recusado, a não ser que o pedido fale de conta ou login, ou cite coisas da própria pessoa ("minha lista", "minhas vagas", pedidos: `commandLikelyNeedsAccount`) |
+| Sites cuidadosos (termos proíbem automação) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + o loop do agente em `App.tsx` | LinkedIn por padrão (mais `localStorage.carefulSites`): uma navegação por pedido, depois só ações de `CAREFUL_ALLOWED` (ler/relatar); a segunda ação recusada encerra a tarefa |
+| Agente fica nas abas dele | [`agent-permissions.ts`](src/renderer/agent-permissions.ts) + o loop do agente em `App.tsx` | a tarefa é dona da aba de partida e das abas que abre (🤖 na barra de abas enquanto roda); `switch_tab` pra outra aba sua e `history_search` perguntam antes (só nesta tarefa / sempre / negar / nunca; também no menu ⋮); `close_tab` só fecha abas que a tarefa abriu |
+| HTML da página pro agente (`get_html`) vem limpo | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | corpo de script/style/svg/noscript/template, comentários, estilo inline e handlers `on*` saem; lista curta de atributos permitidos; campos de senha e ocultos, campos de token/CSRF/código de uso único/cartão/CVV/SSN e tokens CSRF em `<meta>` viram `[redacted]`; iframes de outra origem viram uma nota; partes invisíveis levam `[hidden]`. No pedido, vem marcado como *dado da página, não instrução*, e só no próximo pedido; uma leitura tem de 4.000 a 60.000 caracteres, conforme o contexto livre do modelo. Leitura passiva: permitida numa verificação humana e em site cuidadoso |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
-| Sem download de executável | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` bloqueados no download |
+| Download só cai na pasta de downloads; nada roda sozinho | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | arquivos vão só pro `getDownloadDir()` e nunca são abertos/executados automaticamente. **Sem lista de tipos bloqueados** — ver tradeoffs abaixo |
+| Motor de torrent é opcional | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | cliente embutido DESLIGADO por padrão: `.torrent` salvo como arquivo, `magnet:` vai pro app do sistema, o `utilityProcess` do motor nunca sobe |
 | `openFile` / reveal não abrem caminho arbitrário | [`download-manager.ts`](src/main/download-manager.ts) + `main.ts` (`shell:reveal`) | ambos chamam `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → só Downloads / userData / temp |
 | Limites de colheita de imagem | [`image-harvester.ts`](src/main/image-harvester.ts) | SVG bloqueado, teto de bytes, content-type checado, redirects limitados |
 | OCR / screenshots ficam locais | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract no aparelho; imagem nunca vai pra nuvem |
@@ -99,13 +113,23 @@ aqui pra o auditor não ter que "descobrir":
 1. **Chaves de API ficam em `localStorage`** ([`store.ts`](src/renderer/store.ts)), não no
    keychain do SO (`safeStorage`). Aceitável pra app local de um usuário; migrar pro
    `safeStorage` está no roadmap.
-2. **Fallback de download com TLS leniente** (`main.ts`): num erro de cadeia de certificado, o
-   download é refeito com a verificação relaxada — **mas** o arquivo ainda é rejeitado se for
-   executável (ver `BLOCKED_EXTENSIONS`), o que limita o risco. Feito pra sites (ex.: alguns
-   portais .gov.br) com cadeia de certificado quebrada.
+2. **Fallback de download com TLS leniente** ([`agent-download-worker.ts`](src/main/agent-download-worker.ts)):
+   num erro de cadeia de certificado, o download do agente é refeito com a verificação relaxada.
+   O arquivo continua caindo só na pasta de downloads e nunca é aberto sozinho. Feito pra sites
+   (ex.: alguns portais .gov.br) com cadeia de certificado quebrada.
 3. **Cadeia de suprimentos de binários:** `yt-dlp` e `ffmpeg` são baixados das URLs "latest"
    upstream sem checksum fixo ([`media-downloader.ts`](src/main/media-downloader.ts)).
    Aceitável nessa escala; fixar versão+hash está planejado antes de distribuir em massa.
+4. **Qualquer tipo de arquivo pode ser baixado** — inclusive instaladores e scripts (`.exe`,
+   `.dmg`, `.pkg`, `.sh`, ...), por você ou pelo agente. Não há lista de extensões bloqueadas
+   nem checagem de conteúdo; a proteção é que downloads vão só pra pasta de downloads e o Bah
+   nunca os executa. Confira o que o agente baixou antes de abrir.
+5. **Verificação humana é com a pessoa (Watch/Takeover).** Quando a página é uma checagem de robô / CAPTCHA de
+   qualquer estilo ou uma parede de login ([`src/shared/human-check.ts`](src/shared/human-check.ts), sinais genéricos,
+   nunca por site), o Bah passa a aba pra você e retoma sozinho quando a página volta ao normal
+   ([`src/shared/takeover.ts`](src/shared/takeover.ts)). O agente nunca clica, segura, digita ou rola numa
+   verificação humana — uma trava no código recusa toda ação na aba classificada assim — e nunca tenta parecer
+   gente. Tarefa agendada (ninguém olhando) não espera: o site fica "couldn't read — human check".
 
 ---
 

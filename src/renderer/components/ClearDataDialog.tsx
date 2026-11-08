@@ -6,18 +6,19 @@ import { TIME_RANGES, isTimeRange, type TimeRange } from '../../shared/clear-dat
 // período + caixas. Quem apaga é o App (histórico/downloads são dele) e o main (cookies/cache).
 // O período e as caixas ficam lembrados pra próxima vez, como no Chrome.
 
-export type ClearChoice = { range: TimeRange; history: boolean; cookies: boolean; cache: boolean; downloads: boolean };
+export type ClearChoice = { range: TimeRange; history: boolean; cookies: boolean; cache: boolean; downloads: boolean; chats: boolean };
 
 const PREF_KEY = 'clearData.v1';
 // Padrão do Chrome: histórico + cookies + cache marcados; downloads não.
-const DEFAULTS: ClearChoice = { range: 'hour', history: true, cookies: true, cache: true, downloads: false };
+// Histórico de conversas do assistente: junto com o histórico de navegação (marcado por padrão).
+const DEFAULTS: ClearChoice = { range: 'hour', history: true, cookies: true, cache: true, downloads: false, chats: true };
 
 function loadChoice(): ClearChoice {
   try {
     const raw = JSON.parse(localStorage.getItem(PREF_KEY) || 'null');
     if (!raw || typeof raw !== 'object') return DEFAULTS;
     const b = (k: keyof ClearChoice) => (typeof raw[k] === 'boolean' ? raw[k] : DEFAULTS[k]) as boolean;
-    return { range: isTimeRange(raw.range) ? raw.range : DEFAULTS.range, history: b('history'), cookies: b('cookies'), cache: b('cache'), downloads: b('downloads') };
+    return { range: isTimeRange(raw.range) ? raw.range : DEFAULTS.range, history: b('history'), cookies: b('cookies'), cache: b('cache'), downloads: b('downloads'), chats: b('chats') };
   } catch { return DEFAULTS; }
 }
 
@@ -48,7 +49,7 @@ export default function ClearDataDialog(props: {
   const all = choice.range === 'all';
   const sites = all ? 0 : props.sitesInRange(choice.range);
   const scoped = sites === 0 ? t('cbd.noSites') : sites === 1 ? t('cbd.sitesOne') : t('cbd.sites', { n: sites.toLocaleString() });
-  const nothing = !choice.history && !choice.cookies && !choice.cache && !choice.downloads;
+  const nothing = !choice.history && !choice.cookies && !choice.cache && !choice.downloads && !choice.chats;
 
   const submit = async () => {
     if (nothing || phase === 'busy') return;
@@ -59,7 +60,7 @@ export default function ClearDataDialog(props: {
     setPhase(ok ? 'done' : 'error');
   };
 
-  const box = (key: 'history' | 'cookies' | 'cache' | 'downloads', label: string, hint: string) => (
+  const box = (key: 'history' | 'cookies' | 'cache' | 'downloads' | 'chats', label: string, hint: string) => (
     <label className="dl-set-switch">
       <input type="checkbox" checked={choice[key]} disabled={phase === 'busy'} onChange={e => set({ [key]: e.target.checked })} />
       <span className="dl-set-txt">{label}<small>{hint}</small></span>
@@ -87,6 +88,7 @@ export default function ClearDataDialog(props: {
             {box('cookies', t('cbd.cookies'), all ? t('cbd.cookiesHintAll') : sites === 0 ? scoped : `${scoped} ${t('cbd.cookiesHintSites')}`)}
             {box('cache', t('cbd.cache'), all ? t('cbd.cacheHintAll') : scoped)}
             {box('downloads', t('cbd.downloads'), t('cbd.downloadsHint'))}
+            {box('chats', t('cbd.chats'), t('cbd.chatsHint'))}
             {!all && (choice.cookies || choice.cache) && <small className="cbd-note">{t('cbd.rangeNote')}</small>}
             <small className="cbd-note">{t('cbd.keeps')}</small>
             {phase === 'error' && <div className="cbd-error">{t('cbd.error')}</div>}
