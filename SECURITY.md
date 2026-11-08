@@ -52,6 +52,9 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/region.ts`](src/main/region.ts).
 - **Time zone:** like every browser, page scripts can read your time zone. Choose **UTC** in 🌍
   Region & time to hide it from pages.
+- **Location** is denied to every site without asking: sites see `denied`, not a `prompt`. Only a site you
+  set to *Allow* in its padlock menu gets it. Bah's own window never gets it either. See `DENY_UNLESS_ALLOWED` in
+  [`src/main/site-permission-rules.ts`](src/main/site-permission-rules.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 - **Files from your computer (uploads):** the agent never chooses a path. For `upload`, Bah shows a card and

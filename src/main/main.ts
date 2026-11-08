@@ -1169,10 +1169,11 @@ function createWindow(): void {
   // site-permissions.ts (o Bah pergunta antes de liberar câmera/microfone).
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback) => {
     if (permission === 'media') return callback(wc === mainWindow?.webContents);
+    if (permission === 'geolocation') return callback(false);   // a UI não usa localização
     callback(true);   // demais permissões da própria UI: mantém o permissivo de antes
   });
   mainWindow.webContents.session.setPermissionCheckHandler((wc, permission) =>
-    permission === 'media' ? wc === mainWindow?.webContents : true);
+    permission === 'media' ? wc === mainWindow?.webContents : permission !== 'geolocation');
 
   // Links de outros apps (default-browser.ts) esperam a tela nova avisar que já escuta.
   windowCreatedOnce = true;
@@ -3874,7 +3875,7 @@ const STEALTH_SCRIPT = `
     //    (Bloqueado de verdade: o site pede e o Bah nega na hora.)
     const origQuery = navigator.permissions && navigator.permissions.query;
     if (origQuery) {
-      const ASKABLE = { notifications: 1, geolocation: 1, camera: 1, microphone: 1, 'clipboard-read': 1, midi: 1, 'idle-detection': 1, 'window-management': 1 };
+      const ASKABLE = { notifications: 1, camera: 1, microphone: 1, 'clipboard-read': 1, midi: 1, 'idle-detection': 1, 'window-management': 1 };
       navigator.permissions.query = function (params) {
         return origQuery.call(navigator.permissions, params).then((st) => {
           if (st && st.state === 'denied' && params && ASKABLE[params.name]) {

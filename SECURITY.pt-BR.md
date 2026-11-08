@@ -52,6 +52,9 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   país fixo para desligar. Ver [`src/main/region.ts`](src/main/region.ts).
 - **Fuso horário:** como em todo navegador, os scripts da página leem seu fuso. Escolha **UTC** em 🌍 Região e hora
   pra esconder dos sites.
+- **Localização** é negada a todo site sem perguntar: o site vê `denied`, não um `prompt`. Só um site que você
+  marcar *Permitir* no cadeado recebe. A própria janela do Bah também não recebe. Ver `DENY_UNLESS_ALLOWED` em
+  [`src/main/site-permission-rules.ts`](src/main/site-permission-rules.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
 - **Arquivos do seu computador (uploads):** o agente nunca escolhe caminho. No `upload`, o Bah mostra um cartão e
