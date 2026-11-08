@@ -326,6 +326,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // E2E: resultados fixos pro web_search do agente (só com NODE_ENV=test; senão null).
   e2eSearchResults: (q: string) => ipcRenderer.invoke('e2e:search-results', q),
   e2ePriceStores: () => ipcRenderer.invoke('e2e:price-stores'),
+  e2eTakeoverTimeout: () => ipcRenderer.invoke('e2e:takeover-timeout'),
+  // Watch/Takeover: abas esperando a pessoa; avisa quando ela mexe numa delas (clique/tecla de verdade).
+  takeoverWatch: (wcIds: number[]) => ipcRenderer.invoke('takeover:watch', wcIds),
+  onTakeoverInput: (cb: (wcId: number) => void) => {
+    const listener = (_e: any, id: number) => cb(id);
+    ipcRenderer.on('takeover:input', listener);
+    return () => ipcRenderer.removeListener('takeover:input', listener);
+  },
   appendDatasetRun: (run: unknown) => ipcRenderer.invoke('dataset:append-run', run),
   datasetInfo: () => ipcRenderer.invoke('dataset:info'),
   googleLogin: () => ipcRenderer.invoke('google:login'),

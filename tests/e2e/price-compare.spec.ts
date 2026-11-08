@@ -7,7 +7,8 @@ import type { AddressInfo } from 'net';
 
 // Preço em várias lojas: o Bah visita CADA loja (lojas sintéticas em *.localhost), busca só o produto,
 // o modelo lê o preço na página da loja e o Bah confere. Loja A: preço na busca. Loja B: busca sem preço →
-// abre a página do produto. Loja C: checagem de robô → "couldn't read", sem chamar o modelo. Loja D: o
+// abre a página do produto. Loja C: checagem de robô → o Bah passa pra pessoa (Watch/Takeover); ninguém libera
+// no tempo (E2E_TAKEOVER_TIMEOUT_MS) → "couldn't read — human check", sem chamar o modelo nem tocar a checagem. Loja D: o
 // modelo "lê" um preço que não está na página → não conta. A matéria de ofertas nunca é aberta.
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
@@ -57,7 +58,7 @@ test('price compare: visits each store, reads its price there, records blocked s
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-price-'));
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({ executablePath: ELECTRON, args: [ROOT, `--user-data-dir=${tmp}`, '--use-mock-keychain'],
-    env: { ...env, E2E_MOCK_AI: '1', E2E_MOCK_SCRIPT: JSON.stringify([{ type: 'navigate', url: `http://deals.localhost:${port}/` }]), E2E_MOCK_CHAT_SCRIPT: JSON.stringify(chats), E2E_PRICE_STORES: JSON.stringify(stores), NODE_ENV: 'test' } });
+    env: { ...env, E2E_MOCK_AI: '1', E2E_MOCK_SCRIPT: JSON.stringify([{ type: 'navigate', url: `http://deals.localhost:${port}/` }]), E2E_MOCK_CHAT_SCRIPT: JSON.stringify(chats), E2E_PRICE_STORES: JSON.stringify(stores), E2E_TAKEOVER_TIMEOUT_MS: '4000', NODE_ENV: 'test' } });
   try {
     const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await sleep(1500);
     await page.evaluate(() => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); });
@@ -77,9 +78,10 @@ test('price compare: visits each store, reads its price there, records blocked s
     expect(feed).toContain('✅ Shop A: $199.99 — Apple AirPods Pro 2 Wireless Earbuds (USB-C)');
     expect(feed).toContain('🛒 Shop B: no price in the results — opening the product page…');
     expect(feed).toContain('✅ Shop B: $189.00');
-    expect(feed).toContain("⚠️ Shop C: couldn't read — bot check / captcha");
+    expect(feed).toContain("🙋 Shop C: wants a person to confirm — will hand it to you");
+    expect(feed).toContain("⚠️ Shop C: couldn't read — human check");
     expect(feed).toContain("⚠️ Shop D: couldn't read — price $149.99 not confirmed on the page");
-    expect(feed).toMatch(/Checked "AirPods Pro" at 4 stores: read 2 \(Shop B \$189\.00, Shop A \$199\.99\); blocked 1 \(Shop C — bot check \/ captcha\); no price found 1/);
+    expect(feed).toMatch(/Checked "AirPods Pro" at 4 stores: read 2 \(Shop B \$189\.00, Shop A \$199\.99\); blocked 1 \(Shop C — human check\); no price found 1/);
     expect(feed).toContain('Cheapest: Shop B — $189.00');
     // Cada loja recebeu só o produto na busca; a matéria de ofertas nunca foi aberta; o modelo-agente nunca foi chamado.
     for (const h of ['shopa', 'shopb', 'shopc', 'shopd']) expect(s.hits).toContain(`${h}.localhost/search?q=AirPods%20Pro`);
@@ -108,7 +110,7 @@ test('price compare: visits each store, reads its price there, records blocked s
       if (!html) await sleep(500);
     }
     expect(html).toMatch(/Shop B[\s\S]*Shop A[\s\S]*Shop C[\s\S]*Shop D/);
-    expect(html).toContain("couldn't read — bot check / captcha");
+    expect(html).toContain("couldn't read — human check");
     expect(html).toContain('2 of 4 stores read');
   } finally { await app.close(); s.server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

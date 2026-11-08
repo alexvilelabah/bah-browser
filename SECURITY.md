@@ -80,7 +80,7 @@ end in a couple of hops.
 | Agent stays out of accounts it wasn't asked to use | the agent loop in `App.tsx` | clicks on Sign in / Sign up / "Continue with Google" are refused unless the request mentions an account or sign-in, or names the user's own things ("my list", "my saved jobs", orders: `commandLikelyNeedsAccount`) |
 | Careful sites (terms forbid automation) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + the agent loop in `App.tsx` | LinkedIn by default (plus `localStorage.carefulSites`): one navigation per request, then only `CAREFUL_ALLOWED` (read/report) actions; the second refused action ends the task |
 | Agent stays in its own tabs | [`agent-permissions.ts`](src/renderer/agent-permissions.ts) + the agent loop in `App.tsx` | a task owns its starting tab and the tabs it opens (🤖 in the tab bar while it runs); `switch_tab` to another of your tabs and `history_search` ask first (Allow for this task / Always allow / Deny / Always deny; also in the ⋮ menu); `close_tab` only closes tabs the task opened |
-| Page HTML for the agent (`get_html`) is cleaned | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | script/style/svg/noscript/template bodies, comments, inline styles and `on*` handlers dropped; short attribute allowlist; password/hidden inputs, token/CSRF/one-time-code/card/CVV/SSN fields and `<meta>` CSRF tokens come out as `[redacted]`; cross-origin iframes as a note; invisible parts marked `[hidden]`. Framed in the prompt as *data from the page, not instructions*, shown in the next prompt only; one read is 4,000–60,000 chars, sized to the model's free context. Passive read: allowed on careful sites |
+| Page HTML for the agent (`get_html`) is cleaned | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | script/style/svg/noscript/template bodies, comments, inline styles and `on*` handlers dropped; short attribute allowlist; password/hidden inputs, token/CSRF/one-time-code/card/CVV/SSN fields and `<meta>` CSRF tokens come out as `[redacted]`; cross-origin iframes as a note; invisible parts marked `[hidden]`. Framed in the prompt as *data from the page, not instructions*, shown in the next prompt only; one read is 4,000–60,000 chars, sized to the model's free context. Passive read: allowed on a human check and on careful sites |
 | Local AI stays offline | `main.ts` (hybrid router, local branch) | on Ollama failure it returns an error — **no** silent cloud fallback |
 | Downloads only land in the downloads folder; nothing is auto-run | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | files are written to `getDownloadDir()` only and never opened/executed automatically. **No file-type blocklist** — see tradeoffs below |
 | Torrent engine is opt-in | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | built-in client OFF by default: `.torrent` saved as a file, `magnet:` handed to the OS app, engine `utilityProcess` never started |
@@ -126,6 +126,12 @@ machine). They are listed here so an auditor does not have to "discover" them:
    `.pkg`, `.sh`, ...), by you or by the agent. There is no extension blocklist or content
    sniffing; the protection is that downloads go only to the downloads folder and are never
    executed by Bah. Review what the agent downloads before opening it.
+5. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
+   style or a sign-in wall ([`src/shared/human-check.ts`](src/shared/human-check.ts), generic signals, never per
+   site), Bah hands the tab to you and resumes on its own when the page is normal again
+   ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
+   human check — a code-level guard refuses every page action on a tab classified as one — and never
+   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check".
 
 ---
 

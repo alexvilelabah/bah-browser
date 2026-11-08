@@ -79,7 +79,7 @@ uns dois pulos.
 | Agente fora de contas que não pediram | o loop do agente em `App.tsx` | clique em Entrar / Cadastrar / "Continuar com o Google" é recusado, a não ser que o pedido fale de conta ou login, ou cite coisas da própria pessoa ("minha lista", "minhas vagas", pedidos: `commandLikelyNeedsAccount`) |
 | Sites cuidadosos (termos proíbem automação) | [`careful-sites.ts`](src/renderer/careful-sites.ts) + o loop do agente em `App.tsx` | LinkedIn por padrão (mais `localStorage.carefulSites`): uma navegação por pedido, depois só ações de `CAREFUL_ALLOWED` (ler/relatar); a segunda ação recusada encerra a tarefa |
 | Agente fica nas abas dele | [`agent-permissions.ts`](src/renderer/agent-permissions.ts) + o loop do agente em `App.tsx` | a tarefa é dona da aba de partida e das abas que abre (🤖 na barra de abas enquanto roda); `switch_tab` pra outra aba sua e `history_search` perguntam antes (só nesta tarefa / sempre / negar / nunca; também no menu ⋮); `close_tab` só fecha abas que a tarefa abriu |
-| HTML da página pro agente (`get_html`) vem limpo | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | corpo de script/style/svg/noscript/template, comentários, estilo inline e handlers `on*` saem; lista curta de atributos permitidos; campos de senha e ocultos, campos de token/CSRF/código de uso único/cartão/CVV/SSN e tokens CSRF em `<meta>` viram `[redacted]`; iframes de outra origem viram uma nota; partes invisíveis levam `[hidden]`. No pedido, vem marcado como *dado da página, não instrução*, e só no próximo pedido; uma leitura tem de 4.000 a 60.000 caracteres, conforme o contexto livre do modelo. Leitura passiva: permitida em site cuidadoso |
+| HTML da página pro agente (`get_html`) vem limpo | [`html-clean.ts`](src/shared/html-clean.ts) + [`read-paging.ts`](src/shared/read-paging.ts) | corpo de script/style/svg/noscript/template, comentários, estilo inline e handlers `on*` saem; lista curta de atributos permitidos; campos de senha e ocultos, campos de token/CSRF/código de uso único/cartão/CVV/SSN e tokens CSRF em `<meta>` viram `[redacted]`; iframes de outra origem viram uma nota; partes invisíveis levam `[hidden]`. No pedido, vem marcado como *dado da página, não instrução*, e só no próximo pedido; uma leitura tem de 4.000 a 60.000 caracteres, conforme o contexto livre do modelo. Leitura passiva: permitida numa verificação humana e em site cuidadoso |
 | IA local fica offline | `main.ts` (roteador híbrido, ramo local) | na falha do Ollama devolve erro — **sem** fallback silencioso pra nuvem |
 | Download só cai na pasta de downloads; nada roda sozinho | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | arquivos vão só pro `getDownloadDir()` e nunca são abertos/executados automaticamente. **Sem lista de tipos bloqueados** — ver tradeoffs abaixo |
 | Motor de torrent é opcional | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | cliente embutido DESLIGADO por padrão: `.torrent` salvo como arquivo, `magnet:` vai pro app do sistema, o `utilityProcess` do motor nunca sobe |
@@ -124,6 +124,12 @@ aqui pra o auditor não ter que "descobrir":
    `.dmg`, `.pkg`, `.sh`, ...), por você ou pelo agente. Não há lista de extensões bloqueadas
    nem checagem de conteúdo; a proteção é que downloads vão só pra pasta de downloads e o Bah
    nunca os executa. Confira o que o agente baixou antes de abrir.
+5. **Verificação humana é com a pessoa (Watch/Takeover).** Quando a página é uma checagem de robô / CAPTCHA de
+   qualquer estilo ou uma parede de login ([`src/shared/human-check.ts`](src/shared/human-check.ts), sinais genéricos,
+   nunca por site), o Bah passa a aba pra você e retoma sozinho quando a página volta ao normal
+   ([`src/shared/takeover.ts`](src/shared/takeover.ts)). O agente nunca clica, segura, digita ou rola numa
+   verificação humana — uma trava no código recusa toda ação na aba classificada assim — e nunca tenta parecer
+   gente. Tarefa agendada (ninguém olhando) não espera: o site fica "couldn't read — human check".
 
 ---
 

@@ -387,6 +387,9 @@ const popupTimes = new Map<number, number[]>();
 // trava que impede uma janela de login brotar sozinha nas abas OCULTAS (Pesquisa Rápida,
 // manchetes, imagens), que rodam com allowpopups e ninguém está vendo.
 const lastGesture = new Map<number, number>();
+// Watch/Takeover (shared/takeover.ts): abas cujo input da pessoa o renderer quer saber agora.
+const takeoverWatched = new Set<number>();
+const takeoverLastSent = new Map<number, number>();
 const liveAuthPopups = new Map<number, number>();
 const lastAuthPopupAt = new Map<number, number>();
 // Host da janela de login enquanto ela existe ('' quando não há nenhuma) + o gancho pra
@@ -1312,6 +1315,15 @@ function createWindow(): void {
       if (t === 'mouseDown' || t === 'mouseUp' || t === 'keyDown' || t === 'rawKeyDown' || t === 'touchStart' || t === 'gestureTap') {
         lastGesture.set(wc.id, Date.now());
       }
+      // Watch/Takeover: a aba está esperando a PESSOA (checagem de robô / login). Input de verdade nela
+      // (clique, tecla, toque, rolagem) = a pessoa assumiu → o renderer passa de HANDOFF pra TAKEOVER.
+      if (takeoverWatched.has(wc.id) && /^(mouseDown|keyDown|rawKeyDown|touchStart|gestureTap|mouseWheel)$/.test(String(t || ''))) {
+        const now = Date.now();
+        if (now - (takeoverLastSent.get(wc.id) || 0) > 400) {
+          takeoverLastSent.set(wc.id, now);
+          try { mainWindow?.webContents.send('takeover:input', wc.id); } catch {}
+        }
+      }
     });
     // Intercept popup window requests and forward to renderer to open as new tab
     wc.setWindowOpenHandler((details) => {
@@ -1772,6 +1784,18 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   ipcMain.handle('e2e:search-results', () => {
     if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1' || !process.env.E2E_SEARCH_RESULTS) return null;
     try { const r = JSON.parse(process.env.E2E_SEARCH_RESULTS); return Array.isArray(r) ? r : null; } catch { return null; }
+  });
+  // Watch/Takeover: o renderer diz quais abas esperam a pessoa ([] = nenhuma).
+  ipcMain.handle('takeover:watch', (_e, ids: unknown) => {
+    takeoverWatched.clear();
+    if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'number' && Number.isFinite(id)) takeoverWatched.add(id);
+    return true;
+  });
+  // E2E: quanto esperar a pessoa antes de pular o site (E2E_TAKEOVER_TIMEOUT_MS). Só no teste; no app vale o padrão (3 min).
+  ipcMain.handle('e2e:takeover-timeout', () => {
+    if (process.env.NODE_ENV !== 'test' || process.env.E2E_MOCK_AI !== '1') return null;
+    const n = Number(process.env.E2E_TAKEOVER_TIMEOUT_MS);
+    return Number.isFinite(n) && n > 0 ? n : null;
   });
   // E2E: lojas falsas pro comparador de preço (E2E_PRICE_STORES = JSON [{id,label,names,domain,search}]),
   // servidas em *.localhost pelo teste. Só no teste; no app de verdade devolve null e valem as lojas reais.

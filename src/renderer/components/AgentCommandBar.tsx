@@ -38,6 +38,8 @@ export interface StepRecord {
 export type AgentProgressEvent =
   | { kind: 'status'; message: string }
   | { kind: 'manual_help'; message: string; instruction: string; onContinue: () => void }
+  // Watch/Takeover (shared/takeover.ts): a página quer uma PESSOA. phase = quem dirige; 'agent' = acabou (outcome).
+  | { kind: 'takeover'; phase: 'agent' | 'handoff' | 'takeover'; humanKind: 'captcha' | 'signin'; sites: string[]; cleared?: string[]; outcome?: string; reason?: string; instruction?: string; onHandBack: () => void; onSkip: () => void }
   | { kind: 'confirm'; message: string; label: string; risk: string; onConfirm: () => void; onCancel: () => void; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }>; onChoose?: (value: string) => void }
   | { kind: 'plan_preview'; goal: string; steps: string[]; autoRunMs?: number; onApprove: () => void; onEdit: (goal: string) => void; onCancel: () => void; onHold?: () => void }
   | { kind: 'thought'; message: string }
@@ -69,6 +71,7 @@ type FeedData =
   | { kind: 'report'; text: string }
   | { kind: 'error'; text: string }
   | { kind: 'help'; message: string; instruction: string }
+  | { kind: 'takeover'; tkey: string; phase: 'agent' | 'handoff' | 'takeover'; humanKind: 'captcha' | 'signin'; sites: string[]; cleared?: string[]; outcome?: string; reason?: string; instruction?: string }
   | { kind: 'confirm'; message: string; title?: string; yesLabel?: string; noLabel?: string; choices?: Array<{ label: string; value: string }> }
   // Thread da sessão (renderer/threads.ts): avisos de orçamento/resumo/limpeza/corte, e a conversa que voltou.
   | { kind: 'thread-notice'; notice: ThreadNotice }
@@ -515,6 +518,9 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     });
   }, [tabIds]);
   const [manualHelp, setManualHelp] = useState<{ message: string; instruction: string } | null>(null);
+  // Watch/Takeover ativo: o cartão (pela chave) e os botões [Hand back] [Skip this site] da espera em curso.
+  const takeoverRef = useRef<{ key: string; handBack: () => void; skip: () => void } | null>(null);
+  const [takeoverKey, setTakeoverKey] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ message: string } | null>(null);   // freio de segurança
   const [planPreview, setPlanPreview] = useState<{ goal: string; steps: string[] } | null>(null);
   const [planDraft, setPlanDraft] = useState('');
@@ -645,6 +651,37 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
   const stickToBottomRef = useRef(true);
   const idRef = useRef(0);
 
+  // Atualiza o cartão de Watch/Takeover (em qualquer aba do feed) pela chave.
+  const patchTakeover = (key: string, patch: Partial<Extract<FeedData, { kind: 'takeover' }>>) => {
+    setFeedsByTab(prevMap => {
+      let changed = false;
+      const next: Record<string, FeedItem[]> = {};
+      for (const k of Object.keys(prevMap)) {
+        next[k] = prevMap[k].map(it => (it.kind === 'takeover' && it.tkey === key ? (changed = true, { ...it, ...patch } as FeedItem) : it));
+      }
+      return changed ? next : prevMap;
+    });
+  };
+  const onTakeoverEvent = (event: Extract<AgentProgressEvent, { kind: 'takeover' }>) => {
+    const cur = takeoverRef.current;
+    const data = { phase: event.phase, humanKind: event.humanKind, sites: event.sites, cleared: event.cleared, outcome: event.outcome, reason: event.reason, instruction: event.instruction };
+    if (event.phase === 'agent') {
+      if (cur) { patchTakeover(cur.key, data); takeoverRef.current = null; setTakeoverKey(null); }
+      else push({ kind: 'takeover', tkey: `tk-${Date.now()}-${Math.random()}`, ...data });   // agendada: nunca esperou
+      return;
+    }
+    if (cur) { cur.handBack = event.onHandBack; cur.skip = event.onSkip; patchTakeover(cur.key, data); return; }
+    const key = `tk-${Date.now()}-${Math.random()}`;
+    takeoverRef.current = { key, handBack: event.onHandBack, skip: event.onSkip };
+    setTakeoverKey(key);
+    push({ kind: 'takeover', tkey: key, ...data });
+    notifyHuman(event.sites.join(', '));
+  };
+  const handleTakeover = (what: 'handBack' | 'skip') => {
+    const cur = takeoverRef.current;
+    if (cur) (what === 'handBack' ? cur.handBack : cur.skip)();
+  };
+
   const push = (item: FeedData) => {
     const tabId = threadKeyOf(convoTabRef.current);
     setFeedsByTab(prevMap => {
@@ -747,6 +784,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       const result = await onExecute(cmd, event => {
         if (event.kind === 'step') {
           push({ kind: 'step', step: event.step });
+        } else if (event.kind === 'takeover') {
+          onTakeoverEvent(event);
         } else if (event.kind === 'manual_help') {
           manualContinueRef.current = waitFor(event.onContinue);
           setManualHelp({ message: event.message, instruction: event.instruction });
@@ -805,6 +844,8 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
       setLoading(false);
       setManualHelp(null);
       manualContinueRef.current = null;
+      takeoverRef.current = null;
+      setTakeoverKey(null);
       planCbRef.current = null;
       setPlanPreview(null);
       setPlanEditing(false);
@@ -1286,6 +1327,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
     // tarefa estava parada em "Preciso de você", a resposta da pessoa conta como continuar.
     if (loading && !chatLoading && onInterject) {
       if (manualContinueRef.current) handleContinueAfterManualHelp();
+      else if (takeoverRef.current) handleTakeover('handBack');
       if (onInterject(msg)) { push({ kind: 'chat-user', text: msg }); setInput(''); }
       return;
     }
@@ -1990,7 +2032,7 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
           </div>
         )}
         {feed.map(item => {
-          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} onConfirmRisky={handleConfirmRisky} onChoose={handleChoice} confirmActive={!!pendingConfirm && item.id === lastConfirmId} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
+          const row = <FeedRow item={item} onContinue={handleContinueAfterManualHelp} helpActive={!!manualHelp} takeoverKey={takeoverKey} onTakeover={handleTakeover} onConfirmRisky={handleConfirmRisky} onChoose={handleChoice} confirmActive={!!pendingConfirm && item.id === lastConfirmId} onRunSuggestion={(cmd) => { pendingSuggestionRef.current = null; if (!loading && !chatLoading && !busyRef.current) runAgent(cmd); }} onOpenUrl={onOpenUrl} onSwitchToCloud={onSwitchToCloud} onToggleSpeak={toggleSpeak} speakingId={speakingId} />;
           const transient = item.kind === 'event' && item.event.kind === 'status';
           const cls = !transient ? 'feed-pass' : (expiringIds.has(item.id) ? 'feed-out' : undefined);
           return <div key={item.id} className={cls}>{row}</div>;
@@ -2259,6 +2301,11 @@ export default function AgentCommandBar({ onExecute, onSendChat, onResearch, onC
             <button data-testid="agent-manual-continue" onClick={handleContinueAfterManualHelp} className="composer-continue" title={manualHelp.instruction}>
               {t('feed.continue')}
             </button>
+          ) : takeoverKey ? (
+            // Watch/Takeover: o mesmo lugar do "Continuar" devolve o controle ao Bah (= [Hand back] do cartão).
+            <button data-testid="agent-manual-continue" onClick={() => handleTakeover('handBack')} className="composer-continue" title={t('takeover.handBack')}>
+              {t('takeover.handBack')}
+            </button>
           ) : (loading || chatLoading) ? (
             <>
               {/* Com a tarefa rodando e texto na caixa: Enviar (a IA lê e decide) ao lado do Parar. */}
@@ -2306,6 +2353,41 @@ function chime() {
     setTimeout(() => { try { ac.close(); } catch {} }, 800);
   } catch {}
 }
+// A página quer uma PESSOA (Watch/Takeover): o mesmo sininho + notificação do SO se a janela não está em foco.
+function notifyHuman(sites: string) {
+  chime();
+  try {
+    if (!document.hasFocus() && 'Notification' in window) {
+      new Notification('🙋 Bah', { body: t('takeover.notify', { site: sites }).slice(0, 140) });
+    }
+  } catch {}
+}
+
+// Cartão do Watch/Takeover: quem dirige agora, o que já foi liberado, e [Hand back] [Skip this site] enquanto espera.
+function TakeoverCard({ item, active, onTakeover }: { item: Extract<FeedItem, { kind: 'takeover' }>; active: boolean; onTakeover: (what: 'handBack' | 'skip') => void }) {
+  const sites = item.sites.join(', ');
+  const title = item.humanKind === 'signin' ? t('takeover.signinTitle', { site: sites })
+    : item.sites.length > 1 ? t('takeover.titleMany', { sites }) : t('takeover.title', { site: sites });
+  const line = item.phase === 'takeover' ? t('takeover.driving')
+    : item.phase === 'handoff' ? t('takeover.waiting')
+    : t(`takeover.out.${item.outcome || 'skipped'}`);
+  return (
+    <div className={`feed-help-card takeover-card phase-${item.phase}`} data-testid="takeover-card" data-phase={item.phase} data-outcome={item.outcome || ''}>
+      <div className="feed-help-title">{title}</div>
+      {item.humanKind === 'signin' && item.reason && <div className="feed-help-msg">{item.reason}</div>}
+      {item.humanKind === 'signin' && item.instruction && item.phase !== 'agent' && <div className="feed-help-instr">{item.instruction}</div>}
+      <div className="feed-help-msg" data-testid="takeover-phase">{line}</div>
+      {!!item.cleared?.length && item.sites.length > 1 && <div className="feed-help-instr">{t('takeover.clearedList', { sites: item.cleared.join(', ') })}</div>}
+      {active && item.phase !== 'agent' && (
+        <div className="takeover-actions">
+          <button className="manual-continue-btn" data-testid="takeover-handback" onClick={() => onTakeover('handBack')}>{t('takeover.handBack')}</button>
+          <button className="manual-continue-btn secondary" data-testid="takeover-skip" onClick={() => onTakeover('skip')}>{item.sites.length > 1 ? t('takeover.skipAll') : t('takeover.skip')}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function notifyDone(message: string) {
   chime();
   try {
@@ -2315,7 +2397,7 @@ function notifyDone(message: string) {
   } catch {}
 }
 
-function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud, onToggleSpeak, speakingId }: { item: FeedItem; onContinue: () => void; helpActive: boolean; onConfirmRisky: (ok: boolean) => void; onChoose: (value: string) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void; onToggleSpeak: (id: number, text: string) => void; speakingId: number | null }) {
+function FeedRow({ item, onContinue, helpActive, takeoverKey, onTakeover, onConfirmRisky, onChoose, confirmActive, onRunSuggestion, onOpenUrl, onSwitchToCloud, onToggleSpeak, speakingId }: { item: FeedItem; onContinue: () => void; helpActive: boolean; takeoverKey: string | null; onTakeover: (what: 'handBack' | 'skip') => void; onConfirmRisky: (ok: boolean) => void; onChoose: (value: string) => void; confirmActive: boolean; onRunSuggestion: (cmd: string) => void; onOpenUrl: (url: string) => void; onSwitchToCloud: () => void; onToggleSpeak: (id: number, text: string) => void; speakingId: number | null }) {
   switch (item.kind) {
     case 'task':
       return <div className="chat-msg user"><div className="msg-content">⚡ {item.text}</div></div>;
@@ -2401,6 +2483,8 @@ function FeedRow({ item, onContinue, helpActive, onConfirmRisky, onChoose, confi
           {helpActive && <button className="manual-continue-btn" onClick={onContinue}>{t('feed.continue')}</button>}
         </div>
       );
+    case 'takeover':
+      return <TakeoverCard item={item} active={item.tkey === takeoverKey} onTakeover={onTakeover} />;
     case 'step':
       return <StepCard step={item.step} />;
     case 'thread-notice':
@@ -2531,6 +2615,7 @@ function StepCard({ step }: { step: StepRecord }) {
 function ProgressLine({ event }: { event: AgentProgressEvent }) {
   if (event.kind === 'step') return null;
   if (event.kind === 'manual_help') return null;
+  if (event.kind === 'takeover') return null;   // cartão próprio (TakeoverCard)
   // rendered as its own card above the composer, not as a feed row
   if (event.kind === 'plan_preview') return null;
   if (event.kind === 'media') return null; // renderizado pelo MediaStrip, não aqui

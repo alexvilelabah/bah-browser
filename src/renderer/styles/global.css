@@ -1084,6 +1084,11 @@ button.url-sec:hover{ background:rgba(255,255,255,0.08); }
 .feed-help-title{font-size:12px;font-weight:800;color:#7dd3fc;}
 .feed-help-msg{font-size:12px;color:var(--text-primary);line-height:1.5;}
 .feed-help-instr{font-size:11px;color:var(--text-muted);line-height:1.5;}
+/* Watch/Takeover: a página quer uma pessoa */
+.takeover-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.takeover-card.phase-takeover .feed-help-msg{font-weight:700;}
+.takeover-card.phase-agent{opacity:.85;}
+.manual-continue-btn.secondary{background:transparent;border:1px solid var(--border);color:var(--text-secondary);}
 /* Mode pills (Agente | Chat) */
 .mode-pills{display:flex;gap:4px;flex-shrink:0;}
 .mode-pill {

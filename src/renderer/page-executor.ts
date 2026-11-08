@@ -1,3 +1,5 @@
+import { guardAgentAction } from '../shared/takeover';
+import { humanCheckFlag } from './takeover-driver';
 export type BrowserAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
@@ -507,6 +509,9 @@ export async function waitForSettle(
 }
 
 export async function executeBrowserAction(wv: Electron.WebviewTag, action: BrowserAction): Promise<ToolResult> {
+  // Página de checagem humana: o agente nunca opera — só lê ou sai dela (shared/takeover.ts).
+  const refusal = guardAgentAction(action.type, humanCheckFlag(wv));
+  if (refusal) return { success: false, reason: 'human_check', error: refusal } as ToolResult;
   if (action.type === 'navigate') {
     if (!action.url) return { success: false, error: 'Missing url' };
     const target = normalizeUrl(action.url);

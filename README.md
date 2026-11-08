@@ -183,7 +183,7 @@ The agent runs with full browser privileges, so it's worth being clear about wha
 
 - 🎯 **No fake success.** After a fill/type the agent checks the field actually holds the value; if an action had no real effect it switches strategy instead of reporting success.
 
-- 🙋 **Asks for help when blocked.** On a CAPTCHA, login wall, or paywall it **stops and asks you to step in**, then resumes — it doesn't flail.
+- 🙋 **Hands you the page when it wants a person.** On a bot check / CAPTCHA of any kind or a sign-in wall it **brings the tab to the front and lets you do it** — [Hand back] / [Skip this site] — then resumes by itself as soon as the page is normal again. It never touches the check. Scheduled runs don't wait: that site is marked "couldn't read — human check". On a paywall it still stops and asks you to step in, then resumes when you press Continue.
 
 - 🔐 **Signs in only with you.** When a task needs your account ("my list", "my saved jobs", orders, inbox) the agent may click the site's **Sign in** button once; at the login form Bah **pauses** — you sign in (click the username field to pick a login saved in Bah's password manager, or type it) and press Continue. The agent never types or sees a password and never guesses a username. Bah tracks whether you're **signed in or out per site** and tells the agent each step, so it doesn't re-click Sign in or assume pages it can't see.
 

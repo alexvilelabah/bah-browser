@@ -179,7 +179,7 @@ O agente opera com privilégios de navegador, então vale deixar claro o que ele
 
 - **Sem falso sucesso.** Depois de um preenchimento, o agente confere se o campo realmente ficou com o valor; se uma ação não surtiu efeito, ele muda de estratégia em vez de relatar sucesso.
 
-- **Pede ajuda quando trava.** Em CAPTCHA, login ou paywall ele **para e pede pra você assumir**, e depois retoma — não fica se debatendo.
+- **Passa a página pra você quando ela quer uma pessoa.** Em checagem de robô / CAPTCHA de qualquer tipo ou parede de login ele **traz a aba pra frente e deixa você fazer** — [Devolver] / [Pular este site] — e retoma sozinho assim que a página volta ao normal. Nunca toca a checagem. Tarefa agendada não espera: o site fica "couldn't read — human check". Em paywall ele continua parando e pedindo pra você assumir, e retoma quando você aperta Continuar.
 
 - **Entra na conta só com você.** Quando a tarefa precisa da sua conta ("minha lista", "minhas vagas salvas", pedidos, caixa de entrada) o agente pode clicar uma vez no **Entrar** do site; no formulário de login o Bah **pausa** — você entra (clique no campo de usuário para escolher um login salvo no gerenciador de senhas do Bah, ou digite) e aperta Continuar. O agente nunca digita nem vê senha e nunca chuta um usuário. O Bah acompanha se você **entrou ou não em cada site** e avisa o agente a cada passo, pra ele não clicar Entrar de novo nem supor páginas que não vê.
 
