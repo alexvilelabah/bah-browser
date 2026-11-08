@@ -12,9 +12,12 @@ import * as path from 'path';
 import * as https from 'https';
 import { Readable } from 'stream';
 import { ProgressTracker, TICK_MS, STALL_ABORT_MS } from './download-progress';
+import { installCAs } from './system-ca';
 
-interface Job { url: string; filename?: string; dir: string; acceptLanguage: string }
-const { url, filename, dir, acceptLanguage } = workerData as Job;
+interface Job { url: string; filename?: string; dir: string; acceptLanguage: string; cas?: string[] }
+const { url, filename, dir, acceptLanguage, cas } = workerData as Job;
+// Raízes do SO (rede que inspeciona TLS com a raiz da empresa): a thread tem as próprias defaults.
+if (cas?.length) installCAs(cas);
 const post = (m: Record<string, unknown>) => parentPort!.postMessage(m);
 
 const ctrl = new AbortController();

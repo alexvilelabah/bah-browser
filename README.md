@@ -233,7 +233,8 @@ SOCKS proxy / `ssh -D` tunnel) · **PAC** (script URL) · **Direct**, plus a byp
   (and one sign-in) covers them.
 - **Company root certificates (TLS inspection):** Chromium already trusts the OS certificate store.
   Electron's Node does not, so Bah reads the OS store at startup (macOS keychains, Windows `Root`/`CA`
-  stores, Linux CA bundle) and adds those roots to Node's defaults.
+  stores, Linux CA bundle) and adds those roots to Node's defaults — downloads in the worker thread work
+  behind a TLS-inspecting proxy too.
 - **WebRTC IP leak protection (on by default):** with a proxy, WebRTC may only use the proxy
   (`disable_non_proxied_udp`); without one, only the main network connection
   (`default_public_interface_only`) — either way a page cannot list your IP addresses through it. **Best call

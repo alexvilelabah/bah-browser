@@ -58,7 +58,7 @@ import { setupSkills } from './skills-loader';
 import { setupTorrentManager } from './torrent-manager';
 import { setupRouterManager } from './router-manager';
 import { setupChatStore } from './chat-store';
-import { setupProxy, getProxyConfig, refreshWebRtcPolicy } from './proxy';
+import { setupProxy, proxyFor, getProxyConfig, refreshWebRtcPolicy } from './proxy';
 import { setupSecureDns, getSecureDns } from './secure-dns';
 import { setupNetworkPrivacy, applyNetworkStartupSwitches } from './network-privacy';
 import { setupRegion, getTimezoneOverride } from './region';
@@ -3241,6 +3241,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     getMainWindow: () => mainWindow,
     uniqueDownloadPath,
     blockDuplicates: () => agentBusy,
+    // O motor de várias conexões é Node puro (não usa o proxy): atrás de proxy, o Chromium baixa.
     cancelExternal: (id) => {
       const w = agentDownloads.get(id);
       if (!w) return false;
@@ -3350,12 +3351,19 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
   let agentDlSeq = 0;
   ipcMain.handle('download:url', async (_e, url: string, filename?: string) => {
     if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Only http(s) URLs can be downloaded.' };
+    // Atrás de proxy: o downloader do PRÓPRIO motor (proxy, PAC, login do proxy, certificados do SO;
+    // roda fora do processo principal). A linha aparece no painel e o agente acompanha pelos eventos.
+    const via = await proxyFor(url);
+    if (via && via !== 'DIRECT') {
+      try { session.fromPartition('persist:browser').downloadURL(url); } catch (e: any) { return { success: false, error: String(e?.message || e) }; }
+      return { success: true, info: { background: true, via: 'browser', path: '(Downloads folder — see DOWNLOAD STARTED)', proxy: via } };
+    }
     const id = `agdl_${++agentDlSeq}`;
     // Empacotado: o worker roda do app.asar.unpacked (ver asarUnpack). Em dev o replace é no-op.
     const workerPath = path.join(__dirname, 'agent-download-worker.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
     let worker: Worker;
     try {
-      worker = new Worker(workerPath, { workerData: { url, filename, dir: getDownloadDir(), acceptLanguage: ACCEPT_LANGUAGE } });
+      worker = new Worker(workerPath, { workerData: { url, filename, dir: getDownloadDir(), acceptLanguage: ACCEPT_LANGUAGE, cas: systemCAs } });
     } catch (e: any) {
       return { success: false, error: 'download worker failed to start: ' + String(e?.message ?? e) };
     }
@@ -4069,6 +4077,8 @@ function setupAutoUpdater(): void {
 }
 
 
+// Raízes do SO (empresa que inspeciona TLS) pro Node: carregadas no boot e repassadas à worker de download.
+let systemCAs: string[] = [];
 app.whenReady().then(async () => {
   // Rede corporativa: proxy (System/Manual/PAC/Direct + login 407) em todas as sessões, e as raízes do
   // SO no Node. As requisições do próprio Bah (IA, buscas, sugestões) passam pelo MOTOR do navegador
@@ -4079,7 +4089,7 @@ app.whenReady().then(async () => {
   // ⋮ → Rede: WebRTC (vazamento de IP) + avisos de vazamento (proxy/DNS/IPv4×IPv6).
   setupNetworkPrivacy({ getProxy: getProxyConfig, getSecureDns, refreshWebRtc: refreshWebRtcPolicy });
   setupRegion(applyTimezoneEverywhere, () => mainWindow);
-  loadSystemCAs().then((pems) => { const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
+  loadSystemCAs().then((pems) => { systemCAs = pems; const n = installCAs(pems); console.log(`[SystemCA] ${pems.length} OS certificates, ${n} added to Node`); }).catch(() => {});
   {
     const browsingSession = session.fromPartition('persist:browser');
     (globalThis as any).fetch = (input: any, init?: any) => browsingSession.fetch(input, init);

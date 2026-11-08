@@ -229,7 +229,8 @@ proxy SOCKS / túnel `ssh -D`) · **PAC** (URL do script) · **Direto**, mais um
   (e um login) vale para tudo.
 - **Certificados-raiz da empresa (inspeção TLS):** o Chromium já confia no repositório do SO. O Node do
   Electron não, então o Bah lê o repositório do SO na inicialização (chaveiros do macOS, repositórios
-  `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node.
+  `Root`/`CA` do Windows, bundle de CAs do Linux) e soma essas raízes às padrão do Node — downloads na
+  worker funcionam atrás de proxy com inspeção TLS também.
 - **Proteção contra vazamento de IP pelo WebRTC (ligada por padrão):** com proxy, o WebRTC só pode usar o proxy
   (`disable_non_proxied_udp`); sem proxy, só a conexão de rede principal (`default_public_interface_only`) — nos
   dois casos a página não lista seus endereços IP por ele. **Melhor qualidade de chamada** desliga a proteção

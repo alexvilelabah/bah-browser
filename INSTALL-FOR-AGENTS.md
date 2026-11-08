@@ -122,7 +122,8 @@ npx electron-builder --linux AppImage --publish never     # writes release/Bah-<
 
 **Behind a corporate proxy:** `npm install` needs the proxy and, with TLS inspection, the company root
 certificate: `export HTTPS_PROXY=http://proxy.corp:8080` and `export NODE_EXTRA_CA_CERTS=/path/to/company-root.pem`
-(ask the user or their IT for both; never disable TLS checks with `strict-ssl=false`).
+(ask the user or their IT for both; never disable TLS checks with `strict-ssl=false`). Bah itself
+picks up the OS proxy and OS root certificates on its own; see README → *Corporate networks*.
 
 ---
 
