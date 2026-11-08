@@ -46,12 +46,11 @@ xattr -cr /Applications/Bah.app                       # not signed/notarized yet
 No `gh`? Download the `.dmg` for the right architecture from the releases page instead.
 **Check:** `test -d /Applications/Bah.app && echo ok`, then `open -a Bah` starts it.
 
-Video downloads and MP3s on macOS need ffmpeg from Homebrew (optional, ask first; Bah fetches
-yt-dlp and Deno itself):
+Video/audio downloads on macOS need Homebrew tools (optional, ask first):
 ```bash
-brew install ffmpeg
+brew install yt-dlp deno ffmpeg
 ```
-**Check:** `ffmpeg -version | head -1`.
+**Check:** `yt-dlp --version && ffmpeg -version | head -1`.
 
 ### A2. Windows
 
@@ -86,7 +85,7 @@ npm start                                                        # or: npx elect
 **Check:** `node_modules/electron/dist/` exists (macOS: `Electron.app`), `npm run build` ends with `✓ built in …` and no `error`; `npm start` opens the window.
 Optional: `npm run test:unit` should report `fail 0`.
 
-macOS: for video downloads and MP3s, `brew install ffmpeg` (see A1).
+macOS: for video/audio downloads, `brew bundle` in the repo installs the tools from `Brewfile`.
 
 ### Linux (tested on Ubuntu 24.04 x64)
 
