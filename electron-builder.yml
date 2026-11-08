@@ -41,6 +41,9 @@ asarUnpack:
   # Motor de torrent: ESM forkado num utilityProcess + módulos NATIVOS (.node) do webtorrent.
   # ESM/.node não carregam de dentro do asar → têm que ficar em app.asar.unpacked.
   - "dist/main/torrent/engine.mjs"
+  # Download do agente: worker thread (+ o módulo que ele importa) roda do disco, fora do asar.
+  - "dist/main/agent-download-worker.js"
+  - "dist/main/download-progress.js"
   - "node_modules/node-datachannel/**"
   - "node_modules/utp-native/**"
   - "node_modules/bufferutil/**"
