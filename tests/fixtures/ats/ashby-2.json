@@ -1,0 +1,137 @@
+{
+ "ats": "ashby",
+ "source": "https://jobs.ashbyhq.com/linear/d3bc1ced-3ce4-4086-a050-555055dbb1ff/application",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "jobs.ashbyhq.com /application. Boolean questions render as a checkbox whose scanned label comes from a neighbouring element.",
+ "fields": [
+  {
+   "label": "Autofill from resume",
+   "type": "file",
+   "expect": null
+  },
+  {
+   "label": "Name",
+   "type": "text",
+   "name": "_systemfield_name",
+   "id": "_systemfield_name",
+   "automationId": "_systemfield_name",
+   "required": true,
+   "expect": "fullName"
+  },
+  {
+   "label": "Email",
+   "type": "email",
+   "name": "_systemfield_email",
+   "id": "_systemfield_email",
+   "automationId": "_systemfield_email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Resume",
+   "type": "file",
+   "id": "_systemfield_resume",
+   "automationId": "_systemfield_resume",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Cover letter",
+   "type": "textarea",
+   "name": "1ed7df4b-e6d4-484e-92c3-4a5f5e07fd0c",
+   "id": "1ed7df4b-e6d4-484e-92c3-4a5f5e07fd0c",
+   "automationId": "1ed7df4b-e6d4-484e-92c3-4a5f5e07fd0c",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Github",
+   "type": "text",
+   "name": "1c843a13-4fe3-43df-afcf-37a69d88591b",
+   "id": "1c843a13-4fe3-43df-afcf-37a69d88591b",
+   "automationId": "1c843a13-4fe3-43df-afcf-37a69d88591b",
+   "required": true,
+   "expect": "github"
+  },
+  {
+   "label": "LinkedIn",
+   "type": "text",
+   "name": "ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e",
+   "id": "ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e",
+   "automationId": "ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e",
+   "expect": "linkedin"
+  },
+  {
+   "label": "X",
+   "type": "text",
+   "name": "2165840e-d858-4ff0-ad26-bd48832fe3a7",
+   "id": "2165840e-d858-4ff0-ad26-bd48832fe3a7",
+   "automationId": "2165840e-d858-4ff0-ad26-bd48832fe3a7",
+   "expect": null
+  },
+  {
+   "label": "What is your expected notice period?",
+   "type": "checkbox",
+   "name": "9fd0020d-14f0-47f3-b076-f31e5eaa8295",
+   "automationId": "9fd0020d-14f0-47f3-b076-f31e5eaa8295",
+   "options": [
+    "checked"
+   ],
+   "expect": "startDate"
+  },
+  {
+   "label": "What country are you based in?",
+   "type": "text",
+   "name": "b617d074-3a16-46ec-bb02-550e30cb0e50",
+   "id": "b617d074-3a16-46ec-bb02-550e30cb0e50",
+   "automationId": "b617d074-3a16-46ec-bb02-550e30cb0e50",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Notice Period",
+   "type": "text",
+   "name": "ce587bdf-31fa-4768-9e92-7741b7ad2317",
+   "id": "ce587bdf-31fa-4768-9e92-7741b7ad2317",
+   "automationId": "ce587bdf-31fa-4768-9e92-7741b7ad2317",
+   "required": true,
+   "expect": "startDate"
+  },
+  {
+   "label": "What would you want to work on? Tell us about the features you would want to implement in your first month.",
+   "type": "textarea",
+   "name": "7d3da580-9e6d-494f-a63b-0a889e0a157a",
+   "id": "7d3da580-9e6d-494f-a63b-0a889e0a157a",
+   "automationId": "7d3da580-9e6d-494f-a63b-0a889e0a157a",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Tell us of a time you had to put your PM hat on to solve a complex product problem.",
+   "type": "textarea",
+   "name": "e8a6b6ee-0550-4c69-85ab-05bd9b26c702",
+   "id": "e8a6b6ee-0550-4c69-85ab-05bd9b26c702",
+   "automationId": "e8a6b6ee-0550-4c69-85ab-05bd9b26c702",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "What are you extremely good at? What could you teach the team?",
+   "type": "textarea",
+   "name": "c4b19ee4-d084-47fa-89df-ca00e63a7721",
+   "id": "c4b19ee4-d084-47fa-89df-ca00e63a7721",
+   "automationId": "c4b19ee4-d084-47fa-89df-ca00e63a7721",
+   "required": true,
+   "expect": null
+  },
+  {
+   "label": "Has someone at Linear referred you for this role? If so, please include their name here:",
+   "type": "text",
+   "name": "018585ea-12fd-472a-bdd6-9ef643dfabdd",
+   "id": "018585ea-12fd-472a-bdd6-9ef643dfabdd",
+   "automationId": "018585ea-12fd-472a-bdd6-9ef643dfabdd",
+   "expect": null
+  }
+ ]
+}

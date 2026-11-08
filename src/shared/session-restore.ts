@@ -24,11 +24,15 @@ export const MAX_SESSION_URL = 8192;
 export const MAX_SESSION_TITLE = 300;
 const MAX_SCAN = 1000;   // lista estragada enorme: não percorre além disso
 
-export interface SessionTab { url: string; title: string; pinned?: boolean }
+/** id/sid: o id da aba e da sessão do assistente dela — com "Continuar de onde parou" a aba volta com
+ *  o MESMO id e na mesma sessão, e a conversa salva (main/chat-store.ts) se prende a ela de novo. */
+export interface SessionTab { url: string; title: string; pinned?: boolean; id?: string; sid?: string }
 /** active = posição da ativa em tabs; -1 só quando não sobrou aba nenhuma. */
 export interface SavedSession { tabs: SessionTab[]; active: number }
 /** O que interessa de uma aba viva do renderer. */
-export interface SessionSource { id: string; url: string; title?: string; pinned?: boolean; hidden?: boolean; incognito?: boolean }
+export interface SessionSource { id: string; url: string; title?: string; pinned?: boolean; hidden?: boolean; incognito?: boolean; sessionId?: string }
+
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** Escolha salva → 'restore' ou o padrão (qualquer outra coisa, inclusive nada salvo). */
 export function normalizeStartupMode(raw: unknown): StartupMode {
@@ -50,10 +54,13 @@ export function restorableUrl(url: unknown): url is string {
 
 function toSessionTab(raw: unknown): SessionTab | null {
   if (!raw || typeof raw !== 'object') return null;
-  const r = raw as { url?: unknown; title?: unknown; pinned?: unknown };
+  const r = raw as { url?: unknown; title?: unknown; pinned?: unknown; id?: unknown; sid?: unknown };
   if (!restorableUrl(r.url)) return null;
   const title = typeof r.title === 'string' ? r.title.slice(0, MAX_SESSION_TITLE) : '';
-  return r.pinned === true ? { url: r.url, title, pinned: true } : { url: r.url, title };
+  const out: SessionTab = r.pinned === true ? { url: r.url, title, pinned: true } : { url: r.url, title };
+  if (typeof r.id === 'string' && ID_RE.test(r.id)) out.id = r.id;
+  if (typeof r.sid === 'string' && ID_RE.test(r.sid)) out.sid = r.sid;
+  return out;
 }
 
 // Monta a sessão a partir da lista (na ordem) e da posição da ativa nela (-1 = não se sabe).
@@ -86,7 +93,7 @@ function build(list: readonly unknown[], activePos: number): SavedSession {
 export function sessionToSave(tabs: readonly SessionSource[], activeId: string): SavedSession {
   const strip = tabs.filter(t => !t.hidden);
   return build(
-    strip.map(t => (t.incognito ? null : { url: t.url, title: t.title, pinned: t.pinned })),
+    strip.map(t => (t.incognito ? null : { url: t.url, title: t.title, pinned: t.pinned, id: t.id, sid: t.sessionId })),
     strip.findIndex(t => t.id === activeId),
   );
 }

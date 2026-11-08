@@ -1,0 +1,217 @@
+{
+ "ats": "lever",
+ "source": "https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd/apply",
+ "fetched": "2026-11-01",
+ "reachable": true,
+ "notes": "jobs.lever.co /apply. Several cards[...] radio/checkbox questions have empty labels for the same reason.",
+ "fields": [
+  {
+   "label": "Resume/CV ✱ ATTACH RESUME/CV",
+   "type": "file",
+   "name": "resume",
+   "id": "resume-upload-input",
+   "expect": null
+  },
+  {
+   "label": "Full name ✱",
+   "type": "text",
+   "name": "name",
+   "required": true,
+   "expect": "fullName"
+  },
+  {
+   "label": "Email ✱",
+   "type": "email",
+   "name": "email",
+   "required": true,
+   "expect": "email"
+  },
+  {
+   "label": "Phone",
+   "type": "text",
+   "name": "phone",
+   "expect": "phone"
+  },
+  {
+   "label": "Current location ✱",
+   "type": "text",
+   "name": "location",
+   "id": "location-input",
+   "required": true,
+   "expect": "location"
+  },
+  {
+   "label": "Current company",
+   "type": "text",
+   "name": "org",
+   "expect": "currentCompany"
+  },
+  {
+   "label": "LinkedIn URL",
+   "type": "text",
+   "name": "urls[LinkedIn]",
+   "expect": "linkedin"
+  },
+  {
+   "label": "GitHub URL",
+   "type": "text",
+   "name": "urls[GitHub]",
+   "expect": "github"
+  },
+  {
+   "label": "Portfolio URL",
+   "type": "text",
+   "name": "urls[Portfolio]",
+   "expect": "website"
+  },
+  {
+   "label": "",
+   "type": "checkbox",
+   "name": "cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field0]",
+   "required": true,
+   "options": [
+    "English (ENG)",
+    "Spanish (SPA)",
+    "French (FRA)",
+    "German (DEU)",
+    "Japanese (JPN)",
+    "Cantonese (CANT)",
+    "Mandarin (MAN)",
+    "Dutch (NLD)",
+    "Hindi (HIN)",
+    "Arabic (ARA)",
+    "Danish (DAN)",
+    "Turkish (TUR)"
+   ],
+   "expect": null
+  },
+  {
+   "label": "Type your response",
+   "type": "text",
+   "name": "cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field1]",
+   "expect": null
+  },
+  {
+   "label": "Type your response",
+   "type": "text",
+   "name": "cards[a69a985a-eae9-4c14-90fb-b5a4b891523e][field2]",
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "cards[1c719ca9-5069-4afe-9e82-39ca420e0edb][field0]",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "cards[1c719ca9-5069-4afe-9e82-39ca420e0edb][field1]",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": null
+  },
+  {
+   "label": "UNIVERSITY",
+   "type": "select",
+   "name": "cards[3da58b41-acf5-40a1-945e-c7f047ef8050][field0]",
+   "required": true,
+   "options": [
+    "Click Here (If you encounter an issue, make sure your browser is updated and try",
+    "Aalborg University",
+    "Aalto University",
+    "Aarhus University",
+    "Abdullah Gul University",
+    "Abertay University",
+    "Aberystwyth University",
+    "Abilene Christian University",
+    "Abo Akademi University",
+    "Abubakar Tafawa Balewa University",
+    "Academy of Art University",
+    "Academy of Economic Studies of Moldova"
+   ],
+   "expect": null
+  },
+  {
+   "label": "HOW DID YOU HEAR ABOUT THIS OPPORTUNITY?",
+   "type": "select",
+   "name": "cards[a6197d84-549e-4a91-8bb0-6af972510013][field0]",
+   "required": true,
+   "options": [
+    "Select...",
+    "Agency or Non-Palantir Recruiter",
+    "America's Job Exchange",
+    "BuiltIn",
+    "Campus Ambassador",
+    "Friend or Family",
+    "Glassdoor",
+    "Hackajob",
+    "Hallo",
+    "Handshake",
+    "Job Board (Indeed, Monster, etc.)",
+    "LinkedIn"
+   ],
+   "expect": "howHeard"
+  },
+  {
+   "label": "What has been your favorite project or proudest accomplishment? Why?",
+   "type": "textarea",
+   "name": "cards[ce72d538-c9ad-41f3-8e9a-618d40c82e3a][field0]",
+   "expect": null
+  },
+  {
+   "label": "Why do you want to work at Palantir?",
+   "type": "textarea",
+   "name": "cards[ce72d538-c9ad-41f3-8e9a-618d40c82e3a][field1]",
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "cards[73796cde-fc01-4758-9002-c85155f3503d][field0]",
+   "required": true,
+   "options": [
+    "Yes, I consent",
+    "No, I do not consent"
+   ],
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "cards[a5557d1f-0fab-4dbd-9059-b8625900049a][field0]",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": null
+  },
+  {
+   "label": "",
+   "type": "radio",
+   "name": "cards[a5557d1f-0fab-4dbd-9059-b8625900049a][field1]",
+   "required": true,
+   "options": [
+    "Yes",
+    "No"
+   ],
+   "expect": null
+  },
+  {
+   "label": "ADDITIONAL INFORMATION",
+   "type": "textarea",
+   "name": "comments",
+   "id": "additional-information",
+   "expect": null
+  }
+ ]
+}
