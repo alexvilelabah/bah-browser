@@ -8,7 +8,8 @@ import type { AddressInfo } from 'net';
 // Tarefas agendadas: criar pelo assistente ("every weekday at 8am …"), o relógio injetado
 // (E2E_SCHED_NOW + window.__bahSched.setNow) faz a hora chegar, a tarefa roda num aba com sessão
 // "⏰ …" e fica no histórico; uma vez que bate no freio (botão "Send" numa tarefa sem ninguém olhando)
-// espera — com aviso — e não clica; reabrir depois da hora oferece "Rodar agora / Pular".
+// espera — com aviso — e não clica; reabrir depois da hora oferece "Rodar agora / Pular / Adiar /
+// Apagar": adiar 3 dias pula as vezes até lá (e sobrevive a reiniciar), apagar pede confirmação.
 const ROOT = path.resolve(__dirname, '../..');
 const ELECTRON = process.platform === 'win32' ? path.join(ROOT, 'node_modules/electron/dist/electron.exe')
   : process.platform === 'darwin' ? path.join(ROOT, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
@@ -18,8 +19,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Segunda-feira 2026-11-02 07:59 (hora local da máquina): a tarefa "dias úteis às 8h" vence em 1 minuto.
 const MONDAY_0759 = new Date(2026, 10, 2, 7, 59, 0).getTime();
 const TUESDAY_1000 = new Date(2026, 10, 3, 10, 0, 0).getTime();
+const THURSDAY_1000 = new Date(2026, 10, 5, 10, 0, 0).getTime();
+const SATURDAY_1200 = new Date(2026, 10, 7, 12, 0, 0).getTime();
 
-test('scheduled tasks: create from the assistant, fire on the clock, wait at the brake, offer the missed run', async () => {
+test('scheduled tasks: create from the assistant, fire on the clock, wait at the brake, offer the missed run (run, snooze, delete)', async () => {
   test.setTimeout(300_000);
   let sent = 0;
   const server = http.createServer((q, res) => {
@@ -139,5 +142,86 @@ test('scheduled tasks: create from the assistant, fire on the clock, wait at the
     // O arquivo no disco é cifrado: o pedido não aparece em texto puro.
     const raw = fs.readFileSync(path.join(tmp, 'scheduled-tasks.enc'));
     expect(raw.includes(Buffer.from('check the job board'))).toBe(false);
+
+    // Uma segunda tarefa pelo painel (pro "Apagar" depois): todo dia às 9h → quarta 9h.
+    await openPanel(page);
+    await page.getByTestId('sched-command').fill('read the weather report');
+    await page.getByTestId('sched-when').fill('every day at 9am');
+    await page.getByTestId('sched-save').click();
+    await expect(page.getByTestId('sched-item')).toHaveCount(2);
+    s = await state(page);
+    expect(s.tasks[1].nextAt).toBe(new Date(2026, 10, 4, 9, 0, 0).getTime());
+  } finally { await app.close(); }
+
+  let snoozedUntil = 0;
+  // ── 5. Reabrir na quinta 10h: as duas perderam quarta e quinta → Adiar uma, Apagar a outra.
+  app = await launch(THURSDAY_1000, [{ type: 'done', reason: 'Should not run.', success: true }]);
+  try {
+    const page = await ready(app);
+    await expect(page.getByTestId('sched-missed-row')).toHaveCount(2);
+    const jobs = page.getByTestId('sched-missed-row').filter({ hasText: 'check the job board' });
+    const weather = page.getByTestId('sched-missed-row').filter({ hasText: 'read the weather report' });
+    await expect(jobs).toContainText('Missed 2 times');
+
+    // Adiar: primeiro as escolhas (1, 3, 7 dias); Cancelar volta aos botões sem mudar nada.
+    await jobs.getByTestId('sched-missed-snooze').click();
+    await expect(jobs.getByTestId('sched-missed-snooze-choices')).toBeVisible();
+    await expect(jobs.locator('[data-testid^="sched-snooze-"]')).toHaveText(['1 day', '3 days', '7 days']);
+    await jobs.getByRole('button', { name: 'Cancel' }).click();
+    await expect(jobs.getByTestId('sched-missed-run')).toBeVisible();
+    await jobs.getByTestId('sched-missed-snooze').click();
+    await jobs.getByTestId('sched-snooze-3').click();
+    await expect(page.getByTestId('sched-missed-row')).toHaveCount(1);
+    let s = await state(page);
+    const job = s.tasks.find((x: any) => x.command === 'check the job board');
+    // Quinta 10h + 3 dias = domingo 10h; dias úteis 8h → segunda 9 de novembro, 8h.
+    // (o relógio injetado anda: alguns segundos depois das 10h)
+    expect(job.snoozedUntil).toBeGreaterThanOrEqual(new Date(2026, 10, 8, 10, 0, 0).getTime());
+    expect(job.snoozedUntil).toBeLessThan(new Date(2026, 10, 8, 10, 5, 0).getTime());
+    snoozedUntil = job.snoozedUntil;
+    expect(job.nextAt).toBe(new Date(2026, 10, 9, 8, 0, 0).getTime());
+    expect(job.enabled).toBe(true);
+    expect(job.history.at(-1)).toMatchObject({ outcome: 'skipped', missed: true });
+    expect(job.history.at(-1).summary).toContain('snoozed');
+
+    // Apagar: pede confirmação; "Keep" não apaga; "Delete task" apaga.
+    await weather.getByTestId('sched-missed-delete').click();
+    await expect(weather.getByTestId('sched-missed-delete-confirm')).toContainText('can’t be undone');
+    await weather.getByTestId('sched-missed-delete-no').click();
+    expect((await state(page)).tasks).toHaveLength(2);
+    await weather.getByTestId('sched-missed-delete').click();
+    await weather.getByTestId('sched-missed-delete-yes').click();
+    await expect(page.getByTestId('sched-missed')).toHaveCount(0);
+    s = await state(page);
+    expect(s.tasks).toHaveLength(1);
+    expect(s.tasks[0].command).toBe('check the job board');
+    await sleep(2000);
+    expect(await prompts(app)).toBe(0);   // nenhuma das escolhas roda o agente
+
+    await openPanel(page);
+    await expect(page.getByTestId('sched-snoozed')).toBeVisible();
+  } finally { await app.close(); }
+
+  // ── 6. Reabrir no sábado (ainda adiada): nada oferecido; na segunda 8h a regra normal volta.
+  app = await launch(SATURDAY_1200, [
+    { type: 'navigate', url: T },
+    { type: 'done', reason: 'Back on schedule.', success: true },
+  ]);
+  try {
+    const page = await ready(app);
+    await sleep(2000);
+    await expect(page.getByTestId('sched-missed')).toHaveCount(0);
+    let s = await state(page);
+    expect(s.tasks).toHaveLength(1);
+    expect(s.tasks[0].nextAt).toBe(new Date(2026, 10, 9, 8, 0, 0).getTime());
+    expect(s.tasks[0].snoozedUntil).toBe(snoozedUntil);   // gravado no disco
+    expect(await prompts(app)).toBe(0);
+    if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
+    await page.evaluate((t) => (window as any).__bahSched.setNow(t), new Date(2026, 10, 9, 8, 0, 5).getTime());
+    await expect(page.getByText('Back on schedule.').first()).toBeVisible({ timeout: 60_000 });
+    await expect.poll(async () => (await state(page)).tasks[0].history.at(-1).outcome, { timeout: 15_000 }).toBe('success');
+    s = await state(page);
+    expect(s.tasks[0].nextAt).toBe(new Date(2026, 10, 10, 8, 0, 0).getTime());   // terça 8h
+    expect(s.tasks[0].snoozedUntil).toBeUndefined();
   } finally { await app.close(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

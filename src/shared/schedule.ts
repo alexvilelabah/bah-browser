@@ -24,6 +24,8 @@ export interface ScheduledTask {
   createdAt: number;
   nextAt: number;        // próxima vez (ms, relógio do sistema)
   lastRunAt?: number;
+  /** "Adiar N dias" no cartão das perdidas: nada roda antes disto; depois volta a regra normal. */
+  snoozedUntil?: number;
   history: RunRecord[];  // mais nova por último
 }
 
@@ -37,6 +39,9 @@ export const MAX_HISTORY = 20;
 export const MAX_SUMMARY = 240;
 /** Com o Bah aberto, uma hora que passou há mais que isto (computador dormindo) vira "perdida". */
 export const DUE_GRACE_MS = 10 * 60_000;
+/** Escolhas do "Adiar" no cartão das perdidas (dias). */
+export const SNOOZE_DAYS = [1, 3, 7];
+export const MAX_SNOOZE_DAYS = 30;
 
 export const WEEKDAYS = [1, 2, 3, 4, 5];
 export const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
@@ -271,6 +276,38 @@ export function advance(spec: ScheduleSpec, due: number, now: number): number {
   return nextRunAfter(spec, Math.max(due, now));
 }
 
+// ── ADIAR (cartão das perdidas) ──────────────────────────────────────────────
+
+/** A mesma hora do relógio `days` dias depois (data local: o dia da troca de horário tem 23/25h). */
+export function addLocalDays(at: number, days: number): number {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).getTime();
+}
+
+/** A primeira vez da regra em `at` ou depois (intervalo: na grade que começa em `due`). */
+function firstRunFrom(spec: ScheduleSpec, due: number, at: number): number {
+  return spec.kind === 'interval' ? advance(spec, due, at - 1) : nextRunAfter(spec, at - 1);
+}
+
+/**
+ * "Adiar N dias" uma vez perdida (`due`, agora `now`): nada roda até a mesma hora daqui a N dias;
+ * a próxima vez é a primeira da regra a partir daí (semanal: no dia/hora de sempre; intervalo: na
+ * grade). A tarefa continua na lista e a regra segue normal depois.
+ */
+export function snoozeUntil(spec: ScheduleSpec, due: number, now: number, days: number): { until: number; nextAt: number } {
+  const n = Math.min(Math.max(Math.round(Number(days)) || 1, 1), MAX_SNOOZE_DAYS);
+  const until = addLocalDays(now, n);
+  return { until, nextAt: firstRunFrom(spec, due, until) };
+}
+
+/**
+ * Próxima vez depois de `at` respeitando um adiamento ainda valendo (editar a regra ou religar a
+ * tarefa no meio do adiamento não o desfaz).
+ */
+export function nextRunRespectingSnooze(spec: ScheduleSpec, at: number, snoozedUntil?: number): number {
+  return snoozedUntil && snoozedUntil > at ? firstRunFrom(spec, snoozedUntil, snoozedUntil) : nextRunAfter(spec, at);
+}
+
 // ── VEZES PERDIDAS ───────────────────────────────────────────────────────────
 
 export type DueState = 'not-due' | 'due' | 'missed';
@@ -333,6 +370,7 @@ export function sanitizeTask(t: any): ScheduledTask | null {
     createdAt: num(t.createdAt) ?? Date.now(),
     nextAt: num(t.nextAt) ?? 0,
     ...(num(t.lastRunAt) ? { lastRunAt: num(t.lastRunAt) } : {}),
+    ...(num(t.snoozedUntil) ? { snoozedUntil: num(t.snoozedUntil) } : {}),
     history,
   };
 }

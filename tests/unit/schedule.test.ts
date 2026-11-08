@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseSchedule, parseWhen, nextRunAfter, nextRuns, advance, dueState, missedCount, sanitizeTasks, withRun,
+  addLocalDays, snoozeUntil, nextRunRespectingSnooze, SNOOZE_DAYS, MAX_SNOOZE_DAYS,
   MIN_INTERVAL_MIN, MAX_HISTORY, MAX_TASKS, WEEKDAYS, EVERY_DAY, type ScheduleSpec, type ScheduledTask,
 } from '../../src/shared/schedule.ts';
 
@@ -134,6 +135,79 @@ test('missed runs: at launch anything past is offered; while open, only a long g
   assert.equal(missedCount(daily, L(2026, 10, 30, 8), now), 4);   // 30, 31, 1, 2
   assert.equal(missedCount(daily, now + 1, now), 0);
   assert.equal(missedCount({ kind: 'interval', everyMin: 15 }, now - 3600_000, now), 5);
+});
+
+test('snooze: nothing until the same time N days later, then the regular rule resumes', () => {
+  assert.deepEqual(SNOOZE_DAYS, [1, 3, 7]);
+  const wk: ScheduleSpec = { kind: 'weekly', days: WEEKDAYS, hour: 8, minute: 0 };
+  // Perdida terça 2026-11-03 8:00, a pessoa abre o Bah às 10:00.
+  const due = L(2026, 11, 3, 8), now = L(2026, 11, 3, 10);
+  let s = snoozeUntil(wk, due, now, 1);
+  assert.equal(fmt(s.until), '2026-11-4 10:00 Wed');
+  assert.equal(fmt(s.nextAt), '2026-11-5 8:00 Thu');   // quarta 8h cai dentro do adiamento
+  // Depois do adiamento a regra normal segue: sexta, segunda (pula o fim de semana)…
+  assert.deepEqual(nextRuns(wk, s.nextAt, 2).map(fmt), ['2026-11-6 8:00 Fri', '2026-11-9 8:00 Mon']);
+  assert.equal(fmt(advance(wk, s.nextAt, s.nextAt)), '2026-11-6 8:00 Fri');
+  s = snoozeUntil(wk, due, now, 3);
+  assert.equal(fmt(s.nextAt), '2026-11-9 8:00 Mon');    // sexta 10h + fim de semana
+  s = snoozeUntil(wk, due, now, 7);
+  assert.equal(fmt(s.nextAt), '2026-11-11 8:00 Wed');
+  // Exatamente na hora em que o adiamento acaba conta (em ou depois).
+  s = snoozeUntil(wk, due, L(2026, 11, 3, 8), 1);
+  assert.equal(fmt(s.nextAt), '2026-11-4 8:00 Wed');
+  // Semanal num dia só: a próxima segunda depois do adiamento.
+  const mon: ScheduleSpec = { kind: 'weekly', days: [1], hour: 9, minute: 0 };
+  assert.equal(fmt(snoozeUntil(mon, L(2026, 11, 2, 9), L(2026, 11, 2, 12), 3).nextAt), '2026-11-9 9:00 Mon');
+  assert.equal(fmt(snoozeUntil(mon, L(2026, 11, 2, 9), L(2026, 11, 2, 12), 7).nextAt), '2026-11-16 9:00 Mon');
+  // Dias fora da faixa: no mínimo 1, no máximo MAX_SNOOZE_DAYS.
+  assert.equal(snoozeUntil(wk, due, now, 0).until, addLocalDays(now, 1));
+  assert.equal(snoozeUntil(wk, due, now, 999).until, addLocalDays(now, MAX_SNOOZE_DAYS));
+});
+
+test('snooze: intervals stay on their grid', () => {
+  const iv: ScheduleSpec = { kind: 'interval', everyMin: 120 };
+  const due = L(2026, 11, 3, 8), now = L(2026, 11, 3, 10, 30);
+  const s = snoozeUntil(iv, due, now, 1);
+  assert.equal(fmt(s.until), '2026-11-4 10:30 Wed');
+  assert.equal(fmt(s.nextAt), '2026-11-4 12:00 Wed');   // grade 8h, 10h, 12h… a primeira depois de 10:30
+  assert.equal(advance(iv, s.nextAt, s.nextAt), s.nextAt + 120 * 60_000);
+});
+
+test('snooze across DST: N calendar days, same wall-clock time', () => {
+  const daily8: ScheduleSpec = { kind: 'weekly', days: EVERY_DAY, hour: 8, minute: 0 };
+  // EUA, fim do horário de verão 2026-11-01: adiar 1 dia no sábado 10h → domingo 10h (25h depois).
+  const sat = L(2026, 10, 31, 10);
+  let s = snoozeUntil(daily8, L(2026, 10, 31, 8), sat, 1);
+  assert.equal(fmt(s.until), '2026-11-1 10:00 Sun');
+  assert.equal(s.until - sat, 25 * 3600_000);
+  assert.equal(fmt(s.nextAt), '2026-11-2 8:00 Mon');
+  // Começo do horário de verão 2026-03-08: o dia tem 23h; 8h continua 8h.
+  const mar7 = L(2026, 3, 7, 7);
+  s = snoozeUntil(daily8, L(2026, 3, 6, 8), mar7, 1);
+  assert.equal(fmt(s.until), '2026-3-8 7:00 Sun');
+  assert.equal(s.until - mar7, 23 * 3600_000);
+  assert.equal(fmt(s.nextAt), '2026-3-8 8:00 Sun');
+  // Adiar até uma hora que não existe (2:30 no salto da primavera) empurra pra frente, não some.
+  assert.equal(fmt(addLocalDays(L(2026, 3, 7, 2, 30), 1)), '2026-3-8 3:30 Sun');
+});
+
+test('snooze survives edits and restarts: rescheduling keeps it, storage keeps it', () => {
+  const wk: ScheduleSpec = { kind: 'weekly', days: WEEKDAYS, hour: 8, minute: 0 };
+  const until = L(2026, 11, 6, 10);   // sexta 10h
+  // Mudar a regra (ou religar) no meio do adiamento: a próxima vez continua depois dele.
+  assert.equal(fmt(nextRunRespectingSnooze(wk, L(2026, 11, 4, 9), until)), '2026-11-9 8:00 Mon');
+  const eleven: ScheduleSpec = { kind: 'weekly', days: EVERY_DAY, hour: 11, minute: 0 };
+  assert.equal(fmt(nextRunRespectingSnooze(eleven, L(2026, 11, 4, 9), until)), '2026-11-6 11:00 Fri');
+  // Adiamento já acabou (ou não existe): regra normal.
+  assert.equal(fmt(nextRunRespectingSnooze(wk, L(2026, 11, 9, 9), until)), '2026-11-10 8:00 Tue');
+  assert.equal(fmt(nextRunRespectingSnooze(wk, L(2026, 11, 4, 9))), '2026-11-5 8:00 Thu');
+  assert.equal(nextRunRespectingSnooze({ kind: 'interval', everyMin: 60 }, L(2026, 11, 4, 9), until), until);
+  // O disco guarda o snoozedUntil (e descarta lixo).
+  const base = { id: 'st_s', name: 'N', command: 'check the news', spec: wk, enabled: true, createdAt: 1, nextAt: L(2026, 11, 9, 8), history: [] };
+  assert.equal(sanitizeTasks([{ ...base, snoozedUntil: until }])[0].snoozedUntil, until);
+  assert.equal('snoozedUntil' in sanitizeTasks([{ ...base, snoozedUntil: 'x' }])[0], false);
+  // Ainda adiada → não vence na abertura (não vira oferta de novo).
+  assert.equal(dueState({ enabled: true, nextAt: L(2026, 11, 9, 8) }, L(2026, 11, 7, 12), true), 'not-due');
 });
 
 test('storage: sanitized, capped, history kept short', () => {
