@@ -180,3 +180,64 @@ a.href = /Mac/.test(p) ? '/files/Steam.dmg' : /Win/.test(p) ? '/files/SteamSetup
     fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(dlDir, { recursive: true, force: true });
   }
 });
+
+// "Baixe o Zoom pro meu Mac" digitado em OUTRO sistema: o .dmg é o certo (o pedido diz o computador),
+// não um WRONG OS — e, sendo o único arquivo pedido, a tarefa acaba assim que o download começa.
+// Num Mac, o mesmo caso ao contrário: "pro meu PC com Windows" e um .exe.
+test('download for another computer: "for my Mac" on another OS takes the .dmg and ends the task', async () => {
+  test.setTimeout(120_000);
+  const forMac = ME.os !== 'macos';
+  const FILE = forMac ? 'ZoomInstallerFull.dmg' : 'ZoomInstallerFull.exe';
+  const FILE_RE = FILE.replace(/\./g, '\\.');
+  const server = http.createServer((q, res) => {
+    if (q.url === `/files/${FILE}`) {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${FILE}"` });
+      res.end(Buffer.alloc(64 * 1024, 7));
+      return;
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(`<title>Download Center</title><h1>Zoom Workplace desktop app</h1><p>The desktop app for ${forMac ? 'macOS' : 'Windows'}.</p><a href="/files/${FILE}">Download</a> <a href="/">Support</a>`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const T = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-swdl-target-'));
+  const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bah-swdl-target-files-'));
+  const script = [
+    { type: 'navigate', url: T },
+    { type: 'click_ref', ref: `__REF:(installer for the requested ${forMac ? 'macOS' : 'Windows'})__` },
+    { type: 'wait', ms: 60000 },          // nunca deve rodar: a tarefa acaba quando o download começa
+    { type: 'done', reason: 'SCRIPT REACHED THE END', success: true },
+  ];
+  const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
+  const app = await electron.launch({ executablePath: ELECTRON, args: [ROOT, `--user-data-dir=${tmp}`, '--use-mock-keychain'], env: { ...env, E2E_MOCK_AI: '1', E2E_MOCK_SCRIPT: JSON.stringify(script), NODE_ENV: 'test' } });
+  try {
+    const page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await sleep(1500);
+    await page.evaluate((d) => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); localStorage.setItem('dlDir', d); }, dlDir);
+    await page.reload(); await page.waitForLoadState('domcontentloaded'); await sleep(2000);
+    if (!(await page.getByTestId('agent-command-input').isVisible().catch(() => false))) await page.locator('.top-bar-ai').click();
+    await page.getByTestId('agent-command-input').fill(forMac ? 'download Zoom for my Mac from this page' : 'download Zoom for my Windows PC from this page');
+    await page.getByTestId('agent-command-input').press('Enter');
+    for (let i = 0; i < 80; i++) {
+      if (await page.getByTestId('plan-approve').isVisible().catch(() => false)) await page.getByTestId('plan-approve').click();
+      if (await page.getByText(new RegExp(`Downloading ${FILE_RE}`)).first().isVisible().catch(() => false)) break;
+      await sleep(500);
+    }
+    await expect(page.getByText(new RegExp(`⬇️ Downloading ${FILE_RE}`)).first()).toBeVisible();
+    await expect(page.getByText('SCRIPT REACHED THE END')).toHaveCount(0);
+    const ps: string[] = await app.evaluate(() => (global as any).__e2ePrompts || []);
+    const all = ps.join('\n');
+    if (process.env.SWDL_DUMP) fs.writeFileSync(process.env.SWDL_DUMP, all);
+    // O prompt diz que o pedido é pra outro computador, e o botão aponta o instalador dele.
+    expect(ps[0]).toContain(`THIS COMPUTER: ${ME.osName.split(' ')[0]}`);
+    expect(ps[0]).toContain(`THE REQUEST IS FOR ANOTHER COMPUTER: ${forMac ? 'macOS' : 'Windows'}`);
+    expect(ps[1]).toMatch(new RegExp(`\\[\\d+\\] "Download" → ${FILE_RE} \\(installer for the requested ${forMac ? 'macOS' : 'Windows'}\\)`));
+    // Sem aviso de build errado: nem no prompt, nem na linha de status do painel.
+    expect(all).not.toMatch(/WRONG (OS|CPU|PACKAGE)/);
+    await expect(page.getByText(/not the right build/)).toHaveCount(0);
+    expect(ps.length).toBeLessThanOrEqual(3);   // nenhum passo depois do download
+    await expect.poll(() => fs.existsSync(path.join(dlDir, FILE)), { timeout: 20_000 }).toBe(true);
+  } finally {
+    await app.close(); server.close();
+    fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(dlDir, { recursive: true, force: true });
+  }
+});

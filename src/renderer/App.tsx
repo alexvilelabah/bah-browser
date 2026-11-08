@@ -16,7 +16,7 @@ import { classifyRisk, riskForAction, socialActionToBlock, RiskInfo } from './ri
 import { paceDelay, recordHit, backoff, isBackedOff, hostOf as paceHostOf, BOT_CHECK_RE } from './pacing';
 import { isCarefulHost, CAREFUL_ALLOWED } from './careful-sites';
 import { matchControl, pickOverlay, type PageControl, type OverlayCandidate } from '../shared/page-controls';
-import { machineProfile, machineLine, checkBuild, isDownloadControl, installerFileOf, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
+import { machineProfile, machineLine, checkBuild, targetFromRequest, targetProfile, isDownloadControl, installerFileOf, thirdPartyDownloadSite, thirdPartyNote, signInWall, type MachineInput, type MachineProfile } from '../shared/software-download';
 import { stripTrackingParams } from '../main/tracking-params';
 import { speak, stopSpeaking, isSpeaking } from './tts';
 import { t, onLangChange, getLang, googleLocaleParams, bingLocale, uiLangName } from './i18n';
@@ -2272,6 +2272,10 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
               let pendingZoom: { x: number; y: number; w: number; h: number; label: string } | null = null;
               // Tipo de pedido (pro freio do "encerrou sem listar o que achou").
               const commandWantsDownload = /\b(down?load\w*|downlaod\w*|donwload\w*|downoad\w*|dwnload\w*|baix[ae]\w*|baixar|descarg\w+)\b/i.test(command);
+              // Pra QUAL computador é o download: "pro meu Mac" digitado no Linux é o Mac (SO/CPU do
+              // pedido); sem nada no pedido, esta máquina. Função: o perfil desta máquina chega depois (machine:info).
+              const requestTarget = targetFromRequest(command);
+              const dlFor = () => targetProfile(MACHINE, requestTarget);
               // O download é o ÚLTIMO passo do pedido? Sim → a tarefa acaba quando ele começa. Não ("baixe e
               // instale", "baixe os dois e compare") → o Bah espera TODOS os downloads da tarefa terminarem
               // antes do próximo passo, senão o modelo acha que o arquivo já está lá.
@@ -2879,7 +2883,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const downloadsBlock = taskDls.length
                     ? `DOWNLOADS (live status — the file downloads in the background; the page does not need to change):\n${taskDls.map(d => {
                         const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
-                        if (d.state === 'completed') return `  • ${d.filename} — COMPLETED (${fmtSize(d.bytes)}), saved at ${d.path || 'the Downloads folder'}${ofThisTask(d) ? '' : ' (from a PREVIOUS task — not this request)'}${wrongOsNote(d.filename)}`;
+                        if (d.state === 'completed') return `  • ${d.filename} — COMPLETED (${fmtSize(d.bytes)}), saved at ${d.path || 'the Downloads folder'}${ofThisTask(d) ? '' : ' (from a PREVIOUS task — not this request)'}${wrongOsNote(d.filename, dlFor())}`;
                         if (d.state === 'failed' || d.state === 'cancelled') return `  • ${d.filename} — ${d.state.toUpperCase()}`;
                         if ((d as any).stalled) return `  • ${d.filename} — STALLED at ${of} (no data for ${(d as any).stalledForSec || 15}s)`;
                         const pct = d.totalBytes ? Math.floor(((d.bytes || 0) / d.totalBytes) * 100) + '%, ' : '';
@@ -2904,13 +2908,13 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   const dlButtons = commandWantsDownload
                     ? observation.interactive_elements
                       .filter(e => isDownloadControl(String(e.text || (e as any).aria || ''), hrefOf(e)))
-                      .filter(e => { const f = installerFileOf(hrefOf(e)); return !f || !isWrongBuild(f); })
+                      .filter(e => { const f = installerFileOf(hrefOf(e)); return !f || !isWrongBuild(f, dlFor()); })
                       .sort((a, b) => Number(!!installerFileOf(hrefOf(b))) - Number(!!installerFileOf(hrefOf(a))))
                       .slice(0, 3)
                     : [];
                   stepDlButtons = dlButtons;
                   const dlButtonsBlock = dlButtons.length
-                    ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for this computer)` : ''}`; }).join('\n')}`
+                    ? `LIKELY DOWNLOAD BUTTON${dlButtons.length > 1 ? 'S' : ''} ON THIS PAGE (click to start the file; accepting the license/EULA is part of downloading):\n${dlButtons.map(e => { const f = installerFileOf(hrefOf(e)); return `  [${e.id}] "${String(e.text || (e as any).aria || '').trim().slice(0, 60)}"${f ? ` → ${f} (installer for ${dlFor().requested ? `the requested ${dlFor().osName}` : 'this computer'})` : ''}`; }).join('\n')}`
                     : '';
                   // Dica ao vivo de UI que trava modelo pequeno (vale pra qualquer site):
                   //  • diálogo modal aberto → a página de trás fica inerte e SOME da lista de elementos
@@ -3039,7 +3043,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     suggestBlock,
                     // Download: a máquina e o que escolher bem ao lado dos downloads (o bloco do sistema
                     // fica longe e o modelo pequeno pegava o .exe num Mac); e o aviso de agregador.
-                    commandWantsDownload ? machineLine(MACHINE) : '',
+                    commandWantsDownload ? machineLine(MACHINE, dlFor()) : '',
                     commandWantsDownload ? thirdPartyNote(thirdPartyDownloadSite(observation.url)) : '',
                     downloadsBlock,
                     dlButtonsBlock,
@@ -3407,7 +3411,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                   // download completo). Antes do onProgress, que é quem desenha o rótulo.
                   if (action.type === 'done' && !action.success && commandWantsDownload) {
                     const mine = [...dlLatestRef.current.values()].filter(ofThisTask) as Array<{ state: string; filename: string }>;
-                    const completed = mine.some(d => d.state === 'completed' && !isWrongBuild(d.filename));
+                    const completed = mine.some(d => d.state === 'completed' && !isWrongBuild(d.filename, dlFor()));
                     const running = mine.some(d => d.state === 'started' || d.state === 'progress' || d.state === 'queued');
                     // ...e a mensagem final NÃO admite falha (meta pode ter mudado no meio — um ISO
                     // concluído antes não faz o pedido NOVO de drivers dar "success").
@@ -5132,7 +5136,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                       const prevTask = latest && (latest.startedAt ?? 0) < taskStartedAt ? ' (from a PREVIOUS task — not this request)' : '';
                       // Arquivo errado pra esta máquina, ou baixado de agregador de "free download" (não do fabricante).
                       const dlFrom = d.state === 'started' && commandWantsDownload ? thirdPartyDownloadSite(String((d as any).url || '')) || thirdPartyDownloadSite(observation.url) : '';
-                      const osNote = (d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename) : '') + (dlFrom ? ' ' + thirdPartyNote(dlFrom) : '');
+                      const osNote = (d.state === 'started' || d.state === 'completed' ? wrongOsNote(d.filename, dlFor()) : '') + (dlFrom ? ' ' + thirdPartyNote(dlFrom) : '');
                       const of = `${fmtSize(d.bytes) || '0 B'}${d.totalBytes ? ' of ' + fmtSize(d.totalBytes) : ''}`;
                       const line = d.state === 'completed'
                         ? `DOWNLOAD COMPLETED: ${d.filename} (${fmtSize(d.bytes)}) saved at ${d.path || 'the Downloads folder'} — the file is ready to use at that path. This is SUCCESS — do not download it again.`
@@ -5152,7 +5156,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                           : `DOWNLOAD CANCELLED by the user: ${d.filename}. Do not restart it unless asked.`)
                         : `DOWNLOAD STARTED (in progress — NOT finished yet): ${d.filename}${d.totalBytes ? ' (' + fmtSize(d.totalBytes) + ')' : ''}${d.path ? ' → ' + d.path : ''}. It downloads in the background. ${downloadIsLastStep ? 'If this is the file the user asked for, the task is DONE: finish with done saying it is DOWNLOADING (not downloaded) — the user follows it on the download button.' : 'Bah waits for it to COMPLETE before your next step; the rest of the request continues after DOWNLOAD COMPLETED.'}`;
                       history += `\n${prevTask ? line.replace(/^(DOWNLOAD [A-Z ()_]+?):/, `$1${prevTask}:`) : line}${osNote}`;
-                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${isWrongBuild(d.filename) ? ' ⚠️ ' + t('dl.wrongBuild') : dlFrom ? ' ⚠️ ' + t('dl.thirdParty') : ''}` });
+                      onProgress({ kind: 'status', message: `💾 ${line.slice(0, 140)}${isWrongBuild(d.filename, dlFor()) ? ' ⚠️ ' + t('dl.wrongBuild') : dlFrom ? ' ⚠️ ' + t('dl.thirdParty') : ''}` });
                     }
                     if (dlEvents.some(d => d.state === 'completed' || d.state === 'started')) noEffectCount = 0;
                     // O download que a pessoa pediu COMEÇOU → a tarefa acabou: avisa que está baixando e encerra.
@@ -5161,7 +5165,7 @@ Answer with one word: ACTION, PAGE, WEB, or CHAT.`;
                     if (downloadIsLastStep && actionQueue.length === 0) {
                       const started = dlEvents.find(d => (d.state === 'started' || (d.state === 'progress' && !d.stalled))
                         && ((dlLatestRef.current.get(d.id || d.path || d.filename) as any)?.startedAt ?? 0) >= taskStartedAt
-                        && !wrongOsNote(d.filename));
+                        && !wrongOsNote(d.filename, dlFor()));
                       if (started) {
                         const size = started.totalBytes ? ` (${fmtSize(started.totalBytes)})` : '';
                         const msg = `⬇️ Downloading ${started.filename}${size} to ${started.path ? started.path.split(/[\\/]/).slice(0, -1).join('/') || 'Downloads' : 'Downloads'} — follow its progress on the download button.`;
@@ -5513,13 +5517,16 @@ function youtubeWatchId(u: string): string | null {
 const NAV_PLATFORM = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
 let MACHINE: MachineProfile = machineProfile({ platform: /^Win/i.test(NAV_PLATFORM) ? 'win32' : /Mac/i.test(NAV_PLATFORM) ? 'darwin' : /Linux/i.test(NAV_PLATFORM) ? 'linux' : 'other', arch: 'other' });
 try { window.electronAPI?.machineInfo?.().then(m => { if (m?.platform) MACHINE = machineProfile(m); }).catch(() => {}); } catch {}
-/** Nota pro agente: erro (SO/CPU/pacote errado — não roda aqui) ou aviso (roda emulado). '' = serve. */
-function wrongOsNote(filename: string): string {
-  return checkBuild(filename, MACHINE).note;
+/**
+ * Nota pro agente: erro (SO/CPU/pacote errado — não roda lá) ou aviso (roda emulado). '' = serve.
+ * `target` = o computador do pedido (targetProfile); sem ele, esta máquina.
+ */
+function wrongOsNote(filename: string, target: MachineProfile = MACHINE): string {
+  return checkBuild(filename, target).note;
 }
-/** Só o erro de verdade: um download "concluído" que não roda aqui não conta como sucesso. */
-function isWrongBuild(filename: string): boolean {
-  return checkBuild(filename, MACHINE).level === 'error';
+/** Só o erro de verdade: um download "concluído" que não roda no alvo não conta como sucesso. */
+function isWrongBuild(filename: string, target: MachineProfile = MACHINE): boolean {
+  return checkBuild(filename, target).level === 'error';
 }
 
 // Formatadores do painel de downloads (tamanho, velocidade, tempo restante).
