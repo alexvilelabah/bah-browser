@@ -54,7 +54,19 @@ sites behave exactly as they would for a human.
 | `site-locale.ts` | **Single source** for the language sites receive (Accept-Language / navigator.languages / --lang follow the UI choice) |
 | `page-agent.ts` | Cloud-side reasoning helpers for the agent |
 | `download-manager.ts` | Native download manager: pause/resume/cancel/queue/ETA, guarded `open-file` |
-| `media-downloader.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download) |
+| `agent-download-worker.ts`, `download-progress.ts` | The agent's `download` action: one `worker_threads` worker per download; progress cadence + stall policy. See [Downloads & torrents](#downloads--torrents) |
+| `torrent-manager.ts`, `torrent/engine.mjs` | **Optional** built-in torrent client (off by default): IPC bridge + the engine, isolated in a `utilityProcess` that only starts when used. See [Downloads & torrents](#downloads--torrents) |
+| `media-downloader.ts`, `media-parts.ts` | `yt-dlp` / `ffmpeg` wrapper (video/audio download); parts/merge/interrupted-download logic. See [Downloads & torrents](#downloads--torrents) |
+| `proxy.ts`, `proxy-config.ts` | Proxy for **every** session (system / manual http·https·socks5 / PAC / direct), 407 sign-in prompt with keychain-encrypted saved credentials, `proxy:*` IPC. Main-process `fetch` is routed through the `persist:browser` session's `session.fetch`, and agent downloads that need a proxy use `session.downloadURL`, so one setting covers everything |
+| `site-permissions.ts` (+ `src/shared/site-permissions.ts`) | Permission handlers for the sites' sessions: sensitive permissions denied until the user answers the Bah bar (once / always / never, per origin), background/hidden tabs auto-denied, unknown permissions denied. **Location** is denied without asking on every site (`DENY_UNLESS_ALLOWED` in `site-permission-rules.ts`) — only an Allow the user picks in the padlock menu passes; sites see `denied`, not a faked `prompt` |
+| `frames.ts` | Iframe content for the agent (embedded job/payment/booking forms): accessibility trees of same-process frames (by `frameId`) and cross-origin frames (flattened CDP sessions via `Target.setAutoAttach`), coordinates mapped to the page viewport; elements are listed with `frame="host"`. Fills set the value on the node inside its frame (focus-independent); clicks in cross-origin frames use CDP `Input` on the frame's session (`sendInputEvent` stops at the `<iframe>`) |
+| `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | Page `alert`/`confirm` in tabs: replaces Electron's blocking native box (internal `-run-dialog`) with Bah's dialog for the user, and the agent policy on its tabs (armed `dialog` action > alert closes > ordinary confirm accepted > payment/delete confirm asks the user); `beforeunload` on agent tabs leaves when the agent navigates. `prompt()` is not available in Electron (it throws) |
+| `upload.ts` | Agent `upload` (OS file dialog → token; file field by node/label/position, or the OS picker intercepted with `Page.setInterceptFileChooserDialog` during the action; `DOM.setFileInputFiles`) and session folder grants for `list_files` / `read_file` / `upload { file }` (realpath-checked) |
+| `region.ts` (+ `src/shared/region.ts`, `src/renderer/region-state.ts`) | 🌍 Region & time: network exit country (Cloudflare trace, Auto mode only, 10-min cache), shopping region, time zone for sites via CDP `Emulation.setTimezoneOverride` (resets on restart unless kept); agent region line, search `gl=`/`cc=`, `suggest_time_zone` confirm card |
+| `proxy-base.ts` | Bridge between Bah's proxy settings and Chrome extensions' `chrome.proxy` (VPN extensions): an extension in control wins (as in Chrome); when it lets go, the tabs return to the proxy configured in Bah, not a fixed "system"; Bah's WebRTC leak policy is the extensions' baseline |
+| `secure-dns.ts` (+ `src/shared/secure-dns.ts`) | Secure DNS (DNS-over-HTTPS) chosen by the user: `app.configureHostResolver` for the whole app, `dns:*` IPC. See [Secure DNS](#secure-dns-dns-over-https) |
+| `network-privacy.ts` (+ `src/shared/network-privacy.ts`) | ⋮ → Network: WebRTC IP-leak policy choice, IPv4-only WebRTC (boot switch), leak warnings, `net:*` IPC. See [Secure DNS, IP version, WebRTC](#secure-dns-dns-over-https) |
+| `system-ca.ts` | Reads the OS root certificate store and adds it to Node's default CAs (`tls.setDefaultCACertificates`) — main process and download worker — for TLS-inspecting corporate proxies |
 | `video-cuts.ts`, `transcript.ts` | Local video features (locate where a phrase is spoken, transcripts) — native ffmpeg |
 | `image-harvester.ts` | Bulk image download + AI image generation (Pollinations), with limits |
 | `ocr-engine.ts`, `page-capture.ts` | On-device OCR (Tesseract) + screenshots |
@@ -63,27 +75,673 @@ sites behave exactly as they would for a human.
 | `popup-shield.ts`, `overlay-script.ts` | Popup/overlay handling and dismissal |
 | `job-queue.ts` | Serialises long-running jobs |
 
+### Secure DNS (DNS over HTTPS)
+
+⋮ → Network & proxy → **Secure DNS**. Saved in `userData/secure-dns.json`; `src/shared/secure-dns.ts`
+turns the setting into `app.configureHostResolver({ secureDnsMode, secureDnsServers })` (validated,
+unit-tested; bad input falls back to System). The host resolver belongs to Chromium's single network
+service, so one setting covers **every** session: tabs, incognito, Google sign-in windows and Bah's own
+requests. It is applied after `ready` and re-applied live when the user saves (open connections are closed).
+
+| Mode | Resolver |
+|---|---|
+| **System** (default) | Bah does not call `configureHostResolver` at all: Chromium's default (`automatic`, no servers: plain network DNS, upgraded to DoH only if the system's DNS provider supports it). Nothing changes until the user picks something; switching back re-applies exactly that default |
+| Provider (no account) | AdGuard DNS `https://dns.adguard-dns.com/dns-query` (ads + malware), Mullvad adblock `https://adblock.dns.mullvad.net/dns-query` (ads), Quad9 `https://dns.quad9.net/dns-query` (malware), Cloudflare `https://cloudflare-dns.com/dns-query` (no filtering). Lists are the provider's |
+| NextDNS | `https://dns.nextdns.io/<id>` — the user's own configuration (free account; they manage the lists). Never a default because it needs an account |
+| Custom | Any `https://` DoH template (`{?dns}` allowed), e.g. a Pi-hole / AdGuard Home on the LAN; `http://` rejected |
+
+**Strict** (off by default) maps to `secure` (lookups fail if the DoH server is unreachable) instead of
+`automatic` (falls back to the network's plain DNS). With a proxy set, the proxy may resolve names for
+proxied traffic (HTTP CONNECT, SOCKS5) — the panel says so; proxy behaviour is unchanged.
+
+It is a core setting, not an extension: Chrome extensions have no API to set the resolver, and
+Chrome / Edge / Brave / Firefox all keep Secure DNS in their own settings.
+
+#### IP version, WebRTC and leak warnings
+
+The same panel (⋮ → Network & proxy: warnings, Proxy, Secure DNS, IP version, WebRTC) holds the rest of
+the network privacy settings (`network-privacy.ts`, pure logic in `src/shared/network-privacy.ts`,
+saved in `userData/network.json`).
+
+**IP version — measured on Electron 44, only "automatic" is possible.** The `--disable-ipv6` switch no
+longer exists in this Chromium (the string isn't in the binary; with it, a page on `localhost` still
+connects over `::1`), and neither `configureHostResolver` nor sessions have an address-family option
+(`session.resolveHost` takes `queryType`, but that is only for Bah's own lookups). The panel shows
+"IPv4 only" / "IPv6 only" disabled with that reason and points to the OS network settings.
+
+**WebRTC.** Measured: Electron's default policy (`default`) hands any page the machine's real interface
+addresses — IPv4 and global IPv6 host candidates, no mDNS names. Bah now always sets a policy on every
+web contents (all sessions, incognito included; `proxy.ts` applies it, an extension's
+`chrome.privacy` setting still wins on its session):
+
+| Choice | No proxy | Proxy in use |
+|---|---|---|
+| Protect my IPs (default) | `default_public_interface_only` (no host candidates) | `disable_non_proxied_udp` (no UDP outside the proxy) |
+| Best call quality | `default` | `default` (warned: WebRTC can bypass the proxy) |
+
+"WebRTC: IPv4 only" adds `--force-fieldtrials=WebRTC-IPv6Default/Disabled/` before `ready` (measured:
+IPv6 candidates disappear), so it **applies after a restart** — the panel says so.
+
+**Leak warnings** (top of the panel; the renderer gets families/flags only, never the machine's
+addresses; `os.networkInterfaces()` counts IPv4 that isn't loopback/169.254 and IPv6 only in 2000::/3):
+
+| Warning | When | Fix button |
+|---|---|---|
+| Proxy only over one family | manual proxy whose host is an IP literal (or resolves) to one family, and the machine also has the other; loopback proxies are skipped | Open the OS network settings (macOS / Windows) |
+| Secure DNS only over one family | same, for the DoH server host | Open the OS network settings |
+| WebRTC can bypass the proxy | proxy set + "Best call quality" | Protect WebRTC |
+| Secure DNS behind a proxy (info) | proxy + secure DNS: the proxy may resolve names for proxied traffic | — |
+
+Nothing configured → no warnings. Tests: `tests/unit/network-privacy.test.ts`, `tests/e2e/network-privacy.spec.ts`
+(ICE candidates from a local page; interfaces simulated with `E2E_NET_IFACES` under `NODE_ENV=test` + `E2E_MOCK_AI=1`).
+
+### Downloads & torrents
+
+Every download is written to disk as it arrives (never buffered in RAM), has **no size cap and
+no file-type blocklist**, and lands in the Downloads folder (or the folder picked in
+Downloads → ⚙).
+
+| Path | Entry point | Writes to disk via |
+|---|---|---|
+| Link / page download (click, address bar) | Electron `will-download` → [`download-manager.ts`](src/main/download-manager.ts) | Multi-connection engine or Chromium's own downloader (both stream) |
+| Agent `download` action | `download:url` IPC in `main.ts` (renderer: `electronAPI.downloadUrl`) → a **worker thread** ([`agent-download-worker.ts`](src/main/agent-download-worker.ts)) | `fs.createWriteStream` on the final file |
+| Video / audio | `yt-dlp` + `ffmpeg` ([`media-downloader.ts`](src/main/media-downloader.ts)) | the tools themselves |
+| Files inside a torrent (built-in client ON) | `torrent:save-file` → [`torrent/engine.mjs`](src/main/torrent/engine.mjs) | `fs.createWriteStream` |
+
+#### Link / page downloads (`download-manager.ts`)
+
+1. `will-download` fires; a `.torrent` goes to the torrent card if the built-in client is ON (see below).
+2. The save path is chosen up front (`uniqueDownloadPath` — never overwrites, adds ` (1)`, ` (2)`...),
+   so there is no native "Save as" dialog.
+3. The URL is probed (final URL after redirects, with the tab's UA/Referer/cookies; redirects to another
+   host are refused so cookies don't leak). If the server supports ranges, the file is **≥ 2 MB** and
+   isn't HTML, the multi-connection engine ([`multi-download.ts`](src/main/multi-download.ts)) takes over:
+   up to 8 connections by default (1–32, Downloads → ⚙), writing segments into a `<file>.bahpart`
+   with positional writes, renamed to the final name when complete. Otherwise Chromium downloads it normally.
+4. If the engine can't even start, the download falls back to Chromium on the same list row.
+5. Pause / resume / cancel / queue (max 5 at once) and live speed/ETA go to the Downloads panel (Ctrl+J).
+   Leftover `.bahpart` files from a crash or quit are deleted on startup and when the folder changes.
+
+#### Agent `download` action — background, worker thread
+
+The download runs **off the main process's event loop**, in a `worker_threads` worker started per
+download from [`agent-download-worker.ts`](src/main/agent-download-worker.ts) (unpacked from the asar,
+see `asarUnpack`). `main.ts` only starts the worker and relays its messages.
+
+1. Only `http(s)` URLs. Sent with browser-like headers (Chrome UA, `Accept-Language`, `Referer` = the
+   URL's origin). TLS-lenient retry on a broken certificate chain; one retry after 2.5 s on HTTP 429/403.
+2. File name: the `filename` argument, else the URL's last path segment, else `download`; an extension
+   is guessed from `Content-Type` if missing (`.bin` as last resort). Never overwrites (` (1)`, ` (2)`...).
+3. **Returns as soon as the download starts** (headers received, file created) with
+   `{ id, path, totalBytes, background: true }` — the agent learns the final path immediately and keeps
+   working. An HTTP error before the start comes back as a normal failed action.
+4. The body is **always read as a stream** (a web `ReadableStream` goes through `Readable.fromWeb`) and
+   written chunk by chunk with back-pressure (`drain`). Memory stays flat regardless of size — a 6.5 GB
+   ISO was verified at ~1 GB peak app RSS.
+5. **No size cap and no total time limit** — see stalls below. On error, cancel or an empty body the
+   partial file is deleted.
+6. Everything after the start arrives as `agent:download-event` (`kind: 'agent'`) — the same channel as
+   the other downloads, so the Downloads panel shows a live row (✕ cancels it via `download:cancel` →
+   `cancelExternal`; no pause).
+
+**Progress cadence** ([`download-progress.ts`](src/main/download-progress.ts), `ProgressTracker`): the
+worker ticks every **1 s** (that's what the panel shows). Speed is smoothed over ~5 s and
+ETA = remaining ÷ speed is recomputed every tick, so the cadence adapts as speed changes. Only ticks
+flagged `notify: true` reach the agent's history:
+
+| ETA | Agent gets a `DOWNLOAD PROGRESS` line every |
+|---|---|
+| ≤ 2 min | 1 s |
+| 2–10 min | 5 s |
+| > 10 min | 15 s |
+| unknown (no `Content-Length`, or no speed yet) | 5 s |
+
+Start, completion, failure, cancellation and stall changes are always sent immediately.
+
+**Stalls** are detected in code, not by the AI (a model call per check would be slow and costly, and
+"no bytes for N seconds" is an exact measurement). The AI only decides what to do next.
+
+| No data for | What happens | Agent sees |
+|---|---|---|
+| 15 s | row marked **Stalled** (once; no repeats while stalled); clears if data resumes | `DOWNLOAD STALLED: … at X of Y` |
+| 60 s | download aborted, partial file deleted | `DOWNLOAD FAILED (stalled): … Retry once, or try another mirror/source.` |
+
+**Telling the AI it finished:** the completion line carries the **full local path** —
+`DOWNLOAD COMPLETED: <name> (<size>) saved at <path> — the file is ready to use at that path`. Download
+lines are added to the agent's history after each step. If a background download finishes **after the
+task ended**, its completed/failed event is kept and delivered at the start of the **next** agent task
+(other old download events are dropped then). The system prompt (`ai-engine.ts`) tells the agent never to
+claim success before `COMPLETED`, to `wait` for short downloads, and to hand long ones back to the user
+(Downloads panel) instead of waiting.
+
+**Download tools for the agent** (`App.tsx`, agent loop; parsed/validated in `page-agent.ts`):
+`list_downloads` returns the Downloads panel queue (active first: `[id]`, state, %, size, speed, ETA,
+path, started by agent/user). `cancel_download` / `pause_download` / `resume_download` /
+`retry_download` take that id **or the file name**, and reuse the panel's own handlers. Pause/resume
+only for normal downloads (not agent or video ones); retry only for failed/cancelled ones; cancelling a
+download the **user** started goes through the safety-brake confirmation. Tested end to end with a
+scripted mock model (`E2E_MOCK_SCRIPT`, see `ai:action` in `main.ts`).
+
+Verified with a local test server: the action returned in ~80 ms; a 200 MB file finished byte-exact with
+1 s updates; main-process IPC latency stayed at 2–4 ms during the download; stall flagged at ~16 s and
+failed at 60 s with the partial file removed; cancel removed the partial file.
+
+**Torrents** are controlled by the menu switch **🧲 Built-in torrent client** (`localStorage`
+`torrentBuiltin`, sent to main with `torrent:set-builtin` at startup and on toggle).
+**Default: OFF.**
+
+| Input | Built-in **OFF** (default) | Built-in **ON** |
+|---|---|---|
+| `.torrent` link (click, popup, address bar, agent) | Saved to Downloads as a normal file | Opens the "Save or Play" torrent card |
+| `magnet:` link / pasted magnet | Handed to the OS's default torrent app (`shell.openExternal`) | Opens the torrent card |
+| Torrent engine process | Never started | Started on the first torrent opened |
+
+Where it's decided (all in the main process, so every entry point behaves the same):
+
+- `torrentManager.handleUri()` ([`torrent-manager.ts`](src/main/torrent-manager.ts)) — card if ON; magnet → OS app if OFF.
+- `will-navigate` / `setWindowOpenHandler` in `main.ts` — always route `magnet:`; route `.torrent` only when ON.
+- `interceptDownload` (download-manager dep, wired in `main.ts`) — when ON, a `.torrent` that reaches
+  `will-download` by any path (e.g. typed in the address bar) is cancelled and sent to the card instead.
+- Pasted magnets in the address bar go through `torrent:open` → `handleUri()` (the renderer never decides).
+
+The separate **🌱 Share torrents (seed)** switch (default OFF) only matters when the built-in client is ON.
+
+#### "Download <software> for this computer" (installers and drivers)
+
+Steam, a printer driver, Office, SolidWorks… the agent must get the **vendor's official** build that runs
+**on this machine**. The pure logic lives in [`src/shared/software-download.ts`](src/shared/software-download.ts)
+(unit tests in `tests/unit/software-download.test.ts`); [`src/main/machine-info.ts`](src/main/machine-info.ts)
+reads the system once (`process.platform`/`arch`, `getSystemVersion()`, Rosetta via
+`app.runningUnderARM64Translation`, `/etc/os-release` on Linux) and serves it to the renderer as `machine:info`.
+
+- **Machine profile → the agent.** `machineProfile()` gives OS name + version (macOS codename, Windows 10 vs 11
+  by build, Linux distro and `.deb`/`.rpm`), CPU (Intel x64 / Apple Silicon / ARM64 / 32-bit) and `pickHint()`:
+  one sentence of what to choose (Intel Mac → "Intel / x64 / Universal .dmg or .pkg, not arm64-only"; Windows
+  x64 → ".exe/.msi x64"; Linux → package type). It is in the system prompt (`USER'S COMPUTER`) and, for
+  download tasks, a `THIS COMPUTER: … PICK: …` line next to `DOWNLOADS` in every step.
+- **Checking the file that started.** `checkBuild(filename)` classifies by extension and name tokens
+  (`arm64`/`aarch64`/`apple-silicon`, `x64`/`x86_64`/`amd64`/`intel`, `universal`, `win`/`mac`/`darwin`/`linux`).
+  `error` = will not run here (wrong OS, arm64 build on an Intel Mac, `.rpm` on Ubuntu) → `WRONG OS` / `WRONG CPU` /
+  `WRONG PACKAGE` on the `DOWNLOAD STARTED` line (and in `DOWNLOADS`), and such a download never counts as success.
+  `warn` = runs but not native (Intel build on Apple Silicon via Rosetta, x86 on Windows x64) → a soft note.
+- **Third-party "free download" sites** (Softonic, FileHippo, Uptodown, CNET…): `thirdPartyDownloadSite()` flags
+  the page and downloads from them with `THIRD-PARTY DOWNLOAD SITE` (outdated or bundleware installers) and
+  sends the agent back to the vendor. Which domain *is* official is left to the agent (web search) and to
+  `site-knowledge.ts`.
+- **The download button, whatever its words.** `isDownloadControl(label, href)`: "Download…" always
+  counts; vendor wording ("Install Steam", "Get the app", "Install now", "Try free") only when it leads to an
+  installer file or is a plain button. App-store and extension-store links never count. The agent's element
+  list comes from the accessibility tree and has no `href`, so the candidates' targets are read from the DOM
+  and matched to the `[id]`s by text and position (`matchControl`, [`src/shared/page-controls.ts`](src/shared/page-controls.ts)).
+  `LIKELY DOWNLOAD BUTTON` shows the target file, leaves out wrong-OS/CPU files, and a `click_text` with the
+  same label is turned into a `click_ref` on that button. Without this, Steam's menu "Install Steam" (which only
+  reloads the page) was clicked in a loop.
+- **ARIA-less modals.** The `uiState` pass also collects fixed/high-z panels; `pickOverlay` scores them by
+  covering the viewport centre, a backdrop, z-index and action buttons. An empty backdrop no longer wins the
+  old "≥ 20% of the screen" rule. The `OPEN DIALOG/POPUP` line lists the dialog's own buttons with their `[id]`s
+  (HP's download modal: the modal's "Download" vs the page's). `tests/unit/page-scripts-syntax.test.ts` parses
+  every page script in `App.tsx`; a single-backslash regex in one had silently disabled all of `uiState`.
+- **Sign-in walls.** In a download task (after the first step), `signInWall()` — a password field, an auth host
+  (`login.*`, `auth.*`, `login.microsoftonline.com`…), a `/signin`/`/register` path, or "sign in to download" text —
+  pauses the agent with the manual-help card (`dl.signinWall.*`): the user signs in themselves or stops. The agent
+  never types passwords or creates accounts. A "Sign in" link in a site header does not count.
+- **Never runs anything.** Nothing opens a download on its own: `download:open-file` only runs from the user's
+  click in the Downloads panel, and the agent has no "open file" action. The `software-download` skill
+  (`skills/software-download/SKILL.md`) also tells the model never to open or run the installer.
+
+Tested with `tests/e2e/software-download.spec.ts` (synthetic vendor pages: auto-detect button, OS/CPU list,
+printer model picker with an ARIA-less modal, a Steam-like page whose only download control says "Install Steam", sign-in wall).
+
+#### Video / audio (`media-downloader.ts`, `media-parts.ts`)
+
+yt-dlp downloads a high-resolution video as two **component files** — `Title [id].f313.webm` (picture
+only) and `Title [id].f140.m4a` (sound only) — and then ffmpeg joins them into `Title [id].mp4`. With
+`--no-part` the parts carry those names while they are being written, so a part must never be taken
+for the result:
+
+1. yt-dlp runs with `--no-quiet` (the `--print after_move:filepath` alone switches on quiet mode and hides
+   the `Destination:` / `Merging formats into` lines). Those lines are the exact list of files **this**
+   download wrote; nothing else is ever deleted.
+2. After each run, `classifyRun` ([`media-parts.ts`](src/main/media-parts.ts)) decides: success only with a
+   final file that exists and is not a `.f<id>.` part. Parts left over (non-zero exit, or exit 0 without a
+   merge) mean **"the audio and video parts were not joined"** — a failure, and the parts are removed. If
+   both parts are complete (100% in the progress, or yt-dlp exited 0), Bah joins them itself with
+   `ffmpeg -c copy` (mp4 when the codecs fit, otherwise mkv) instead of failing.
+3. A normal video request (not mp3) is checked with `ffprobe` from the same ffmpeg folder. No audio
+   stream → one retry with `-f "bv*+ba/b[acodec!=none]" --force-overwrites`; if the source has no audio
+   format at all the file is kept and the agent is told it has no sound; otherwise it is a failure.
+4. Quit / crash: yt-dlp runs in its own process group (`detached`), so it does not die with Bah. On
+   `before-quit`, `stopAllMediaDownloads()` kills every yt-dlp group. Each download is recorded in
+   `userData/media-downloads.json` (folder, start time, files written, pid, what "retry" needs); a
+   finished file leaves the record as soon as it is printed. At the next launch
+   `recoverInterruptedDownloads()` stops a leftover yt-dlp, deletes only the recorded files that are in
+   that download's folder and not older than it, and the Downloads list shows the download as
+   **Interrupted** with ↻.
+
+---
+
+## Chrome Web Store install and password-manager extensions
+
+**Installing from the store ("Add to Bah").** The Chrome Web Store now decides on its *server* whether the
+browser is Google Chrome. Its page script asks `chrome.webstorePrivate.getFullChromeVersion()` and, for
+142.0.7430 and later, stops reading the user agent and trusts only a flag the server ships with the page
+(`IJ_values`). That flag is false for every non-Chrome browser. Bah's store preload, `webstorePrivate`
+and `userAgentData` brands (including "Google Chrome") were all in place; changing `sec-ch-ua` does not
+flip the flag either. So the page shows "Switch to Chrome" and hides its button. Bah does **not** pretend
+to be Chrome to get past this (no forged headers, no fake version). Instead, on a store detail page
+(`shared/extension-store.ts`, exact origin) the toolbar shows Bah's own **Add to Bah** button.
+`extensions:install-from-store` takes the id from the tab's URL (never from an argument) and downloads the
+public `.crx` from the same update endpoint the store uses, through the tabs' session and its proxy.
+`parseCrx3` checks that the package's key hashes to its declared id and to the page's id. Bah then asks
+the same "Add X?" question as the store and loads through the gated loader (access approval, removed
+list).
+
+**Running LastPass, Bitwarden and 1Password.** When tested with their public packages (never signed in),
+the Bitwarden background died at `chrome.webNavigation.onCommitted` and LastPass at
+`chrome.windows.onFocusChanged`: a TypeError on start-up stops the whole extension, including field menus
+and the popup. The shim (`extension-shim-preload.ts`) now adds the missing pieces, served from
+`chrome-extensions.ts`:
+
+- `webNavigation`: events from the tabs' frames, only to subscribers, only for pages the extension may
+  see. `frameId` 0 is the main frame and others use `frameTreeNodeId`. Also `getFrame`/`getAllFrames`.
+- `windows`: Bah is one window, id 1. `windows.create` opens a tab.
+- `idle`: "locked" follows the OS screen lock, so vaults that lock with the computer still lock.
+- `offscreen`: one hidden window per extension, showing only that extension's own page (used for the
+  clipboard and DOMParser). Bah also provides `runtime.getContexts` for that document.
+- `commands`: the manifest's shortcut list, with no keys bound.
+- `permissions`: `contains` / `getAll` answer from the manifest. Optional grants are refused.
+- `tabs.getCurrent`: returns `undefined` in a popup, and the tab when an extension page is open in a tab. Bitwarden's popup picks its width from this call.
+
+The LastPass and Bitwarden popups fix their size in the body's CSS, and `preferred-size-changed` never arrived for them, so they stayed at 25×25. The popup is now measured a few times after it loads and grows to fit (max 800×600, as in Chrome).
+
+**Who is installed** (`shared/password-extensions.ts`): detection uses the Web Store IDs, which come from
+the extension's public key, so another extension cannot claim them. A name alone does not count.
+
+**Bah's own manager steps back.** Default on, with a switch in the Passwords panel. While one of these
+extensions is enabled, Bah's manager offers neither its logins list nor "Save password?" in normal tabs;
+two managers competing over the same field is the surprise to avoid. Private tabs keep Bah's manager,
+because extensions don't run there (same as Chrome).
+
+**Agent at a login form** (`loginWaitStep`, `waitForExtensionLogin` in `App.tsx`). On an account task:
+
+- With a password-manager extension, Bah waits up to 8 s for the extension's own auto-login. If the form
+  disappears or the page shows signed-in, the agent continues.
+- Bitwarden's "Autofill on page load" only fills. If the extension filled the password, Bah presses the
+  form's Sign in once.
+- 1Password never fills on its own, so Bah does not wait for it.
+- Otherwise Bah pauses with a card naming the extension's setting: LastPass "Auto-login" (site item →
+  Edit → Advanced Settings), Bitwarden "Autofill on page load" (Settings → Autofill, also per login), or
+  1Password's pick-and-submit.
+- The agent never types credentials. Bah asks the page only whether the password field is empty (yes/no)
+  and never reads the value.
+
+**Extension UI is not part of the page** (`shared/extension-ui.ts`). The agent never sees or clicks
+`chrome-extension://` iframes, or the marked injection roots under which LastPass and 1Password draw
+their icons and menus:
+
+- they are removed from the main accessibility tree (`cdp:axtree`) and from the iframe trees
+  (`cdp:frames-ax`);
+- the cookie-banner sweeper (`overlays:dismiss`) skips them.
+
+Clicking a password manager's menu would hand out a credential on the AI's initiative.
+
+**Reading or setting per-site auto-login: no supported route.** None of the three documents a supported
+way for another program to read or change their per-site auto-login or autofill:
+
+- No extension messaging API: none has `externally_connectable`.
+- Their CLIs (`lpass`, `bw`, `op`) need the user's unlocked vault.
+- Their enterprise policies live in the vendor's admin console, not readable by a browser. Electron has
+  no `storage.managed` either.
+
+Reading their private storage or patching them is off-limits: it crosses into the vault, and it would
+break on every update. So Bah only *guides*, and names the setting.
+
 ---
 
 ## `src/renderer/` — UI + agent loop
 
 | File | Responsibility |
 |---|---|
-| `App.tsx` | Top-level app; **the live agent ReAct loop** (`onExecute`) |
+| `App.tsx` | Top-level app; **the live agent ReAct loop** (`onExecute`); toolbar (extensions, downloads, the round **profile icon** — optional Google sign-in / switch account — and ⋮) |
+| `platform.ts` | The real OS and CPU for the UI (`PLATFORM`, `ARCH`, `IS_MAC`, `shortcut()`), from the preload's `process.platform` / `process.arch` — never sniffed from the user agent (that is Bah's own Chrome identity) |
+| `price-compare.ts` | Multi-store price comparison: detection (en/pt), the product-only query, the store list (named + region retailers up to 4), each store's own search URL, `blockedReason` (error / bot check / sign-in / off-domain), `checkRead` — a row counts only if read on the store's own domain and the price is in that page's text; articles and aggregators never count |
 | `components/AgentCommandBar.tsx` | The unified command box, the activity feed, and settings |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Deterministic 0-token quick actions (`detectQuickAction`) |
+| `known-sites.ts` | Curated site name → official URL map (no guessed domains) |
+| `tabs-summary.ts` | "Summarize my open tabs": tab selection, permission, prompt and reply parsing |
 | `page-executor.ts` | Executes browser actions inside the page |
-| `risk.ts` | The safety-brake classifier (`riskForAction`) |
+| `risk.ts` | The safety-brake classifier (`riskForAction`). Kinds: payment, deletion, card data, application, sending (unattended) and **message** — a support ticket or forum post: "Submit ticket/request", "Create case", "Post your question", "Request/Schedule a call" always; a bare Submit/Send/Post/Start chat in a `support` task; Enter on a ticket/post form URL |
+| `support-draft.ts` | The ticket/post text from what is known so far, filled by code: `supportFacts` (request + follow-up replies from the session thread + product/serial/contact method the user gave + a similar thread the agent saw, command and "continue / use chat" directives stripped), `draftPrompt` (the configured model writes SUBJECT/DESCRIPTION from ONLY those facts), `finalDraft` (a reply that adds any number/code not in the facts — e.g. a model year — or comes back malformed falls back to `templateDraft`, the user's own sentences in sections; product/serial always included), `planSupportFill` (description box, subject/title, serial, product, 📝 contact fields only; fields the user filled and password forms untouched; applied by `form-filler.ts`'s `applyFill`). App.tsx fills once per form, shows the review card ("look it over in the tab, then Continue"), re-reads the form with `SUPPORT_DRAFT_SCRIPT` and tells the model FORM FILLED BY BAH. `unsupportedSentences` drops draft sentences whose content words are mostly not in the facts (an 8B model wrote "I've not tried any fixes yet", "I've tried resetting the SMC" — never said). `supportFinishProblem`: a support task that ends off the vendor's domain is reported as failed; so is one that sent nothing and whose final message admits it did not get there; only a ticket/post the user actually sent is offered as a skill. The user's webmail is never opened for a support task |
+| `page-load.ts` | "The page did not load", generic: Access Denied / 403 (Akamai errors.edgesuite.net), not found, browser error page, blank page, repeated clicks with no effect. In a support task the prompt gets `pageLoadHint` (the failed URL, then `web_search` for that page and open a result on the vendor's domains), the generic "abandon this site, use Google/Wikipedia" recovery text is replaced, and the same URL failing again (or 4 failures) stops the task with a plain message — no retries, no getting around blocks |
+| `support-tickets.ts` | Support tickets and support-forum posts: `commandIsSupport`/`commandIsForum` (en/pt/es), the vendor's **official** support/community address (`SUPPORT_SITES`, first vendor named wins), the prompt block with only the 📝 profile's contact fields, and `SUPPORT_DRAFT_SCRIPT` + `formatSupportDraft`: the send card shows the form's filled fields and the full description, never a password (an empty description box is flagged). **First step:** `supportVendorFor` finds the vendor — the table's or any brand named where a vendor would be ("my Canon printer", "contact Logitech support") — and code queues a `web_search` (vendor + product + support/contact or community) before step 0; the table's address is only the fallback. `offSupportSite`: web_search is always allowed; navigate/new_tab only to the vendor's own domain (`vendorUrlOk`: table domains, or a registrable domain that *is* the vendor's name — `canon.com`, `canon.co.uk`; look-alikes like `canon-support-help.com` or `canon.support` are refused). Support tasks count as account tasks, so the sign-in form pauses for the user (a support lobby offering sign-in, or "Change a subscription", is not a wall) |
+| `form-filler.ts`, `dropdown-page.ts` | Application form filled **by code** (rules in `shared/form-fill.ts`): scan → plan → apply. Searchable dropdowns (react-select `input[role=combobox]`, ARIA comboboxes, Workday `button[aria-haspopup=listbox]` prompts, incl. ones with a search box) are filled one at a time by `shared/dropdown-fill.ts`: type the value, wait (bounded) for the — possibly async, possibly portalled — `role=option` list, pick the best match (`pickOption` semantics + country aliases + unique-word match) with a full pointer/mouse event sequence, then verify the field shows it. No match → the list's options go to the one questions card as choices. Lists are closed by blur/outside click, never Escape inside a dialog (it would close an Easy Apply modal). Main document + open dialog, like the rest of the fill |
 | `agent-recovery.ts`, `agent-login-policy.ts` | Stuck-state recovery + login/captcha detection |
+| `takeover-driver.ts` (+ `shared/takeover.ts`, `shared/human-check.ts`) | Watch/Takeover: generic human-check / sign-in-wall classifier, hand-off state machine, guard that refuses agent actions on a human check |
+| `shared/html-clean.ts` | `get_html`: the in-page DOM walk (`collectHtmlScript`, run through `executeJavaScript` so it falls back to the isolated world on no-script pages) and the pure cleaner/serializer (`serializeHtml`): attribute allowlist, secret values redacted, script/style/svg bodies dropped, `data:` URLs shortened, `[#N]` element-list refs (stamped by `cdp:mark-refs` in `main/frames.ts` under a nonce attribute, removed after the read), `[hidden]` marks; paged by `offset` on tag boundaries (`serializeHtml` → `shared/read-paging.ts`). The HTML goes in the next prompt only, framed as page data, not instructions |
+| `shared/read-paging.ts` | How much one `get_html` / `extract_text` read returns and paging through the rest. `readBudget`: clamp(free context tokens × 0.4 × 3.5 chars/token, 4,000, 60,000), free = window − last prompt (context meter) − 4,096 answer reserve; default 6,000 on windows under 64k, 12,000 above; `max` up to the budget, an over-ask is served at the budget and says so. `pageHtml` / `pageText`: pages on tag / line boundaries that tile exactly, each stating "chars A–B of N" and ending with the exact next call. The one-step PAGE HTML / PAGE TEXT (extracted) blocks (end markers; the cloud observation slice grows by their length) and the action normalisers |
 | `agent-run-logger.ts` | Opt-in run logging (local training-data collector) |
 | `store.ts` | UI/settings state (localStorage) |
 | `i18n.ts` | Hand-rolled en / pt / es; **English is the default** |
 | `macros.ts` | Record/replay of deterministic macros |
+| `form-filler.ts` (+ `src/shared/form-fill.ts`, `src/shared/ats-tables.ts`) | Job applications filled by code from the 📝 applicant profile. The page scan (`FORM_SCAN_SCRIPT`) returns `FieldInfo[]`, including a stable `automationId` (Workday `data-automation-id`, Ashby `data-field-path`, Rippling `data-input`). `planFill` detects the ATS (`detectAts`: URL, or field names for embedded forms) and classifies each field with **that ATS's table first** (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, Rippling), then the generic label/name/autocomplete rules. A table can also say `skip` (honeypots such as Workday's `beecatcher`, passwords, react-select internals) so a field is neither filled nor asked. Tables are built from public forms; their minimized field inventories live in `tests/fixtures/ats/*.json` and `tests/unit/ats-tables.test.ts` checks them and prints coverage per ATS |
 
 ---
 
+## Agent sessions (tab chips + shared conversation)
+
+A **session** is the line of work the assistant follows: one tab, or a group of tabs that share one
+conversation. A tab gets a session the first time the assistant is used on it (`ensureSession`): the
+name comes from the request ("Job hunt", "Groceries", "Trip"…), the colour is one not in use. On the tab
+strip it shows like a Chrome tab group — a coloured chip with the name before the session's tabs, the
+same colour underlining each of them; the panel shows the same chip (click to rename). Tabs the agent
+opens during a task, and links opened in a new tab from a session tab, join that session; the tab's
+right-click menu adds it to another session, starts a new one or removes it; dragging a tab between two
+tabs of a session joins it, dragging it away leaves.
+The conversation is keyed by **thread key** = session id (or the tab id when the tab has none): the
+panel feed (`AgentCommandBar` `feedsByTab`) and the session's **thread**. When a tab's key changes, its
+conversation moves with it (`bah:move-thread`). Rules: `src/shared/agent-sessions.ts` (tested in
+`tests/unit/agent-sessions.test.ts`); state: `store.ts`; UI: `TabBar.tsx`, `AgentCommandBar.tsx`; end to
+end: `tests/e2e/agent-sessions.spec.ts`.
+
+**One thread per session.** `src/renderer/threads.ts` holds one thread per key (rules in
+`src/shared/thread-store.ts`): **turns** (what you asked, what the chat answered — recent ones verbatim,
+clipped), **agent task summaries** (goal, last key steps, outcome, last thing acted on — not every step;
+written by `finishRun` in `App.tsx`) and **facts** (signed in/out per site, jobs looked at) plus 📌
+**pinned** items, which are never compacted. The agent prompt ("PREVIOUS REQUESTS THIS SESSION") and the
+chat read the same rendered block (`promptBlock`); chat sends it to `ai:chat`, and `ai-engine.ts` then
+skips its own per-tab history (only an attached file is remembered there, `lastDocs`). The thread has a
+fixed **token budget per prompt** — ~15% of the model's window, 512–4096 tokens, 3000 when the window is
+unknown — so the current page is never crowded out. At 80% the feed warns and offers 📌; over budget,
+the oldest items fold into a running summary and the feed says "🗜 Summarized N older turns", which
+expands to the exact text that replaced them; `/compact` and 🗑 do the same, visibly. When the
+observation must be trimmed to fit the window, the page is trimmed (never the thread) and the feed says
+"✂️ page trimmed to fit".
+**Context meter** (`components/ContextMeter.tsx`, math in `src/shared/context-meter.ts`): next to the
+model name, `context 6.1k / 16k · thread 2.3k`; the bar goes amber/red and names what crowds it; a tap
+shows the last call's breakdown (instructions, skills, thread, page). Window from the engine's detection
+(`ai:context-window` → `resolveContextBudget`: `/props` on llama.cpp or the configured size; unknown on
+cloud); total from the provider's `prompt_tokens` when reported, else an estimate (marked `~`). Test hook:
+`window.__bahThreadBudget`; `E2E_CONTEXT_WINDOW` fakes the window under `E2E_MOCK_AI`.
+
+**Restore + chat history.** `src/main/chat-store.ts` keeps two `safeStorage`-encrypted files (rules in
+`src/shared/chat-history.ts`): the **live** threads + session names/colours (`threads-live.enc`, saved
+≤1.5 s after a change and on window close, before the tab session's "saved" reply) and the **🕘 chat
+history** (`chat-history.enc`: one entry per session with name, colour, dates, sites, first request, its
+tabs and thread; updated as you go, like browsing history). With ⋮ → When Bah opens = "Continue where you
+left off" the tabs come back with the same tab id and `sessionId` (`session.v1` stores `id`/`sid`) and
+the thread re-attaches (`store.ts` `bootTabs`, loaded synchronously via `threads:load-live-sync`); any
+other choice deletes the live file at startup. ⋮ → 🕘 Chat history (`components/ChatHistoryPanel.tsx`)
+opens a past session read-only or **Resumes** it (`store.resumeSession`, optionally reopening its tabs).
+"Clear browsing data" has a "chat history" box (same time range). Incognito never reaches either file.
+Tests: `tests/unit/thread-store.test.ts`, `chat-history.test.ts`, `context-meter.test.ts`,
+`session-restore.test.ts`; end to end `tests/e2e/sessions-thread.spec.ts`.
+
+## Scheduled tasks (while Bah is open)
+
+The assistant can run a request on a schedule — "every weekday at 8am check my Indeed recommendations",
+"toda segunda às 9h resuma as notícias", "cada 2 horas …" — or from ⋮ → ⏰ **Scheduled tasks** (add, edit,
+pause, delete, run now, history). Pure rules in `src/shared/schedule.ts` (tested in
+`tests/unit/schedule.test.ts`): the en/pt/es parser (daily, weekdays, weekends, weekly on named days, every
+N minutes/hours with a 15-minute minimum, at HH:MM / 8am / 8h / noon), next-run computation in **local
+wall-clock time** (8:00 stays 8:00 across DST; a time skipped by the spring jump runs right after it; the
+repeated fall-back hour runs once), missed-run detection and the storage validation/caps. An ambiguous
+request (no time, "at 9" morning or evening, interval below the minimum) gets a confirm card with the next
+3 run times before saving; a clear one is saved and the reply says when it runs next. The early check is in
+`AgentCommandBar.runUnified` (before the router).
+- **Storage**: `src/main/scheduled-tasks.ts` — `userData/scheduled-tasks.enc`, encrypted with `safeStorage`
+  (no keychain → kept in memory only), ≤50 tasks, ≤1000-char command, ≤20 history entries each.
+- **Runner**: `src/renderer/scheduler.ts` (`useScheduler`). A tick (15 s) finds due tasks and queues them;
+  one runs at a time and only when the assistant panel is idle (a person's task or chat is never
+  interrupted: `bah:sched-busy` / `bah:sched-run` events into `AgentCommandBar`). Each task runs in its own
+  tab and session (chip "⏰ <name>"), reused on later runs while it stays open. The agent loop gets
+  `unattended: true`: the risk brake also stops at a bare Send/Post/Book/Order (`risk.ts`), and the
+  Gmail/YouTube auto-send helpers are off. Outcome + short summary go to the task history.
+- **Waiting for the user**: a confirm card (risk brake, permission, questions card) or a sign-in pause
+  stops the run; the scheduler marks it "waiting for you" in the panel/menu and posts a system notification
+  (`sched:notify`; click → the task's tab). The task clock (`task-deadline.ts`) is suspended while a card
+  waits. Nothing risky happens until the person answers.
+- **Missed runs**: at launch every enabled task whose time already passed is offered (`MissedRunsCard`:
+  Run now / Skip / Snooze / Delete), never run silently. While open, a time missed by more than 10 minutes
+  (the computer slept) is offered the same way. Skip records a "skipped" entry and moves to the next time.
+  **Snooze** (1, 3 or 7 days) dismisses the missed run and stores `snoozedUntil` = the same wall-clock time
+  N days later (`snoozeUntil` in `schedule.ts`, DST-aware); `nextAt` becomes the first regular time at or
+  after it (weekly: the usual day/time; interval: on its grid), so nothing runs before then and the normal
+  rule resumes after. Both fields are saved, so a snooze survives a restart; editing the rule or resuming a
+  paused task during the snooze keeps it (`nextRunRespectingSnooze`). **Delete** asks for confirmation in
+  the card, then removes the task. The offer is in-app only: there is no system notification for missed
+  runs, and the "waiting for you" notification has no action buttons.
+- **Tests**: `tests/e2e/scheduled-tasks.spec.ts` uses an injectable clock (`E2E_SCHED_NOW` and
+  `window.__bahSched.setNow`, only with `NODE_ENV=test`).
+
+## Memory saver (sleeping tabs)
+
+Chrome's Memory Saver, plus one Bah rule. A sweep in `App.tsx` (every 60 s) unmounts the `<webview>` of a
+tab that has been idle long enough (`discarded: true`); clicking the tab remounts it at its URL. Pure rules
+in `src/shared/memory-saver.ts` (tested in `tests/unit/memory-saver.test.ts`); UI in
+`components/MemorySaverMenu.tsx` (⋮ → 💤 Memory saver ▸: on/off, level, keep-active list).
+- **Levels** (Chrome publishes no times; these are Bah's): Moderate 2 h, Balanced 30 min (default, the old
+  behaviour), Maximum 10 min idle. Stored in `localStorage` `memSaver` / `memSaverLevel` / `memSaverKeep`.
+- **Never discarded**: the active tab, incognito/hidden tabs (`incognito.ts` `canDiscard`), pinned tabs,
+  sites on the keep-active list, tabs whose **session** (`store.threadKeyOf`) has an agent task running or
+  waiting for the user (confirm/questions card, sign-in pause — the whole `onExecute`; plus the scheduler's
+  current run), and — gathered only for tabs that pass those cheap checks — tabs playing audio or video
+  (even a muted `<video>`), with camera/microphone/screen granted on the current page, with notifications
+  allowed for the site, with a download in progress that started there, with a half-filled form, or with an
+  open USB/HID/serial/Bluetooth device. The page part is one script (`PAGE_SIGNALS_SCRIPT`, run through the
+  isolated-world fallback of `page-eval.ts`; forms compare `value`/`checked`/`selected` with their HTML
+  defaults, ignoring hidden and search inputs); the main part is `memsaver:signals`
+  (`src/main/memory-saver-signals.ts`, fed by `site-permissions.ts` and `download-manager.ts`).
+  Camera/screen counts from the grant until the page navigates (Electron has no "capture stopped" event).
+- **Keep-active list**, Chrome's rules: `google.com` covers its subdomains, `.google.com` only that domain,
+  `[*.]`/`*.` prefixes mean the same as none, an optional path matches on a segment boundary
+  (`site.com/app`), and a written scheme or port must match.
+- The tab's hover tooltip says why a candidate tab was kept ("Kept active: form partly filled in").
+- **Tests**: `tests/e2e/memory-saver.spec.ts` uses `memSaverIdleMs` / `memSaverSweepMs` (localStorage
+  overrides for tests) to shorten the idle time and the sweep.
+
+## Command routing & follow-ups
+
+The box under the assistant decides per message: agent task, answer about the page, web answer or chat
+(`routeCommand` in `AgentCommandBar.tsx`; with a cloud AI a one-word classifier in `App.tsx`
+`classifyIntent` goes first, with a local AI the word rules decide; with the optional
+[local router](#local-router-qwen25-15b-optional) downloaded, it goes first in both modes). Before any of that:
+- a **question about the last run** ("did you click it?", "what happened?") → chat with a log of that
+  run (`src/renderer/last-run.ts` `lastRunDigest`), never a web search;
+- a **report that the last run fell short** ("one window was opened, but not the second") → back to the
+  agent (`reportsIncompleteRun`), which gets the previous requests and how they ended;
+- a message that **starts with an action verb** ("search for…", "find…", "browse to…") → agent
+  (`src/renderer/route-words.ts`); questions keep going to the web answer.
+Each finished run records the last thing it acted on, and the prompt says "it / that one" means it.
+"N <anything> … each / different" opens N videos even with a typo (`site-knowledge.ts`, tested by
+bundling in `tests/unit/quick-video.test.ts`). Web answers drop search-engine pages from their sources
+and never show a raw `[[ACTION: …]]` tag; a suggested action of "none" is not shown as a button.
+
+**Named sites go straight to their official address.** `src/renderer/known-sites.ts` is a short,
+hand-checked map of well-known sites (LinkedIn, Indeed, GitHub, Amazon for your country, Walmart, Whole
+Foods, YouTube, Gmail, Google…) → official URL. When a command names one ("browse to linkedin, find a
+job…"), the agent's first prompt gets a `NAMED SITE:` line with the address and the rule "navigate,
+don't web_search the name"; every prompt lists the map under `OFFICIAL SITES`; with a local AI the fast
+path opens it directly (`getInitialShortcutAction`). Names that are also common words ("indeed",
+"target") only count after "go to / on / at / abra…". A name that is not on the list is never turned
+into a guessed domain (typosquatting): it still goes through `web_search`. Tests:
+`tests/unit/known-sites.test.ts`, `tests/unit/named-site-shortcut.test.ts`, `tests/e2e/named-site.spec.ts`.
+
+**"Summarize my open tabs".** `wantsTabsSummary` (`src/renderer/tabs-summary.ts`) turns the request
+into the `summarize_tabs` action, even with the AI in charge (otherwise the model would visit every tab
+with `switch_tab`). The executor in `App.tsx` picks the tabs (`selectTabsForSummary`: no incognito tabs,
+no internal pages such as `about:`, `file:` or Bah's own player; sleeping tabs are listed as asleep and
+only woken when the user asks, e.g. "including the sleeping ones"), checks the **your tabs** permission
+once for the set (`tabsAccessDecision`: ask / always / never from the menu; the task's own tab needs
+none), reads each tab's text with `<webview>.executeJavaScript` (which falls back to the isolated
+world on pages that forbid scripts) and makes one stateless model call for a per-tab line plus an
+overall summary. The panel shows a card with one link per tab that switches to it. Tests:
+`tests/unit/tabs-summary.test.ts`, `tests/e2e/tabs-summary.spec.ts`.
+
+**Plain-text files in dark mode.** Chromium's text viewer turns the text light in a dark scheme, but a
+site that sends `Content-Security-Policy: default-src 'none'; sandbox` (Hugging Face, GitHub raw) never
+gets the matching dark background → white on white. `main.ts` inserts a user stylesheet
+(`PLAIN_TEXT_VIEWER_CSS`, matching only the viewer's `<meta>` + `<pre>` layout) so background and text
+follow the same scheme (`tests/e2e/plain-text-dark.spec.ts`).
+
+**Pages that forbid scripts.** That same CSP turns off the page's JavaScript, and with it every
+`<webview>.executeJavaScript` Bah uses to read pages (text sample, `extract_text`, page state, job
+listings, forms). `src/renderer/page-eval.ts` wraps `executeJavaScript` on every tab once
+(`WebViewContainer`): it tries the page world; if that fails, a trivial probe tells a real script error
+(passed on, never re-run) from a page that blocks scripts (→ the same code runs in Bah's **isolated
+world** 1047 through `page:eval-isolated` in `main.ts`, the mechanism extension content scripts use,
+remembered until the tab's address changes). Tests: `tests/unit/page-eval.test.ts`,
+`tests/e2e/no-js-page.spec.ts`.
+
+### Local router (Qwen2.5-1.5B, optional)
+
+When the routing model is downloaded, a small local LLM labels **every** message before anything
+reaches the big model — in cloud *and* local mode — and the word rules above become the fallback.
+- **Model:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF` `q4_k_m` (Apache-2.0, 1,117,320,736 bytes, sha256
+  `6a1a2eb6…9407e`) in `<userData>/models/`. Never bundled: the assistant settings show a card
+  ("Download the 1.1 GB routing model?"); `router:download` runs only after that click, resumes a
+  `.part` with `Range`, and checks size + sha256 before renaming (`src/main/router/model-download.ts`).
+- **Engine:** `src/main/router/engine.mjs` (esbuild bundle, `node-llama-cpp` external) in a
+  `utilityProcess`, started 3 s after the window shows, only if the file is there. `gpu: 'auto'`
+  (Metal / Vulkan / CPU; integrated GPUs on Vulkan stay on CPU); if it fails to load it retries once on CPU, then `router:status` = `error`
+  and the word rules route. A crash only kills that process. node-llama-cpp tests its native binary in a
+  child process on Windows/Linux; from a utility process that fork would start another Bah (the
+  `RunAsNode` fuse is off), so the engine forwards that fork to `router-manager.ts`, which opens the
+  test file as another utility process.
+- **Prompt** (`src/shared/router-routes.ts`, idea from Arch-Router, none of its weights or text): routes
+  `{name, description}` with descriptive keys the model writes (`browser_task`, `about_this_page`,
+  `web_question`, `greeting_or_chat`, `explain_last_task`, `redo_last_task`, `other`), rules and a few
+  examples. That system prompt is the fixed prefix, evaluated once; per message only
+  `Open page / Last task / Message` is processed. Output is held by a JSON-schema grammar to
+  `{"route": "<one key>"}`. LAST_RUN vs FIX is then settled by the sentence's shape (question →
+  LAST_RUN, statement → FIX). The router only labels text; it never acts, and the text never leaves the machine.
+- **Mapping** (`classifyIntent` → `routeCommand`): ACTION → agent, PAGE/CHAT → chat (page attached),
+  WEB → web answer, LAST_RUN → chat with the last run's log, FIX → agent; `other` / timeout (5 s) →
+  the previous path. Still ahead of the router: short greetings, the agent-drive toggle,
+  repeat/macro intents, vague-request hints and the zero-token quick actions.
+- **Eval:** `npm run router:eval` runs the same core (`router-core.mjs`) in plain Node over
+  `tests/fixtures/routing-cases.json` (82 en/pt/es cases) and scores the word rules on the same set.
+  On an Intel i7-9750H (CPU): router 89.0 % (90.2 % with the greeting fast path) vs word rules 84.1 %, p50 ≈ 0.6–0.9 s, p95 ≈ 1.0–1.4 s,
+  load ≈ 9 s, ≈ 0.9 GB RSS in Node (≈ 2 GB reported for the utility process, model file mmapped).
+  Smoke: `tests/e2e/router-local.spec.ts` (skips without the model).
+- **Request expansion** (`src/shared/request-expansion.ts`, IPC `router:expand`): before the agent
+  starts a task, a "find/download" request about a named work (`shouldExpandRequest`: find/download
+  verb + media noun + a work after from/of/do/de…; never URLs or plain commands) is rewritten by the
+  same model in a second, small context (1024 tokens, own JSON grammar `{"understood": "…"}`,
+  ≤ 96 tokens, temperature 0). The prompt only allows disambiguation (year, performer, original vs
+  sequel/remake, full names) and forbids track lists, new steps, composers/directors. The main process
+  checks the output (`checkExpansion`): junk/refusals, > 320 chars, missing key terms of the request
+  (synonyms movie↔film, plurals and one-letter typos tolerated), a new action (buy/send/play/open/…),
+  a new number other than a year, or a new site → dropped. Timeout 3.5 s (renderer 4 s); no model,
+  slow or dropped → the original text. Accepted text shows in the feed as "🔎 Understood as: …" and goes
+  to the agent as an `UNDERSTOOD AS (… a GUESS … the GOAL wins …)` line under `GOAL:`. The 1.5B model's
+  facts are often wrong (it said "Bad by The Beatles"), hence the "guess" wording and the skill's
+  "confirm it". Eval: `npm run router:expand-eval` prints the raw output and the verdict per request.
+  E2E without a model: `E2E_FAKE_ROUTER_EXPAND` (with `E2E_MOCK_AI=1`) fakes the model's answer.
+- **Media collections** (`src/renderer/download-steps.ts`, skill `media-collection`): the agent stores
+  `work` ("Top Gun (1986)") and `tracks` as "Title — Artist"; Bah then downloads each one with
+  `ytsearch:` + `collectionQuery` = title + artist + work + year (`subjectYear`: the stored `work`, else
+  the request, else the expansion, ignoring what follows "not …"). The main process widens the search
+  pool (`ytsearchN`) and takes the first hit that passes the duration filter; ranking the top hits by
+  title/artist/year is not done.
+- **Packaging:** `@node-llama-cpp/*` (and node-llama-cpp `bins/`) are `asarUnpack`ed; node-llama-cpp's JS
+  and the engine stay in the asar, where its ~120 dependencies resolve. CUDA packages, the llama.cpp
+  source bundle and CLI templates are excluded.
+
+## Navigation skills (`skills/*/SKILL.md`)
+
+Short, tested recipes the agent gets **only when they apply**, instead of one ever-growing system prompt
+(a small local model follows a short, relevant prompt far better). Format is compatible with the
+`SKILL.md` used by Browse.sh / agent-browser: YAML-ish front matter + a markdown body (≤ 220 words).
+
+```markdown
+---
+name: eula-accept            # must equal the folder name
+description: Accept a standard software license as part of a requested download.
+states: [eula]               # page states Bah detects (see below)
+tasks: [download]            # task types: download, search
+sites: [booking.com]         # optional: hosts (subdomains match)
+priority: 35                 # tie-breaker, higher first
+---
+1. ...steps written in terms of Bah's actions (click_ref, check, select_option, find, look_at...)
+```
+
+A skill is used when **every** list it declares matches; each step injects at most 3, most specific
+first (site > page state > task), as a `SKILLS FOR THIS PAGE` section near the top of the prompt.
+
+| Page state | Detected when (`App.tsx`, per step) |
+|---|---|
+| `dialog` | a visible modal (`role=dialog`, `aria-modal`, `<dialog open>`) covers ≥4% of the viewport |
+| `suggestions` | a visible autocomplete/listbox with options |
+| `datepicker` | `input[type=date]`, `role=grid`, calendar/datepicker widgets |
+| `eula` | controls mention EULA / license agreement / accept the terms |
+| `os-selector` | controls offer Windows **and** macOS/Linux |
+| `searchbox` | a visible search / destination / city field |
+| `tabs` | a tab strip (`role=tablist`, or ≥2 controls named like Overview / Specifications / Reviews / Accessories…) |
+| `cards` | ≥3 sibling cards of the same kind, each with a link (job/hotel/product lists) |
+| `signin` | a visible password field, a login page (title/path), or a "sign in to see/continue…" wall |
+
+Task types come from the request: `download` (download words, typos included), `search` (find/search/
+compare/cheapest/list...), `travel` (hotels, lodging, flights...), `shopping` (stores, prices, buy...), `parts`
+(charger/adapter/battery/compatible...), `people`, `jobs`, `grocery` (add/put… to a cart or basket, groceries, a
+shopping list — replaces `shopping`, whose skill says never to add to a cart). On a `grocery` task each step also
+gets, from `src/renderer/grocery.ts` (unit-tested in `tests/unit/grocery.test.ts`, e2e in
+`tests/e2e/grocery-cart.spec.ts`): **GROCERY PRODUCTS ON THIS PAGE** — every product tile's name, price, unit price,
+Sponsored / OUT OF STOCK / IN CART ×n, and the `[ref]` of its Add, + and − buttons (matched to the interactive
+elements by screen position, so a grid of identical "Add" buttons is no longer ambiguous); **CART PAGE** — lines,
+quantities, subtotal and the checkout button it must not click; and **SHOPPING LIST** — the request parsed into items
+("a dozen bagels" = 12) checked against what the store shows in the cart. Finishing without opening the cart is
+sent back once. The brake (`risk.ts`) asks before Checkout / Check out / Continue to payment / Place (your) order /
+Reserve time slot; in a cart task, removing a cart line and Enter on the cart page do not ask. Per-site **account state** (signed in / signed out, read from the page each step and remembered per site for the session — `agent-login-policy.ts`) goes in the prompt as an `ACCOUNT:` line. **Bundled skills are general rules, not recipes for named sites** —
+site-specific recipes belong in user/contributed skills.
+User skills live in `<userData>/skills/` (menu → 🧩 My skills); after a successful task Bah offers to draft one
+("Save as skill" → review → Save → optional GitHub proposal). See [CONTRIBUTING-SKILLS.md](CONTRIBUTING-SKILLS.md). Code: parser + selection `src/shared/skills.ts` (unit-tested in
+`tests/unit/skills.test.ts`, which also checks every bundled skill parses, has triggers and stays short),
+loader + `skills:list` IPC `src/main/skills-loader.ts` (re-reads files in dev; packaged via
+`electron-builder.yml` `files`). Bundled skills: `popup-dismiss`, `autocomplete-pick`, `date-picker`,
+`site-search`, `page-tabs`, `download-chain`, `eula-accept`, `os-selector`, `product-specs`, `compatible-part`,
+`shopping-compare`, `used-listings`, `travel-search`, `people-search`, `job-apply`, `card-list`, `sign-in`,
+`grocery-cart`, `support-ticket` (task `support`: a support ticket or a support-forum post — see `support-tickets.ts`).
+
+---
+
+## Browser identity & bot checks (what sites see)
+
+Measured 2026-11-03 on an Intel MacBook Pro (i7-9750H, 6 cores / 12 threads, 16 GB, UHD 630), the same
+snippet on `https://example.com` in real Chrome 156 and in Bah (temp profile):
+
+| Signal | Real Chrome | Bah |
+|---|---|---|
+| `hardwareConcurrency` / `deviceMemory` (page and worker) | 6 / 16 | 6 / 16 |
+| WebGL renderer | ANGLE Metal, Intel UHD Graphics 630 | same |
+| `navigator.plugins`, UA, `userAgentData` arch / platformVersion | 5 PDF viewers, Intel Mac, x86, 26.7.1 | same |
+| `userAgentData.fullVersionList` | Chrome **156.0.8078.79** | Chrome **156.0.0.0** |
+| `navigator.webdriver` | **false** | **true** when launched by Playwright |
+
+GPU, cores and memory are the engine's own values (the old page-script override — "Intel Iris 6100", 8 cores,
+8 GB — was removed: workers saw the real numbers, a classic tampering signal; `tests/e2e/hardware-identity.spec.ts`).
+Canvas, audio and fonts are not touched. Chromium itself reports physical cores on this Mac (real Chrome says 6 too)
+and real RAM (16, not capped at 8).
+
+**Likely culprits for the bot checks seen in demos and tests** (Target "Press & hold", Walmart "Robot or human?",
+Amazon error pages):
+1. **`navigator.webdriver = true`.** Every e2e spec, demo take (`tools/record-demo-mac.mjs`) and probe launches Bah
+   through Playwright, which adds Chromium's automation flag. That is an honest "automated" signal and should stay
+   honest — but it means our runs are the worst case. Bah opened normally reports `false`; we expect checks to be
+   rare in everyday use. Judge bot-check rates from a normal launch, not from test/demo runs.
+2. **Version mismatch.** Bah presents itself as Chrome 156 (needed for Google sign-in, see the Chrome Web Store
+   section) on Electron 44's older Chromium, and the full version is `156.0.0.0`, not a real build. A detector can
+   notice a "Chrome 156" missing 156-only features. The honest fix (report the real engine) may bring back the Google
+   sign-in block — open decision.
+3. **Fresh profiles.** Test and demo profiles start empty (no sign-ins, no cookies from checks already passed), so
+   every visit looks like a first visit.
+
+When a human check appears the user completes it (Watch/Takeover handoff); the only exception is upstream's opt-in
+switch (☑️ *Agent may click captcha checkboxes*, OFF by default), which clicks a simple checkbox once first.
+
 ## Build & release
+
+> **E2E on macOS:** launch Electron with `--use-mock-keychain`. The password vault (`safeStorage`) otherwise opens a Keychain prompt for the unsigned dev build in a fresh test profile, and the synchronous call freezes the main process (Playwright then times out with no error).
 
 - **Build:** Renderer = Vite + `tsc` typecheck; Main = `tsc`. An i18n parity gate
   (`scripts/i18n-check.mjs`) **fails the build** if en/pt/es drift out of sync.

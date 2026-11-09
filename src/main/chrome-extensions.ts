@@ -13,7 +13,7 @@
 //
 // Regra de segurança: o ID da extensão vem SEMPRE de quem chamou (escopo do worker ou
 // origem do frame), nunca dos argumentos. E todo argumento é conferido antes de usar.
-import { app, BrowserWindow, dialog, ipcMain, screen, webContents, type Session, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, powerMonitor, screen, webContents, webFrameMain, type Session, type WebContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { installChromeWebStore, uninstallExtension } from 'electron-chrome-web-store';
@@ -22,7 +22,8 @@ import { setupExtensionApis, NOT_MINE, readIconFile, safeIconImage, iconDataUrlB
 
 const CALL = 'bah-ext:call';
 const EVENT = 'bah-ext:event';
-const STORE_ORIGIN = 'https://chromewebstore.google.com';
+const STORE_ORIGIN = R.STORE_ORIGIN;
+const MAX_CRX_BYTES = 300 * 1024 * 1024;   // o 1Password tem ~18 MB; 300 MB é folga, não limite real
 const ICON_PX = 32;   // ícone desenhado a 16–20px; 32 fica nítido em tela de alta densidade
 const MAX_ALARMS = 500;   // por extensão, como o Chrome
 const NOT_APPROVED = 'New permissions were not approved.';
@@ -456,6 +457,115 @@ export function setupChromeExtensions(deps: {
     alarmTables.delete(extId);
   };
 
+  // ── 4c. webNavigation, offscreen e idle (o que gerenciador de senha usa) ────
+  // webNavigation: eventos dos frames das abas, só pra quem escuta e só de páginas que a extensão
+  // pode ver (host_permissions). frameId igual ao do Chrome: 0 = principal; os outros = id do nó
+  // na árvore de frames (o mesmo número que o Chromium usa nas APIs de extensão).
+  const navSubs = new Set<string>();
+  const frameIdOf = (wc: WebContents, f: Electron.WebFrameMain | null | undefined): number => {
+    if (!f) return -1;
+    try { return f === wc.mainFrame ? 0 : f.frameTreeNodeId; } catch { return -1; }
+  };
+  const frameDetails = (wc: WebContents, f: Electron.WebFrameMain | null | undefined, url: string) => {
+    let parent: Electron.WebFrameMain | null = null;
+    try { parent = f?.parent || null; } catch {}
+    const main = (() => { try { return f === wc.mainFrame; } catch { return false; } })();
+    return {
+      tabId: wc.id, url, frameId: frameIdOf(wc, f), parentFrameId: parent ? frameIdOf(wc, parent) : -1,
+      processId: (() => { try { return f?.processId ?? -1; } catch { return -1; } })(),
+      frameType: main ? 'outermost_frame' : 'sub_frame', documentLifecycle: 'active', timeStamp: Date.now(),
+    };
+  };
+  const sendNav = (wc: WebContents, name: string, f: Electron.WebFrameMain | null | undefined, url: string, extra: Record<string, unknown> = {}) => {
+    if (!navSubs.size || wc.isDestroyed() || !tabOf(wc.id) || !f) return;
+    const details = { ...frameDetails(wc, f, url), ...extra };
+    for (const id of navSubs) {
+      const ext = exts.get(id);
+      if (!ext) continue;
+      let see = false;
+      try { see = R.canSeeTabUrl(ext.manifest, url, ext.id); } catch {}
+      if (see) void sendToExtension(id, name, [details]);
+    }
+  };
+  const frameAt = (pid: number, rid: number) => { try { return webFrameMain.fromId(pid, rid) || null; } catch { return null; } };
+  app.on('web-contents-created', (_e, wc) => {
+    let mine = false;
+    try { mine = wc.session === ses; } catch {}
+    if (!mine) return;
+    wc.on('did-start-navigation', (ev: any) => {
+      if (!navSubs.size || ev?.isSameDocument) return;
+      sendNav(wc, 'webNavigation.onBeforeNavigate', ev?.frame, String(ev?.url || ''));
+    });
+    wc.on('did-frame-navigate', (_ev, url, _code, _status, _main, pid, rid) => {
+      if (navSubs.size) sendNav(wc, 'webNavigation.onCommitted', frameAt(pid, rid), url, { transitionType: 'link', transitionQualifiers: [] });
+    });
+    wc.on('dom-ready', () => { if (navSubs.size) sendNav(wc, 'webNavigation.onDOMContentLoaded', wc.mainFrame, wc.getURL()); });
+    wc.on('did-frame-finish-load', (_ev, _main, pid, rid) => {
+      if (!navSubs.size) return;
+      const f = frameAt(pid, rid);
+      if (f) sendNav(wc, 'webNavigation.onCompleted', f, f.url);
+    });
+    wc.on('did-navigate-in-page', (_ev, url, _main, pid, rid) => {
+      if (navSubs.size) sendNav(wc, 'webNavigation.onHistoryStateUpdated', frameAt(pid, rid), url, { transitionType: 'link', transitionQualifiers: [] });
+    });
+    wc.on('did-fail-load', (_ev, code, desc, url, _main, pid, rid) => {
+      if (navSubs.size && code !== -3) sendNav(wc, 'webNavigation.onErrorOccurred', frameAt(pid, rid), url, { error: `net::${desc || code}` });
+    });
+  });
+  const allFrames = (ext: LoadedExt, wc: WebContents) => {
+    const out: Array<Record<string, unknown>> = [];
+    let list: Electron.WebFrameMain[] = [];
+    try { list = wc.mainFrame.framesInSubtree; } catch {}
+    // Aba que ela não pode ver (sem host_permissions) não mostra frame nenhum — como no Chrome.
+    if (!R.canSeeTabUrl(ext.manifest, wc.getURL(), ext.id)) return out;
+    for (const f of list) {
+      let url = '';
+      try { url = f.url; } catch { continue; }
+      const d: Record<string, unknown> = { ...frameDetails(wc, f, url), errorOccurred: false };
+      delete d.tabId; delete d.timeStamp;
+      out.push(d);
+    }
+    return out;
+  };
+
+  // offscreen: UMA janela invisível por extensão com uma página DELA (área de transferência,
+  // DOMParser…). Some quando a extensão fecha o documento, descarrega ou o Bah sai.
+  const offscreenDocs = new Map<string, { win: BrowserWindow; url: string }>();
+  const closeOffscreen = (extId: string) => {
+    const d = offscreenDocs.get(extId);
+    offscreenDocs.delete(extId);
+    try { if (d && !d.win.isDestroyed()) d.win.destroy(); } catch {}
+  };
+  const createOffscreen = async (ext: LoadedExt, rawUrl: unknown) => {
+    if (offscreenDocs.has(ext.id)) throw new Error('Only a single offscreen document may be created.');
+    const rel = R.normalizeExtPath(rawUrl, ext.id);
+    if (!rel) throw new Error('Invalid offscreen document URL.');
+    const url = R.extensionUrl(ext.id, rel);
+    // Filha da janela principal: fecha junto com ela (janela escondida solta seguraria o Bah aberto).
+    const mw = deps.getMainWindow();
+    const win = new BrowserWindow({
+      ...(mw && !mw.isDestroyed() ? { parent: mw } : {}),
+      show: false, skipTaskbar: true, width: 400, height: 300, focusable: false,
+      webPreferences: { session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
+    });
+    offscreenDocs.set(ext.id, { win, url });
+    win.once('closed', () => { if (offscreenDocs.get(ext.id)?.win === win) offscreenDocs.delete(ext.id); });
+    // Nunca sai da própria extensão (link/redirect pra site não carrega na janela escondida).
+    win.webContents.on('will-navigate', (e, to) => { if (R.extensionIdFromUrl(to) !== ext.id) e.preventDefault(); });
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    try { await win.loadURL(url); } catch (e) { closeOffscreen(ext.id); throw new Error('Could not load the offscreen document.'); }
+    return undefined;
+  };
+
+  // idle: o Bah não mede inatividade (sem sondar o sistema), mas a tela travada conta como "locked"
+  // — cofre de senha que tranca junto com o computador continua trancando.
+  let screenLocked = false;
+  const sendIdle = (state: string) => {
+    for (const ext of exts.values()) if (R.hasApiPermission(ext.manifest, 'idle')) void sendToExtension(ext.id, 'idle.onStateChanged', [state]);
+  };
+  powerMonitor.on('lock-screen', () => { screenLocked = true; sendIdle('locked'); });
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; sendIdle('active'); });
+
   // ── 5. O que a extensão pede (chrome.action.*, tabs.create…) ───────────────
   const loadIcon = (ext: LoadedExt, d: Record<string, unknown>): string => {
     if (d.imageData !== undefined) {
@@ -554,6 +664,49 @@ export function setupChromeExtensions(deps: {
         return undefined;
       }
       case 'tabs.subscribe': tabSubs.add(extId); return true;
+      case 'windows.create': {
+        // Janela nova = aba nova do Bah (uma janela só); a primeira URL abre, o resto é ignorado.
+        const first = Array.isArray(d.url) ? d.url[0] : d.url;
+        let wc: WebContents | null = null;
+        if (first !== undefined) {
+          const r = R.checkTabUrl(first, ext.id);
+          if (!r.ok) throw new Error(r.reason);
+          wc = await openTab(r.url, d.focused !== false);
+          if (!wc) throw new Error('Could not open the window.');
+        }
+        const see = wc ? R.canSeeTabUrl(ext.manifest, wc.getURL() || String(first), ext.id) : false;
+        return { id: 1, focused: true, incognito: false, type: 'normal', state: 'normal', alwaysOnTop: false, tabs: wc ? [tabInfo(wc, true, see)] : [] };
+      }
+      case 'tabs.getCurrent': return undefined;   // o worker não é aba (página de extensão: ver o CALL)
+      case 'webNavigation.subscribe': navSubs.add(extId); return true;
+      case 'webNavigation.getAllFrames': {
+        const wc = tabId === undefined ? null : tabOf(tabId);
+        return wc ? allFrames(ext, wc) : null;
+      }
+      case 'webNavigation.getFrame': {
+        const wc = tabId === undefined ? null : tabOf(tabId);
+        const fid = typeof d.frameId === 'number' ? d.frameId : -2;
+        const f = wc ? allFrames(ext, wc).find(x => x.frameId === fid) : undefined;
+        if (!f) return null;
+        const { frameId: _f, ...rest } = f;
+        return rest;
+      }
+      case 'idle.queryState': return screenLocked ? 'locked' : 'active';
+      case 'offscreen.createDocument': return createOffscreen(ext, d.url);
+      case 'offscreen.closeDocument': {
+        if (!offscreenDocs.has(extId)) throw new Error('No current offscreen document.');
+        closeOffscreen(extId); return undefined;
+      }
+      case 'offscreen.hasDocument': return offscreenDocs.has(extId);
+      case 'runtime.getContexts': {
+        // Só o documento offscreen (é o que as extensões perguntam); o resto o Chrome também lista,
+        // mas ninguém de quem o Bah depende pergunta.
+        const f = R.asDetails(d.filter);
+        const types = Array.isArray(f.contextTypes) ? f.contextTypes : null;
+        const doc = offscreenDocs.get(extId);
+        if (!doc || (types && !types.includes('OFFSCREEN_DOCUMENT'))) return [];
+        return [{ contextType: 'OFFSCREEN_DOCUMENT', contextId: `offscreen-${extId}`, tabId: -1, windowId: -1, frameId: -1, documentUrl: doc.url, documentOrigin: `chrome-extension://${extId}`, incognito: false }];
+      }
       case 'runtime.getPlatformInfo': return R.platformInfo(process.platform, process.arch);
       case 'storage.sync.get': return R.storageGet(readSync(extId), d.keys);
       case 'storage.sync.getKeys': return Object.keys(readSync(extId));
@@ -603,6 +756,12 @@ export function setupChromeExtensions(deps: {
     }
     const extId = R.extensionIdFromUrl(src);
     if (!extId || !exts.has(extId)) throw new Error('Not allowed.');
+    // A aba de quem chamou (página da extensão aberta numa aba); popup/opções/offscreen não são aba.
+    if (method === 'tabs.getCurrent') {
+      const ext = exts.get(extId)!;
+      const wc = ev.type === 'service-worker' ? null : tabOf(e.sender.id);
+      return wc ? tabInfo(wc, true, R.canSeeTabUrl(ext.manifest, wc.getURL(), ext.id)) : undefined;
+    }
     return handleCall(extId, String(method), details);
   });
 
@@ -705,6 +864,8 @@ export function setupChromeExtensions(deps: {
     ready.delete(ext.id);
     wakeReady(ext.id, false);
     tabSubs.delete(ext.id);
+    navSubs.delete(ext.id);
+    closeOffscreen(ext.id);
     if (popup?.extId === ext.id) closePopup();
     for (const [v, w] of Array.from(workers)) if (w.extId === ext.id) dropWorker(v);
     clearAlarmTable(ext.id);
@@ -745,7 +906,9 @@ export function setupChromeExtensions(deps: {
     const win = new BrowserWindow({
       parent: mw, show: false, frame: false, resizable: false, movable: false,
       minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
-      width: 25, height: 25, useContentSize: true, backgroundColor: '#ffffff',
+      // Nasce (escondida) com a altura máxima do Chrome: popup que escolhe o layout pela altura da
+      // janela na hora de abrir (o Bitwarden: < 300 px vira a versão "mini") vê a altura de verdade.
+      width: 25, height: 600, useContentSize: true, backgroundColor: '#ffffff',
       webPreferences: {
         session: ses, contextIsolation: true, sandbox: true, nodeIntegration: false,
         enablePreferredSizeMode: true, spellcheck: false,
@@ -773,6 +936,25 @@ export function setupChromeExtensions(deps: {
     };
     win.webContents.on('preferred-size-changed', (_e, s) => { size = R.clampPopupSize(s.width, s.height); place(); show(); });
     win.webContents.once('did-finish-load', () => setTimeout(show, 150));   // página que não avisa o tamanho
+    // Medido ao vivo: o popup do LastPass (400×418) e o do Bitwarden ficavam em 25×25 — o
+    // preferred-size-changed não chega pra página que fixa o tamanho no CSS do body. Mede o conteúdo
+    // algumas vezes logo depois de carregar e cresce até ele (nunca encolhe; o limite é o do Chrome).
+    const MEASURE_JS = `(() => { const d = document.documentElement, b = document.body;
+      const r = (e) => e ? e.getBoundingClientRect() : { width: 0, height: 0 };
+      // Altura pelo conteúdo (body, e o <html> quando o CSS fixa um mínimo): o scrollHeight do <html>
+      // é no mínimo a janela, e a janela nasce alta — mediria todo popup com 600.
+      return [Math.max(d.scrollWidth, b ? b.scrollWidth : 0, r(d).width, r(b).width),
+              Math.max(b ? b.scrollHeight : 0, r(d).height, r(b).height)]; })()`;
+    const measure = async () => {
+      if (win.isDestroyed()) return;
+      try {
+        const m = await win.webContents.executeJavaScript(MEASURE_JS);
+        if (!Array.isArray(m) || win.isDestroyed()) return;
+        const next = R.clampPopupSize(Math.max(size.width, Number(m[0])), Math.max(size.height, Number(m[1])));
+        if (next.width !== size.width || next.height !== size.height) { size = next; place(); }
+      } catch {}
+    };
+    win.webContents.on('did-finish-load', () => { for (const ms of [100, 400, 1000, 2500]) setTimeout(() => { void measure(); }, ms); });
     win.on('blur', () => { if (popup?.win === win) closePopup(); });
     win.on('closed', () => { if (popup?.win === win) popup = null; });
     win.webContents.on('before-input-event', (ev, input) => {
@@ -1135,6 +1317,10 @@ export function setupChromeExtensions(deps: {
     if (isDisabled(details.id)) return { action: 'deny' as const };
     const manifest = details.manifest || {};
     const name = details.localizedName || manifest.name || details.id;
+    return (await askInstall(details.id, name, manifest, details.icon)) ? { action: 'allow' as const } : { action: 'deny' as const };
+  };
+  // A pergunta "Adicionar X?" (loja ou botão do Bah): o que a pessoa aprova vira a base de acesso.
+  const askInstall = async (id: string, name: string, manifest: any, iconImg?: Electron.NativeImage): Promise<boolean> => {
     const access = R.hostAccessSummary(manifest);
     const missing = R.unsupportedFeatures(manifest);
     const lines: string[] = [];
@@ -1143,7 +1329,7 @@ export function setupChromeExtensions(deps: {
     if (hostLines.length || permLines.length) lines.push(deps.t('ext.install.can'), ...permLines, ...hostLines);
     if (missing.length) lines.push('', fmt('ext.install.unsupported', { list: missing.join(', ') }));
     let icon: Electron.NativeImage | undefined;
-    try { if (details.icon && !details.icon.isEmpty()) icon = details.icon.resize({ width: 64, height: 64, quality: 'best' }); } catch {}
+    try { if (iconImg && !iconImg.isEmpty()) icon = iconImg.resize({ width: 64, height: 64, quality: 'best' }); } catch {}
     const r = await showBox({
       type: 'question',
       title: deps.t('ext.install.title'),
@@ -1153,12 +1339,72 @@ export function setupChromeExtensions(deps: {
       defaultId: 1, cancelId: 1, noLink: true,
       ...(icon ? { icon } : {}),
     });
-    if (r.response !== 0) return { action: 'deny' as const };
+    if (r.response !== 0) return false;
     // O que a pessoa viu e aprovou. O .crx baixado é conferido contra isso antes de carregar.
-    pendingGrants.set(details.id, R.accessGrant(manifest));
-    if (tombstones.delete(details.id)) saveTombstones();
-    return { action: 'allow' as const };
+    pendingGrants.set(id, R.accessGrant(manifest));
+    if (tombstones.delete(id)) saveTombstones();
+    return true;
   };
+
+  // ── 12b. "Adicionar ao Bah" (a loja não mostra mais o botão pra quem não é o Chrome) ──────
+  // Ver storeDetailId em chrome-extension-rules.ts: a loja decide no servidor e o Bah não se passa
+  // pelo Chrome. A pessoa clica no botão do Bah com a aba na página da extensão; o Bah baixa o .crx
+  // público (mesmo endereço da loja, pela sessão das abas — vale o proxy dela), confere ID × chave,
+  // pergunta igual à loja e carrega pelo carregador com trava.
+  const installing = new Set<string>();
+  ipcMain.handle('extensions:install-from-store', async (e, wcId: unknown) => {
+    if (!fromMainWindow(e)) return { ok: false, error: 'denied' };
+    const wc = typeof wcId === 'number' && Number.isInteger(wcId) ? webContents.fromId(wcId) : null;
+    if (!wc || wc.isDestroyed() || wc.session !== ses) return { ok: false, error: 'no-tab' };
+    // O ID vem do endereço da aba, nunca de argumento.
+    const id = R.storeDetailId(wc.getURL());
+    if (!id) return { ok: false, error: 'not-store-page' };
+    if (ses.extensions.getExtension(id) || isDisabled(id)) return { ok: false, error: 'installed' };
+    if (installing.has(id)) return { ok: false, error: 'busy' };
+    installing.add(id);
+    const stage = path.join(userData, 'ExtensionsStaging', `${id}-${Date.now()}`);
+    try {
+      const res = await ses.fetch(R.crxDownloadUrl(id, process.versions.chrome || '140.0.0.0'));
+      if (!res.ok) throw new Error(`download failed (${res.status})`);
+      const len = Number(res.headers.get('content-length') || 0);
+      if (len > MAX_CRX_BYTES) throw new Error('package too large');
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_CRX_BYTES) throw new Error('package too large');
+      const crx = R.parseCrx3(buf);
+      if (crx.id !== id) throw new Error('package id does not match the store page');
+      // adm-zip: a mesma do electron-chrome-web-store (dependência dela); limpa "../" dos nomes.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const AdmZip = require('adm-zip');
+      new AdmZip(crx.zip).extractAllTo(stage, true);
+      const mfFile = path.join(stage, 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(mfFile, 'utf8'));
+      if (!manifest || typeof manifest !== 'object' || typeof manifest.version !== 'string') throw new Error('invalid manifest');
+      if (Number(manifest.manifest_version) < 3) throw new Error('Manifest V2 extensions are not supported');
+      manifest.key = crx.publicKey.toString('base64');
+      fs.writeFileSync(mfFile, JSON.stringify(manifest, null, 2));
+      const name = R.localizeMessage(manifest.name, readMessages(stage, manifest)) || id;
+      let icon: Electron.NativeImage | undefined;
+      try {
+        const rel = R.normalizeExtPath(R.pickIconPath(manifest.icons, 128), '');
+        const file = rel ? R.resolveInsideRoot(stage, rel) : null;
+        if (file) icon = nativeImage.createFromPath(file);
+      } catch {}
+      if (!(await askInstall(id, name, manifest, icon))) return { ok: false, cancelled: true };
+      const dest = path.join(extensionsPath, id, `${R.normalizeVersionDir(manifest.version)}_0`);
+      await fs.promises.rm(dest, { recursive: true, force: true });
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      await fs.promises.rename(stage, dest);
+      await ses.extensions.loadExtension(dest);
+      return { ok: true, name };
+    } catch (err: any) {
+      pendingGrants.delete(id);
+      console.warn('[Extensões] instalar pelo Bah falhou:', err?.message || err);
+      return { ok: false, error: String(err?.message || err) };
+    } finally {
+      installing.delete(id);
+      fs.promises.rm(stage, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 
   const libPreload = (() => { try { return require.resolve('electron-chrome-web-store/preload'); } catch { return ''; } })();
   if (!libPreload || !fs.existsSync(libPreload)) {

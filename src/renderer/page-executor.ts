@@ -1,12 +1,17 @@
+import { guardAgentAction } from '../shared/takeover';
+import { humanCheckFlag } from './takeover-driver';
 export type BrowserAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
-  | { type: 'extract_text'; max_chars?: number }
+  | { type: 'extract_text'; max_chars?: number; offset?: number }
+  | { type: 'get_html'; selector?: string; max?: number; offset?: number }
   | { type: 'extract_images'; min_width?: number }
   | { type: 'search_images'; query: string; min_width?: number; count?: number }
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
   | { type: 'generate_image'; prompt: string; count?: number }
   | { type: 'download'; url: string; filename?: string }
+  | { type: 'list_downloads' }
+  | { type: 'cancel_download' | 'pause_download' | 'resume_download' | 'retry_download'; id: string }
   | { type: 'download_video'; url?: string; query?: string; audio_only?: boolean; count?: number; quality?: 'best' | 'low' }
   | { type: 'open_video_cuts'; phrase: string; count?: number }
   | { type: 'open_video'; query: string }
@@ -24,6 +29,30 @@ export type BrowserAction =
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
+  | { type: 'select_option'; ref: number; option: string }
+  | { type: 'upload'; ref: number; multiple?: boolean; file?: string[] }
+  | { type: 'list_files'; query?: string }
+  | { type: 'dialog'; accept: boolean; text?: string }
+  | { type: 'click_role'; role: string; name?: string; nth?: number }
+  | { type: 'get'; ref: number }
+  | { type: 'save_pdf'; name?: string }
+  | { type: 'screenshot'; full?: boolean; name?: string }
+  | { type: 'clipboard'; read?: boolean; write?: string }
+  | { type: 'keydown'; key: string }
+  | { type: 'keyup'; key: string }
+  | { type: 'insert_text'; text: string }
+  | { type: 'read_file'; file: string }
+  | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'find'; text: string }
+  | { type: 'web_search'; query: string }
+  | { type: 'history_search'; query: string }
+  | { type: 'summarize_tabs'; wake?: boolean }
+  | { type: 'suggest_time_zone'; zone: string; reason: string }
+  | { type: 'back' }
+  | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
+  | { type: 'drag'; ref: number; to_ref: number }
+  | { type: 'forward' | 'reload' }
+  | { type: 'check' | 'uncheck'; ref: number }
   | { type: 'fill_ref'; ref: number; value: string }
   | { type: 'click_text'; text: string; nth?: number }
   | { type: 'click_at'; x: number; y: number }
@@ -32,7 +61,7 @@ export type BrowserAction =
   | { type: 'press'; key: string }
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
-  | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'wait'; ms?: number; selector?: string; timeout?: number; text?: string; gone?: string; url?: string; load?: 'load' | 'networkidle' }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface InteractiveElement {
@@ -50,6 +79,9 @@ export interface InteractiveElement {
   pressed?: boolean;
   checked?: boolean;
   backendNodeId?: number; // CDP node id for precise clicking
+  disabled?: boolean;     // listado mas desabilitado (formulário incompleto, botão cinza)
+  frame?: string;         // dentro de um iframe (host dele): sem backendNodeId — clique por coordenada
+  frameNode?: { key: string; id: number };   // nó no documento do iframe (preencher sem depender de foco)
   repeatNote?: number;    // "+N elementos similares" colapsados após este (poda de payload)
 }
 
@@ -74,12 +106,20 @@ export interface ToolResult {
 export function formatAction(action: BrowserAction): string {
   switch (action.type) {
     case 'plan': return `plan(${action.steps?.length ?? 0} steps)`;
-    case 'store': return `store(${action.key}=${JSON.stringify(action.value).slice(0, 60)}${action.source ? ` from ${action.source}` : ''})`;
-    case 'extract_text': return `extract_text()`;
+    case 'store': {
+      // Lista: "tracks: 3 — Thriller — Michael Jackson; Beat It — …" (antes o JSON cortado no meio de uma string).
+      const v = action.value;
+      const shown = Array.isArray(v) ? `${v.length} — ${v.map(String).join('; ')}` : (typeof v === 'string' ? v : JSON.stringify(v));
+      return `store(${action.key}: ${shown.length > 90 ? shown.slice(0, 89) + '…' : shown}${action.source ? ` from ${action.source}` : ''})`;
+    }
+    case 'extract_text': return `extract_text(${action.offset ? `from ${action.offset}` : ''})`;
+    case 'get_html': return `get_html(${action.selector ? `"${shorten(action.selector, 60)}"` : 'body'}${action.offset ? `, from ${action.offset}` : ''})`;
     case 'extract_images': return `extract_images(${action.min_width ? `min ${action.min_width}px` : ''})`;
     case 'search_images': return `search_images("${shorten(action.query, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'harvest_images': return `harvest_images("${shorten(action.query, 50)}", ${action.count || 10}${action.min_width ? `, min ${action.min_width}px` : ''})`;
     case 'download': return `download("${shorten(action.url, 80)}")`;
+    case 'list_downloads': return 'list_downloads()';
+    case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download': return `${action.type}("${shorten(action.id, 60)}")`;
     case 'download_video': return `download_video(${action.count && action.count > 1 ? `${action.count}x, ` : ''}${action.audio_only ? 'audio, ' : ''}${action.quality === 'best' ? 'best quality, ' : ''}${action.query ? `search: "${shorten(action.query, 50)}"` : action.url ? shorten(action.url, 70) : 'current tab'})`;
     case 'open_video_cuts': return `open_video_cuts("${shorten(action.phrase, 50)}"${action.count ? `, ${action.count}` : ''})`;
     case 'open_video': return `open_video("${shorten(action.query, 50)}")`;
@@ -98,6 +138,31 @@ export function formatAction(action: BrowserAction): string {
     case 'new_tab': return `new_tab("${action.url}")`;
     case 'close_tab': return `close_tab(${action.tab})`;
     case 'click_ref': return `click_ref(@${action.ref})`;
+    case 'look_at': return action.ref != null ? `look_at(@${action.ref})` : `look_at(${action.x},${action.y} ${action.w}x${action.h})`;
+    case 'history_search': return `history_search("${shorten(action.query, 60)}")`;
+    case 'upload': return `upload(@${action.ref}${action.file ? ` ${([] as string[]).concat(action.file).join(', ')}` : ''})`;
+    case 'list_files': return 'list_files()';
+    case 'get': return `get(@${action.ref})`;
+    case 'save_pdf': return 'save_pdf()';
+    case 'screenshot': return `screenshot(${action.full === false ? 'viewport' : 'full page'})`;
+    case 'clipboard': return action.write != null ? `clipboard(write ${action.write.length} chars)` : 'clipboard(read)';
+    case 'keydown': return `keydown(${action.key})`;
+    case 'keyup': return `keyup(${action.key})`;
+    case 'insert_text': return `insert_text("${shorten(action.text, 40)}")`;
+    case 'click_role': return `click_role(${action.role}${action.name ? ` "${shorten(action.name, 40)}"` : ''}${action.nth ? ` #${action.nth}` : ''})`;
+    case 'dialog': return `dialog(${action.accept ? 'accept' : 'dismiss'}${action.text != null ? ` "${shorten(action.text, 40)}"` : ''})`;
+    case 'read_file': return `read_file(${shorten(action.file, 60)})`;
+    case 'suggest_time_zone': return `suggest_time_zone(${action.zone})`;
+    case 'web_search': return `web_search("${shorten(action.query, 60)}")`;
+    case 'summarize_tabs': return `summarize_tabs(${action.wake ? 'wake sleeping' : 'open tabs'})`;
+    case 'find': return `find("${shorten(action.text, 50)}")`;
+    case 'back': return 'back()';
+    case 'forward': return 'forward()';
+    case 'reload': return 'reload()';
+    case 'hover': case 'dblclick': case 'focus': return `${action.type}(@${action.ref})`;
+    case 'drag': return `drag(@${action.ref} → @${action.to_ref})`;
+    case 'check': case 'uncheck': return `${action.type}(@${action.ref})`;
+    case 'select_option': return `select_option(@${action.ref}, "${shorten(action.option, 50)}")`;
     case 'fill_ref': return `fill_ref(@${action.ref}, "${shorten(action.value)}")`;
     case 'click_text': return `click_text("${action.text}"${action.nth ? `, nth=${action.nth}` : ''})`;
     case 'click_at': return `click_at(${Math.round(action.x)}, ${Math.round(action.y)})`;
@@ -106,7 +171,7 @@ export function formatAction(action: BrowserAction): string {
     case 'press': return `press("${action.key}")`;
     case 'navigate': return `navigate("${action.url}")`;
     case 'scroll': return `scroll("${action.direction}"${action.amount ? `, ${action.amount}` : ''})`;
-    case 'wait': return action.selector ? `wait("${action.selector}")` : `wait(${action.ms ?? action.timeout ?? 1000}ms)`;
+    case 'wait': return action.text ? `wait(text "${shorten(action.text, 40)}")` : action.gone ? `wait(gone "${shorten(action.gone, 40)}")` : action.url ? `wait(url ${shorten(action.url, 50)})` : action.load ? `wait(${action.load})` : action.selector ? `wait("${action.selector}")` : `wait(${action.ms ?? action.timeout ?? 1000}ms)`;
     case 'done': return `done(${action.success ? 'success' : 'failed'}: "${shorten(action.reason)}")`;
   }
 }
@@ -222,8 +287,10 @@ export async function observePageViaAXTree(
             }
           }
 
+          // Iframes (formulário de vaga, pagamento, reserva embutidos): a árvore da página não os inclui.
+          const frameEls = await collectFrameElements(wcId).catch(() => [] as InteractiveElement[]);
           // Filter out elements with no resolved coordinates (off-screen / hidden)
-          const allVisible = elements.filter(e => e.w > 0 && e.h > 0 && e.x > 0 && e.y > 0);
+          const allVisible = [...elements, ...frameEls].filter(e => e.w > 0 && e.h > 0 && e.x > 0 && e.y > 0);
           if (allVisible.length >= 4) {
             // PRIORIZAÇÃO POR VIEWPORT (pedido do Gemini): coords do getBoxModel são
             // relativas à viewport, então y <= innerHeight = está na tela. Elementos
@@ -266,6 +333,27 @@ export async function observePageViaAXTree(
   return fallback;
 }
 
+/** Elementos dos iframes, com coordenadas na viewport da página e o host do iframe em `frame`. */
+async function collectFrameElements(wcId: number): Promise<InteractiveElement[]> {
+  const api = window.electronAPI as any;
+  if (!api?.getFramesAx || !api?.getFramesCoords) return [];
+  const r = await api.getFramesAx(wcId);
+  const out: InteractiveElement[] = [];
+  for (const f of r?.frames || []) {
+    const els = buildElementsFromAXTree(f.nodes).slice(0, 60);
+    const ids = els.map(e => e.backendNodeId).filter((x): x is number => x != null);
+    if (!ids.length) continue;
+    const c = await api.getFramesCoords(wcId, f.key, ids);
+    for (const el of els) {
+      const b = el.backendNodeId != null ? c?.coords?.[el.backendNodeId] : null;
+      if (!b) continue;
+      // Sem backendNodeId: o id é de OUTRO documento (colidiria com os da página). Age por coordenada.
+      out.push({ ...el, ...b, backendNodeId: undefined, frame: f.label, frameNode: { key: f.key, id: el.backendNodeId! } });
+    }
+  }
+  return out;
+}
+
 // Roles considered interactive by the AX tree
 const INTERACTIVE_ROLES = new Set([
   'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox', 'option',
@@ -306,8 +394,8 @@ function buildElementsFromAXTree(nodes: any[]): InteractiveElement[] {
     const pressedProp = node.properties?.find((p: any) => p.name === 'pressed');
     const checkedProp = node.properties?.find((p: any) => p.name === 'checked');
     const disabledProp = node.properties?.find((p: any) => p.name === 'disabled');
-    // Skip truly disabled elements
-    if (disabledProp?.value?.value === true) continue;
+    // Desabilitado continua na lista, marcado: "Enviar" cinza diz ao agente que falta algo no formulário.
+    const disabled = disabledProp?.value?.value === true;
 
     elements.push({
       id: elements.length,
@@ -322,6 +410,7 @@ function buildElementsFromAXTree(nodes: any[]): InteractiveElement[] {
       placeholder: getProp(node, 'placeholder')?.slice(0, 40),
       pressed: pressedProp ? pressedProp.value?.value === true || pressedProp.value?.value === 'true' : undefined,
       checked: checkedProp ? checkedProp.value?.value === true || checkedProp.value?.value === 'true' : undefined,
+      ...(disabled ? { disabled: true } : {}),
       backendNodeId: node.backendDOMNodeId as number,
     });
   }
@@ -422,6 +511,9 @@ export async function waitForSettle(
 }
 
 export async function executeBrowserAction(wv: Electron.WebviewTag, action: BrowserAction): Promise<ToolResult> {
+  // Página de checagem humana: o agente nunca opera — só lê ou sai dela (shared/takeover.ts).
+  const refusal = guardAgentAction(action.type, humanCheckFlag(wv));
+  if (refusal) return { success: false, reason: 'human_check', error: refusal } as ToolResult;
   if (action.type === 'navigate') {
     if (!action.url) return { success: false, error: 'Missing url' };
     const target = normalizeUrl(action.url);
@@ -506,9 +598,18 @@ const OBSERVE_SCRIPT = `
       const r = el.getBoundingClientRect();
       const ariaLabel = el.getAttribute('aria-label') || '';
       const innerText = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-      const text = (innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || (secret(el) ? '' : el.value) || '').slice(0, 120);
+      // Checkbox/radio: o nome é o texto do <label> (o value é só "on") + estado real. Sem isso a
+      // caixinha "I accept the license" aparecia como <input>on</input> e ninguém sabia o que era.
+      const isBox = el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio');
+      // Campo de arquivo: aparecia como <input></input> vazio — o agente não sabia que era upload.
+      const isFile = el.tagName === 'INPUT' && el.type === 'file';
+      const labelText = (isBox || isFile) ? ((el.labels && el.labels[0] ? el.labels[0].innerText : '') || (el.closest('label') ? el.closest('label').innerText : '')).replace(/\\s+/g, ' ').trim() : '';
+      const fileNames = isFile && el.files && el.files.length ? Array.prototype.map.call(el.files, function(f){ return f.name; }).join(', ') : '';
+      const text = isFile
+        ? ((labelText || ariaLabel || el.getAttribute('title') || 'Choose file') + ' [file upload: ' + (fileNames || 'no file chosen') + ']').slice(0, 120)
+        : (labelText || innerText || ariaLabel || el.getAttribute('title') || el.getAttribute('placeholder') || ((isBox || secret(el)) ? '' : el.value) || '').slice(0, 120);
       const pressed = el.getAttribute('aria-pressed');
-      const checked = el.getAttribute('aria-checked');
+      const checked = isBox ? String(!!el.checked) : el.getAttribute('aria-checked');
       return {
         id,
         tag: el.tagName.toLowerCase(),
@@ -517,12 +618,13 @@ const OBSERVE_SCRIPT = `
         y: Math.round(r.top + r.height / 2),
         w: Math.round(r.width),
         h: Math.round(r.height),
-        role: el.getAttribute('role') || undefined,
+        role: el.getAttribute('role') || (isBox ? el.type : isFile ? 'file' : (el.tagName === 'SELECT' ? 'combobox' : undefined)),
         href: el.href || undefined,
         placeholder: el.getAttribute('placeholder') || undefined,
         aria: ariaLabel ? ariaLabel.slice(0, 80) : undefined,
         pressed: pressed === 'true' ? true : (pressed === 'false' ? false : undefined),
         checked: checked === 'true' ? true : (checked === 'false' ? false : undefined),
+        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true' || undefined,
       };
     });
   return {

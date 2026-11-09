@@ -1,17 +1,22 @@
 import { AIEngine } from './ai-engine';
+import { isTimeZone } from '../shared/region';
 import type { VisionImage, VisionReport } from '../shared/vision';
 import { classifyError, type AgentErrorCode } from '../shared/error-codes';
 import { isPrivateAi } from './incognito-session';
+import { normalizeGetHtml, normalizeExtractText } from '../shared/read-paging';
 
 export type AgentAction =
   | { type: 'plan'; steps: string[] }
   | { type: 'store'; key: string; value: any; source?: string }
-  | { type: 'extract_text'; max_chars?: number }
+  | { type: 'extract_text'; max_chars?: number; offset?: number }
+  | { type: 'get_html'; selector?: string; max?: number; offset?: number }
   | { type: 'extract_images'; min_width?: number }
   | { type: 'search_images'; query: string; min_width?: number; count?: number }
   | { type: 'harvest_images'; query: string; count?: number; min_width?: number }
   | { type: 'generate_image'; prompt: string; count?: number }
   | { type: 'download'; url: string; filename?: string }
+  | { type: 'list_downloads' }
+  | { type: 'cancel_download' | 'pause_download' | 'resume_download' | 'retry_download'; id: string }
   | { type: 'download_video'; url?: string; query?: string; audio_only?: boolean; count?: number; quality?: 'best' | 'low' }
   | { type: 'open_video_cuts'; phrase: string; count?: number }
   | { type: 'open_video'; query: string }
@@ -28,6 +33,29 @@ export type AgentAction =
   | { type: 'new_tab'; url: string }
   | { type: 'close_tab'; tab: number }
   | { type: 'click_ref'; ref: number }
+  | { type: 'select_option'; ref: number; option: string }
+  | { type: 'upload'; ref: number; multiple?: boolean; file?: string[] }
+  | { type: 'list_files'; query?: string }
+  | { type: 'dialog'; accept: boolean; text?: string }
+  | { type: 'click_role'; role: string; name?: string; nth?: number }
+  | { type: 'get'; ref: number }
+  | { type: 'save_pdf'; name?: string }
+  | { type: 'screenshot'; full?: boolean; name?: string }
+  | { type: 'clipboard'; read?: boolean; write?: string }
+  | { type: 'keydown'; key: string }
+  | { type: 'keyup'; key: string }
+  | { type: 'insert_text'; text: string }
+  | { type: 'read_file'; file: string }
+  | { type: 'look_at'; ref?: number; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'find'; text: string }
+  | { type: 'web_search'; query: string }
+  | { type: 'history_search'; query: string }
+  | { type: 'suggest_time_zone'; zone: string; reason: string }
+  | { type: 'back' }
+  | { type: 'hover' | 'dblclick' | 'focus'; ref: number }
+  | { type: 'drag'; ref: number; to_ref: number }
+  | { type: 'forward' | 'reload' }
+  | { type: 'check' | 'uncheck'; ref: number }
   | { type: 'fill_ref'; ref: number; value: string }
   | { type: 'click_text'; text: string; nth?: number }
   | { type: 'click_at'; x: number; y: number }
@@ -36,7 +64,7 @@ export type AgentAction =
   | { type: 'press'; key: string }
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
-  | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'wait'; ms?: number; selector?: string; timeout?: number; text?: string; gone?: string; url?: string; load?: 'load' | 'networkidle' }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface AgentResult {
@@ -59,8 +87,41 @@ const BATCHABLE_ACTIONS = new Set(['fill_ref', 'fill', 'type', 'press', 'click_r
 
 const VALID_ACTIONS = new Set([
   'plan',
+  'hover',
+  'dblclick',
+  'focus',
+  'drag',
+  'forward',
+  'reload',
+  'history_search',
+  'suggest_time_zone',
+  'web_search',
+  'look_at',
+  'find',
+  'back',
+  'check',
+  'uncheck',
+  'select_option',
+  'upload',
+  'list_files',
+  'dialog',
+  'click_role',
+  'get',
+  'save_pdf',
+  'screenshot',
+  'clipboard',
+  'keydown',
+  'keyup',
+  'insert_text',
+  'read_file',
+  'list_downloads',
+  'cancel_download',
+  'pause_download',
+  'resume_download',
+  'retry_download',
   'store',
   'extract_text',
+  'get_html',
   'extract_images',
   'search_images',
   'harvest_images',
@@ -105,7 +166,8 @@ export class PageAgent {
     try {
       const r = await this.aiEngine.generateAction(command, observedState, screenshot, tier, signal);
       const parsed = this.parseResponse(r.text);
-      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model }, vision: r.vision };
+      // contextTokens/contextTrimmed/promptParts: o medidor de contexto do painel e o aviso "✂️ página cortada".
+      return { ...parsed, metrics: { usage: r.usage, latencyMs: r.latencyMs, model: r.model, contextTokens: r.contextTokens, contextTrimmed: r.contextTrimmed, promptParts: r.promptParts }, vision: r.vision };
     } catch (err: any) {
       const e = classifyError(err);
       return {
@@ -252,7 +314,9 @@ export class PageAgent {
       case 'store':
         return { type: 'store', key: String(action.key ?? ''), value: action.value, source: action.source ? String(action.source) : undefined };
       case 'extract_text':
-        return { type: 'extract_text', max_chars: toOptionalNumber(action.max_chars) };
+        return normalizeExtractText(action);
+      case 'get_html':
+        return normalizeGetHtml(action);
       case 'extract_images':
         return { type: 'extract_images', min_width: toOptionalNumber(action.min_width) };
       case 'search_images':
@@ -263,6 +327,11 @@ export class PageAgent {
         return { type: 'generate_image', prompt: String(action.prompt ?? action.query ?? action.text ?? ''), count: toOptionalNumber(action.count) };
       case 'download':
         return { type: 'download', url: String(action.url ?? ''), filename: action.filename ? String(action.filename) : undefined };
+      case 'list_downloads':
+        return { type: 'list_downloads' };
+      case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+        // id OU nome do arquivo (modelo pequeno costuma mandar o nome).
+        return { type: action.type, id: String(action.id ?? action.download_id ?? action.filename ?? action.file ?? action.name ?? '').trim() };
       case 'download_video':
         return { type: 'download_video', url: action.url ? String(action.url) : undefined, query: action.query ? String(action.query) : undefined, audio_only: action.audio_only === true, count: action.count != null ? Number(action.count) : undefined, quality: /low|baixa|pior|ruim|480|360/i.test(String(action.quality ?? '')) ? 'low' : (/best|max|alta|hd|4k/i.test(String(action.quality ?? '')) ? 'best' : undefined) };
       case 'open_video_cuts':
@@ -319,9 +388,58 @@ export class PageAgent {
       case 'close_tab':
         return { type: 'close_tab', tab: Number(action.tab) };
       case 'click_ref':
-        return { type: 'click_ref', ref: Number(action.ref) };
+        return { type: 'click_ref', ref: toRef(action.ref) };
+      case 'look_at':
+        return { type: 'look_at', ref: action.ref != null && action.ref !== '' ? toRef(action.ref) : undefined, x: toOptionalNumber(action.x), y: toOptionalNumber(action.y), w: toOptionalNumber(action.w ?? action.width), h: toOptionalNumber(action.h ?? action.height) };
+      case 'suggest_time_zone':
+        return { type: 'suggest_time_zone', zone: String(action.zone ?? action.time_zone ?? action.timezone ?? '').trim(), reason: String(action.reason ?? '').trim().slice(0, 200) };
+      case 'history_search':
+        return { type: 'history_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
+      case 'web_search':
+        return { type: 'web_search', query: String(action.query ?? action.q ?? action.text ?? '').trim() };
+      case 'find':
+        return { type: 'find', text: String(action.text ?? action.query ?? action.label ?? '').trim() };
+      case 'back':
+        return { type: 'back' };
+      case 'forward': case 'reload':
+        return { type: action.type };
+      case 'hover': case 'dblclick': case 'focus':
+        return { type: action.type, ref: toRef(action.ref) };
+      case 'drag':
+        return { type: 'drag', ref: toRef(action.ref ?? action.from_ref ?? action.from), to_ref: toRef(action.to_ref ?? action.to ?? action.target_ref) };
+      case 'check': case 'uncheck':
+        return { type: action.type, ref: toRef(action.ref) };
+      case 'upload':
+        { const f = action.file ?? action.files ?? action.path;
+          const files = (Array.isArray(f) ? f : f != null && f !== '' ? [f] : []).map((x: any) => String(x).trim()).filter(Boolean).slice(0, 10);
+          return { type: 'upload', ref: toRef(action.ref), multiple: !!action.multiple || files.length > 1, ...(files.length ? { file: files } : {}) }; }
+      case 'save_pdf':
+        return { type: 'save_pdf', ...(action.name || action.filename ? { name: String(action.name ?? action.filename).slice(0, 80) } : {}) };
+      case 'screenshot':
+        return { type: 'screenshot', full: action.full !== false && action.full_page !== false, ...(action.name || action.filename ? { name: String(action.name ?? action.filename).slice(0, 80) } : {}) };
+      case 'clipboard':
+        return { type: 'clipboard', ...(action.write != null || action.text != null ? { write: String(action.write ?? action.text) } : { read: true }) };
+      case 'get':
+        return { type: 'get', ref: toRef(action.ref) };
+      case 'keydown': case 'keyup':
+        return { type: action.type, key: String(action.key ?? '').trim() };
+      case 'insert_text':
+        return { type: 'insert_text', text: String(action.text ?? action.value ?? '') };
+      case 'click_role':
+        return { type: 'click_role', role: String(action.role ?? '').trim().toLowerCase(), ...(action.name ?? action.text ?? action.label ? { name: String(action.name ?? action.text ?? action.label).trim() } : {}), ...(toOptionalNumber(action.nth) ? { nth: toOptionalNumber(action.nth) } : {}) };
+      case 'dialog': {
+        const acc = action.accept ?? action.value ?? (typeof action.answer === 'string' ? !/^(dismiss|cancel|no|false)$/i.test(action.answer) : true);
+        const text = action.text ?? action.prompt_text ?? action.promptText;
+        return { type: 'dialog', accept: acc === true || acc === 'true' || acc === 'accept', ...(text != null ? { text: String(text) } : {}) };
+      }
+      case 'list_files':
+        return { type: 'list_files', query: String(action.query ?? action.q ?? '').trim() || undefined };
+      case 'read_file':
+        return { type: 'read_file', file: String(action.file ?? action.path ?? action.name ?? '').trim() };
+      case 'select_option':
+        return { type: 'select_option', ref: toRef(action.ref), option: String(action.option ?? action.value ?? action.text ?? action.label ?? '').trim() };
       case 'fill_ref':
-        return { type: 'fill_ref', ref: Number(action.ref), value: String(action.value ?? '') };
+        return { type: 'fill_ref', ref: toRef(action.ref), value: String(action.value ?? '') };
       case 'click_text':
         return { type: 'click_text', text: String(action.text ?? ''), nth: toOptionalNumber(action.nth) };
       case 'click_at':
@@ -345,25 +463,46 @@ export class PageAgent {
           direction: ['up', 'down', 'top', 'bottom'].includes(action.direction) ? action.direction : 'down',
           amount: toOptionalNumber(action.amount),
         };
-      case 'wait':
+      case 'wait': {
+        const str = (v: any) => (v == null || v === '' ? undefined : String(v).trim().slice(0, 200) || undefined);
+        const load = str(action.load ?? action.state);
         return {
           type: 'wait',
           ms: toOptionalNumber(action.ms),
           selector: action.selector ? String(action.selector) : undefined,
           timeout: toOptionalNumber(action.timeout),
+          ...(str(action.text) ? { text: str(action.text) } : {}),
+          ...(str(action.gone ?? action.text_gone) ? { gone: str(action.gone ?? action.text_gone) } : {}),
+          ...(str(action.url) ? { url: str(action.url) } : {}),
+          ...(load ? { load: /idle/i.test(load) ? 'networkidle' : 'load' } : {}),
         };
+      }
       case 'done':
         return {
           type: 'done',
           // With no reason, the message must match `success`: saying "Task complete."
           // on an unsuccessful done lies to the user about what happened.
-          reason: String(action.reason ?? '') || (action.success === true ? 'Task complete.' : 'The model ended the task without saying why.'),
-          success: action.success === true,
+          // Small local models send "success": "true" (string) — that is a true, not a false.
+          reason: String(action.reason ?? '') || (action.success === true || /^\s*true\s*$/i.test(String(action.success)) ? 'Task complete.' : 'The model ended the task without saying why.'),
+          // Sem "success" nenhum (o modelo local nunca manda): decide pelo que a mensagem diz —
+          // sucesso, a não ser que ela admita falha. "success": false explícito continua valendo.
+          success: action.success == null || action.success === ''
+            ? !!String(action.reason ?? '').trim() && !/\b(unable|could ?n[o']t|cannot|can't|failed|not (?:able|found|possible|available)|no viable|blocked|n[aã]o consegui|no pude)\b/i.test(String(action.reason ?? ''))
+            : action.success === true || /^\s*true\s*$/i.test(String(action.success)),
         };
     }
 
     return { type: 'done', reason: 'Unhandled action type from model.', success: false };
   }
+}
+
+// Element id from the model. Small local models (e.g. Qwen3-VL-8B) often echo the id the way
+// it is displayed — "@20", "[20]", "#20", "ref 20" — instead of the bare number 20. Number()
+// turned those into NaN and every click_ref was rejected. Anything else stays NaN → invalid.
+export function toRef(value: unknown): number {
+  if (typeof value === 'number') return value;
+  const m = /^\s*(?:ref\s*)?[@#\[]?\s*(\d+)\s*\]?\s*$/i.exec(String(value ?? ''));
+  return m ? Number(m[1]) : NaN;
 }
 
 function toOptionalNumber(value: unknown): number | undefined {
@@ -388,6 +527,34 @@ export function validateAction(a: AgentAction): string | null {
     typeof v === 'string' && v.trim().length > 0 && !BAD_SCHEME.test(v)
     && (/^https?:\/\//i.test(v.trim()) || /^[\w.-]+\.[a-z]{2,}(\/|$|\?|#|:)/i.test(v.trim()));
   switch (a.type) {
+    case 'look_at':
+      if (a.ref != null) return finiteInt(a.ref) ? null : `look_at "ref" must be a non-negative integer, got ${JSON.stringify((a as any).ref)}`;
+      return [a.x, a.y, a.w, a.h].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) && (a.w as number) > 0 && (a.h as number) > 0
+        ? null : 'look_at needs "ref", or "x","y","w","h" (viewport pixels) for the area to zoom into';
+    case 'history_search': return nonEmpty(a.query) ? null : 'history_search needs a non-empty "query"';
+    case 'suggest_time_zone': return isTimeZone(a.zone) ? null : 'suggest_time_zone needs an IANA "zone" such as "Asia/Tokyo" or "America/Denver"';
+    case 'web_search': return nonEmpty(a.query) ? null : 'web_search needs a non-empty "query"';
+    case 'find': return nonEmpty(a.text) ? null : 'find needs the "text" to look for';
+    case 'back': case 'forward': case 'reload': return null;
+    case 'hover': case 'dblclick': case 'focus':
+      return finiteInt(a.ref) ? null : `${a.type} needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'drag':
+      return finiteInt(a.ref) && finiteInt(a.to_ref) ? null : 'drag needs "ref" (what to drag) and "to_ref" (where to drop) as element ids';
+    case 'check': case 'uncheck':
+      return finiteInt(a.ref) ? null : `${a.type} needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+    case 'list_files': return null;
+    case 'dialog': return null;
+    case 'save_pdf': case 'screenshot': case 'clipboard': return null;
+    case 'get': return finiteInt(a.ref) ? null : 'get needs the "ref" of an element';
+    case 'keydown': case 'keyup': return nonEmpty(a.key) ? null : `${a.type} needs a "key"`;
+    case 'insert_text': return nonEmpty(a.text) ? null : 'insert_text needs "text"';
+    case 'click_role': return nonEmpty(a.role) ? null : 'click_role needs a "role" (button, link, textbox, checkbox, radio, combobox, tab, menuitem, option, switch)';
+    case 'read_file': return nonEmpty(a.file) ? null : 'read_file needs a "file" name from list_files';
+    case 'upload':
+      return finiteInt(a.ref) ? null : `upload needs the "ref" of the upload button or file field, got ${JSON.stringify((a as any).ref)}`;
+    case 'select_option':
+      if (!finiteInt(a.ref)) return `select_option needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
+      return nonEmpty(a.option) ? null : 'select_option needs the "option" text to choose';
     case 'click_ref': return finiteInt(a.ref) ? null : `click_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
     case 'fill_ref':
       if (!finiteInt(a.ref)) return `fill_ref needs a finite non-negative integer "ref", got ${JSON.stringify((a as any).ref)}`;
@@ -401,6 +568,9 @@ export function validateAction(a: AgentAction): string | null {
     case 'navigate': return httpUrl(a.url) ? null : `navigate needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'new_tab': return httpUrl(a.url) ? null : `new_tab needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
     case 'download': return httpUrl(a.url) ? null : `download needs an http(s) "url", got ${JSON.stringify((a as any).url)}`;
+    case 'list_downloads': return null;
+    case 'cancel_download': case 'pause_download': case 'resume_download': case 'retry_download':
+      return nonEmpty(a.id) ? null : `${a.type} needs "id" (from list_downloads) or the file name`;
     case 'download_video':
       // Sem url nem query = o vídeo da ABA ABERTA — é o que o prompt manda ("omit both to
       // grab the currently open tab") e o que o executor faz (usa a URL da aba). Recusar isso
@@ -412,7 +582,7 @@ export function validateAction(a: AgentAction): string | null {
     case 'switch_tab': return finiteInt(a.tab) ? null : 'switch_tab needs a finite non-negative integer "tab"';
     case 'close_tab': return finiteInt(a.tab) ? null : 'close_tab needs a finite non-negative integer "tab"';
     case 'wait':
-      if (a.ms == null && !a.selector) return 'wait needs "ms" or "selector"';
+      if (a.ms == null && !a.selector && !(a as any).text && !(a as any).gone && !(a as any).url && !(a as any).load) return 'wait needs "ms", "text", "gone", "url", "load" or "selector"';
       if (a.ms != null && !(Number.isFinite(a.ms) && a.ms >= 0)) return 'wait "ms" must be a non-negative number';
       return null;
     case 'plan': return Array.isArray(a.steps) && a.steps.length > 0 ? null : 'plan needs a non-empty "steps" array';
@@ -436,6 +606,8 @@ export function validateAction(a: AgentAction): string | null {
     // did not say why. Rejecting it here turned a COMPLETED task into "the model kept
     // returning an invalid response" after 3 retries.
     case 'done': return null;
+    case 'get_html':
+      return a.selector != null && String(a.selector).length > 300 ? 'get_html "selector" is too long — use a short CSS selector like "#id" or "form"' : null;
     case 'extract_text': case 'extract_images': case 'read_aloud':
     case 'stock_movers': case 'scroll':
       return null;

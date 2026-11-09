@@ -28,6 +28,7 @@ export interface VideoButtonLabels {
   reveal: string;      // mostrar na pasta
   video: string;       // "Vídeo" (opção sem resolução conhecida / achada no tráfego)
   drm: string;         // vídeo protegido contra cópia
+  needTool: string;    // macOS: falta o yt-dlp (comando do brew)
   dec: string;         // separador decimal do idioma ("," ou ".")
 }
 
@@ -47,6 +48,7 @@ export const DEFAULT_VIDEO_BUTTON_LABELS: VideoButtonLabels = {
   reveal: 'Show in folder',
   video: 'Video',
   drm: 'This video is copy-protected (DRM), so it can\'t be downloaded.',
+  needTool: 'Downloading needs yt-dlp. In Terminal, run: brew install yt-dlp deno ffmpeg — then try again.',
   dec: '.',
 };
 
@@ -171,7 +173,7 @@ export function buildVideoButtonScript(labels: VideoButtonLabels): string {
       var f = cur && formats[cur];
       if (!f || f.state === 'loading') { menu.appendChild(msg(L.loading)); return; }
       if (f.state === 'err') {
-        menu.appendChild(msg(f.live ? L.live : L.listFailed, 'err'));
+        menu.appendChild(msg(f.needTool ? L.needTool : (f.live ? L.live : L.listFailed), 'err'));
         if (!f.live) menu.appendChild(item(L.retry, '', '', function(){ formats[cur] = null; ask(); render(); }));
         return;
       }
@@ -240,7 +242,7 @@ export function buildVideoButtonScript(labels: VideoButtonLabels): string {
       refresh: refresh,
       onFormats: function(p){
         if (!p || !p.v) return;
-        formats[p.v] = p.ok ? { state: 'ok', list: p.choices || [] } : { state: 'err', live: !!p.live };
+        formats[p.v] = p.ok ? { state: 'ok', list: p.choices || [] } : { state: 'err', live: !!p.live, needTool: !!p.needTool };
         if (p.v === cur && open) render();
       },
       onJob: function(p){

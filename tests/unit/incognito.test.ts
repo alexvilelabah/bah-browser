@@ -103,8 +103,8 @@ test('permissões na aba anônima: só os "Bloquear" do perfil valem; "Permitir"
   // Notificação bloqueada no perfil: continua bloqueada na anônima.
   assert.equal(resolveRequest(priv, 'notifications', { isMainFrame: true }, 'https://chato.com/').action, 'deny');
   assert.equal(checkAnswer(priv, 'https://chato.com', 'notifications'), false);
-  // Localização liberada no perfil: na anônima não está liberada (a checagem diz não, o pedido pergunta).
+  // Localização liberada no perfil: na anônima não está liberada — e localização nunca pergunta, é negada.
   assert.equal(checkAnswer(priv, 'https://chato.com', 'geolocation'), false);
-  assert.equal(resolveRequest(priv, 'geolocation', {}, 'https://chato.com/').action, 'ask');
+  assert.equal(resolveRequest(priv, 'geolocation', {}, 'https://chato.com/').action, 'deny');
   assert.deepEqual(incognitoStore({}), {});
 });

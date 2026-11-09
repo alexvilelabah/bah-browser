@@ -87,6 +87,12 @@ export interface RecoveryInput {
   popupCloseAttempts: number;
   /** Se o comando exige especificamente este site */
   commandRequiresThisSite: boolean;
+  /** Tarefa de BAIXAR algo: página "Get the app / Install X" é o objetivo, não um beco sem saída. */
+  commandWantsDownload?: boolean;
+  /** Tarefa de encher carrinho: tirar uma linha ("Remove", "Delete <produto>") é editar o carrinho, não ação sensível. */
+  cartTask?: boolean;
+  /** O freio de risco já perguntou à pessoa nesta ação (ela aprovou ou recusou): não perguntar de novo. */
+  brakeAsked?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -188,12 +194,20 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
 
   // ── 1. Captcha / verificação humana (prioridade máxima) ──────────
   const interstitial = looksLikeInterstitial(input);
-  if (CAPTCHA_TITLE.test(input.title || '') || hasCaptchaWidget(input)
-    || (interstitial && (CAPTCHA_PATTERNS.test(text) || CAPTCHA_PATTERNS.test(elText)))) {
+  // O widget (checkbox/iframe de captcha) só conta numa página-PORTEIRA (pouco texto/controle).
+  // Numa página de conteúdo ele é de um formulário opcional — newsletter na página "thank you"
+  // de download (AnyDesk), contato, comentário — e não bloqueia nada: parar ali pedindo pra
+  // pessoa "resolver o captcha" era alarme falso.
+  // Qual regra disparou vai junto no motivo: alarme falso fica diagnosticável pelo chat.
+  const captchaWhy = CAPTCHA_TITLE.test(input.title || '') ? `title "${(input.title || '').slice(0, 40)}"`
+    : interstitial && hasCaptchaWidget(input) ? 'captcha widget on a near-empty page'
+    : interstitial && (CAPTCHA_PATTERNS.test(text) || CAPTCHA_PATTERNS.test(elText)) ? `near-empty page mentioning "${((text.match(CAPTCHA_PATTERNS) || elText.match(CAPTCHA_PATTERNS) || [''])[0]).slice(0, 30)}"`
+    : '';
+  if (captchaWhy) {
     if (input.commandRequiresThisSite) {
       return {
         decision: 'ask_user',
-        reason: `Human/captcha verification detected on ${domain}. This site is needed for the task — solve the captcha manually.`,
+        reason: `Human/captcha verification detected on ${domain} (${captchaWhy}). This site is needed for the task — solve the captcha manually.`,
         blocker: 'captcha',
         maxRetries: 0,
       };
@@ -323,7 +337,7 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   // Interstitial only: almost every big site carries an "Install App" / "Get the app" link
   // in its header (Spotify, Reddit, LinkedIn…), and treating that as a dead end made the
   // agent go back from pages that had loaded the content just fine.
-  if (interstitial && (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText))) {
+  if (interstitial && !input.commandWantsDownload && (DEAD_END_PATTERNS.test(text) || DEAD_END_PATTERNS.test(elText))) {
     // The user named this site: going back silently drops them on the previous page (often
     // Google) with the task unfinished. Ask instead, as captcha and login already do.
     if (input.commandRequiresThisSite) {
@@ -357,9 +371,12 @@ export function diagnose(input: RecoveryInput): RecoveryVerdict {
   // da página inteira → numa página de produto (que sempre tem "Comprar"/"carrinho")
   // qualquer clique inócuo ("Mais informações", "Especificações") disparava o alerta.
   // Agora só dispara se o elemento clicado for de fato um botão de compra/pagar/excluir.
-  if (input.lastActionType && /click/i.test(input.lastActionType)) {
+  // Já perguntado pelo freio (ou recusado: nada aconteceu) → sem segundo pedido de confirmação.
+  const answered = !!input.brakeAsked || input.lastResult?.reason === 'user_cancelled';
+  if (!answered && input.lastActionType && /click/i.test(input.lastActionType)) {
     const targetText = (input.lastActionTargetText || '').trim();
-    if (targetText && SENSITIVE_ACTION_PATTERNS.test(targetText)) {
+    const cartEdit = !!input.cartTask && /^(remove|delete|excluir|remover|eliminar|decrease|increase)\b/i.test(targetText) && !/\b(account|conta|cuenta|all|tudo)\b/i.test(targetText);
+    if (targetText && !cartEdit && SENSITIVE_ACTION_PATTERNS.test(targetText)) {
       return {
         decision: 'ask_user',
         reason: 'Sensitive action detected (purchase/payment/deletion). Asking the user for confirmation before proceeding.',

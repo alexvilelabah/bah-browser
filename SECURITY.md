@@ -39,6 +39,33 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Site permissions (location, camera, microphone, clipboard, notifications, MIDI, files):** denied
+  until you answer Bah's bar — *Allow this time* (until the page reloads), *Always allow* / *Never allow*
+  (saved per site in `site-permissions.json`; review or reset in menu ⋮ → 🔒 Site permissions). The bar is
+  Bah's own UI, outside the page, so the agent cannot answer it; requests from background or hidden tabs
+  are denied without asking. Screen capture, USB/HID/serial and unknown permissions are always denied.
+  Before this, Electron's default granted all of these to every site silently. See
+  [`src/main/site-permissions.ts`](src/main/site-permissions.ts).
+- **Network country check:** in *Auto* shopping region only, one request to `https://www.cloudflare.com/cdn-cgi/trace`
+  (through the browser engine, same route as your tabs) when a task starts or the 🌍 panel opens, cached 10 minutes.
+  Only the country code is used. Choose *My computer's region* or a fixed country to turn it off. See
+  [`src/main/region.ts`](src/main/region.ts).
+- **Time zone:** like every browser, page scripts can read your time zone. Bah also puts your region and time zone
+  in the agent's prompt, which goes to your AI provider (stays local with a local model). Choose **UTC** in 🌍
+  Region & time to hide it from pages.
+- **Files from your computer (uploads):** the agent never chooses a path. For `upload`, Bah shows a card and
+  *you* pick the file in the OS dialog (the agent sees only its name). Or you can **allow one folder for this
+  session**: the agent may then list it, read PDF/Word/text files in it (e.g. to pick the résumé that fits a
+  job) and attach files from it — resolved and checked in the main process (no `../` or symlink escape), until
+  you quit Bah or revoke it (menu ⋮ → 📂 Agent folder access). Nothing is sent until the site's form is
+  submitted. See [`src/main/upload.ts`](src/main/upload.ts).
+- **Proxy:** when a proxy is configured (OS settings, the 🌐 Network & proxy panel or `HTTPS_PROXY`),
+  all of Bah's traffic goes through it — that is the point. Proxy passwords are typed into Bah's own
+  box, stored only if you tick *Remember*, encrypted with the OS keychain (`safeStorage`, file
+  `proxy-auth.json`), and never shown to the agent or the model. See [`src/main/proxy.ts`](src/main/proxy.ts).
+- **Company root certificates:** Bah adds the OS-trusted root certificates to Node so it trusts what the
+  browser engine already trusts. It does not add or trust anything the OS does not. See
+  [`src/main/system-ca.ts`](src/main/system-ca.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 
@@ -67,9 +94,17 @@ end in a couple of hops.
 | Process isolation | `main.ts` → `webPreferences` | `contextIsolation: true`, `nodeIntegration: false` |
 | Hardened binary (Electron Fuses) | [`build/afterPack.js`](build/afterPack.js) | RunAsNode off, `NODE_OPTIONS` ignored, `--inspect` ignored |
 | IPC bridge = only entry point | [`preload.ts`](src/preload/preload.ts) | every channel is `ipcRenderer.invoke(...)`; no Node primitives exposed |
-| Safety brake (pay / buy / delete / card) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + the agent loop in `App.tsx` | `riskForAction` classifies the action; click, **fill** (card data) and **press** (Enter on checkout) all ask for confirmation before running |
+| Safety brake (pay / buy / delete / card / send a job application) | [`src/renderer/risk.ts`](src/renderer/risk.ts) + the agent loop in `App.tsx` | `riskForAction` classifies the action; click, **fill** (card data) and **press** (Enter on checkout) all ask for confirmation before running. In a job-application task, a bare "Submit"/"Send" button and Enter on a review page also ask (`📨 Send it` / `Don't send`) |
+| Job application profile + saved answers | [`src/main/applicant-profile.ts`](src/main/applicant-profile.ts), [`src/shared/form-fill.ts`](src/shared/form-fill.ts) | Stored only on this computer, encrypted with `safeStorage` (no keychain → not stored). Filled into forms **by code** in job tasks; answers the user types in the questions card are saved only when "Save these answers" is ticked. Voluntary self-identification defaults to "decline". Editable/erasable in ⋮ → 📝 |
+| Scheduled tasks (unattended runs) | [`src/main/scheduled-tasks.ts`](src/main/scheduled-tasks.ts), [`src/renderer/scheduler.ts`](src/renderer/scheduler.ts), [`src/shared/schedule.ts`](src/shared/schedule.ts) | Commands and run history stored only on this computer in `scheduled-tasks.enc`, encrypted with `safeStorage` (no keychain → memory only), capped (50 tasks, 20 history entries). They run **only while Bah is open**; a time missed while it was closed is offered at launch (Run now / Skip / Snooze 1, 3 or 7 days / Delete, with a confirmation before deleting), never run silently; a snooze is stored with the task (`snoozedUntil`) and nothing runs before it ends. A scheduled run is `unattended`: every risk-brake confirmation, permission prompt, questions card or sign-in pause **waits for the user** (system notification + "waiting for you" in the panel), a bare Send/Post/Book/Order also asks, and the Gmail/YouTube auto-send helpers are off. Not created from private tabs. The test clock (`E2E_SCHED_NOW`) is read only with `NODE_ENV=test` |
+| Assistant conversations (live thread + 🕘 Chat history) | [`src/main/chat-store.ts`](src/main/chat-store.ts), [`src/shared/chat-history.ts`](src/shared/chat-history.ts), [`src/shared/thread-store.ts`](src/shared/thread-store.ts) | Stored only on this computer, encrypted with `safeStorage` (`threads-live.enc`, `chat-history.enc`; no keychain → not stored). Capped (100 conversations / ~2 MB of history, 60 live threads / ~1.5 MB). Incognito tabs never reach either file (filtered in the renderer and again in main). The live thread comes back only with ⋮ → When Bah opens = "Continue where you left off"; otherwise it is deleted at startup. Chat history is cleared by "Clear browsing data". The `threads:*` / `chat-history:*` channels accept only the main window as sender (`threads:save-live` / `threads:load-live-sync` use `send` / `sendSync` so the last save lands before the window closes) |
+| Sign-in: the agent never types a password | [`src/renderer/agent-login-policy.ts`](src/renderer/agent-login-policy.ts) + [`skills/sign-in/SKILL.md`](skills/sign-in/SKILL.md) + the sign-in guard in `App.tsx` | the agent may click a site's Sign in only when the task needs the user's account (`commandLikelyNeedsAccount`); a visible password field / login page on such a task pauses Bah (`detectManualHelpNeed`) for the user to sign in; saved passwords stay in the password manager (no tool reaches it). Per-site signed-in/out state (`accountStateOf`) goes in the prompt as an `ACCOUNT:` line. Careful-mode sites (`careful-sites.ts`) stop the task at the second refused action |
+| Password-manager extensions (LastPass, Bitwarden, 1Password) | [`src/shared/password-extensions.ts`](src/shared/password-extensions.ts), [`src/shared/extension-ui.ts`](src/shared/extension-ui.ts), `cdp:axtree` in `main.ts`, [`frames.ts`](src/main/frames.ts) | Bah never fills from an extension and never reads its vault or settings (no supported API exists; see ARCHITECTURE). On an account task with one enabled, Bah waits up to 8 s for the extension's **own** auto-login. For Bitwarden's fill-only autofill, Bah presses the form's Sign in once, and only after the extension filled the password. Bah asks the page only whether the password field is empty (yes/no), never its value. If nothing happens, Bah pauses with a card naming the extension's setting. `chrome-extension://` iframes and marked injection roots (the extension's icons and menus) are removed from what the agent sees, so the AI can't pick a credential from an extension's menu. Detection uses Web Store IDs, which come from the extension's key; a name alone doesn't count. The test hook `BAH_TEST_PASSWORD_EXTENSIONS` only works with `NODE_ENV=test` |
+| "Add to Bah" on Chrome Web Store pages | `extensions:install-from-store` in [`chrome-extensions.ts`](src/main/chrome-extensions.ts), `parseCrx3` in [`chrome-extension-rules.ts`](src/main/chrome-extension-rules.ts) | the extension id comes from the tab URL (exact store origin), never from an argument. The public `.crx` comes from Google's update endpoint over HTTPS; its key must hash to its declared id and to the page's id. Manifest V3 only. Bah asks the same "Add X?" approval and loads through the gated loader. Bah does **not** fake being Chrome to make the store's own button appear |
+| Reading pages that forbid scripts | [`src/renderer/page-eval.ts`](src/renderer/page-eval.ts) + `page:eval-isolated` in `main.ts` | only when the page world refuses a trivial probe, Bah's own reader scripts run in a separate isolated world (1047) of that tab; the IPC accepts only the main window as sender and only `<webview>` tabs of that window; the page's own JavaScript cannot see or call into that world |
 | Local AI stays offline | `main.ts` (hybrid router, local branch) | on Ollama failure it returns an error — **no** silent cloud fallback |
-| No executable downloads | `main.ts` `BLOCKED_EXTENSIONS` + `attachDownloadManager` | `.exe/.msi/.bat/.cmd/.scr/.js/.vbs/.ps1/.jar/.lnk/.hta/...` blocked at download time |
+| Downloads only land in the downloads folder; nothing is auto-run | `main.ts` (`download:url`) + [`download-manager.ts`](src/main/download-manager.ts) | files are written to `getDownloadDir()` only and never opened/executed automatically. **No file-type blocklist** — see tradeoffs below |
+| Torrent engine is opt-in | [`torrent-manager.ts`](src/main/torrent-manager.ts) (`builtinOn`, `handleUri`) | built-in client OFF by default: `.torrent` saved as a file, `magnet:` handed to the OS app, engine `utilityProcess` never started |
 | `openFile` / reveal can't open arbitrary paths | [`download-manager.ts`](src/main/download-manager.ts) (`download:open-file`) + `main.ts` (`shell:reveal`) | both call `isInsideAllowedRoot` ([`validate.ts`](src/main/validate.ts)) → Downloads / userData / temp only |
 | Image harvesting limits | [`src/main/image-harvester.ts`](src/main/image-harvester.ts) | SVG blocked, byte cap, content-type checked, redirects limited |
 | OCR / screenshots stay local | [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts) | Tesseract on-device; image never sent to a cloud |
@@ -102,12 +137,39 @@ machine). They are listed here so an auditor does not have to "discover" them:
    not the OS keychain (`safeStorage`). Acceptable for a single-user local app; moving to
    `safeStorage` is on the roadmap.
 2. **Download TLS-lenient fallback** (`main.ts`): on a certificate-chain error, a download is
-   retried with verification relaxed — **but** the file is still rejected if it is an
-   executable (see `BLOCKED_EXTENSIONS`), which bounds the risk. Added for sites (e.g. some
-   government portals) that ship a broken certificate chain.
+   retried with verification relaxed. The file still only lands in the downloads folder and is
+   never opened automatically. Added for sites (e.g. some government portals) that ship a
+   broken certificate chain.
 3. **Binary supply chain:** `yt-dlp` and `ffmpeg` are fetched from their upstream "latest"
    URLs without a pinned checksum ([`src/main/media-downloader.ts`](src/main/media-downloader.ts)).
    Acceptable at this scale; checksum-pinning is planned before wider distribution.
+4. **Any file type can be downloaded** — including installers and scripts (`.exe`, `.dmg`,
+   `.pkg`, `.sh`, ...), by you or by the agent. There is no extension blocklist or content
+   sniffing; the protection is that downloads go only to the downloads folder and are never
+   executed by Bah. Review what the agent downloads before opening it.
+5. **Optional captcha checkbox click** (menu ☑️, OFF by default; `tryCaptchaCheckbox` in `App.tsx`):
+   when ON, on a real human-verification gate the agent clicks a reCAPTCHA / hCaptcha / Turnstile
+   checkbox **once** with real input and checks whether it passed (response token / widget gone);
+   otherwise it asks the user as before. It never attempts image challenges. Some sites forbid
+   automated access in their terms — this is the user's choice to make.
+6. **Human checks are the person's job (Watch/Takeover).** When a page is a bot check / CAPTCHA of any
+   style or a sign-in wall ([`src/shared/human-check.ts`](src/shared/human-check.ts), generic signals, never per
+   site), Bah hands the tab to you and resumes on its own when the page is normal again
+   ([`src/shared/takeover.ts`](src/shared/takeover.ts)). The agent never clicks, holds, types into or scrolls a
+   human check — a code-level guard refuses every page action on a tab classified as one — and never
+   tries to look human. Scheduled (unattended) runs never wait: the site is marked "couldn't read — human check". The opt-in switch from item 5 (OFF by default) still clicks a simple checkbox once before handing off.
+7. **The agent can read a page's HTML (`get_html`)** ([`src/shared/html-clean.ts`](src/shared/html-clean.ts)). What it
+   gets is cleaned: `<script>`/`<style>`/`<svg>`/`<noscript>`/`<template>` bodies, comments, inline styles and
+   `on*` handlers are dropped; `data:` URLs are shortened; only a short attribute allowlist survives. **Secret
+   values never leave the page**: password and hidden inputs, any field whose name/id/autocomplete looks like a
+   token, CSRF, one-time code, card number, CVV or SSN, and `<meta>` CSRF tokens come out as `[redacted]`;
+   cross-origin iframes are just `[cross-origin iframe]`. The HTML is framed in the prompt as *data from the page,
+   not instructions*, and invisible parts are marked `[hidden]` so hidden "ignore previous instructions" text
+   is visibly not something the user sees. It is a passive read (allowed on a human check like `extract_text`);
+   whatever the agent does next still goes through the safety brake. One read is bounded by the model's free
+   context — 4,000 to 60,000 chars ([`src/shared/read-paging.ts`](src/shared/read-paging.ts)), 6,000 by default
+   on small local models — and longer pages are read in pages (`offset`). Each `get_html` / `extract_text`
+   page is shown in the next prompt only (its own block, framed as page data), not kept in the agent's history.
 
 ---
 

@@ -11,13 +11,17 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
 
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
+    // O cliente embutido é opcional (padrão desligado) — liga pro teste.
+    await page.evaluate(() => (window as any).electronAPI.torrentSetBuiltin(true));
     // (1) Colar um magnet na barra de endereço abre o card (estado "fetching") na hora.
     const bar = page.locator('.url-input');
     await bar.fill('magnet:?xt=urn:btih:0000000000000000000000000000000000000000&dn=teste');
@@ -59,19 +63,21 @@ test('torrent: sheet opens on magnet and the engine streams a real torrent', asy
 test('seed toggle: OFF by default, flips ON and persists', async () => {
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   try {
     // Isolamento: o userData dos testes persiste o localStorage entre execuções — garante
     // o estado inicial "sem preferência" (= padrão OFF) independente de rodadas anteriores.
     await page.evaluate(() => localStorage.removeItem('torrentSeed'));
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
-    await page.locator('.menu-btn').nth(1).click();   // [0]=downloads, [1]=menu ⋮
+    await page.getByTestId('main-menu-btn').click();   // menu ⋮
     const item = page.locator('.menu-item', { hasText: 'seed' });
     await expect(item).toBeVisible();
     await expect(item.locator('.menu-switch')).toHaveText('OFF');   // padrão desligado

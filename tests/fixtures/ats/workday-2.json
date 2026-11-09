@@ -1,0 +1,8 @@
+{
+ "ats": "workday",
+ "source": "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/Israel-Yokneam/Senior-DFT-ATPG-Engineer_JR2013532/apply/applyManually",
+ "fetched": "2026-11-01",
+ "reachable": false,
+ "notes": "Workday apply/applyManually on another tenant: step 1 of 5 Create Account/Sign In shows only sign-in buttons (no inputs) until a sign-in method is chosen. No fields reachable without signing in.",
+ "fields": []
+}

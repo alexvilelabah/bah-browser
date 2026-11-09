@@ -6,14 +6,16 @@ import type { AddressInfo } from 'net';
 async function launch() {
   const { ELECTRON_RUN_AS_NODE: _n, ...env } = process.env;
   const app = await electron.launch({
-    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist/electron.exe'),
-    args: [path.resolve(__dirname, '../..')],
+    executablePath: path.resolve(__dirname, '../../node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+    args: [path.resolve(__dirname, '../..'), '--use-mock-keychain'],
     // E2E_MOCK_AI so intercepta o AGENTE (ai:action); o caminho de CHAT usa o engine real,
     // que e exatamente o que queremos exercitar contra o servidor OpenAI-compativel falso.
     env: { ...env, E2E_MOCK_AI: '1', NODE_ENV: 'test' },
   });
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // The shell can reload once right after launch; evaluating during it fails with 'context destroyed'.
+  await page.waitForTimeout(1500);
   // A fresh profile opens the first-run tour, a modal that intercepts every click. This spec
   // is about settings, not the tour: mark it seen and reload.
   await page.evaluate(() => { localStorage.setItem('tourSeen', '1'); localStorage.setItem('guideSeen', '1'); });
