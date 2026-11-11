@@ -63,7 +63,7 @@
 
 - **Navegador completo** com abas, navegação, URL, tema dark
 - **Painel AGENTE** lateral: digita um comando → a IA decide passo a passo até concluir
-- **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela
+- **Lê a página** (DOM, elementos interativos numerados e OCR) e age por ferramentas estruturadas — sem depender de "enxergar" a tela. Funciona também em páginas que proíbem scripts (arquivos crus do Hugging Face / GitHub): o Bah lê pelo próprio mundo isolado de scripts
 - **IA**: gerar imagem **funciona grátis de cara** (sem chave). Conversar e o agente autônomo completo precisam de chave — **DeepSeek** (barato, recomendado) — também **Mistral** / **NVIDIA NIM** — ou **Ollama** (local/offline, grátis)
 - **Chat por aba** — cada aba do navegador tem a sua própria conversa; a IA lembra de cada aba separadamente
 - **Atalhos de uma tacada**: abrir N vídeos de uma vez, pular pro momento exato em que uma frase é dita em vários vídeos, **conversar sobre um vídeo do YouTube usando a transcrição**, comparar preços, buscar notícias — atalhos determinísticos que gastam zero tokens
