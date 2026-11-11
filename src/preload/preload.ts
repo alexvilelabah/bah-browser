@@ -3,6 +3,9 @@ import type { VisionImage } from '../shared/vision';
 import type { PasswordsBridge } from '../shared/password-types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Sistema e arquitetura reais (src/renderer/platform.ts) — a tela não adivinha pelo userAgent.
+  platform: process.platform,
+  arch: process.arch,
   // Window controls
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),

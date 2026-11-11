@@ -68,6 +68,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | Arquivo | Responsabilidade |
 |---|---|
 | `App.tsx` | App de topo; **o loop ReAct vivo do agente** (`onExecute`) |
+| `platform.ts` | O sistema e a CPU de verdade pra tela (`PLATFORM`, `ARCH`, `IS_MAC`, `shortcut()`), vindos de `process.platform` / `process.arch` do preload — nunca adivinhados pelo user agent (que é a identidade de Chrome do próprio Bah) |
 | `components/AgentCommandBar.tsx` | A caixa de comando unificada, o feed de atividade e as configurações |
 | `components/` | `AddressBar`, `TabBar`, `WebViewContainer`, `AgentVisualOverlay` |
 | `site-knowledge.ts` | Atalhos determinísticos 0-token (`detectQuickAction`) |
