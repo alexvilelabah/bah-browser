@@ -127,6 +127,8 @@ USER → "open gmail and delete the spam"
 
 Clicks happen through `webContents.sendInputEvent` in the main process — a **real** Chromium mouse event, not a synthetic one, so React/Vue/anti-bot sites respond normally. The AI prefers the **DOM-first** path (`click_ref`), falling back to text and then coordinates.
 
+Iframes count too: fields and buttons inside embedded forms (job applications, payment fields, booking widgets) — same-origin or from another site — appear in the element list marked `frame="host"`, and `click_ref` / `fill_ref` work on them the same way.
+
 ---
 
 ## Running it
