@@ -33,6 +33,7 @@ export type BrowserAction =
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
   | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'dialog'; accept: boolean; text?: string }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface InteractiveElement {
@@ -107,6 +108,7 @@ export function formatAction(action: BrowserAction): string {
     case 'navigate': return `navigate("${action.url}")`;
     case 'scroll': return `scroll("${action.direction}"${action.amount ? `, ${action.amount}` : ''})`;
     case 'wait': return action.selector ? `wait("${action.selector}")` : `wait(${action.ms ?? action.timeout ?? 1000}ms)`;
+    case 'dialog': return `dialog(${action.accept ? 'accept' : 'dismiss'}${action.text != null ? ` "${shorten(action.text, 40)}"` : ''})`;
     case 'done': return `done(${action.success ? 'success' : 'failed'}: "${shorten(action.reason)}")`;
   }
 }

@@ -41,6 +41,7 @@ import { setupDownloadManager } from './download-manager';
 import { getDownloadDir, downloadRoots } from './download-dir';
 import { setupVideoButton } from './video-button';
 import { setupSitePermissions } from './site-permissions';
+import { attachJsDialogs, setupJsDialogs } from './js-dialogs';
 import { setupPasswordManager } from './password-manager';
 import { isTaggedSecret } from './password-rules';
 import { makeDomainMatcher, siteOf } from './cookie-domain';
@@ -1182,6 +1183,7 @@ function createWindow(): void {
     // Aba anônima (sessão só na memória, shared/incognito.ts): tudo igual, menos o que deixaria
     // rastro — o ícone não entra no cache dos favoritos e o que ela abre nasce anônimo também.
     const incognito = isIncognitoWc(wc);
+    attachJsDialogs(wc, () => mainWindow);   // alert/confirm: caixa do Bah ou política do agente (não a nativa que trava)
     // Fundo ESCURO do webview antes da página pintar — mata o "flash branco" ao abrir aba/site novo
     // (a UI é escura; sem isto o Chromium pinta BRANCO até o 1º frame da página). Igual ao Chrome.
     try { (wc as any).setBackgroundColor('#262624'); } catch {}
@@ -2876,6 +2878,7 @@ ipcMain.handle('local:test-connection', async (_e, baseUrl?: string, authKey?: s
     googleLoginSession: session.fromPartition(GOOGLE_LOGIN_PARTITION),
     extensionsDir: path.join(app.getPath('userData'), 'Extensions'),
   });
+  setupJsDialogs();
   // Câmera, microfone, localização, notificações…: o site pede e o Bah PERGUNTA (igual ao
   // Chrome). Sem isto o Electron liberava tudo sozinho nas abas.
   setupSitePermissions({

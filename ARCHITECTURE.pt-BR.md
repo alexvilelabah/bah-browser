@@ -59,6 +59,7 @@ de DOM sintéticos), então os sites reagem exatamente como reagiriam pra uma pe
 | `data-view.ts` | Renderiza tabelas/gráficos numa página local (sem CDN) |
 | `validate.ts` | Helpers de segurança de caminho (`isInsideAllowedRoot` etc.) |
 | `popup-shield.ts`, `overlay-script.ts` | Tratamento e dispensa de popups/overlays |
+| `js-dialogs.ts` (+ `src/renderer/js-dialogs.ts`, `components/JsDialogHost.tsx`) | `alert`/`confirm` das páginas: troca a caixa nativa do Electron (que trava a página; evento interno `-run-dialog`) pela caixa do Bah pra pessoa, e pela política do agente nas abas dele (`dialog` armado > alert fecha > confirm comum aceito > confirm de pagamento/exclusão pergunta à pessoa); `beforeunload` nas abas do agente sai quando ele navega. `prompt()` não existe no Electron (lança erro) |
 | `job-queue.ts` | Serializa tarefas longas |
 
 ---

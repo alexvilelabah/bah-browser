@@ -37,6 +37,7 @@ export type AgentAction =
   | { type: 'navigate'; url: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'top' | 'bottom'; amount?: number }
   | { type: 'wait'; ms?: number; selector?: string; timeout?: number }
+  | { type: 'dialog'; accept: boolean; text?: string }
   | { type: 'done'; reason: string; success: boolean };
 
 export interface AgentResult {
@@ -91,6 +92,7 @@ const VALID_ACTIONS = new Set([
   'navigate',
   'scroll',
   'wait',
+  'dialog',
   'done',
 ]);
 
@@ -352,6 +354,11 @@ export class PageAgent {
           selector: action.selector ? String(action.selector) : undefined,
           timeout: toOptionalNumber(action.timeout),
         };
+      case 'dialog': {
+        const acc = action.accept ?? action.value ?? (typeof action.answer === 'string' ? !/^(dismiss|cancel|no|false)$/i.test(action.answer) : true);
+        const text = action.text ?? action.prompt_text ?? action.promptText;
+        return { type: 'dialog', accept: acc === true || acc === 'true' || acc === 'accept', ...(text != null ? { text: String(text) } : {}) };
+      }
       case 'done':
         return {
           type: 'done',
@@ -436,6 +443,7 @@ export function validateAction(a: AgentAction): string | null {
     // did not say why. Rejecting it here turned a COMPLETED task into "the model kept
     // returning an invalid response" after 3 retries.
     case 'done': return null;
+    case 'dialog': return null;
     case 'extract_text': case 'extract_images': case 'read_aloud':
     case 'stock_movers': case 'scroll':
       return null;

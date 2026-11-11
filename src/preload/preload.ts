@@ -338,6 +338,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('safe-browsing-block', listener);
     return () => ipcRenderer.removeListener('safe-browsing-block', listener);
   },
+  // alert/confirm das páginas (src/main/js-dialogs.ts): caixa do Bah e política do agente
+  jsDialogRespond: (id: number, accept: boolean, text?: string) => ipcRenderer.invoke('jsdialog:respond', id, accept, text),
+  jsDialogAgentTabs: (ids: number[]) => ipcRenderer.invoke('jsdialog:agent-tabs', ids),
+  onJsDialog: (cb: (ev: { type: 'open' | 'closed' | 'left'; data: any }) => void) => {
+    const o = (_e: any, d: any) => cb({ type: 'open', data: d }); const c = (_e: any, d: any) => cb({ type: 'closed', data: d }); const l = (_e: any, d: any) => cb({ type: 'left', data: d });
+    ipcRenderer.on('jsdialog:open', o); ipcRenderer.on('jsdialog:closed', c); ipcRenderer.on('jsdialog:left', l);
+    return () => { ipcRenderer.removeListener('jsdialog:open', o); ipcRenderer.removeListener('jsdialog:closed', c); ipcRenderer.removeListener('jsdialog:left', l); };
+  },
   // OCR enrichment — runs Tesseract locally, returns plain text (no image to cloud).
   // frameDataUrl: optional PNG of a frame already captured, so OCR and the model agree.
   takeOcr: (wcId: number, domText: string, force?: boolean, frameDataUrl?: string) =>
