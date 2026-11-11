@@ -39,6 +39,9 @@ fronteira inteira entre o lado web/UI e o lado privilegiado (veja abaixo).
   local do roteador híbrido).
 - **OCR e screenshots usados pra OCR** rodam **no aparelho** (Tesseract) — a imagem nunca é
   enviada. Ver [`takeOcr`](src/preload/preload.ts) + [`ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Localização** é negada a todo site sem perguntar: o site vê `denied`, não um `prompt`. Só um site que você
+  marcar *Permitir* no cadeado recebe. A própria janela do Bah também não recebe. Ver `DENY_UNLESS_ALLOWED` em
+  [`src/main/site-permission-rules.ts`](src/main/site-permission-rules.ts).
 - **Sem analytics, sem telemetria, sem phone-home.** Não há SDK nem endpoint de analytics no
   código — pode dar grep.
 

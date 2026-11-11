@@ -39,6 +39,9 @@ the entire boundary between the web/UI side and the privileged side (see below).
   [`src/main/main.ts`](src/main/main.ts), the hybrid-router local branch).
 - **OCR and screenshots used for OCR** run **on-device** (Tesseract) — the image is never
   uploaded. See [`takeOcr`](src/preload/preload.ts) + [`src/main/ocr-engine.ts`](src/main/ocr-engine.ts).
+- **Location** is denied to every site without asking: sites see `denied`, not a `prompt`. Only a site you
+  set to *Allow* in its padlock menu gets it. Bah's own window never gets it either. See `DENY_UNLESS_ALLOWED` in
+  [`src/main/site-permission-rules.ts`](src/main/site-permission-rules.ts).
 - **No analytics, no telemetry, no phone-home.** There is no analytics SDK or endpoint in
   the source — grep for it.
 
