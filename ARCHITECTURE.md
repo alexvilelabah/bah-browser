@@ -729,10 +729,12 @@ Amazon error pages):
    through Playwright, which adds Chromium's automation flag. That is an honest "automated" signal and should stay
    honest — but it means our runs are the worst case. Bah opened normally reports `false`; we expect checks to be
    rare in everyday use. Judge bot-check rates from a normal launch, not from test/demo runs.
-2. **Version mismatch.** Bah presents itself as Chrome 156 (needed for Google sign-in, see the Chrome Web Store
-   section) on Electron 44's older Chromium, and the full version is `156.0.0.0`, not a real build. A detector can
-   notice a "Chrome 156" missing 156-only features. The honest fix (report the real engine) may bring back the Google
-   sign-in block — open decision.
+2. **Version mismatch (fixed).** Bah used to present itself as Chrome 156 on Electron 44's Chromium 152, with a
+   made-up full version `156.0.0.0`. Cloudflare Turnstile catches that: on redvid.io the checkbox ended in
+   "Verification failed" while claiming 156, and passed (without even showing the checkbox) with the real version.
+   Bah now reports the engine's own version everywhere: `Chrome/152.0.0.0` in the UA and `sec-ch-ua` (Chrome's
+   reduced format) and the real build (e.g. `152.0.7977.130`) in `userAgentData.fullVersionList`. It moves with
+   each Electron upgrade, with nothing to bump by hand.
 3. **Fresh profiles.** Test and demo profiles start empty (no sign-ins, no cookies from checks already passed), so
    every visit looks like a first visit.
 

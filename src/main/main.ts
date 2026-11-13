@@ -419,13 +419,13 @@ let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
 
 // Versão que o Bah declara (UA, sec-ch-ua, navigator.userAgentData) — UMA fonte, sempre igual nos
-// três. Formato reduzido "NNN.0.0.0", como o Chrome manda desde 2023 (o número completo do build,
-// ex. 148.0.7778.271, nenhum Chrome atual manda — entregava que não era Chrome). Major = o maior
-// entre o motor e o Chrome estável atual (o Chromium do Electron fica algumas versões atrás).
-// SUBIR CURRENT_CHROME_MAJOR quando o Chrome estável avançar (~a cada 4 semanas).
-const CURRENT_CHROME_MAJOR = 156;
-const ENGINE_CHROME_MAJOR = Number((process.versions.chrome || '130').split('.')[0]) || 130;
-const CHROME_MAJOR = String(Math.max(ENGINE_CHROME_MAJOR, CURRENT_CHROME_MAJOR));
+// três: a do MOTOR (o Chromium do Electron). Nunca uma maior: um "Chrome 156" sem os recursos do 156
+// é o que o Cloudflare Turnstile pega — no redvid.io dava "Verification failed" declarando 156 sobre
+// o motor 152, e passava (sem nem mostrar a caixinha) com a versão real.
+// UA e sec-ch-ua no formato reduzido "NNN.0.0.0", como o Chrome manda desde 2023; o número completo
+// do build só vai onde o Chrome também manda (fullVersionList / fullVersion do userAgentData).
+const ENGINE_CHROME_VERSION = process.versions.chrome || '130.0.0.0';
+const CHROME_MAJOR = ENGINE_CHROME_VERSION.split('.')[0] || '130';
 const CHROME_VERSION = `${CHROME_MAJOR}.0.0.0`;
 // Mesmos brands que navigator.userAgentData (applyChromeIdentity) — header e JS iguais, na ordem do Chrome.
 const CHROME_SEC_CH_UA = `"Not:A-Brand";v="8", "Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}"`;
@@ -495,8 +495,8 @@ async function applyChromeIdentity(wc: Electron.WebContents): Promise<void> {
       platform: process.platform === 'darwin' ? 'MacIntel' : process.platform === 'win32' ? 'Win32' : 'Linux x86_64',
       userAgentMetadata: {
         brands,
-        fullVersionList: brands.map(b => ({ brand: b.brand, version: b.brand === 'Not:A-Brand' ? '8.0.0.0' : CHROME_VERSION })),
-        fullVersion: CHROME_VERSION,
+        fullVersionList: brands.map(b => ({ brand: b.brand, version: b.brand === 'Not:A-Brand' ? '8.0.0.0' : ENGINE_CHROME_VERSION })),
+        fullVersion: ENGINE_CHROME_VERSION,
         platform: CH_PLATFORM,
         platformVersion,
         architecture: CH_ARCH,

@@ -703,10 +703,12 @@ human?" do Walmart, páginas de erro da Amazon):
    Bah pelo Playwright, que liga a flag de automação do Chromium. É um sinal honesto de "automatizado" e deve
    continuar honesto — mas faz das nossas execuções o pior caso. O Bah aberto normalmente diz `false`; esperamos
    checagens raras no uso do dia a dia. Medir a frequência de checagens com o Bah aberto normalmente, não em teste/demo.
-2. **Versão que não bate.** O Bah se apresenta como Chrome 156 (preciso pro login do Google, ver a seção da Chrome
-   Web Store) sobre o Chromium mais antigo do Electron 44, e a versão completa é `156.0.0.0`, não um build real. Um
-   detector pode notar um "Chrome 156" sem recursos que só o 156 tem. A correção honesta (informar o motor real)
-   pode trazer de volta o bloqueio do login do Google — decisão em aberto.
+2. **Versão que não bate (corrigido).** O Bah se apresentava como Chrome 156 sobre o Chromium 152 do Electron 44,
+   com a versão completa inventada `156.0.0.0`. O Cloudflare Turnstile pega isso: no redvid.io a caixinha terminava
+   em "Verification failed" declarando 156, e passava (sem nem mostrar a caixinha) com a versão real. Agora o Bah
+   informa a versão do próprio motor em tudo: `Chrome/152.0.0.0` no UA e no `sec-ch-ua` (formato reduzido do
+   Chrome) e o build real (ex. `152.0.7977.130`) no `userAgentData.fullVersionList`. Acompanha cada atualização
+   do Electron, sem número pra subir à mão.
 3. **Perfis novos.** Perfis de teste e demo começam vazios (sem logins, sem cookies de checagens já passadas): toda
    visita parece a primeira.
 
