@@ -385,7 +385,7 @@ let authPopupHost = '';
 let reavaliarAdblock: (() => void) | null = null;
 
 // Identidade Chrome (UA, sec-ch-ua, navigator.userAgentData): UMA fonte, chrome-identity.ts.
-// Versão = Chrome estável atual (CURRENT_CHROME_MAJOR) no formato reduzido; SO e arquitetura REAIS.
+// Versão = a do motor (formato reduzido no UA; build real no userAgentData); SO e arquitetura REAIS.
 const CHROME_ID = chromeIdentity({
   engineChrome: process.versions.chrome,
   platform: process.platform,

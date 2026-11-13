@@ -8,17 +8,18 @@
 // lia o valor real antes do remendo, e header × JS × SO de verdade se contradiziam — contradição é o
 // sinal clássico que os detectores de robô procuram.
 
-// Versão que o Bah declara. Formato reduzido "NNN.0.0.0", como o Chrome manda desde 2023 (o número
-// completo do build, ex. 148.0.7778.271, nenhum Chrome atual manda). Major = o maior entre o motor e o
-// Chrome estável atual (o Chromium do Electron fica algumas versões atrás).
-// SUBIR CURRENT_CHROME_MAJOR quando o Chrome estável avançar (~a cada 4 semanas).
-export const CURRENT_CHROME_MAJOR = 156;
+// Versão que o Bah declara: a do MOTOR (o Chromium do Electron), nunca uma maior. Um "Chrome 156" sem
+// os recursos do 156 é o que o Cloudflare Turnstile pega: no redvid.io dava "Verification failed"
+// declarando 156 sobre o motor 152, e passava (sem nem mostrar a caixinha) com a versão real.
+// UA e sec-ch-ua no formato reduzido "NNN.0.0.0", como o Chrome manda desde 2023; o build completo
+// (ex. 152.0.7977.130) só vai onde o Chrome também manda: fullVersion / fullVersionList.
 
 export interface Brand { brand: string; version: string }
 
 export interface ChromeIdentity {
   major: string;
-  version: string;               // "156.0.0.0"
+  version: string;               // "152.0.0.0" (reduzido: UA e sec-ch-ua)
+  fullVersion: string;           // "152.0.7977.130" (build real: userAgentData.fullVersion / fullVersionList)
   userAgent: string;
   secChUa: string;               // header sec-ch-ua (mesmos brands e ordem do navigator.userAgentData)
   chPlatform: string;            // sec-ch-ua-platform / userAgentData.platform: Windows | macOS | Linux
@@ -34,13 +35,13 @@ export interface IdentityInput {
   platform: string;               // process.platform
   arch: string;                   // process.arch
   arm64Translation?: boolean;     // app.runningUnderARM64Translation (build x64 no Rosetta)
-  currentMajor?: number;
 }
 
 export function chromeIdentity(input: IdentityInput): ChromeIdentity {
-  const engineMajor = Number(String(input.engineChrome || '').split('.')[0]) || 0;
-  const major = String(Math.max(engineMajor, input.currentMajor ?? CURRENT_CHROME_MAJOR));
+  const engine = String(input.engineChrome || '');
+  const major = String(Number(engine.split('.')[0]) || 130);
   const version = `${major}.0.0.0`;
+  const fullVersion = /^\d+\.\d+\.\d+\.\d+$/.test(engine) ? engine : version;
   // Plataforma REAL (era sempre "Windows"): site que detecta o SO — página de driver/instalador —
   // oferecia o arquivo de Windows num Mac. Os tokens são os fixos do Chrome de verdade em cada SO
   // (no Mac o Chrome manda "Intel Mac OS X 10_15_7" até em Apple Silicon).
@@ -61,6 +62,7 @@ export function chromeIdentity(input: IdentityInput): ChromeIdentity {
   return {
     major,
     version,
+    fullVersion,
     userAgent: `Mozilla/5.0 (${uaPlatform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`,
     secChUa: brands.map(b => `"${b.brand}";v="${b.version}"`).join(', '),
     chPlatform,
@@ -68,7 +70,7 @@ export function chromeIdentity(input: IdentityInput): ChromeIdentity {
     architecture,
     bitness,
     brands,
-    fullVersionList: brands.map(b => ({ brand: b.brand, version: b.brand === 'Not:A-Brand' ? '8.0.0.0' : version })),
+    fullVersionList: brands.map(b => ({ brand: b.brand, version: b.brand === 'Not:A-Brand' ? '8.0.0.0' : fullVersion })),
   };
 }
 
@@ -82,7 +84,7 @@ export function userAgentOverrideParams(id: ChromeIdentity, languages: string[],
     userAgentMetadata: {
       brands: id.brands,
       fullVersionList: id.fullVersionList,
-      fullVersion: id.version,
+      fullVersion: id.fullVersion,
       platform: id.chPlatform,
       platformVersion,
       architecture: id.architecture,

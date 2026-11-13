@@ -53,7 +53,10 @@ test('header and JavaScript report the same Chrome identity, in Chrome header or
     expect(js.ua).toContain(`Chrome/${js.brands.match(/"Google Chrome";v="(\d+)"/)![1]}.0.0.0`);
     expect(header('sec-ch-ua-platform')).toBe(`"${CH_PLATFORM}"`);
     expect(js.chPlatform).toBe(CH_PLATFORM);
-    expect(js.high.uaFullVersion).toMatch(/^\d+\.0\.0\.0$/);
+    // The engine's own version: reduced in the UA, the real build in the high-entropy hints (as Chrome does).
+    const engine = await app.evaluate(() => process.versions.chrome);
+    expect(js.ua).toContain(`Chrome/${engine.split('.')[0]}.0.0.0 `);
+    expect(js.high.uaFullVersion).toBe(engine);
     expect(js.languages[0]).toBe(header('accept-language').split(',')[0]);
     // navigator.webdriver is left to the engine: a boolean, never the undefined the old patch produced.
     // (Playwright launches set it to true; a normal launch reports false.)

@@ -100,9 +100,11 @@ around a block.
   the first script on; nothing is patched in JavaScript afterwards. Before, the header said one Chrome
   version and brand order while the page script said another, and a page could read the real value
   before the patch ran — a mismatch detectors look for.
-- **Version.** `CURRENT_CHROME_MAJOR` (bump it when stable Chrome moves, about every 4 weeks) in the
-  reduced `NNN.0.0.0` format real Chrome sends; Electron's Chromium is usually a few versions behind.
-  The engine's version is used instead when it is newer.
+- **Version.** The engine's own Chrome version (`process.versions.chrome`), never a newer one: the reduced
+  `NNN.0.0.0` format in the UA and `sec-ch-ua`, as real Chrome sends, and the real build in
+  `userAgentData.fullVersion` / `fullVersionList`. Claiming the current stable Chrome (156) on Electron's
+  Chromium 152 made Cloudflare Turnstile fail ("Verification failed" on redvid.io); with the real version
+  the check passes, often without showing the checkbox.
 - **Real OS and architecture.** The UA platform token and `sec-ch-ua-platform` follow the real OS (it
   used to say Windows everywhere, so driver/installer sites offered Windows files on a Mac);
   `getHighEntropyValues()` reports the real CPU architecture.

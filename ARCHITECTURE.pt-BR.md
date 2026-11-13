@@ -98,9 +98,11 @@ Nada aqui resolve CAPTCHA nem contorna bloqueio.
   remendado em JavaScript depois. Antes, o header dizia uma versão e ordem de brands do Chrome e o
   script da página dizia outra, e a página conseguia ler o valor real antes do remendo — o tipo de
   contradição que os detectores procuram.
-- **Versão.** `CURRENT_CHROME_MAJOR` (subir quando o Chrome estável avançar, ~a cada 4 semanas) no
-  formato reduzido `NNN.0.0.0` que o Chrome de verdade manda; o Chromium do Electron costuma ficar
-  algumas versões atrás. Se o motor for mais novo, vale a versão dele.
+- **Versão.** A do próprio motor (`process.versions.chrome`), nunca uma maior: formato reduzido
+  `NNN.0.0.0` no UA e no `sec-ch-ua`, como o Chrome de verdade manda, e o build real no
+  `userAgentData.fullVersion` / `fullVersionList`. Declarar o Chrome estável atual (156) sobre o Chromium
+  152 do Electron fazia o Cloudflare Turnstile falhar ("Verification failed" no redvid.io); com a versão
+  real a checagem passa, muitas vezes sem nem mostrar a caixinha.
 - **SO e arquitetura reais.** O token de plataforma do UA e o `sec-ch-ua-platform` seguem o SO real
   (antes dizia Windows em todo lugar, e site de driver/instalador oferecia arquivo de Windows no Mac);
   `getHighEntropyValues()` informa a arquitetura real da CPU.
