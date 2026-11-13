@@ -25,6 +25,7 @@ import {
   type LocalProvider,
 } from './local-providers';
 import { stripTrackingParams } from './tracking-params';
+import { withSafeScriptletSender, scriptletFailureLogger } from './adblock-safe-inject';
 import { PageAgent } from './page-agent';
 import { MonitorManager } from './monitor-manager';
 import { downloadVideo, resolveTopVideo, resolveTopVideos, resolveTopNVideos, type VideoDownloadProgress } from './media-downloader';
@@ -3292,14 +3293,17 @@ async function setupAdblock(): Promise<void> {
     // extensão. O BlockingContext chama blocker.onInjectCosmeticFilters na HORA de cada pedido,
     // então embrulhar o método aqui vale pra todo liga/desliga do adblock. O endereço vem do
     // frame visto pelo main, não do que a página informou.
+    // O mesmo embrulho trata a rejeição dos scriptlets que o Ghostery injeta sem await
+    // (adblock-safe-inject.ts).
     {
       const b = blocker;
       const origInject = b.onInjectCosmeticFilters;
+      const onScriptletFailure = scriptletFailureLogger();
       b.onInjectCosmeticFilters = async (event, url, msg) => {
         let real = '';
         try { real = String(event.senderFrame?.url || event.sender?.getURL?.() || url || ''); } catch { real = String(url || ''); }
         if (real.startsWith('chrome-extension://')) return;
-        return origInject(event, url, msg);
+        return origInject(withSafeScriptletSender(event, onScriptletFailure), url, msg);
       };
     }
     const persistSession = session.fromPartition('persist:browser');
